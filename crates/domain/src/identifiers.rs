@@ -87,6 +87,20 @@ pub enum MarketRoute {
     NegRisk,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentifierMapError {
+    ConflictingTokenCondition {
+        token_id: TokenId,
+        existing_condition_id: ConditionId,
+        new_condition_id: ConditionId,
+    },
+    ConflictingConditionRoute {
+        condition_id: ConditionId,
+        existing_route: MarketRoute,
+        new_route: MarketRoute,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct IdentifierMap {
     token_to_condition: HashMap<TokenId, ConditionId>,
@@ -94,39 +108,61 @@ pub struct IdentifierMap {
 }
 
 impl IdentifierMap {
-    pub fn new<T, C>(token_conditions: T, condition_routes: C) -> Self
+    pub fn new<T, C>(token_conditions: T, condition_routes: C) -> Result<Self, IdentifierMapError>
     where
         T: IntoIterator,
         T::Item: IntoTokenConditionPair,
         C: IntoIterator,
         C::Item: IntoConditionRoutePair,
     {
-        let token_to_condition = token_conditions
+        let mut token_to_condition: HashMap<TokenId, ConditionId> = HashMap::new();
+        for (token_id, condition_id) in token_conditions
             .into_iter()
             .map(IntoTokenConditionPair::into_pair)
-            .collect();
-        let condition_to_route = condition_routes
+        {
+            if let Some(existing_condition_id) = token_to_condition.get(&token_id) {
+                if existing_condition_id != &condition_id {
+                    return Err(IdentifierMapError::ConflictingTokenCondition {
+                        token_id,
+                        existing_condition_id: existing_condition_id.clone(),
+                        new_condition_id: condition_id,
+                    });
+                }
+            } else {
+                token_to_condition.insert(token_id, condition_id);
+            }
+        }
+
+        let mut condition_to_route: HashMap<ConditionId, MarketRoute> = HashMap::new();
+        for (condition_id, route) in condition_routes
             .into_iter()
             .map(IntoConditionRoutePair::into_pair)
-            .collect();
+        {
+            if let Some(existing_route) = condition_to_route.get(&condition_id) {
+                if existing_route != &route {
+                    return Err(IdentifierMapError::ConflictingConditionRoute {
+                        condition_id,
+                        existing_route: *existing_route,
+                        new_route: route,
+                    });
+                }
+            } else {
+                condition_to_route.insert(condition_id, route);
+            }
+        }
 
-        Self {
+        Ok(Self {
             token_to_condition,
             condition_to_route,
-        }
+        })
     }
 
-    pub fn condition_for_token(&self, token_id: &str) -> Option<&str> {
-        self.token_to_condition
-            .get(&TokenId::from(token_id))
-            .map(ConditionId::as_str)
+    pub fn condition_for_token(&self, token_id: &TokenId) -> Option<&ConditionId> {
+        self.token_to_condition.get(token_id)
     }
 
-    pub fn route_for_condition(&self, condition_id: &str) -> MarketRoute {
-        self.condition_to_route
-            .get(&ConditionId::from(condition_id))
-            .copied()
-            .expect("condition route should exist")
+    pub fn route_for_condition(&self, condition_id: &ConditionId) -> Option<MarketRoute> {
+        self.condition_to_route.get(condition_id).copied()
     }
 }
 

@@ -46,7 +46,8 @@ impl RuntimeMode {
 }
 
 impl RuntimePolicy {
-    pub fn from_statuses(
+    pub fn constrained_by(
+        self,
         venue_status: VenueTradingStatus,
         account_status: AccountTradingStatus,
     ) -> Self {
@@ -64,10 +65,7 @@ impl RuntimePolicy {
                 mode: RuntimeMode::NoNewRisk,
                 overlay: Some(RuntimeOverlay::ReduceOnly),
             },
-            _ => Self {
-                mode: RuntimeMode::Healthy,
-                overlay: None,
-            },
+            _ => self,
         }
     }
 }

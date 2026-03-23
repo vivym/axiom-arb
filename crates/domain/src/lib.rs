@@ -5,8 +5,8 @@ mod resolution;
 mod runtime_mode;
 
 pub use identifiers::{
-    Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap, Market,
-    MarketId, MarketRoute, Token, TokenId,
+    Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap,
+    IdentifierMapError, Market, MarketId, MarketRoute, Token, TokenId,
 };
 pub use inventory::{
     ApprovalKey, ApprovalState, ApprovalStatus, InventoryBucket, ReservationState, SignatureType,
