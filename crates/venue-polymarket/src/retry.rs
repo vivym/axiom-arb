@@ -7,6 +7,21 @@ pub enum RetryClass {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusinessErrorKind {
+    DuplicateSignedOrder,
+    MalformedPayload,
+    MinSize,
+    TickSize,
+    InsufficientBalance,
+    InsufficientAllowance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HttpRetryContext {
+    pub persistent_rate_limit: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryDecision {
     pub class: RetryClass,
@@ -38,6 +53,20 @@ impl RetryDecision {
         restriction: Option<&str>,
         identity: Option<&SignedOrderIdentity>,
     ) -> Self {
+        Self::for_http_status_with_context(
+            status_code,
+            restriction,
+            identity,
+            HttpRetryContext::default(),
+        )
+    }
+
+    pub fn for_http_status_with_context(
+        status_code: u16,
+        restriction: Option<&str>,
+        identity: Option<&SignedOrderIdentity>,
+        context: HttpRetryContext,
+    ) -> Self {
         match status_code {
             425 => Self {
                 class: RetryClass::Transport,
@@ -53,7 +82,9 @@ impl RetryDecision {
                 class: RetryClass::Transport,
                 reuse_payload: true,
                 backoff: true,
-                next_mode: None,
+                next_mode: context
+                    .persistent_rate_limit
+                    .then_some(RuntimeMode::Degraded),
                 overlay: None,
                 reconcile_first: false,
                 retry_of_order_id: None,
@@ -96,16 +127,11 @@ impl RetryDecision {
     }
 
     pub fn for_duplicate_signed_order(order_id: OrderId, identity: &SignedOrderIdentity) -> Self {
-        Self {
-            class: RetryClass::Business,
-            reuse_payload: false,
-            backoff: false,
-            next_mode: Some(RuntimeMode::Reconciling),
-            overlay: None,
-            reconcile_first: true,
-            retry_of_order_id: Some(order_id),
-            preserved_identity: Some(identity.clone()),
-        }
+        Self::for_business_error(
+            BusinessErrorKind::DuplicateSignedOrder,
+            Some(order_id),
+            Some(identity),
+        )
     }
 
     pub fn for_business_retry(order_id: OrderId) -> Self {
@@ -118,6 +144,49 @@ impl RetryDecision {
             reconcile_first: false,
             retry_of_order_id: Some(order_id),
             preserved_identity: None,
+        }
+    }
+
+    pub fn for_business_error(
+        error_kind: BusinessErrorKind,
+        order_id: Option<OrderId>,
+        identity: Option<&SignedOrderIdentity>,
+    ) -> Self {
+        match error_kind {
+            BusinessErrorKind::DuplicateSignedOrder => Self {
+                class: RetryClass::Business,
+                reuse_payload: false,
+                backoff: false,
+                next_mode: Some(RuntimeMode::Reconciling),
+                overlay: None,
+                reconcile_first: true,
+                retry_of_order_id: order_id,
+                preserved_identity: identity.cloned(),
+            },
+            BusinessErrorKind::MalformedPayload
+            | BusinessErrorKind::MinSize
+            | BusinessErrorKind::TickSize => Self {
+                class: RetryClass::None,
+                reuse_payload: false,
+                backoff: false,
+                next_mode: None,
+                overlay: None,
+                reconcile_first: false,
+                retry_of_order_id: None,
+                preserved_identity: identity.cloned(),
+            },
+            BusinessErrorKind::InsufficientBalance | BusinessErrorKind::InsufficientAllowance => {
+                Self {
+                    class: RetryClass::None,
+                    reuse_payload: false,
+                    backoff: false,
+                    next_mode: Some(RuntimeMode::NoNewRisk),
+                    overlay: None,
+                    reconcile_first: true,
+                    retry_of_order_id: None,
+                    preserved_identity: identity.cloned(),
+                }
+            }
         }
     }
 }

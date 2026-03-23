@@ -10,20 +10,28 @@ const POLY_SIGNATURE: HeaderName = HeaderName::from_static("poly-signature");
 const POLY_SIGNATURE_TYPE: HeaderName = HeaderName::from_static("poly-signature-type");
 const POLY_TIMESTAMP: HeaderName = HeaderName::from_static("poly-timestamp");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignerContext<'a> {
+    pub address: &'a str,
+    pub funder_address: &'a str,
+    pub signature_type: SignatureType,
+    pub wallet_route: WalletRoute,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct L2AuthHeaders<'a> {
-    pub address: &'a str,
+    pub signer: SignerContext<'a>,
     pub api_key: &'a str,
     pub passphrase: &'a str,
     pub timestamp: &'a str,
     pub signature: &'a str,
-    pub signature_type: SignatureType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthError {
     EmptyField(&'static str),
     InvalidHeaderValue(&'static str),
+    SignerMismatch,
 }
 
 impl fmt::Display for AuthError {
@@ -31,6 +39,7 @@ impl fmt::Display for AuthError {
         match self {
             Self::EmptyField(name) => write!(f, "missing auth field: {name}"),
             Self::InvalidHeaderValue(name) => write!(f, "invalid auth header value: {name}"),
+            Self::SignerMismatch => write!(f, "signature_type and wallet_route disagree"),
         }
     }
 }
@@ -53,6 +62,14 @@ pub fn signature_type_to_wallet_route(signature_type: SignatureType) -> WalletRo
     }
 }
 
+pub fn wallet_route_label(wallet_route: WalletRoute) -> &'static str {
+    match wallet_route {
+        WalletRoute::Eoa => "eoa",
+        WalletRoute::Proxy => "proxy",
+        WalletRoute::Safe => "safe",
+    }
+}
+
 pub fn wallet_route_to_signature_type(wallet_route: WalletRoute) -> SignatureType {
     match wallet_route {
         WalletRoute::Eoa => SignatureType::Eoa,
@@ -62,8 +79,18 @@ pub fn wallet_route_to_signature_type(wallet_route: WalletRoute) -> SignatureTyp
 }
 
 pub fn build_l2_auth_headers(headers: &L2AuthHeaders<'_>) -> Result<HeaderMap, AuthError> {
+    if wallet_route_to_signature_type(headers.signer.wallet_route) != headers.signer.signature_type
+    {
+        return Err(AuthError::SignerMismatch);
+    }
+
     let mut map = HeaderMap::new();
-    insert_header(&mut map, POLY_ADDRESS.clone(), "address", headers.address)?;
+    insert_header(
+        &mut map,
+        POLY_ADDRESS.clone(),
+        "address",
+        headers.signer.address,
+    )?;
     insert_header(&mut map, POLY_API_KEY.clone(), "api_key", headers.api_key)?;
     insert_header(
         &mut map,
@@ -87,7 +114,7 @@ pub fn build_l2_auth_headers(headers: &L2AuthHeaders<'_>) -> Result<HeaderMap, A
         &mut map,
         POLY_SIGNATURE_TYPE.clone(),
         "signature_type",
-        signature_type_label(headers.signature_type),
+        signature_type_label(headers.signer.signature_type),
     )?;
     Ok(map)
 }

@@ -5,6 +5,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use url::Url;
 
+use crate::{
+    build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
+};
+
 #[derive(Debug, Clone)]
 pub struct PolymarketRestClient {
     http: Client,
@@ -15,6 +19,7 @@ pub struct PolymarketRestClient {
 
 #[derive(Debug)]
 pub enum RestError {
+    Auth(AuthError),
     Http(reqwest::Error),
     Url(url::ParseError),
     MissingField(&'static str),
@@ -30,9 +35,32 @@ pub struct VenueStatusResponse {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct OpenOrderSummary {
+    #[serde(alias = "id")]
+    pub order_id: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub market: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct BalanceAllowanceResponse {
+    #[serde(default, alias = "asset")]
+    pub asset_id: Option<String>,
+    #[serde(default)]
+    pub balance: Option<String>,
+    #[serde(default)]
+    pub allowance: Option<String>,
+    #[serde(default)]
+    pub spender: Option<String>,
+}
+
 impl fmt::Display for RestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Auth(err) => write!(f, "auth error: {err}"),
             Self::Http(err) => write!(f, "http error: {err}"),
             Self::Url(err) => write!(f, "url error: {err}"),
             Self::MissingField(field) => write!(f, "missing response field: {field}"),
@@ -41,6 +69,12 @@ impl fmt::Display for RestError {
 }
 
 impl std::error::Error for RestError {}
+
+impl From<AuthError> for RestError {
+    fn from(value: AuthError) -> Self {
+        Self::Auth(value)
+    }
+}
 
 impl From<reqwest::Error> for RestError {
     fn from(value: reqwest::Error) -> Self {
@@ -77,6 +111,43 @@ impl PolymarketRestClient {
         self.get_clob("status", &[]).await
     }
 
+    pub fn build_open_orders_request(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+    ) -> Result<reqwest::Request, RestError> {
+        self.build_authenticated_get_request(&self.clob_host, "orders", &[], auth)
+    }
+
+    pub async fn fetch_open_orders(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+    ) -> Result<Vec<OpenOrderSummary>, RestError> {
+        let request = self.build_open_orders_request(auth)?;
+        self.execute_json(request).await
+    }
+
+    pub fn build_balance_allowance_request(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+        asset_id: &str,
+    ) -> Result<reqwest::Request, RestError> {
+        self.build_authenticated_get_request(
+            &self.clob_host,
+            "balance-allowance",
+            &[("asset", asset_id)],
+            auth,
+        )
+    }
+
+    pub async fn fetch_balance_allowance(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+        asset_id: &str,
+    ) -> Result<BalanceAllowanceResponse, RestError> {
+        let request = self.build_balance_allowance_request(auth, asset_id)?;
+        self.execute_json(request).await
+    }
+
     pub(crate) async fn get_relayer<T>(
         &self,
         path: &str,
@@ -95,6 +166,20 @@ impl PolymarketRestClient {
         self.get_json(&self.clob_host, path, query).await
     }
 
+    fn build_authenticated_get_request(
+        &self,
+        base: &Url,
+        path: &str,
+        extra_query: &[(&str, &str)],
+        auth: &L2AuthHeaders<'_>,
+    ) -> Result<reqwest::Request, RestError> {
+        let headers = build_l2_auth_headers(auth)?;
+        let mut query = signer_query(auth);
+        query.extend_from_slice(extra_query);
+        let url = join_url(base, path, &query)?;
+        Ok(self.http.get(url).headers(headers).build()?)
+    }
+
     async fn get_json<T>(
         &self,
         base: &Url,
@@ -106,6 +191,14 @@ impl PolymarketRestClient {
     {
         let url = join_url(base, path, query)?;
         let response = self.http.get(url).send().await?.error_for_status()?;
+        Ok(response.json::<T>().await?)
+    }
+
+    async fn execute_json<T>(&self, request: reqwest::Request) -> Result<T, RestError>
+    where
+        T: DeserializeOwned,
+    {
+        let response = self.http.execute(request).await?.error_for_status()?;
         Ok(response.json::<T>().await?)
     }
 }
@@ -122,4 +215,16 @@ fn join_url(base: &Url, path: &str, query: &[(&str, &str)]) -> Result<Url, RestE
     }
 
     Ok(url)
+}
+
+fn signer_query<'a>(auth: &'a L2AuthHeaders<'a>) -> Vec<(&'a str, &'a str)> {
+    vec![
+        ("owner", auth.signer.address),
+        ("funder", auth.signer.funder_address),
+        (
+            "signature_type",
+            signature_type_label(auth.signer.signature_type),
+        ),
+        ("wallet_route", wallet_route_label(auth.signer.wallet_route)),
+    ]
 }
