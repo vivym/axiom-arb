@@ -27,6 +27,14 @@ impl From<String> for OrderId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedOrderIdentity {
+    pub signed_order_hash: String,
+    pub salt: String,
+    pub nonce: String,
+    pub signature: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmissionState {
     Draft,
@@ -72,5 +80,5 @@ pub struct Order {
     pub submission_state: SubmissionState,
     pub venue_state: VenueOrderState,
     pub settlement_state: SettlementState,
-    pub signed_order: Option<String>,
+    pub signed_order: Option<SignedOrderIdentity>,
 }

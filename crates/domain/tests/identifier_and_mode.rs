@@ -1,6 +1,7 @@
 use domain::{
-    AccountTradingStatus, ConditionId, IdentifierMap, IdentifierMapError, MarketRoute, RuntimeMode,
-    RuntimeOverlay, RuntimePolicy, TokenId, VenueTradingStatus,
+    AccountTradingStatus, ConditionId, EventFamilyId, EventId, IdentifierMap, IdentifierMapError,
+    IdentifierRecord, MarketId, MarketRoute, RuntimeMode, RuntimeOverlay, RuntimePolicy, TokenId,
+    VenueTradingStatus,
 };
 
 #[test]
@@ -82,7 +83,7 @@ fn identifier_map_returns_none_when_route_metadata_is_missing() {
 }
 
 #[test]
-fn venue_cancel_only_overlays_existing_policy() {
+fn venue_cancel_only_preserves_stricter_internal_mode() {
     let constrained = RuntimePolicy {
         mode: RuntimeMode::Reconciling,
         overlay: None,
@@ -92,14 +93,61 @@ fn venue_cancel_only_overlays_existing_policy() {
     assert_eq!(
         constrained,
         RuntimePolicy {
-            mode: RuntimeMode::NoNewRisk,
+            mode: RuntimeMode::Reconciling,
             overlay: Some(RuntimeOverlay::CancelOnly),
         }
     );
 }
 
 #[test]
-fn account_close_only_applies_reduce_only_overlay() {
+fn identifier_map_crosswalk_resolves_full_record_chain() {
+    let map = IdentifierMap::from_records([
+        IdentifierRecord {
+            event_id: EventId::from("event_a"),
+            event_family_id: EventFamilyId::from("family_a"),
+            market_id: MarketId::from("market_a"),
+            condition_id: ConditionId::from("condition_a"),
+            token_id: TokenId::from("token_yes"),
+            outcome_label: "YES".to_owned(),
+            route: MarketRoute::Standard,
+        },
+        IdentifierRecord {
+            event_id: EventId::from("event_a"),
+            event_family_id: EventFamilyId::from("family_a"),
+            market_id: MarketId::from("market_a"),
+            condition_id: ConditionId::from("condition_a"),
+            token_id: TokenId::from("token_no"),
+            outcome_label: "NO".to_owned(),
+            route: MarketRoute::Standard,
+        },
+    ])
+    .expect("crosswalk should build");
+
+    let token = TokenId::from("token_yes");
+    let condition = ConditionId::from("condition_a");
+
+    assert_eq!(map.condition_for_token(&token), Some(&condition));
+    assert_eq!(
+        map.market_for_condition(&condition),
+        Some(&MarketId::from("market_a"))
+    );
+    assert_eq!(
+        map.event_for_condition(&condition),
+        Some(&EventId::from("event_a"))
+    );
+    assert_eq!(
+        map.family_for_condition(&condition),
+        Some(&EventFamilyId::from("family_a"))
+    );
+    assert_eq!(map.outcome_label_for_token(&token), Some("YES"));
+    assert_eq!(
+        map.route_for_condition(&condition),
+        Some(MarketRoute::Standard)
+    );
+}
+
+#[test]
+fn account_close_only_preserves_mode_and_merges_overlay_conservatively() {
     let constrained = RuntimePolicy {
         mode: RuntimeMode::Degraded,
         overlay: Some(RuntimeOverlay::InventoryOnly),
@@ -112,8 +160,8 @@ fn account_close_only_applies_reduce_only_overlay() {
     assert_eq!(
         constrained,
         RuntimePolicy {
-            mode: RuntimeMode::NoNewRisk,
-            overlay: Some(RuntimeOverlay::ReduceOnly),
+            mode: RuntimeMode::Degraded,
+            overlay: Some(RuntimeOverlay::CancelOnly),
         }
     );
 }
@@ -158,4 +206,78 @@ fn geoblocked_or_banned_forces_global_halt() {
             }
         );
     }
+}
+
+#[test]
+fn bootstrapping_with_cancel_only_stays_bootstrapping() {
+    let constrained = RuntimePolicy {
+        mode: RuntimeMode::Bootstrapping,
+        overlay: Some(RuntimeOverlay::CancelOnly),
+    }
+    .constrained_by(VenueTradingStatus::CancelOnly, AccountTradingStatus::Normal);
+
+    assert_eq!(
+        constrained,
+        RuntimePolicy {
+            mode: RuntimeMode::Bootstrapping,
+            overlay: Some(RuntimeOverlay::CancelOnly),
+        }
+    );
+}
+
+#[test]
+fn bootstrapping_with_close_only_stays_bootstrapping() {
+    let constrained = RuntimePolicy {
+        mode: RuntimeMode::Bootstrapping,
+        overlay: Some(RuntimeOverlay::CancelOnly),
+    }
+    .constrained_by(
+        VenueTradingStatus::TradingEnabled,
+        AccountTradingStatus::CloseOnly,
+    );
+
+    assert_eq!(
+        constrained,
+        RuntimePolicy {
+            mode: RuntimeMode::Bootstrapping,
+            overlay: Some(RuntimeOverlay::CancelOnly),
+        }
+    );
+}
+
+#[test]
+fn global_halt_with_cancel_only_stays_global_halt() {
+    let constrained = RuntimePolicy {
+        mode: RuntimeMode::GlobalHalt,
+        overlay: None,
+    }
+    .constrained_by(VenueTradingStatus::CancelOnly, AccountTradingStatus::Normal);
+
+    assert_eq!(
+        constrained,
+        RuntimePolicy {
+            mode: RuntimeMode::GlobalHalt,
+            overlay: None,
+        }
+    );
+}
+
+#[test]
+fn global_halt_with_close_only_stays_global_halt() {
+    let constrained = RuntimePolicy {
+        mode: RuntimeMode::GlobalHalt,
+        overlay: None,
+    }
+    .constrained_by(
+        VenueTradingStatus::TradingEnabled,
+        AccountTradingStatus::CloseOnly,
+    );
+
+    assert_eq!(
+        constrained,
+        RuntimePolicy {
+            mode: RuntimeMode::GlobalHalt,
+            overlay: None,
+        }
+    );
 }
