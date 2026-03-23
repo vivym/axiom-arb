@@ -2,12 +2,17 @@ use std::fmt;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::UserWsEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketWsEvent {
     Book(MarketBookUpdate),
+    PriceChange(MarketPriceChangeUpdate),
+    LastTradePrice(MarketTradePriceUpdate),
+    TickSizeChange(MarketTickSizeChangeUpdate),
+    Lifecycle(MarketLifecycleUpdate),
     Ping,
     Pong,
 }
@@ -17,6 +22,38 @@ pub struct MarketBookUpdate {
     pub asset_id: String,
     pub best_bid: Option<String>,
     pub best_ask: Option<String>,
+    pub event_ts: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketPriceChangeUpdate {
+    pub asset_id: String,
+    pub price: String,
+    pub side: Option<String>,
+    pub event_ts: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketTradePriceUpdate {
+    pub asset_id: String,
+    pub price: String,
+    pub size: Option<String>,
+    pub event_ts: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketTickSizeChangeUpdate {
+    pub asset_id: String,
+    pub previous_tick_size: Option<String>,
+    pub tick_size: String,
+    pub event_ts: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketLifecycleUpdate {
+    pub market_id: Option<String>,
+    pub asset_id: Option<String>,
+    pub status: String,
     pub event_ts: Option<DateTime<Utc>>,
 }
 
@@ -78,7 +115,11 @@ impl WsChannelLivenessMonitor {
         match event {
             MarketWsEvent::Ping => state.last_ping_at = Some(observed_at),
             MarketWsEvent::Pong => state.last_pong_at = Some(observed_at),
-            MarketWsEvent::Book(_) => {}
+            MarketWsEvent::Book(_)
+            | MarketWsEvent::PriceChange(_)
+            | MarketWsEvent::LastTradePrice(_)
+            | MarketWsEvent::TickSizeChange(_)
+            | MarketWsEvent::Lifecycle(_) => {}
         }
     }
 
@@ -115,7 +156,7 @@ impl WsChannelLivenessMonitor {
         }
 
         state.requires_reconcile_attention = true;
-        state.stale_since = Some(now);
+        state.stale_since = Some(state.last_message_at + self.max_gap);
         Some(WsChannelReconcileReason::StaleChannel {
             channel: self.channel,
         })
@@ -133,6 +174,10 @@ pub enum WsParseError {
     Json(serde_json::Error),
     MissingField(&'static str),
     UnknownEvent(String),
+    InvalidField {
+        field: &'static str,
+        value: String,
+    },
     InvalidTimestamp(String),
 }
 
@@ -142,6 +187,9 @@ impl fmt::Display for WsParseError {
             Self::Json(err) => write!(f, "websocket json parse error: {err}"),
             Self::MissingField(field) => write!(f, "websocket payload missing field: {field}"),
             Self::UnknownEvent(event) => write!(f, "unsupported websocket event: {event}"),
+            Self::InvalidField { field, value } => {
+                write!(f, "invalid websocket field {field}: {value}")
+            }
             Self::InvalidTimestamp(value) => write!(f, "invalid websocket timestamp: {value}"),
         }
     }
@@ -161,9 +209,25 @@ struct MarketEnvelope {
     #[serde(default)]
     asset_id: Option<String>,
     #[serde(default)]
-    best_bid: Option<String>,
+    market_id: Option<String>,
     #[serde(default)]
-    best_ask: Option<String>,
+    best_bid: Option<Value>,
+    #[serde(default)]
+    best_ask: Option<Value>,
+    #[serde(default)]
+    price: Option<Value>,
+    #[serde(default)]
+    side: Option<Value>,
+    #[serde(default, alias = "last_trade_price")]
+    last_trade_price: Option<Value>,
+    #[serde(default)]
+    size: Option<Value>,
+    #[serde(default, alias = "tick_size")]
+    tick_size: Option<Value>,
+    #[serde(default, alias = "previous_tick_size")]
+    previous_tick_size: Option<Value>,
+    #[serde(default)]
+    status: Option<Value>,
     #[serde(default, alias = "timestamp")]
     ts: Option<String>,
 }
@@ -177,10 +241,50 @@ pub fn parse_market_message(message: &str) -> Result<MarketWsEvent, WsParseError
             asset_id: envelope
                 .asset_id
                 .ok_or(WsParseError::MissingField("asset_id"))?,
-            best_bid: envelope.best_bid,
-            best_ask: envelope.best_ask,
+            best_bid: optional_string(envelope.best_bid, "best_bid")?,
+            best_ask: optional_string(envelope.best_ask, "best_ask")?,
             event_ts: parse_timestamp(envelope.ts)?,
         })),
+        "PRICE_CHANGE" => Ok(MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+            asset_id: envelope
+                .asset_id
+                .ok_or(WsParseError::MissingField("asset_id"))?,
+            price: required_value(envelope.price, "price")?,
+            side: optional_string(envelope.side, "side")?,
+            event_ts: parse_timestamp(envelope.ts)?,
+        })),
+        "LAST_TRADE_PRICE" => Ok(MarketWsEvent::LastTradePrice(MarketTradePriceUpdate {
+            asset_id: envelope
+                .asset_id
+                .ok_or(WsParseError::MissingField("asset_id"))?,
+            price: required_value(
+                envelope.last_trade_price.or(envelope.price),
+                "last_trade_price",
+            )?,
+            size: optional_string(envelope.size, "size")?,
+            event_ts: parse_timestamp(envelope.ts)?,
+        })),
+        "TICK_SIZE_CHANGE" => Ok(MarketWsEvent::TickSizeChange(
+            MarketTickSizeChangeUpdate {
+                asset_id: envelope
+                    .asset_id
+                    .ok_or(WsParseError::MissingField("asset_id"))?,
+                previous_tick_size: optional_string(
+                    envelope.previous_tick_size,
+                    "previous_tick_size",
+                )?,
+                tick_size: required_value(envelope.tick_size, "tick_size")?,
+                event_ts: parse_timestamp(envelope.ts)?,
+            },
+        )),
+        "LIFECYCLE" | "STATUS" | "MARKET_STATUS" => {
+            Ok(MarketWsEvent::Lifecycle(MarketLifecycleUpdate {
+                market_id: envelope.market_id,
+                asset_id: envelope.asset_id,
+                status: required_value(envelope.status, "status")?,
+                event_ts: parse_timestamp(envelope.ts)?,
+            }))
+        }
         other => Err(WsParseError::UnknownEvent(other.to_owned())),
     }
 }
@@ -197,4 +301,24 @@ fn parse_timestamp(value: Option<String>) -> Result<Option<DateTime<Utc>>, WsPar
     let parsed = DateTime::parse_from_rfc3339(&value)
         .map_err(|_| WsParseError::InvalidTimestamp(value.clone()))?;
     Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+fn required_value(value: Option<Value>, field: &'static str) -> Result<String, WsParseError> {
+    optional_string(value, field)?.ok_or(WsParseError::MissingField(field))
+}
+
+fn optional_string(
+    value: Option<Value>,
+    field: &'static str,
+) -> Result<Option<String>, WsParseError> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        Some(Value::Bool(value)) => Ok(Some(value.to_string())),
+        Some(other) => Err(WsParseError::InvalidField {
+            field,
+            value: other.to_string(),
+        }),
+    }
 }

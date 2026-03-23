@@ -4,6 +4,9 @@ use chrono::{DateTime, Duration, Utc};
 pub struct OrderHeartbeatState {
     pub heartbeat_id: Option<String>,
     pub last_success_at: DateTime<Utc>,
+    pub reconcile_attention_since: Option<DateTime<Utc>>,
+    pub reconcile_reason: Option<HeartbeatReconcileReason>,
+    pub requires_reconcile_attention: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,26 +33,46 @@ impl OrderHeartbeatMonitor {
     ) {
         state.heartbeat_id = Some(heartbeat_id.into());
         state.last_success_at = at;
+        state.reconcile_attention_since = None;
+        state.reconcile_reason = None;
+        state.requires_reconcile_attention = false;
     }
 
     pub fn record_invalid(
         &self,
         state: &mut OrderHeartbeatState,
-        _at: DateTime<Utc>,
+        at: DateTime<Utc>,
     ) -> Option<HeartbeatReconcileReason> {
         state.heartbeat_id = None;
-        Some(HeartbeatReconcileReason::InvalidHeartbeat)
+        self.raise_attention(state, at, HeartbeatReconcileReason::InvalidHeartbeat)
     }
 
     pub fn reconcile_trigger(
         &self,
-        state: &OrderHeartbeatState,
+        state: &mut OrderHeartbeatState,
         now: DateTime<Utc>,
     ) -> Option<HeartbeatReconcileReason> {
-        if now.signed_duration_since(state.last_success_at) > self.max_gap {
-            return Some(HeartbeatReconcileReason::MissedHeartbeat);
+        let stale_onset = state.last_success_at + self.max_gap;
+        if now > stale_onset {
+            return self.raise_attention(state, stale_onset, HeartbeatReconcileReason::MissedHeartbeat);
         }
 
         None
+    }
+
+    fn raise_attention(
+        &self,
+        state: &mut OrderHeartbeatState,
+        at: DateTime<Utc>,
+        reason: HeartbeatReconcileReason,
+    ) -> Option<HeartbeatReconcileReason> {
+        if state.requires_reconcile_attention {
+            return None;
+        }
+
+        state.reconcile_attention_since = Some(at);
+        state.reconcile_reason = Some(reason);
+        state.requires_reconcile_attention = true;
+        Some(reason)
     }
 }

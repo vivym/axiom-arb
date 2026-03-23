@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::WsParseError;
 
@@ -16,6 +17,10 @@ pub struct UserOrderUpdate {
     pub order_id: String,
     pub status: String,
     pub condition_id: String,
+    pub price: Option<String>,
+    pub size: Option<String>,
+    pub fee_rate_bps: Option<String>,
+    pub transaction_hash: Option<String>,
     pub event_ts: Option<DateTime<Utc>>,
 }
 
@@ -25,6 +30,10 @@ pub struct UserTradeUpdate {
     pub order_id: String,
     pub status: String,
     pub condition_id: String,
+    pub price: Option<String>,
+    pub size: Option<String>,
+    pub fee_rate_bps: Option<String>,
+    pub transaction_hash: Option<String>,
     pub event_ts: Option<DateTime<Utc>>,
 }
 
@@ -39,6 +48,14 @@ struct UserEnvelope {
     status: Option<String>,
     #[serde(default)]
     condition_id: Option<String>,
+    #[serde(default)]
+    price: Option<Value>,
+    #[serde(default)]
+    size: Option<Value>,
+    #[serde(default)]
+    fee_rate_bps: Option<Value>,
+    #[serde(default)]
+    transaction_hash: Option<Value>,
     #[serde(default, alias = "timestamp")]
     ts: Option<String>,
 }
@@ -52,6 +69,10 @@ pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
             order_id: required(envelope.order_id, "order_id")?,
             status: required(envelope.status, "status")?,
             condition_id: required(envelope.condition_id, "condition_id")?,
+            price: optional_string(envelope.price, "price")?,
+            size: optional_string(envelope.size, "size")?,
+            fee_rate_bps: optional_string(envelope.fee_rate_bps, "fee_rate_bps")?,
+            transaction_hash: optional_string(envelope.transaction_hash, "transaction_hash")?,
             event_ts: parse_timestamp(envelope.ts)?,
         })),
         "TRADE" => Ok(UserWsEvent::Trade(UserTradeUpdate {
@@ -59,6 +80,10 @@ pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
             order_id: required(envelope.order_id, "order_id")?,
             status: required(envelope.status, "status")?,
             condition_id: required(envelope.condition_id, "condition_id")?,
+            price: optional_string(envelope.price, "price")?,
+            size: optional_string(envelope.size, "size")?,
+            fee_rate_bps: optional_string(envelope.fee_rate_bps, "fee_rate_bps")?,
+            transaction_hash: optional_string(envelope.transaction_hash, "transaction_hash")?,
             event_ts: parse_timestamp(envelope.ts)?,
         })),
         other => Err(WsParseError::UnknownEvent(other.to_owned())),
@@ -77,4 +102,20 @@ fn parse_timestamp(value: Option<String>) -> Result<Option<DateTime<Utc>>, WsPar
     let parsed = DateTime::parse_from_rfc3339(&value)
         .map_err(|_| WsParseError::InvalidTimestamp(value.clone()))?;
     Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+fn optional_string(
+    value: Option<Value>,
+    field: &'static str,
+) -> Result<Option<String>, WsParseError> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        Some(Value::Bool(value)) => Ok(Some(value.to_string())),
+        Some(other) => Err(WsParseError::InvalidField {
+            field,
+            value: other.to_string(),
+        }),
+    }
 }
