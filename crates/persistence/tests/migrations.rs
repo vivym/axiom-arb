@@ -173,6 +173,48 @@ async fn seed_identifier_graph(pool: &PgPool) {
         .unwrap();
 }
 
+async fn seed_partial_market_graph(pool: &PgPool, market_id: &str, condition_id: &str) {
+    sqlx::query(
+        r#"
+        INSERT INTO event_families (event_family_id, name)
+        VALUES ('family-1', 'family-1')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO events (event_id, event_family_id, name)
+        VALUES ('event-1', 'family-1', 'event-1')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO conditions (condition_id, event_id)
+        VALUES ($1, 'event-1')
+        "#,
+    )
+    .bind(condition_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO markets (market_id, condition_id, event_id, route)
+        VALUES ($1, $2, 'event-1', 'standard')
+        "#,
+    )
+    .bind(market_id)
+    .bind(condition_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn migrations_create_signed_order_and_resolution_tables() {
     let db = TestDatabase::new().await;
@@ -459,6 +501,34 @@ async fn conflicting_identifier_mappings_are_rejected() {
 }
 
 #[tokio::test]
+async fn market_uniqueness_race_is_reported_as_identifier_conflict() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_partial_market_graph(&db.pool, "market-existing", "condition-1").await;
+
+    let repo = IdentifierRepo;
+    let err = repo
+        .upsert_record(
+            &db.pool,
+            &identifier_record("market-new", "condition-1", "token-yes", "YES"),
+        )
+        .await
+        .expect_err("market uniqueness conflict should normalize to IdentifierConflict");
+
+    match err {
+        PersistenceError::IdentifierConflict(conflict) => {
+            assert!(matches!(
+                conflict,
+                domain::IdentifierMapError::ConflictingConditionMetadata { .. }
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn conflicting_identifier_metadata_rewrites_are_rejected() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -502,6 +572,40 @@ async fn conflicting_identifier_metadata_rewrites_are_rejected() {
             "YES"
         )]
     );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn duplicate_condition_outcome_is_reported_as_identifier_conflict() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let repo = IdentifierRepo;
+    repo.upsert_record(
+        &db.pool,
+        &identifier_record("market-1", "condition-1", "token-yes", "YES"),
+    )
+    .await
+    .unwrap();
+
+    let err = repo
+        .upsert_record(
+            &db.pool,
+            &identifier_record("market-1", "condition-1", "token-yes-2", "YES"),
+        )
+        .await
+        .expect_err("duplicate condition/outcome should normalize to IdentifierConflict");
+
+    match err {
+        PersistenceError::IdentifierConflict(conflict) => {
+            assert!(matches!(
+                conflict,
+                domain::IdentifierMapError::ConflictingTokenMetadata { .. }
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 
     db.cleanup().await;
 }
@@ -646,6 +750,50 @@ async fn reusing_order_id_with_different_payload_is_rejected() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+
+    let stored = orders
+        .get_order(&db.pool, &OrderId::from("order-1"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.order.price, Decimal::new(55, 2));
+    assert_eq!(
+        stored.order.signed_order.unwrap().signed_order_hash,
+        "hash-1"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn replaying_identical_signed_order_is_idempotent() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_identifier_graph(&db.pool).await;
+
+    let orders = OrderRepo;
+    let original = signed_order(
+        "order-1",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "hash-1",
+        55,
+        SettlementState::Unknown,
+    );
+    let row = NewOrderRow::from_domain(&original, None);
+
+    orders
+        .insert_signed_order(&db.pool, row.clone())
+        .await
+        .unwrap();
+    orders.insert_signed_order(&db.pool, row).await.unwrap();
+
+    let order_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(order_count, 1);
 
     let stored = orders
         .get_order(&db.pool, &OrderId::from("order-1"))

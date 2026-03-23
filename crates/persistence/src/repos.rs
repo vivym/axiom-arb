@@ -182,7 +182,7 @@ impl IdentifierRepo {
             r#"
             INSERT INTO markets (market_id, condition_id, event_id, route)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (market_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(&row.market_id)
@@ -193,31 +193,49 @@ impl IdentifierRepo {
         .await?;
 
         if result.rows_affected() == 0 {
-            let existing = sqlx::query(
+            if let Some(existing) = sqlx::query(
                 "SELECT condition_id, event_id, route FROM markets WHERE market_id = $1",
             )
             .bind(&row.market_id)
-            .fetch_one(&mut **tx)
-            .await?;
+            .fetch_optional(&mut **tx)
+            .await?
+            {
+                let existing_condition_id: String = existing.try_get("condition_id")?;
+                let existing_event_id: String = existing.try_get("event_id")?;
+                let existing_route: String = existing.try_get("route")?;
 
-            let existing_condition_id: String = existing.try_get("condition_id")?;
-            let existing_event_id: String = existing.try_get("event_id")?;
-            let existing_route: String = existing.try_get("route")?;
+                if existing_condition_id != row.condition_id || existing_event_id != row.event_id {
+                    return Err(PersistenceError::IdentifierConflict(
+                        domain::IdentifierMapError::ConflictingConditionMetadata {
+                            condition_id: row.condition_id.clone().into(),
+                        },
+                    ));
+                }
 
-            if existing_condition_id != row.condition_id || existing_event_id != row.event_id {
+                if existing_route != row.route {
+                    return Err(PersistenceError::IdentifierConflict(
+                        domain::IdentifierMapError::ConflictingConditionRoute {
+                            condition_id: row.condition_id.clone().into(),
+                            existing_route: route_from_str(&existing_route)?,
+                            new_route: route_from_str(&row.route)?,
+                        },
+                    ));
+                }
+
+                return Ok(());
+            }
+
+            if sqlx::query_scalar::<_, String>(
+                "SELECT market_id FROM markets WHERE condition_id = $1 LIMIT 1",
+            )
+            .bind(&row.condition_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .is_some()
+            {
                 return Err(PersistenceError::IdentifierConflict(
                     domain::IdentifierMapError::ConflictingConditionMetadata {
                         condition_id: row.condition_id.clone().into(),
-                    },
-                ));
-            }
-
-            if existing_route != row.route {
-                return Err(PersistenceError::IdentifierConflict(
-                    domain::IdentifierMapError::ConflictingConditionRoute {
-                        condition_id: row.condition_id.clone().into(),
-                        existing_route: route_from_str(&existing_route)?,
-                        new_route: route_from_str(&row.route)?,
                     },
                 ));
             }
@@ -293,7 +311,7 @@ impl IdentifierRepo {
                 route
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (token_id) DO NOTHING
+            ON CONFLICT DO NOTHING
             "#,
         )
         .bind(&row.token_id)
@@ -307,7 +325,7 @@ impl IdentifierRepo {
         .await?;
 
         if result.rows_affected() == 0 {
-            let existing_row = sqlx::query(
+            if let Some(existing_row) = sqlx::query(
                 r#"
                 SELECT event_id, event_family_id, market_id, condition_id, token_id, outcome_label, route
                 FROM identifier_map
@@ -315,16 +333,35 @@ impl IdentifierRepo {
                 "#,
             )
             .bind(&row.token_id)
-            .fetch_one(&mut **tx)
-            .await?;
+            .fetch_optional(&mut **tx)
+            .await?
+            {
+                let existing = map_identifier_record_row(existing_row)?.into_domain()?;
+                let attempted = row.clone().into_domain()?;
 
-            let existing = map_identifier_record_row(existing_row)?.into_domain()?;
-            let attempted = row.clone().into_domain()?;
+                if existing != attempted {
+                    let mut records = self.list_records_in_tx(tx).await?;
+                    records.push(attempted);
+                    IdentifierMap::from_records(records)?;
+                    return Err(PersistenceError::IdentifierConflict(
+                        domain::IdentifierMapError::ConflictingTokenMetadata {
+                            token_id: row.token_id.clone().into(),
+                        },
+                    ));
+                }
 
-            if existing != attempted {
-                let mut records = self.list_records_in_tx(tx).await?;
-                records.push(attempted);
-                IdentifierMap::from_records(records)?;
+                return Ok(());
+            }
+
+            if sqlx::query_scalar::<_, String>(
+                "SELECT token_id FROM identifier_map WHERE condition_id = $1 AND outcome_label = $2 LIMIT 1",
+            )
+            .bind(&row.condition_id)
+            .bind(&row.outcome_label)
+            .fetch_optional(&mut **tx)
+            .await?
+            .is_some()
+            {
                 return Err(PersistenceError::IdentifierConflict(
                     domain::IdentifierMapError::ConflictingTokenMetadata {
                         token_id: row.token_id.clone().into(),
