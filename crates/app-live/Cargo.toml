@@ -3,6 +3,10 @@ name = "app-live"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+domain = { path = "../domain" }
+rust_decimal = "1.40.0"
+state = { path = "../state" }
+
 [lib]
 path = "src/lib.rs"
-
