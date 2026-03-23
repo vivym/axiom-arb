@@ -1,8 +1,8 @@
 CREATE TABLE orders (
     order_id TEXT PRIMARY KEY,
-    market_id TEXT NOT NULL REFERENCES markets(market_id) ON DELETE RESTRICT,
-    condition_id TEXT NOT NULL REFERENCES conditions(condition_id) ON DELETE RESTRICT,
-    token_id TEXT NOT NULL REFERENCES tokens(token_id) ON DELETE RESTRICT,
+    market_id TEXT NOT NULL,
+    condition_id TEXT NOT NULL,
+    token_id TEXT NOT NULL,
     quantity NUMERIC NOT NULL,
     price NUMERIC NOT NULL,
     submission_state TEXT NOT NULL,
@@ -14,14 +14,43 @@ CREATE TABLE orders (
     signature TEXT,
     retry_of_order_id TEXT REFERENCES orders(order_id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT orders_identifier_map_link_valid
+        FOREIGN KEY (market_id, condition_id, token_id)
+        REFERENCES identifier_map(market_id, condition_id, token_id)
+        ON DELETE RESTRICT,
+    CONSTRAINT orders_submission_state_valid CHECK (
+        submission_state IN ('draft', 'planned', 'risk_approved', 'signed', 'submitted', 'acked', 'rejected', 'unknown')
+    ),
+    CONSTRAINT orders_venue_state_valid CHECK (
+        venue_state IN ('live', 'matched', 'delayed', 'unmatched', 'cancel_pending', 'cancelled', 'expired', 'unknown')
+    ),
+    CONSTRAINT orders_settlement_state_valid CHECK (
+        settlement_state IN ('matched', 'mined', 'confirmed', 'retrying', 'failed', 'unknown')
+    ),
+    CONSTRAINT orders_signed_order_identity_complete CHECK (
+        (
+            signed_order_hash IS NULL
+            AND salt IS NULL
+            AND nonce IS NULL
+            AND signature IS NULL
+        )
+        OR (
+            signed_order_hash IS NOT NULL
+            AND salt IS NOT NULL
+            AND nonce IS NOT NULL
+            AND signature IS NOT NULL
+        )
+    )
 );
 
 CREATE INDEX idx_orders_market_id ON orders(market_id);
 CREATE INDEX idx_orders_condition_id ON orders(condition_id);
 CREATE INDEX idx_orders_token_id ON orders(token_id);
 CREATE INDEX idx_orders_retry_of_order_id ON orders(retry_of_order_id);
-CREATE INDEX idx_orders_signed_order_hash ON orders(signed_order_hash);
+CREATE UNIQUE INDEX orders_signed_order_hash_unique
+    ON orders(signed_order_hash)
+    WHERE signed_order_hash IS NOT NULL;
 
 CREATE TABLE event_journal (
     journal_seq BIGSERIAL PRIMARY KEY,

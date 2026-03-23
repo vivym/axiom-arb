@@ -1,10 +1,12 @@
-use domain::{ApprovalState, ConditionId, IdentifierRecord, Order, OrderId, ResolutionState};
+use domain::{
+    ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
+};
 use sqlx::{postgres::PgRow, PgPool, Row};
 
 use crate::{
     models::{
         ApprovalStateRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput,
-        JournalEntryRow, NewOrderRow, OrderRow, ResolutionStateRow,
+        JournalEntryRow, NewOrderRow, OrderRow, ResolutionStateRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -14,6 +16,8 @@ pub struct IdentifierRepo;
 
 impl IdentifierRepo {
     pub async fn upsert_record(&self, pool: &PgPool, record: &IdentifierRecord) -> Result<()> {
+        self.validate_record(pool, record).await?;
+
         let row = IdentifierRecordRow::from_domain(record);
         let mut tx = pool.begin().await?;
 
@@ -47,15 +51,13 @@ impl IdentifierRepo {
 
         sqlx::query(
             r#"
-            INSERT INTO conditions (condition_id, market_id, event_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO conditions (condition_id, event_id)
+            VALUES ($1, $2)
             ON CONFLICT (condition_id) DO UPDATE
-            SET market_id = EXCLUDED.market_id,
-                event_id = EXCLUDED.event_id
+            SET event_id = EXCLUDED.event_id
             "#,
         )
         .bind(&row.condition_id)
-        .bind(&row.market_id)
         .bind(&row.event_id)
         .execute(&mut *tx)
         .await?;
@@ -127,6 +129,13 @@ impl IdentifierRepo {
         Ok(())
     }
 
+    async fn validate_record(&self, pool: &PgPool, record: &IdentifierRecord) -> Result<()> {
+        let mut records = self.list_records(pool).await?;
+        records.push(record.clone());
+        IdentifierMap::from_records(records)?;
+        Ok(())
+    }
+
     pub async fn list_records(&self, pool: &PgPool) -> Result<Vec<IdentifierRecord>> {
         let rows = sqlx::query(
             r#"
@@ -164,7 +173,20 @@ impl OrderRepo {
             return Err(PersistenceError::IncompleteSignedOrderIdentity);
         }
 
-        sqlx::query(
+        if let Some(signed_order_hash) = row.signed_order_hash.as_deref() {
+            if let Some(existing_order_id) = self
+                .find_order_id_by_signed_hash_excluding(pool, signed_order_hash, &row.order_id)
+                .await?
+            {
+                return Err(PersistenceError::DuplicateSignedOrderHash {
+                    signed_order_hash: signed_order_hash.to_owned(),
+                    existing_order_id,
+                    attempted_order_id: row.order_id.clone(),
+                });
+            }
+        }
+
+        let query_result = sqlx::query(
             r#"
             INSERT INTO orders (
                 order_id,
@@ -209,18 +231,51 @@ impl OrderRepo {
         .bind(submission_state(&row))
         .bind(venue_state(&row))
         .bind(settlement_state(&row))
-        .bind(row.signed_order_hash)
-        .bind(row.salt)
-        .bind(row.nonce)
-        .bind(row.signature)
-        .bind(row.retry_of_order_id)
+        .bind(row.signed_order_hash.as_deref())
+        .bind(row.salt.as_deref())
+        .bind(row.nonce.as_deref())
+        .bind(row.signature.as_deref())
+        .bind(row.retry_of_order_id.as_deref())
         .execute(pool)
-        .await?;
+        .await;
+
+        if let Err(err) = query_result {
+            if constraint_name(&err) == Some("orders_signed_order_hash_unique") {
+                let signed_order_hash = row
+                    .signed_order_hash
+                    .clone()
+                    .expect("duplicate hash constraint requires signed_order_hash");
+                let existing_order_id = self
+                    .find_order_id_by_signed_hash(pool, &signed_order_hash)
+                    .await?
+                    .unwrap_or_else(|| "<unknown>".to_owned());
+
+                return Err(PersistenceError::DuplicateSignedOrderHash {
+                    signed_order_hash,
+                    existing_order_id,
+                    attempted_order_id: row.order_id.clone(),
+                });
+            }
+
+            if constraint_name(&err) == Some("orders_identifier_map_link_valid") {
+                return Err(PersistenceError::InvalidOrderIdentifierLinkage {
+                    market_id: row.market_id.clone(),
+                    condition_id: row.condition_id.clone(),
+                    token_id: row.token_id.clone(),
+                });
+            }
+
+            return Err(err.into());
+        }
 
         Ok(())
     }
 
-    pub async fn get_order(&self, pool: &PgPool, order_id: &OrderId) -> Result<Option<Order>> {
+    pub async fn get_order(
+        &self,
+        pool: &PgPool,
+        order_id: &OrderId,
+    ) -> Result<Option<StoredOrder>> {
         let row = sqlx::query(
             r#"
             SELECT
@@ -250,8 +305,48 @@ impl OrderRepo {
 
         row.map(map_order_row)
             .transpose()?
-            .map(OrderRow::into_domain)
+            .map(OrderRow::into_stored_order)
             .transpose()
+    }
+
+    async fn find_order_id_by_signed_hash(
+        &self,
+        pool: &PgPool,
+        signed_order_hash: &str,
+    ) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT order_id
+            FROM orders
+            WHERE signed_order_hash = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(signed_order_hash)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn find_order_id_by_signed_hash_excluding(
+        &self,
+        pool: &PgPool,
+        signed_order_hash: &str,
+        order_id: &str,
+    ) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT order_id
+            FROM orders
+            WHERE signed_order_hash = $1 AND order_id <> $2
+            LIMIT 1
+            "#,
+        )
+        .bind(signed_order_hash)
+        .bind(order_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Into::into)
     }
 }
 
@@ -689,5 +784,12 @@ fn settlement_state(row: &NewOrderRow) -> &'static str {
         domain::SettlementState::Retrying => "retrying",
         domain::SettlementState::Failed => "failed",
         domain::SettlementState::Unknown => "unknown",
+    }
+}
+
+fn constraint_name(err: &sqlx::Error) -> Option<&str> {
+    match err {
+        sqlx::Error::Database(db_err) => db_err.constraint(),
+        _ => None,
     }
 }

@@ -110,8 +110,8 @@ pub struct OrderRow {
 }
 
 impl OrderRow {
-    pub fn into_domain(self) -> Result<Order> {
-        Ok(Order {
+    pub fn into_stored_order(self) -> Result<StoredOrder> {
+        let order = Order {
             order_id: self.order_id.into(),
             market_id: MarketId::from(self.market_id),
             condition_id: ConditionId::from(self.condition_id),
@@ -127,8 +127,23 @@ impl OrderRow {
                 self.nonce,
                 self.signature,
             )?,
+        };
+
+        Ok(StoredOrder {
+            retry_of_order_id: self.retry_of_order_id.map(OrderId::from),
+            order,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredOrder {
+    pub order: Order,
+    pub retry_of_order_id: Option<OrderId>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

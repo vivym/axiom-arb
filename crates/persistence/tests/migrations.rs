@@ -1,58 +1,86 @@
-use std::{path::Path, sync::OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
 use domain::{
-    ApprovalState, ApprovalStatus, ConditionId, DisputeState, IdentifierRecord, MarketId,
-    MarketRoute, Order, OrderId, ResolutionState, ResolutionStatus, SettlementState, SignatureType,
-    SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
+    ApprovalState, ApprovalStatus, ConditionId, DisputeState, IdentifierRecord, InventoryBucket,
+    MarketId, MarketRoute, Order, OrderId, ResolutionState, ResolutionStatus, SettlementState,
+    SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use persistence::{
     models::{InventoryBucketRow, JournalEntryInput, NewOrderRow},
-    ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo, ResolutionRepo,
+    run_migrations, ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo,
+    PersistenceError, ResolutionRepo,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use tokio::sync::{Mutex, MutexGuard};
 
-fn test_lock() -> &'static Mutex<()> {
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    TEST_LOCK.get_or_init(|| Mutex::new(()))
+static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
+
+struct TestDatabase {
+    admin_pool: PgPool,
+    pool: PgPool,
+    schema: String,
 }
 
-async fn test_db_pool() -> PgPool {
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for persistence tests");
+impl TestDatabase {
+    async fn new() -> Self {
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for persistence tests");
 
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&database_url)
-        .await
-        .expect("test database should connect");
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("test database should connect");
 
-    sqlx::query("DROP SCHEMA IF EXISTS public CASCADE")
-        .execute(&pool)
-        .await
-        .expect("public schema should drop");
-    sqlx::query("CREATE SCHEMA public")
-        .execute(&pool)
-        .await
-        .expect("public schema should recreate");
+        let schema = format!(
+            "persistence_test_{}_{}",
+            std::process::id(),
+            NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let create_schema = format!(r#"CREATE SCHEMA "{schema}""#);
 
-    pool
-}
+        sqlx::query(&create_schema)
+            .execute(&admin_pool)
+            .await
+            .expect("test schema should create");
 
-async fn isolated_test_db_pool() -> (MutexGuard<'static, ()>, PgPool) {
-    let guard = test_lock().lock().await;
-    let pool = test_db_pool().await;
-    (guard, pool)
-}
+        let search_path_sql = format!(r#"SET search_path TO "{schema}""#);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |conn, _meta| {
+                let search_path_sql = search_path_sql.clone();
+                Box::pin(async move {
+                    sqlx::query(&search_path_sql).execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(&database_url)
+            .await
+            .expect("isolated test pool should connect");
 
-async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    let migrations_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
-    let migrator = sqlx::migrate::Migrator::new(migrations_dir.as_path()).await?;
+        Self {
+            admin_pool,
+            pool,
+            schema,
+        }
+    }
 
-    migrator.run(pool).await
+    async fn cleanup(self) {
+        self.pool.close().await;
+
+        let drop_schema = format!(
+            r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#,
+            schema = self.schema
+        );
+        sqlx::query(&drop_schema)
+            .execute(&self.admin_pool)
+            .await
+            .expect("test schema should drop");
+
+        self.admin_pool.close().await;
+    }
 }
 
 async fn table_exists(pool: &PgPool, table_name: &str) -> bool {
@@ -61,7 +89,7 @@ async fn table_exists(pool: &PgPool, table_name: &str) -> bool {
         SELECT EXISTS (
             SELECT 1
             FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = $1
+            WHERE table_schema = current_schema() AND table_name = $1
         ) AS exists
         "#,
     )
@@ -78,7 +106,7 @@ async fn column_exists(pool: &PgPool, table_name: &str, column_name: &str) -> bo
         SELECT EXISTS (
             SELECT 1
             FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+            WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2
         ) AS exists
         "#,
     )
@@ -90,20 +118,77 @@ async fn column_exists(pool: &PgPool, table_name: &str, column_name: &str) -> bo
     .get("exists")
 }
 
+fn identifier_record(
+    market_id: &str,
+    condition_id: &str,
+    token_id: &str,
+    outcome_label: &str,
+) -> IdentifierRecord {
+    IdentifierRecord {
+        event_id: "event-1".into(),
+        event_family_id: "family-1".into(),
+        market_id: market_id.into(),
+        condition_id: condition_id.into(),
+        token_id: token_id.into(),
+        outcome_label: outcome_label.to_owned(),
+        route: MarketRoute::Standard,
+    }
+}
+
+fn signed_order(
+    order_id: &str,
+    market_id: &str,
+    condition_id: &str,
+    token_id: &str,
+    signed_order_hash: &str,
+    price_hundredths: i64,
+    settlement_state: SettlementState,
+) -> Order {
+    Order {
+        order_id: OrderId::from(order_id),
+        market_id: MarketId::from(market_id),
+        condition_id: ConditionId::from(condition_id),
+        token_id: TokenId::from(token_id),
+        quantity: Decimal::new(10, 0),
+        price: Decimal::new(price_hundredths, 2),
+        submission_state: SubmissionState::Signed,
+        venue_state: VenueOrderState::Live,
+        settlement_state,
+        signed_order: Some(SignedOrderIdentity {
+            signed_order_hash: signed_order_hash.to_owned(),
+            salt: format!("salt-{order_id}"),
+            nonce: format!("nonce-{order_id}"),
+            signature: format!("sig-{order_id}"),
+        }),
+    }
+}
+
+async fn seed_identifier_graph(pool: &PgPool) {
+    IdentifierRepo
+        .upsert_record(
+            &pool,
+            &identifier_record("market-1", "condition-1", "token-yes", "YES"),
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn migrations_create_signed_order_and_resolution_tables() {
-    let (_guard, pool) = isolated_test_db_pool().await;
-    run_migrations(&pool).await.unwrap();
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
 
-    assert!(table_exists(&pool, "orders").await);
-    assert!(column_exists(&pool, "orders", "signed_order_hash").await);
-    assert!(table_exists(&pool, "resolution_states").await);
+    assert!(table_exists(&db.pool, "orders").await);
+    assert!(column_exists(&db.pool, "orders", "signed_order_hash").await);
+    assert!(table_exists(&db.pool, "resolution_states").await);
+
+    db.cleanup().await;
 }
 
 #[tokio::test]
 async fn persistence_repos_round_trip_runtime_foundation() {
-    let (_guard, pool) = isolated_test_db_pool().await;
-    run_migrations(&pool).await.unwrap();
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
 
     let identifiers = IdentifierRepo;
     let orders = OrderRepo;
@@ -114,64 +199,38 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 
     identifiers
         .upsert_record(
-            &pool,
-            &IdentifierRecord {
-                event_id: "event-1".into(),
-                event_family_id: "family-1".into(),
-                market_id: "market-1".into(),
-                condition_id: "condition-1".into(),
-                token_id: "token-yes".into(),
-                outcome_label: "YES".to_owned(),
-                route: MarketRoute::Standard,
-            },
+            &db.pool,
+            &identifier_record("market-1", "condition-1", "token-yes", "YES"),
         )
         .await
         .unwrap();
 
-    let original_order = Order {
-        order_id: OrderId::from("order-1"),
-        market_id: MarketId::from("market-1"),
-        condition_id: ConditionId::from("condition-1"),
-        token_id: TokenId::from("token-yes"),
-        quantity: Decimal::new(10, 0),
-        price: Decimal::new(55, 2),
-        submission_state: SubmissionState::Signed,
-        venue_state: VenueOrderState::Live,
-        settlement_state: SettlementState::Unknown,
-        signed_order: Some(SignedOrderIdentity {
-            signed_order_hash: "hash-1".to_owned(),
-            salt: "salt-1".to_owned(),
-            nonce: "nonce-1".to_owned(),
-            signature: "sig-1".to_owned(),
-        }),
-    };
-
+    let original_order = signed_order(
+        "order-1",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "hash-1",
+        55,
+        SettlementState::Unknown,
+    );
     orders
-        .insert_signed_order(&pool, NewOrderRow::from_domain(&original_order, None))
+        .insert_signed_order(&db.pool, NewOrderRow::from_domain(&original_order, None))
         .await
         .unwrap();
 
-    let retry_order = Order {
-        order_id: OrderId::from("order-2"),
-        market_id: MarketId::from("market-1"),
-        condition_id: ConditionId::from("condition-1"),
-        token_id: TokenId::from("token-yes"),
-        quantity: Decimal::new(10, 0),
-        price: Decimal::new(54, 2),
-        submission_state: SubmissionState::Submitted,
-        venue_state: VenueOrderState::Unknown,
-        settlement_state: SettlementState::Retrying,
-        signed_order: Some(SignedOrderIdentity {
-            signed_order_hash: "hash-2".to_owned(),
-            salt: "salt-2".to_owned(),
-            nonce: "nonce-2".to_owned(),
-            signature: "sig-2".to_owned(),
-        }),
-    };
-
+    let retry_order = signed_order(
+        "order-2",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "hash-2",
+        54,
+        SettlementState::Retrying,
+    );
     orders
         .insert_signed_order(
-            &pool,
+            &db.pool,
             NewOrderRow::from_domain(&retry_order, Some(&original_order.order_id)),
         )
         .await
@@ -179,7 +238,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 
     approvals
         .upsert_state(
-            &pool,
+            &db.pool,
             &ApprovalState {
                 token_id: TokenId::from("token-yes"),
                 spender: "0xspender".to_owned(),
@@ -198,13 +257,13 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 
     inventory
         .upsert_bucket(
-            &pool,
+            &db.pool,
             &InventoryBucketRow {
                 linked_order_id: Some(original_order.order_id.as_str().to_owned()),
                 ..InventoryBucketRow::new(
                     "token-yes",
                     "0xowner",
-                    domain::InventoryBucket::ReservedForOrder,
+                    InventoryBucket::ReservedForOrder,
                     Decimal::new(10, 0),
                 )
             },
@@ -214,7 +273,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 
     resolutions
         .upsert_state(
-            &pool,
+            &db.pool,
             &ResolutionState {
                 condition_id: ConditionId::from("condition-1"),
                 resolution_status: ResolutionStatus::Resolved,
@@ -229,7 +288,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 
     let journal_row = journal
         .append(
-            &pool,
+            &db.pool,
             &JournalEntryInput {
                 stream: "runtime".to_owned(),
                 source_kind: "test".to_owned(),
@@ -245,21 +304,29 @@ async fn persistence_repos_round_trip_runtime_foundation() {
         .await
         .unwrap();
 
-    assert_eq!(identifiers.list_records(&pool).await.unwrap().len(), 1);
+    assert_eq!(identifiers.list_records(&db.pool).await.unwrap().len(), 1);
+
+    let stored_retry_order = orders
+        .get_order(&db.pool, &retry_order.order_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        orders
-            .get_order(&pool, &retry_order.order_id)
-            .await
-            .unwrap()
-            .unwrap()
+        stored_retry_order
+            .order
             .signed_order
             .unwrap()
             .signed_order_hash,
         "hash-2"
     );
     assert_eq!(
+        stored_retry_order.retry_of_order_id,
+        Some(original_order.order_id.clone())
+    );
+
+    assert_eq!(
         approvals
-            .get_state(&pool, "token-yes", "0xspender", "0xowner")
+            .get_state(&db.pool, "token-yes", "0xspender", "0xowner")
             .await
             .unwrap()
             .unwrap()
@@ -268,7 +335,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
     );
     assert_eq!(
         inventory
-            .list_by_owner(&pool, "0xowner")
+            .list_by_owner(&db.pool, "0xowner")
             .await
             .unwrap()
             .len(),
@@ -276,7 +343,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
     );
     assert_eq!(
         resolutions
-            .get_state(&pool, &ConditionId::from("condition-1"))
+            .get_state(&db.pool, &ConditionId::from("condition-1"))
             .await
             .unwrap()
             .unwrap()
@@ -284,5 +351,197 @@ async fn persistence_repos_round_trip_runtime_foundation() {
         vec![Decimal::new(1, 0), Decimal::new(0, 0)]
     );
     assert_eq!(journal_row.journal_seq, 1);
-    assert_eq!(journal.list_after(&pool, 0, 10).await.unwrap().len(), 1);
+    assert_eq!(journal.list_after(&db.pool, 0, 10).await.unwrap().len(), 1);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn duplicate_signed_payloads_are_rejected() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_identifier_graph(&db.pool).await;
+
+    let orders = OrderRepo;
+    let first_order = signed_order(
+        "order-1",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "same-hash",
+        55,
+        SettlementState::Unknown,
+    );
+    orders
+        .insert_signed_order(&db.pool, NewOrderRow::from_domain(&first_order, None))
+        .await
+        .unwrap();
+
+    let duplicate_order = signed_order(
+        "order-2",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "same-hash",
+        56,
+        SettlementState::Retrying,
+    );
+    let err = orders
+        .insert_signed_order(&db.pool, NewOrderRow::from_domain(&duplicate_order, None))
+        .await
+        .expect_err("duplicate signed payload should be rejected");
+
+    match err {
+        PersistenceError::DuplicateSignedOrderHash {
+            signed_order_hash,
+            existing_order_id,
+            attempted_order_id,
+        } => {
+            assert_eq!(signed_order_hash, "same-hash");
+            assert_eq!(existing_order_id, "order-1");
+            assert_eq!(attempted_order_id, "order-2");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let order_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(order_count, 1);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn conflicting_identifier_mappings_are_rejected() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let repo = IdentifierRepo;
+    repo.upsert_record(
+        &db.pool,
+        &identifier_record("market-1", "condition-1", "token-yes", "YES"),
+    )
+    .await
+    .unwrap();
+
+    let err = repo
+        .upsert_record(
+            &db.pool,
+            &identifier_record("market-2", "condition-2", "token-yes", "YES"),
+        )
+        .await
+        .expect_err("conflicting token mapping should be rejected");
+
+    match err {
+        PersistenceError::IdentifierConflict(conflict) => {
+            assert!(matches!(
+                conflict,
+                domain::IdentifierMapError::ConflictingTokenCondition { .. }
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn inconsistent_order_identifier_linkage_is_rejected() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let identifiers = IdentifierRepo;
+    let orders = OrderRepo;
+
+    identifiers
+        .upsert_record(
+            &db.pool,
+            &identifier_record("market-1", "condition-1", "token-yes", "YES"),
+        )
+        .await
+        .unwrap();
+    identifiers
+        .upsert_record(
+            &db.pool,
+            &identifier_record("market-2", "condition-2", "token-no", "NO"),
+        )
+        .await
+        .unwrap();
+
+    let err = orders
+        .insert_signed_order(
+            &db.pool,
+            NewOrderRow::from_domain(
+                &signed_order(
+                    "order-3",
+                    "market-1",
+                    "condition-1",
+                    "token-no",
+                    "hash-3",
+                    52,
+                    SettlementState::Unknown,
+                ),
+                None,
+            ),
+        )
+        .await
+        .expect_err("inconsistent market/condition/token combination should be rejected");
+
+    match err {
+        PersistenceError::InvalidOrderIdentifierLinkage {
+            market_id,
+            condition_id,
+            token_id,
+        } => {
+            assert_eq!(market_id, "market-1");
+            assert_eq!(condition_id, "condition-1");
+            assert_eq!(token_id, "token-no");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn orders_table_rejects_invalid_submission_state() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_identifier_graph(&db.pool).await;
+
+    let err = sqlx::query(
+        r#"
+        INSERT INTO orders (
+            order_id,
+            market_id,
+            condition_id,
+            token_id,
+            quantity,
+            price,
+            submission_state,
+            venue_state,
+            settlement_state
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind("invalid-state-order")
+    .bind("market-1")
+    .bind("condition-1")
+    .bind("token-yes")
+    .bind(Decimal::new(10, 0))
+    .bind(Decimal::new(55, 2))
+    .bind("not-a-real-state")
+    .bind("live")
+    .bind("unknown")
+    .execute(&db.pool)
+    .await
+    .expect_err("invalid submission_state should be rejected");
+
+    let err_text = err.to_string();
+    assert!(err_text.contains("orders_submission_state_valid"));
+
+    db.cleanup().await;
 }

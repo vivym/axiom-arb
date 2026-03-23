@@ -1,27 +1,41 @@
-use std::{
-    error::Error as StdError,
-    fmt,
-    path::{Path, PathBuf},
-};
+use std::{error::Error as StdError, fmt};
 
+use domain::IdentifierMapError;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 pub mod models;
 pub mod repos;
 
+pub use models::StoredOrder;
 pub use repos::{
     ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo, ResolutionRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
+
 #[derive(Debug)]
 pub enum PersistenceError {
     MissingDatabaseUrl,
     Sqlx(sqlx::Error),
     Migration(sqlx::migrate::MigrateError),
-    InvalidValue { kind: &'static str, value: String },
+    InvalidValue {
+        kind: &'static str,
+        value: String,
+    },
     IncompleteSignedOrderIdentity,
+    DuplicateSignedOrderHash {
+        signed_order_hash: String,
+        existing_order_id: String,
+        attempted_order_id: String,
+    },
+    IdentifierConflict(IdentifierMapError),
+    InvalidOrderIdentifierLinkage {
+        market_id: String,
+        condition_id: String,
+        token_id: String,
+    },
 }
 
 impl PersistenceError {
@@ -48,6 +62,23 @@ impl fmt::Display for PersistenceError {
                     "signed order identity must include hash, salt, nonce, and signature"
                 )
             }
+            Self::DuplicateSignedOrderHash {
+                signed_order_hash,
+                existing_order_id,
+                attempted_order_id,
+            } => write!(
+                f,
+                "signed order hash {signed_order_hash} already belongs to order {existing_order_id}; attempted order {attempted_order_id}"
+            ),
+            Self::IdentifierConflict(err) => write!(f, "{err:?}"),
+            Self::InvalidOrderIdentifierLinkage {
+                market_id,
+                condition_id,
+                token_id,
+            } => write!(
+                f,
+                "order identifiers do not resolve to a single mapping: market={market_id} condition={condition_id} token={token_id}"
+            ),
         }
     }
 }
@@ -63,6 +94,12 @@ impl From<sqlx::Error> for PersistenceError {
 impl From<sqlx::migrate::MigrateError> for PersistenceError {
     fn from(value: sqlx::migrate::MigrateError) -> Self {
         Self::Migration(value)
+    }
+}
+
+impl From<IdentifierMapError> for PersistenceError {
+    fn from(value: IdentifierMapError) -> Self {
+        Self::IdentifierConflict(value)
     }
 }
 
@@ -82,11 +119,6 @@ pub async fn connect_pool_from_env() -> Result<PgPool> {
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
-    let migrator = sqlx::migrate::Migrator::new(migrations_dir().as_path()).await?;
-    migrator.run(pool).await?;
+    MIGRATOR.run(pool).await?;
     Ok(())
-}
-
-pub fn migrations_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations")
 }
