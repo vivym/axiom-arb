@@ -160,7 +160,7 @@ The production architecture is `single process + multiple async tasks`.
 ### 5.2 State Layers
 
 - `Venue State`: raw venue-facing information from WS and REST
-- `Trading State`: orders, balances, positions, reservations, inventory buckets, market status
+- `Trading State`: orders, balances, positions, reservations, inventory buckets, resolution state, market status
 - `Strategy State`: stable read-only state exposed to strategies
 - `Recovery State`: bootstrapping, reconciling, degraded, no-new-risk, halted
 
@@ -187,12 +187,14 @@ Rules:
 
 | Mode | New risk | Cancel | Reduce-only hedge or repair | `split / merge / redeem` | Order heartbeat |
 | --- | --- | --- | --- | --- | --- |
-| `Bootstrapping` | No | Yes | Yes, if required for safety | Recovery or inventory-only actions | Yes, once authenticated |
+| `Bootstrapping` | No | Yes | No, unless explicit operator override is active | No automated inventory actions before first successful reconcile | Yes, once authenticated |
 | `Healthy` | Yes | Yes | Yes | Yes | Yes |
 | `Reconciling` | No | Yes | Yes | Inventory normalization or unwind only | Yes |
 | `Degraded` | No | Yes | Yes, under explicit price guards | Protective or inventory-only actions | Yes |
 | `NoNewRisk` | No | Yes | Yes | `merge` and `redeem` allowed; `split` only for approved repair or unwind | Yes unless `cancel-all` policy is selected |
 | `GlobalHalt` | No | Yes, including `cancel-all` | No automated repair orders | No automated expansion; wind-down only via explicit break-glass policy | Continue until live orders are cancelled or confirmed absent, then stop |
+
+Before the first fully successful reconciliation, `Bootstrapping` defaults to `CancelOnly`. Any repair, hedge, or inventory action during bootstrap requires explicit break-glass operator override.
 
 ### 6.2 Operational Policy Overlays
 
@@ -203,6 +205,18 @@ The engine may apply stricter overlays inside `Reconciling`, `Degraded`, or `NoN
 - `CancelOnly`
 
 These overlays are action filters, not separate lifecycle modes.
+
+### 6.3 Venue And Account Trading Status Mapping
+
+Venue and account restrictions must map deterministically into local runtime behavior.
+
+Minimum mappings:
+
+- venue `trading disabled` -> `GlobalHalt`
+- venue `cancel-only` -> `NoNewRisk` plus `CancelOnly`
+- address `close-only` -> `NoNewRisk` plus `ReduceOnly`
+- geoblocked or banned address -> `GlobalHalt` plus operator alert
+- any newly observed venue or account restriction state must be journaled and surfaced to observability immediately
 
 ## 7. Domain Model
 
@@ -219,6 +233,7 @@ The minimum domain entities are:
 - `Fill`
 - `Balance`
 - `ApprovalState`
+- `ResolutionState`
 - `Position`
 - `RelayerTransaction`
 - `CTFOperation`
@@ -264,6 +279,10 @@ Approval and allowance are part of live trading state, not one-time setup trivia
 
 - token
 - spender
+- owner_address
+- funder_address
+- wallet_route
+- signature_type
 - allowance
 - last_checked_at
 - required_min_allowance
@@ -271,7 +290,26 @@ Approval and allowance are part of live trading state, not one-time setup trivia
 
 The engine must reconcile approval state during bootstrapping and before any execution path that depends on token spending.
 
-### 7.4 Separation Rules
+### 7.4 Resolution State
+
+Resolution and redemption must depend on authoritative condition-level settlement state, not only market labels.
+
+`ResolutionState` must track at least:
+
+- `condition_id`
+- `resolution_status`
+- `payout_vector`
+- `resolved_at`
+- `dispute_state`
+- `redeemable_at`
+
+`ResolutionState` is the authoritative source for:
+
+- whether redemption is allowed
+- how much value each outcome token redeems for
+- when post-resolution inventory can be normalized into realized settlement
+
+### 7.5 Separation Rules
 
 The design must keep the following concepts separate:
 
@@ -481,7 +519,7 @@ It may:
 - available inventory and reservation sufficiency
 - approval and allowance sufficiency for every spender touched by the execution path
 - market status and lifecycle validity
-- resolution and dispute-state validity for `redeem`
+- resolution, payout-vector, and dispute-state validity for `redeem`
 - feed freshness
 - websocket and order-heartbeat freshness
 - unresolved `Unknown` state
@@ -617,6 +655,31 @@ Rules:
 - after the venue resumes, the engine performs forced reconciliation of open orders, fills, balances, and relayer transactions
 - all orders submitted near the restart window and not fully explained by reconciliation go through uncertainty review
 
+### 13.8 HTTP, Venue Error, And Retry Policy Matrix
+
+HTTP and business-error handling must distinguish retryable transport failures from terminal business rejections.
+
+| Error class | Default action | Retry class | Local mode effect |
+| --- | --- | --- | --- |
+| network timeout / connection reset | query remote status first, then retry if still uncertain | transport retry with bounded exponential backoff and jitter | may force `Reconciling` |
+| HTTP `425` | pause new orders and reconcile after venue recovery | transport retry with exponential backoff | `Reconciling` or `NoNewRisk` |
+| HTTP `429` | back off and retry | transport retry with exponential backoff and jitter | stays in current mode unless persistent, then `Degraded` |
+| HTTP `500` | back off and retry | transport retry with bounded exponential backoff and jitter | may force `Degraded` or `Reconciling` |
+| HTTP `503` trading disabled | do not retry blindly | no automatic retry until venue status changes | `GlobalHalt` |
+| HTTP `503` cancel-only | do not place new orders; allow cancels | no automatic new-order retry while active | `NoNewRisk` plus `CancelOnly` |
+| duplicated order / signed order already seen | reconcile original signed order first | no blind transport retry; business retry only if the original is definitively absent | may force `Reconciling` |
+| min-size / tick-size / malformed payload | reject as terminal business error | no retry | no mode change |
+| insufficient balance / allowance | reject and reconcile state | no retry until balance or allowance changes | may force `NoNewRisk` |
+| `FOK` not filled | treat as expected terminal execution result | no retry unless strategy emits a new opportunity | no mode change |
+| delayed / unmatched accepted responses | treat as live venue outcomes, not transport failures | no automatic transport retry | no mode change |
+
+Rules:
+
+- retry budgets must be explicit per endpoint and operation class
+- every retried request must journal its retry class and budget consumption
+- transport retry must never silently become business retry
+- persistent `429` or `500` conditions must eventually degrade local mode rather than loop indefinitely
+
 ## 14. Persistence Model
 
 Postgres is a required system component.
@@ -631,6 +694,7 @@ Required tables:
 - `identifier_map`
 - `balances`
 - `approval_states`
+- `resolution_states`
 - `inventory_buckets`
 - `orders`
 - `fills`
@@ -663,6 +727,8 @@ The persisted model must be able to answer:
 - what signed payload was actually submitted
 - whether a retry reused the same payload or created a new one
 - what allowance or approval shortfall blocks execution
+- which owner, funder, wallet route, and signature type an approval belongs to
+- what payout vector and dispute state govern a resolved condition
 - what free inventory exists
 - what is reserved by open orders
 - what is matched but not yet settled
@@ -705,9 +771,10 @@ Startup recovery flow:
 1. load identifier maps, signer configuration, approval state, and pending inventory state
 2. connect feeds and start websocket liveness
 3. start order heartbeat once credentials are available
-4. fetch remote open orders, balances, approvals, and recent relayer transactions
+4. fetch remote open orders, balances, approvals, resolution state, and recent relayer transactions
 5. reconcile local and remote state
-6. enter `Healthy` only after convergence
+6. remain `CancelOnly` during bootstrap until the first successful reconcile completes
+7. enter `Healthy` only after convergence
 
 If convergence fails, the system must remain in `NoNewRisk` or escalate to `GlobalHalt`.
 
@@ -750,6 +817,7 @@ The system may go live only after:
 - event journal is complete enough for replay
 - orders, balances, and positions reconcile successfully
 - approvals and allowances reconcile successfully for all required spenders
+- resolution-state and payout-vector persistence are validated against at least one resolved condition path
 - `Unknown` paths force risk tightening
 - paper-mode full-set runs have been evaluated on live data
 - minimal live `split / merge / redeem` validation succeeds
