@@ -81,11 +81,17 @@ Explicit non-goals:
 
 Added scope:
 
-- automatic discovery of all tradable `neg-risk` market families
+- automatic discovery of all tradable standard `neg-risk` market families
 - structure validation before activation
 - event-family level exposure management
 - strategy evaluation across outcome graphs
 - `negRisk`-aware execution and recovery
+
+Initial live exclusions:
+
+- augmented `neg-risk` families unless placeholder and `Other` semantics are explicitly modeled
+- unnamed placeholder outcomes
+- direct trading on `Other`
 
 `v1b` is a new live release on top of the `v1a` production baseline, not a separate system.
 
@@ -129,7 +135,7 @@ The production architecture is `single process + multiple async tasks`.
    - on missed or invalid heartbeat, assume venue-side open orders may have been cancelled and trigger immediate reconciliation
 
 5. `state reconciler`
-   - periodically reconcile using REST snapshots and relayer transaction status
+   - periodically reconcile using REST snapshots, approval state, and relayer transaction status
    - recover after reconnects, timeouts, restarts, and `Unknown` states
 
 6. `strategy dispatcher`
@@ -212,6 +218,7 @@ The minimum domain entities are:
 - `Order`
 - `Fill`
 - `Balance`
+- `ApprovalState`
 - `Position`
 - `RelayerTransaction`
 - `CTFOperation`
@@ -249,7 +256,22 @@ The inventory model must distinguish at least:
 - `redeemable`
 - `quarantined`
 
-### 7.3 Separation Rules
+### 7.3 Approval And Allowance State
+
+Approval and allowance are part of live trading state, not one-time setup trivia.
+
+`ApprovalState` must track at least:
+
+- token
+- spender
+- allowance
+- last_checked_at
+- required_min_allowance
+- approval_status
+
+The engine must reconcile approval state during bootstrapping and before any execution path that depends on token spending.
+
+### 7.4 Separation Rules
 
 The design must keep the following concepts separate:
 
@@ -360,7 +382,7 @@ They may not:
 - `Opportunity::FullSetBuyMerge`
 - `Opportunity::FullSetSplitSell`
 
-### 10.3 Precision And Units
+### 10.3 Precision, Units, And Quantization
 
 The pricing model must preserve venue-native units while normalizing comparisons to USDC-equivalent value.
 
@@ -373,6 +395,11 @@ Rules:
 - buy-side taker fees are collected in shares and must be converted into USDC-equivalent cost for edge calculation
 - sell-side taker fees are collected in USDC and must be accounted for directly
 - marketable `BUY` orders specify USDC amount, while marketable `SELL` orders specify shares
+- `min_order_size` must be fetched and enforced before submission
+- `price_quantum` and `size_quantum` must be modeled explicitly
+- strategy outputs economic intent; execution converts it into venue-legal `price` and `size`
+- all rounding and quantization must complete before submission; the venue must not be used as the first validator
+- `sdk_market_order_semantics` and raw signed-order semantics must be documented separately so retry and replay logic are not coupled to SDK-only abstractions
 
 ### 10.4 Net Edge
 
@@ -432,6 +459,7 @@ It must also pass:
 - conversion-path validation
 - liquidity and execution sanity checks
 - recovery-model support checks
+- placeholder and `Other` exclusion rules for initial live scope
 
 ## 12. Risk Model
 
@@ -451,7 +479,9 @@ It may:
 - identifier and market-route consistency
 - net edge after fees and slippage
 - available inventory and reservation sufficiency
+- approval and allowance sufficiency for every spender touched by the execution path
 - market status and lifecycle validity
+- resolution and dispute-state validity for `redeem`
 - feed freshness
 - websocket and order-heartbeat freshness
 - unresolved `Unknown` state
@@ -488,7 +518,19 @@ Execution must explicitly model:
 
 `split / merge / redeem` are not complete when requested. They are complete only after relayer confirmation or authoritative state reconciliation proves the effect.
 
-### 13.2 Execution-Plan Categories
+### 13.2 Signed-Order Idempotency And Retry Semantics
+
+Retry must distinguish transport-level replay from business-level re-issuance.
+
+Rules:
+
+- on `Submitted but not confirmed`, the engine must query the status of the original signed order before generating a new payload
+- `transport retry` resends the same signed payload and preserves `signed_order_hash`, `salt`, `nonce`, and `signature`
+- `business retry` generates a new signed payload and therefore requires a new `salt`, `nonce`, and `signature`
+- the engine must never treat a new signed payload as equivalent to replaying an existing order
+- every business retry must link back to the original via `retry_of_order_id`
+
+### 13.3 Execution-Plan Categories
 
 Required execution-plan categories:
 
@@ -496,6 +538,8 @@ Required execution-plan categories:
 - `FullSetSplitThenSell`
 - `CancelStale`
 - `RedeemResolved`
+
+`RedeemResolved` is by `condition_id`, not by arbitrary amount. The redeemable amount is derived from current balances and payout state. It is allowed only when the condition is resolved and not in dispute, challenge, or uncertainty review.
 
 Execution plans are the unit of:
 
@@ -505,7 +549,7 @@ Execution plans are the unit of:
 - replay
 - postmortem analysis
 
-### 13.3 `v1a` Execution Rules
+### 13.4 `v1a` Execution Rules
 
 - two-leg trades should share a `batch_group`
 - batch submission is a synchronization aid, not an atomicity guarantee
@@ -513,8 +557,9 @@ Execution plans are the unit of:
 - `FAK` is allowed only where partial-fill handling is explicitly supported
 - `maker` logic is excluded from `v1a`
 - price legality must be checked before submission
+- min-size and quantization legality must be checked before submission
 
-### 13.4 Failure Semantics
+### 13.5 Failure Semantics
 
 Execution failure must distinguish at least:
 
@@ -525,7 +570,7 @@ Execution failure must distinguish at least:
 - trade completed but `split/merge/redeem` failed
 - chain or relayer state unknown
 
-### 13.5 Deterministic Recovery Playbooks
+### 13.6 Deterministic Recovery Playbooks
 
 The engine must define deterministic actions for the highest-risk failure classes.
 
@@ -559,7 +604,7 @@ The engine must define deterministic actions for the highest-risk failure classe
   - treat each order response independently
   - do not infer symmetry between both legs merely because they shared a batch
 
-### 13.6 Venue Maintenance And Restart Handling
+### 13.7 Venue Maintenance And Restart Handling
 
 The engine must have explicit behavior for venue restart windows and HTTP `425`.
 
@@ -585,6 +630,7 @@ Required tables:
 - `tokens`
 - `identifier_map`
 - `balances`
+- `approval_states`
 - `inventory_buckets`
 - `orders`
 - `fills`
@@ -602,10 +648,21 @@ Required tables:
 - recovery must not rely on memory-only state
 - idempotent keys are required for orders, fills, and chain-affecting operations
 
-### 14.2 Inventory And Relayer Persistence
+### 14.2 Order, Approval, Inventory, And Relayer Persistence
+
+The `orders` persistence model must include the signed-order fields needed to distinguish transport retry from business retry:
+
+- `signed_order_hash`
+- `salt`
+- `nonce`
+- `signature`
+- `retry_of_order_id`
 
 The persisted model must be able to answer:
 
+- what signed payload was actually submitted
+- whether a retry reused the same payload or created a new one
+- what allowance or approval shortfall blocks execution
 - what free inventory exists
 - what is reserved by open orders
 - what is matched but not yet settled
@@ -627,20 +684,28 @@ The journal is mandatory for:
 
 At minimum each entry must include:
 
+- `journal_seq`
 - `stream`
+- `source_kind`
+- `source_session_id`
+- `source_event_id`
+- `dedupe_key`
+- `causal_parent_id`
 - `event_type`
 - `event_ts`
 - `payload`
 - ingestion timestamp
 
+`journal_seq` is the authoritative local replay order for deterministic reconstruction.
+
 ## 15. Recovery Model
 
 Startup recovery flow:
 
-1. load identifier maps, signer configuration, and pending inventory state
+1. load identifier maps, signer configuration, approval state, and pending inventory state
 2. connect feeds and start websocket liveness
 3. start order heartbeat once credentials are available
-4. fetch remote open orders, balances, and recent relayer transactions
+4. fetch remote open orders, balances, approvals, and recent relayer transactions
 5. reconcile local and remote state
 6. enter `Healthy` only after convergence
 
@@ -684,9 +749,11 @@ The system may go live only after:
 - websocket `PING/PONG` and REST order-heartbeat behavior are both verified
 - event journal is complete enough for replay
 - orders, balances, and positions reconcile successfully
+- approvals and allowances reconcile successfully for all required spenders
 - `Unknown` paths force risk tightening
 - paper-mode full-set runs have been evaluated on live data
 - minimal live `split / merge / redeem` validation succeeds
+- signed-order retry logic is validated for transport retry vs business retry
 - relayer wallet deployment path and nonce tracking are validated
 - broken-leg repair and inventory quarantine flows are exercised
 - kill switches are tested
@@ -700,6 +767,7 @@ The system may go live only after:
 
 - all tradable `neg-risk` families can be discovered
 - structure validation is implemented and enforced
+- augmented `neg-risk`, placeholder, and `Other` outcomes remain excluded unless explicitly modeled and validated
 - family-level exposure can be reconstructed
 - identifier, route, and family mappings can be replayed from persistence
 - replay can explain `neg-risk` decisions and failures
@@ -751,8 +819,10 @@ These items are not optional details. They are launch-critical validations:
 
 - verify the exact live signing and credential flow for the chosen wallet setup
 - verify the production path for `split / merge / redeem` in the chosen Rust-first architecture
+- verify approval and allowance reconciliation across all required spenders
 - verify family discovery completeness for `neg-risk` routing
 - verify recovery behavior when a two-leg batch produces mixed results
+- verify transport retry versus business retry behavior for signed orders
 - verify how maintenance, throttling, reconnect gaps, and relayer delays affect order certainty
 
 ## 20. Final Decision
