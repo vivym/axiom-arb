@@ -89,16 +89,18 @@ impl Settings {
             let key = key.as_ref();
             let value = value.as_ref().trim();
             match key {
-                "DATABASE_URL" if !value.is_empty() => db_url = Some(value.to_owned()),
+                "DATABASE_URL" if !value.is_empty() => {
+                    db_url = Some(parse_url("DATABASE_URL", value)?);
+                }
                 "AXIOM_MODE" if !value.is_empty() => mode = Some(parse_runtime_mode(value)?),
                 "POLY_CLOB_HOST" if !value.is_empty() => {
-                    clob_host = Some(value.to_owned());
+                    clob_host = Some(parse_url("POLY_CLOB_HOST", value)?);
                 }
                 "POLY_DATA_API_HOST" if !value.is_empty() => {
-                    data_api_host = Some(value.to_owned());
+                    data_api_host = Some(parse_url("POLY_DATA_API_HOST", value)?);
                 }
                 "POLY_RELAYER_HOST" if !value.is_empty() => {
-                    relayer_host = Some(value.to_owned());
+                    relayer_host = Some(parse_url("POLY_RELAYER_HOST", value)?);
                 }
                 "POLY_SIGNATURE_TYPE" if !value.is_empty() => {
                     signature_type = Some(parse_signature_type(value)?);
@@ -115,14 +117,71 @@ impl Settings {
                 url: db_url.ok_or(ConfigError::MissingVar("DATABASE_URL"))?,
             },
             polymarket: PolymarketSettings {
-                clob_host: clob_host.unwrap_or_else(|| DEFAULT_POLY_CLOB_HOST.to_owned()),
-                data_api_host: data_api_host
-                    .unwrap_or_else(|| DEFAULT_POLY_DATA_API_HOST.to_owned()),
-                relayer_host: relayer_host.unwrap_or_else(|| DEFAULT_POLY_RELAYER_HOST.to_owned()),
+                clob_host: clob_host.unwrap_or_else(default_poly_clob_host),
+                data_api_host: data_api_host.unwrap_or_else(default_poly_data_api_host),
+                relayer_host: relayer_host.unwrap_or_else(default_poly_relayer_host),
                 signature_type: signature_type.unwrap_or(DEFAULT_POLY_SIGNATURE_TYPE),
             },
         })
     }
+}
+
+fn parse_url(key: &'static str, value: &str) -> Result<String, ConfigError> {
+    let (scheme, rest) = value
+        .split_once("://")
+        .ok_or_else(|| ConfigError::InvalidVar {
+            key,
+            value: value.to_owned(),
+        })?;
+
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+        || rest.is_empty()
+        || value.chars().any(char::is_whitespace)
+    {
+        return Err(ConfigError::InvalidVar {
+            key,
+            value: value.to_owned(),
+        });
+    }
+
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return Err(ConfigError::InvalidVar {
+            key,
+            value: value.to_owned(),
+        });
+    }
+
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(host) = host.strip_prefix('[') {
+        host.split_once(']').map(|(inner, _)| inner).unwrap_or("")
+    } else {
+        host.split(':').next().unwrap_or("")
+    };
+
+    if host.is_empty() {
+        return Err(ConfigError::InvalidVar {
+            key,
+            value: value.to_owned(),
+        });
+    }
+
+    Ok(value.to_owned())
+}
+
+fn default_poly_clob_host() -> String {
+    DEFAULT_POLY_CLOB_HOST.to_owned()
+}
+
+fn default_poly_data_api_host() -> String {
+    DEFAULT_POLY_DATA_API_HOST.to_owned()
+}
+
+fn default_poly_relayer_host() -> String {
+    DEFAULT_POLY_RELAYER_HOST.to_owned()
 }
 
 fn parse_runtime_mode(value: &str) -> Result<RuntimeMode, ConfigError> {
