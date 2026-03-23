@@ -36,6 +36,9 @@ pub enum PersistenceError {
         condition_id: String,
         token_id: String,
     },
+    ImmutableOrderConflict {
+        order_id: String,
+    },
 }
 
 impl PersistenceError {
@@ -79,6 +82,9 @@ impl fmt::Display for PersistenceError {
                 f,
                 "order identifiers do not resolve to a single mapping: market={market_id} condition={condition_id} token={token_id}"
             ),
+            Self::ImmutableOrderConflict { order_id } => {
+                write!(f, "order {order_id} already exists with immutable submitted fields")
+            }
         }
     }
 }

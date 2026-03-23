@@ -8,7 +8,8 @@ CREATE TABLE events (
     event_id TEXT PRIMARY KEY,
     event_family_id TEXT NOT NULL REFERENCES event_families(event_family_id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (event_id, event_family_id)
 );
 
 CREATE TABLE conditions (
@@ -64,6 +65,10 @@ CREATE TABLE identifier_map (
     CONSTRAINT identifier_map_condition_event_consistent
         FOREIGN KEY (condition_id, event_id)
         REFERENCES conditions(condition_id, event_id)
+        ON DELETE CASCADE,
+    CONSTRAINT identifier_map_event_family_consistent
+        FOREIGN KEY (event_id, event_family_id)
+        REFERENCES events(event_id, event_family_id)
         ON DELETE CASCADE,
     CONSTRAINT identifier_map_market_route_consistent
         FOREIGN KEY (market_id, route)

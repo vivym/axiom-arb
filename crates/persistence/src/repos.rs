@@ -1,7 +1,7 @@
 use domain::{
     ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
 };
-use sqlx::{postgres::PgRow, PgPool, Row};
+use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 
 use crate::{
     models::{
@@ -16,85 +16,272 @@ pub struct IdentifierRepo;
 
 impl IdentifierRepo {
     pub async fn upsert_record(&self, pool: &PgPool, record: &IdentifierRecord) -> Result<()> {
-        self.validate_record(pool, record).await?;
-
         let row = IdentifierRecordRow::from_domain(record);
         let mut tx = pool.begin().await?;
+        self.validate_record_in_tx(&mut tx, record).await?;
 
-        sqlx::query(
+        self.insert_or_confirm_event_family(&mut tx, &row).await?;
+        self.insert_or_confirm_event(&mut tx, &row).await?;
+        self.insert_or_confirm_condition(&mut tx, &row).await?;
+        self.insert_or_confirm_market(&mut tx, &row).await?;
+        self.insert_or_confirm_token(&mut tx, &row).await?;
+        self.insert_or_confirm_identifier_map(&mut tx, &row).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn validate_record_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        record: &IdentifierRecord,
+    ) -> Result<()> {
+        let mut records = self.list_records_in_tx(tx).await?;
+        records.push(record.clone());
+        IdentifierMap::from_records(records)?;
+        Ok(())
+    }
+
+    async fn list_records_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<Vec<IdentifierRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT event_id, event_family_id, market_id, condition_id, token_id, outcome_label, route
+            FROM identifier_map
+            ORDER BY event_family_id, event_id, market_id, token_id
+            "#,
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+
+        rows.into_iter()
+            .map(map_identifier_record_row)
+            .map(|row| row.and_then(IdentifierRecordRow::into_domain))
+            .collect()
+    }
+
+    async fn insert_or_confirm_event_family(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO event_families (event_family_id, name)
             VALUES ($1, $2)
-            ON CONFLICT (event_family_id) DO UPDATE
-            SET name = EXCLUDED.name
+            ON CONFLICT (event_family_id) DO NOTHING
             "#,
         )
         .bind(&row.event_family_id)
         .bind(&row.event_family_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        sqlx::query(
+        if result.rows_affected() == 0 {
+            let existing_name: String =
+                sqlx::query_scalar("SELECT name FROM event_families WHERE event_family_id = $1")
+                    .bind(&row.event_family_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+
+            if existing_name != row.event_family_id {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingConditionMetadata {
+                        condition_id: row.condition_id.clone().into(),
+                    },
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn insert_or_confirm_event(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO events (event_id, event_family_id, name)
             VALUES ($1, $2, $3)
-            ON CONFLICT (event_id) DO UPDATE
-            SET event_family_id = EXCLUDED.event_family_id,
-                name = EXCLUDED.name
+            ON CONFLICT (event_id) DO NOTHING
             "#,
         )
         .bind(&row.event_id)
         .bind(&row.event_family_id)
         .bind(&row.event_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        sqlx::query(
+        if result.rows_affected() == 0 {
+            let existing =
+                sqlx::query("SELECT event_family_id, name FROM events WHERE event_id = $1")
+                    .bind(&row.event_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+
+            let existing_family_id: String = existing.try_get("event_family_id")?;
+            let existing_name: String = existing.try_get("name")?;
+            if existing_family_id != row.event_family_id || existing_name != row.event_id {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingConditionMetadata {
+                        condition_id: row.condition_id.clone().into(),
+                    },
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn insert_or_confirm_condition(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO conditions (condition_id, event_id)
             VALUES ($1, $2)
-            ON CONFLICT (condition_id) DO UPDATE
-            SET event_id = EXCLUDED.event_id
+            ON CONFLICT (condition_id) DO NOTHING
             "#,
         )
         .bind(&row.condition_id)
         .bind(&row.event_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        sqlx::query(
+        if result.rows_affected() == 0 {
+            let existing_event_id: String =
+                sqlx::query_scalar("SELECT event_id FROM conditions WHERE condition_id = $1")
+                    .bind(&row.condition_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+
+            if existing_event_id != row.event_id {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingConditionMetadata {
+                        condition_id: row.condition_id.clone().into(),
+                    },
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn insert_or_confirm_market(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO markets (market_id, condition_id, event_id, route)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (market_id) DO UPDATE
-            SET condition_id = EXCLUDED.condition_id,
-                event_id = EXCLUDED.event_id,
-                route = EXCLUDED.route
+            ON CONFLICT (market_id) DO NOTHING
             "#,
         )
         .bind(&row.market_id)
         .bind(&row.condition_id)
         .bind(&row.event_id)
         .bind(&row.route)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        sqlx::query(
+        if result.rows_affected() == 0 {
+            let existing = sqlx::query(
+                "SELECT condition_id, event_id, route FROM markets WHERE market_id = $1",
+            )
+            .bind(&row.market_id)
+            .fetch_one(&mut **tx)
+            .await?;
+
+            let existing_condition_id: String = existing.try_get("condition_id")?;
+            let existing_event_id: String = existing.try_get("event_id")?;
+            let existing_route: String = existing.try_get("route")?;
+
+            if existing_condition_id != row.condition_id || existing_event_id != row.event_id {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingConditionMetadata {
+                        condition_id: row.condition_id.clone().into(),
+                    },
+                ));
+            }
+
+            if existing_route != row.route {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingConditionRoute {
+                        condition_id: row.condition_id.clone().into(),
+                        existing_route: route_from_str(&existing_route)?,
+                        new_route: route_from_str(&row.route)?,
+                    },
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn insert_or_confirm_token(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO tokens (token_id, condition_id, outcome_label)
             VALUES ($1, $2, $3)
-            ON CONFLICT (token_id) DO UPDATE
-            SET condition_id = EXCLUDED.condition_id,
-                outcome_label = EXCLUDED.outcome_label
+            ON CONFLICT (token_id) DO NOTHING
             "#,
         )
         .bind(&row.token_id)
         .bind(&row.condition_id)
         .bind(&row.outcome_label)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        sqlx::query(
+        if result.rows_affected() == 0 {
+            let existing =
+                sqlx::query("SELECT condition_id, outcome_label FROM tokens WHERE token_id = $1")
+                    .bind(&row.token_id)
+                    .fetch_one(&mut **tx)
+                    .await?;
+
+            let existing_condition_id: String = existing.try_get("condition_id")?;
+            let existing_outcome_label: String = existing.try_get("outcome_label")?;
+
+            if existing_condition_id != row.condition_id {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingTokenCondition {
+                        token_id: row.token_id.clone().into(),
+                        existing_condition_id: existing_condition_id.into(),
+                        new_condition_id: row.condition_id.clone().into(),
+                    },
+                ));
+            }
+
+            if existing_outcome_label != row.outcome_label {
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingTokenMetadata {
+                        token_id: row.token_id.clone().into(),
+                    },
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn insert_or_confirm_identifier_map(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &IdentifierRecordRow,
+    ) -> Result<()> {
+        let result = sqlx::query(
             r#"
             INSERT INTO identifier_map (
                 token_id,
@@ -106,13 +293,7 @@ impl IdentifierRepo {
                 route
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (token_id) DO UPDATE
-            SET condition_id = EXCLUDED.condition_id,
-                market_id = EXCLUDED.market_id,
-                event_id = EXCLUDED.event_id,
-                event_family_id = EXCLUDED.event_family_id,
-                outcome_label = EXCLUDED.outcome_label,
-                route = EXCLUDED.route
+            ON CONFLICT (token_id) DO NOTHING
             "#,
         )
         .bind(&row.token_id)
@@ -122,17 +303,36 @@ impl IdentifierRepo {
         .bind(&row.event_family_id)
         .bind(&row.outcome_label)
         .bind(&row.route)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
-        tx.commit().await?;
-        Ok(())
-    }
+        if result.rows_affected() == 0 {
+            let existing_row = sqlx::query(
+                r#"
+                SELECT event_id, event_family_id, market_id, condition_id, token_id, outcome_label, route
+                FROM identifier_map
+                WHERE token_id = $1
+                "#,
+            )
+            .bind(&row.token_id)
+            .fetch_one(&mut **tx)
+            .await?;
 
-    async fn validate_record(&self, pool: &PgPool, record: &IdentifierRecord) -> Result<()> {
-        let mut records = self.list_records(pool).await?;
-        records.push(record.clone());
-        IdentifierMap::from_records(records)?;
+            let existing = map_identifier_record_row(existing_row)?.into_domain()?;
+            let attempted = row.clone().into_domain()?;
+
+            if existing != attempted {
+                let mut records = self.list_records_in_tx(tx).await?;
+                records.push(attempted);
+                IdentifierMap::from_records(records)?;
+                return Err(PersistenceError::IdentifierConflict(
+                    domain::IdentifierMapError::ConflictingTokenMetadata {
+                        token_id: row.token_id.clone().into(),
+                    },
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -173,9 +373,11 @@ impl OrderRepo {
             return Err(PersistenceError::IncompleteSignedOrderIdentity);
         }
 
+        let mut tx = pool.begin().await?;
+
         if let Some(signed_order_hash) = row.signed_order_hash.as_deref() {
             if let Some(existing_order_id) = self
-                .find_order_id_by_signed_hash_excluding(pool, signed_order_hash, &row.order_id)
+                .find_order_id_by_signed_hash_excluding(&mut tx, signed_order_hash, &row.order_id)
                 .await?
             {
                 return Err(PersistenceError::DuplicateSignedOrderHash {
@@ -205,21 +407,7 @@ impl OrderRepo {
                 retry_of_order_id
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (order_id) DO UPDATE
-            SET market_id = EXCLUDED.market_id,
-                condition_id = EXCLUDED.condition_id,
-                token_id = EXCLUDED.token_id,
-                quantity = EXCLUDED.quantity,
-                price = EXCLUDED.price,
-                submission_state = EXCLUDED.submission_state,
-                venue_state = EXCLUDED.venue_state,
-                settlement_state = EXCLUDED.settlement_state,
-                signed_order_hash = EXCLUDED.signed_order_hash,
-                salt = EXCLUDED.salt,
-                nonce = EXCLUDED.nonce,
-                signature = EXCLUDED.signature,
-                retry_of_order_id = EXCLUDED.retry_of_order_id,
-                updated_at = NOW()
+            ON CONFLICT (order_id) DO NOTHING
             "#,
         )
         .bind(&row.order_id)
@@ -236,8 +424,26 @@ impl OrderRepo {
         .bind(row.nonce.as_deref())
         .bind(row.signature.as_deref())
         .bind(row.retry_of_order_id.as_deref())
-        .execute(pool)
+        .execute(&mut *tx)
         .await;
+
+        if let Ok(result) = &query_result {
+            if result.rows_affected() == 0 {
+                let existing = self
+                    .get_order_row(&mut tx, &row.order_id)
+                    .await?
+                    .expect("existing order should load on order_id conflict");
+
+                if order_row_matches_input(&existing, &row) {
+                    tx.commit().await?;
+                    return Ok(());
+                }
+
+                return Err(PersistenceError::ImmutableOrderConflict {
+                    order_id: row.order_id.clone(),
+                });
+            }
+        }
 
         if let Err(err) = query_result {
             if constraint_name(&err) == Some("orders_signed_order_hash_unique") {
@@ -246,7 +452,7 @@ impl OrderRepo {
                     .clone()
                     .expect("duplicate hash constraint requires signed_order_hash");
                 let existing_order_id = self
-                    .find_order_id_by_signed_hash(pool, &signed_order_hash)
+                    .find_order_id_by_signed_hash_in_pool(pool, &signed_order_hash)
                     .await?
                     .unwrap_or_else(|| "<unknown>".to_owned());
 
@@ -268,6 +474,7 @@ impl OrderRepo {
             return Err(err.into());
         }
 
+        tx.commit().await?;
         Ok(())
     }
 
@@ -309,7 +516,42 @@ impl OrderRepo {
             .transpose()
     }
 
-    async fn find_order_id_by_signed_hash(
+    async fn get_order_row(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        order_id: &str,
+    ) -> Result<Option<OrderRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                order_id,
+                market_id,
+                condition_id,
+                token_id,
+                quantity,
+                price,
+                submission_state,
+                venue_state,
+                settlement_state,
+                signed_order_hash,
+                salt,
+                nonce,
+                signature,
+                retry_of_order_id,
+                created_at,
+                updated_at
+            FROM orders
+            WHERE order_id = $1
+            "#,
+        )
+        .bind(order_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        row.map(map_order_row).transpose()
+    }
+
+    async fn find_order_id_by_signed_hash_in_pool(
         &self,
         pool: &PgPool,
         signed_order_hash: &str,
@@ -330,7 +572,7 @@ impl OrderRepo {
 
     async fn find_order_id_by_signed_hash_excluding(
         &self,
-        pool: &PgPool,
+        tx: &mut Transaction<'_, Postgres>,
         signed_order_hash: &str,
         order_id: &str,
     ) -> Result<Option<String>> {
@@ -344,7 +586,7 @@ impl OrderRepo {
         )
         .bind(signed_order_hash)
         .bind(order_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut **tx)
         .await
         .map_err(Into::into)
     }
@@ -784,6 +1026,31 @@ fn settlement_state(row: &NewOrderRow) -> &'static str {
         domain::SettlementState::Retrying => "retrying",
         domain::SettlementState::Failed => "failed",
         domain::SettlementState::Unknown => "unknown",
+    }
+}
+
+fn order_row_matches_input(existing: &OrderRow, incoming: &NewOrderRow) -> bool {
+    existing.order_id == incoming.order_id
+        && existing.market_id == incoming.market_id
+        && existing.condition_id == incoming.condition_id
+        && existing.token_id == incoming.token_id
+        && existing.quantity == incoming.quantity
+        && existing.price == incoming.price
+        && existing.submission_state == submission_state(incoming)
+        && existing.venue_state == venue_state(incoming)
+        && existing.settlement_state == settlement_state(incoming)
+        && existing.signed_order_hash.as_deref() == incoming.signed_order_hash.as_deref()
+        && existing.salt.as_deref() == incoming.salt.as_deref()
+        && existing.nonce.as_deref() == incoming.nonce.as_deref()
+        && existing.signature.as_deref() == incoming.signature.as_deref()
+        && existing.retry_of_order_id.as_deref() == incoming.retry_of_order_id.as_deref()
+}
+
+fn route_from_str(value: &str) -> Result<domain::MarketRoute> {
+    match value {
+        "standard" => Ok(domain::MarketRoute::Standard),
+        "negrisk" => Ok(domain::MarketRoute::NegRisk),
+        _ => Err(PersistenceError::invalid_value("market_route", value)),
     }
 }
 

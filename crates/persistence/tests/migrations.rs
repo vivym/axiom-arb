@@ -444,6 +444,65 @@ async fn conflicting_identifier_mappings_are_rejected() {
         other => panic!("unexpected error: {other:?}"),
     }
 
+    let stored_records = repo.list_records(&db.pool).await.unwrap();
+    assert_eq!(
+        stored_records,
+        vec![identifier_record(
+            "market-1",
+            "condition-1",
+            "token-yes",
+            "YES"
+        )]
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn conflicting_identifier_metadata_rewrites_are_rejected() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let repo = IdentifierRepo;
+    repo.upsert_record(
+        &db.pool,
+        &identifier_record("market-1", "condition-1", "token-yes", "YES"),
+    )
+    .await
+    .unwrap();
+
+    let err = repo
+        .upsert_record(
+            &db.pool,
+            &IdentifierRecord {
+                outcome_label: "MAYBE".to_owned(),
+                ..identifier_record("market-1", "condition-1", "token-yes", "YES")
+            },
+        )
+        .await
+        .expect_err("conflicting identifier metadata rewrite should be rejected");
+
+    match err {
+        PersistenceError::IdentifierConflict(conflict) => {
+            assert!(matches!(
+                conflict,
+                domain::IdentifierMapError::ConflictingTokenMetadata { .. }
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let stored_records = repo.list_records(&db.pool).await.unwrap();
+    assert_eq!(
+        stored_records,
+        vec![identifier_record(
+            "market-1",
+            "condition-1",
+            "token-yes",
+            "YES"
+        )]
+    );
+
     db.cleanup().await;
 }
 
@@ -542,6 +601,62 @@ async fn orders_table_rejects_invalid_submission_state() {
 
     let err_text = err.to_string();
     assert!(err_text.contains("orders_submission_state_valid"));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn reusing_order_id_with_different_payload_is_rejected() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_identifier_graph(&db.pool).await;
+
+    let orders = OrderRepo;
+    let original = signed_order(
+        "order-1",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "hash-1",
+        55,
+        SettlementState::Unknown,
+    );
+    orders
+        .insert_signed_order(&db.pool, NewOrderRow::from_domain(&original, None))
+        .await
+        .unwrap();
+
+    let conflicting = signed_order(
+        "order-1",
+        "market-1",
+        "condition-1",
+        "token-yes",
+        "hash-1b",
+        56,
+        SettlementState::Retrying,
+    );
+    let err = orders
+        .insert_signed_order(&db.pool, NewOrderRow::from_domain(&conflicting, None))
+        .await
+        .expect_err("reusing an existing order_id with different payload should be rejected");
+
+    match err {
+        PersistenceError::ImmutableOrderConflict { order_id } => {
+            assert_eq!(order_id, "order-1");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let stored = orders
+        .get_order(&db.pool, &OrderId::from("order-1"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.order.price, Decimal::new(55, 2));
+    assert_eq!(
+        stored.order.signed_order.unwrap().signed_order_hash,
+        "hash-1"
+    );
 
     db.cleanup().await;
 }
