@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/app-live",
+  "crates/app-replay",
+  "crates/config",
+  "crates/domain",
+  "crates/journal",
+  "crates/observability",
+  "crates/persistence",
+  "crates/venue-polymarket",
+  "crates/state",
+  "crates/strategy-fullset",
+  "crates/risk",
+  "crates/execution",
+]
+resolver = "2"
+
