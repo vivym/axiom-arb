@@ -210,7 +210,7 @@ fn ws_market_channel_marks_stale_after_freshness_gap() {
 }
 
 #[test]
-fn ws_user_channel_clears_stale_state_after_new_message() {
+fn ws_user_channel_keeps_reconcile_attention_latched_after_new_message() {
     let monitor = WsChannelLivenessMonitor::new(WsChannelKind::User, chrono::Duration::seconds(30));
     let mut state = WsChannelState::new(WsChannelKind::User, ts(10, 0, 0));
 
@@ -236,9 +236,30 @@ fn ws_user_channel_clears_stale_state_after_new_message() {
     monitor.record_user_event(&mut state, &trade, ts(10, 0, 32));
 
     assert_eq!(state.last_message_at, ts(10, 0, 32));
+    assert!(state.requires_reconcile_attention);
+    assert_eq!(state.stale_since, Some(ts(10, 0, 30)));
+    assert_eq!(monitor.reconcile_trigger(&mut state, ts(10, 0, 40)), None);
+}
+
+#[test]
+fn ws_channel_requires_explicit_reset_to_clear_reconcile_attention() {
+    let monitor = WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
+    let mut state = WsChannelState::new(WsChannelKind::Market, ts(10, 0, 0));
+
+    assert_eq!(
+        monitor.reconcile_trigger(&mut state, ts(10, 0, 31)),
+        Some(WsChannelReconcileReason::StaleChannel {
+            channel: WsChannelKind::Market,
+        })
+    );
+    assert!(state.requires_reconcile_attention);
+    assert_eq!(state.stale_since, Some(ts(10, 0, 30)));
+
+    monitor.reset_reconcile_attention(&mut state, ts(10, 0, 45));
+
     assert!(!state.requires_reconcile_attention);
     assert_eq!(state.stale_since, None);
-    assert_eq!(monitor.reconcile_trigger(&mut state, ts(10, 0, 40)), None);
+    assert_eq!(state.last_message_at, ts(10, 0, 45));
 }
 
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {

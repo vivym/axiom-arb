@@ -162,10 +162,20 @@ impl WsChannelLivenessMonitor {
         })
     }
 
-    fn record_observation(&self, state: &mut WsChannelState, observed_at: DateTime<Utc>) {
-        state.last_message_at = observed_at;
+    pub fn reset_reconcile_attention(
+        &self,
+        state: &mut WsChannelState,
+        recovered_at: DateTime<Utc>,
+    ) {
+        debug_assert_eq!(state.channel, self.channel);
+
+        state.last_message_at = recovered_at;
         state.stale_since = None;
         state.requires_reconcile_attention = false;
+    }
+
+    fn record_observation(&self, state: &mut WsChannelState, observed_at: DateTime<Utc>) {
+        state.last_message_at = observed_at;
     }
 }
 
