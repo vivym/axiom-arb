@@ -13,7 +13,8 @@ use reqwest::StatusCode;
 use url::Url;
 use venue_polymarket::{
     map_venue_status, AuthError, BusinessErrorKind, HttpRetryContext, L2AuthHeaders,
-    PolymarketRestClient, RestError, RetryClass, RetryDecision, SignerContext,
+    PolymarketRestClient, RelayerAuth, RelayerTransactionType, RestError, RetryClass,
+    RetryDecision, SignerContext,
 };
 
 #[test]
@@ -210,6 +211,70 @@ async fn fetch_open_orders_preserves_authenticated_error_body() {
     }
 }
 
+#[tokio::test]
+async fn fetch_recent_transactions_uses_builder_auth_and_documented_shape() {
+    let server = MockServer::spawn(
+        "200 OK",
+        r#"[{"transactionID":"tx-1","transactionHash":"0xhash","from":"0x1111111111111111111111111111111111111111","to":"0x2222222222222222222222222222222222222222","proxyAddress":"0x3333333333333333333333333333333333333333","nonce":"60","state":"STATE_CONFIRMED","type":"SAFE","owner":"0x4444444444444444444444444444444444444444","createdAt":"2024-07-14T21:13:08.819782Z","updatedAt":"2024-07-14T21:13:46.576639Z"}]"#,
+    );
+    let client = sample_client_for(server.base_url());
+
+    let transactions = client
+        .fetch_recent_transactions(&sample_builder_relayer_auth())
+        .await
+        .expect("transactions should parse");
+    let request = server.finish();
+
+    assert!(request.starts_with("GET /transactions HTTP/1.1"));
+    assert!(request.contains("poly-builder-api-key: builder-key-1"));
+    assert!(request.contains("poly-builder-timestamp: 1700000000"));
+    assert!(request.contains("poly-builder-passphrase: builder-pass-1"));
+    assert!(request.contains("poly-builder-signature: 0xbuilder"));
+    assert_eq!(transactions.len(), 1);
+    assert_eq!(transactions[0].transaction_id, "tx-1");
+    assert_eq!(transactions[0].transaction_hash.as_deref(), Some("0xhash"));
+    assert_eq!(
+        transactions[0].from_address.as_deref(),
+        Some("0x1111111111111111111111111111111111111111")
+    );
+    assert_eq!(
+        transactions[0].proxy_address.as_deref(),
+        Some("0x3333333333333333333333333333333333333333")
+    );
+    assert_eq!(
+        transactions[0].wallet_type,
+        Some(RelayerTransactionType::Safe)
+    );
+    assert_eq!(transactions[0].state.as_deref(), Some("STATE_CONFIRMED"));
+    assert_eq!(
+        transactions[0].created_at.as_deref(),
+        Some("2024-07-14T21:13:08.819782Z")
+    );
+}
+
+#[tokio::test]
+async fn fetch_current_nonce_uses_documented_query_and_relayer_auth() {
+    let server = MockServer::spawn("200 OK", r#"{"nonce":"31"}"#);
+    let client = sample_client_for(server.base_url());
+
+    let nonce = client
+        .fetch_current_nonce(
+            &sample_relayer_api_auth(),
+            "0x5555555555555555555555555555555555555555",
+            RelayerTransactionType::Proxy,
+        )
+        .await
+        .expect("nonce should parse");
+    let request = server.finish();
+
+    assert!(request.starts_with("GET /nonce?"));
+    assert!(request.contains("address=0x5555555555555555555555555555555555555555"));
+    assert!(request.contains("type=PROXY"));
+    assert!(request.contains("relayer-api-key: relayer-key-1"));
+    assert!(request.contains("relayer-api-key-address: 0x6666666666666666666666666666666666666666"));
+    assert_eq!(nonce, "31");
+}
+
 fn sample_signed_order() -> SignedOrderIdentity {
     SignedOrderIdentity {
         signed_order_hash: "0xhash".to_owned(),
@@ -243,6 +308,22 @@ fn sample_auth_with_funder(funder_address: &'static str) -> L2AuthHeaders<'stati
         passphrase: "pass-1",
         timestamp: "1700000000",
         signature: "0xsig",
+    }
+}
+
+fn sample_builder_relayer_auth() -> RelayerAuth<'static> {
+    RelayerAuth::BuilderApiKey {
+        api_key: "builder-key-1",
+        timestamp: "1700000000",
+        passphrase: "builder-pass-1",
+        signature: "0xbuilder",
+    }
+}
+
+fn sample_relayer_api_auth() -> RelayerAuth<'static> {
+    RelayerAuth::RelayerApiKey {
+        api_key: "relayer-key-1",
+        address: "0x6666666666666666666666666666666666666666",
     }
 }
 

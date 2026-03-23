@@ -1,28 +1,39 @@
 use serde::Deserialize;
 
-use crate::{PolymarketRestClient, RestError};
+use crate::{build_relayer_auth_headers, PolymarketRestClient, RelayerAuth, RestError};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RelayerQuery<'a> {
-    pub owner: Option<&'a str>,
-    pub signer: Option<&'a str>,
-    pub proxy_address: Option<&'a str>,
-    pub safe_address: Option<&'a str>,
-    pub nonce: Option<&'a str>,
-    pub transaction_id: Option<&'a str>,
-    pub tx_hash: Option<&'a str>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum RelayerTransactionType {
+    #[serde(rename = "PROXY")]
+    Proxy,
+    #[serde(rename = "SAFE")]
+    Safe,
+}
+
+impl RelayerTransactionType {
+    pub fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Proxy => "PROXY",
+            Self::Safe => "SAFE",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct RelayerTransaction {
-    #[serde(alias = "id")]
+    #[serde(alias = "transactionID", alias = "id")]
     pub transaction_id: String,
-    #[serde(default)]
-    pub owner: Option<String>,
-    #[serde(default)]
-    pub nonce: Option<String>,
-    #[serde(default)]
-    pub signer: Option<String>,
+    #[serde(
+        default,
+        alias = "transactionHash",
+        alias = "txHash",
+        alias = "tx_hash"
+    )]
+    pub transaction_hash: Option<String>,
+    #[serde(default, alias = "from", alias = "signer")]
+    pub from_address: Option<String>,
+    #[serde(default, alias = "to")]
+    pub to_address: Option<String>,
     #[serde(
         default,
         alias = "proxyAddress",
@@ -30,12 +41,26 @@ pub struct RelayerTransaction {
         alias = "proxy"
     )]
     pub proxy_address: Option<String>,
-    #[serde(default, alias = "safeAddress", alias = "safe_address", alias = "safe")]
-    pub safe_address: Option<String>,
-    #[serde(default, alias = "txHash", alias = "tx_hash")]
-    pub tx_hash: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
+    pub nonce: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default, rename = "type")]
+    pub wallet_type: Option<RelayerTransactionType>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default, alias = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(default, alias = "updatedAt")]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub data: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,67 +84,26 @@ struct CurrentNonceResponse {
 impl PolymarketRestClient {
     pub async fn fetch_recent_transactions(
         &self,
-        owner: &str,
+        auth: &RelayerAuth<'_>,
     ) -> Result<Vec<RelayerTransaction>, RestError> {
-        self.fetch_recent_transactions_with_query(&RelayerQuery {
-            owner: Some(owner),
-            ..RelayerQuery::default()
-        })
-        .await
-    }
-
-    pub async fn fetch_recent_transactions_with_query(
-        &self,
-        query: &RelayerQuery<'_>,
-    ) -> Result<Vec<RelayerTransaction>, RestError> {
-        let pairs = query.as_pairs();
-        let response: RecentTransactionsResponse = self.get_relayer("transactions", &pairs).await?;
-
+        let headers = build_relayer_auth_headers(auth)?;
+        let request =
+            self.build_get_request(&self.relayer_host, "transactions", &[], Some(headers))?;
+        let response: RecentTransactionsResponse = self.execute_json(request).await?;
         Ok(recent_transactions_from_response(response))
     }
 
-    pub async fn fetch_current_nonce(&self, owner: &str) -> Result<String, RestError> {
-        self.fetch_current_nonce_with_query(&RelayerQuery {
-            owner: Some(owner),
-            ..RelayerQuery::default()
-        })
-        .await
-    }
-
-    pub async fn fetch_current_nonce_with_query(
+    pub async fn fetch_current_nonce(
         &self,
-        query: &RelayerQuery<'_>,
+        auth: &RelayerAuth<'_>,
+        address: &str,
+        wallet_type: RelayerTransactionType,
     ) -> Result<String, RestError> {
-        let pairs = query.as_pairs();
-        let response: CurrentNonceResponse = self.get_relayer("nonce", &pairs).await?;
-
+        let headers = build_relayer_auth_headers(auth)?;
+        let query = [("address", address), ("type", wallet_type.as_query_value())];
+        let request = self.build_get_request(&self.relayer_host, "nonce", &query, Some(headers))?;
+        let response: CurrentNonceResponse = self.execute_json(request).await?;
         current_nonce_from_response(response)
-    }
-}
-
-impl<'a> RelayerQuery<'a> {
-    fn as_pairs(&self) -> Vec<(&'static str, &'a str)> {
-        let mut pairs = Vec::new();
-
-        push_pair(&mut pairs, "owner", self.owner);
-        push_pair(&mut pairs, "signer", self.signer);
-        push_pair(&mut pairs, "proxyAddress", self.proxy_address);
-        push_pair(&mut pairs, "safeAddress", self.safe_address);
-        push_pair(&mut pairs, "nonce", self.nonce);
-        push_pair(&mut pairs, "id", self.transaction_id);
-        push_pair(&mut pairs, "txHash", self.tx_hash);
-
-        pairs
-    }
-}
-
-fn push_pair<'a>(
-    pairs: &mut Vec<(&'static str, &'a str)>,
-    key: &'static str,
-    value: Option<&'a str>,
-) {
-    if let Some(value) = value {
-        pairs.push((key, value));
     }
 }
 
@@ -144,32 +128,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn relayer_query_pairs_include_correlation_fields() {
-        let query = RelayerQuery {
-            owner: Some("0xowner"),
-            signer: Some("0xsigner"),
-            proxy_address: Some("0xproxy"),
-            safe_address: Some("0xsafe"),
-            nonce: Some("7"),
-            transaction_id: Some("tx-1"),
-            tx_hash: Some("0xhash"),
-        };
-
-        let pairs = query.as_pairs();
-
-        assert!(pairs.contains(&("owner", "0xowner")));
-        assert!(pairs.contains(&("signer", "0xsigner")));
-        assert!(pairs.contains(&("proxyAddress", "0xproxy")));
-        assert!(pairs.contains(&("safeAddress", "0xsafe")));
-        assert!(pairs.contains(&("nonce", "7")));
-        assert!(pairs.contains(&("id", "tx-1")));
-        assert!(pairs.contains(&("txHash", "0xhash")));
-    }
-
-    #[test]
-    fn recent_transactions_response_shapes_correlation_fields() {
+    fn recent_transactions_response_shapes_documented_camel_case_fields() {
         let response: RecentTransactionsResponse = serde_json::from_str(
-            r#"{"transactions":[{"id":"tx-1","owner":"0xowner","nonce":"7","signer":"0xsigner","proxyAddress":"0xproxy","safeAddress":"0xsafe","txHash":"0xhash","status":"pending"}]}"#,
+            r#"[{"transactionID":"tx-1","transactionHash":"0xhash","from":"0x1111111111111111111111111111111111111111","to":"0x2222222222222222222222222222222222222222","proxyAddress":"0x3333333333333333333333333333333333333333","nonce":"60","state":"STATE_CONFIRMED","type":"SAFE","owner":"0x4444444444444444444444444444444444444444","createdAt":"2024-07-14T21:13:08.819782Z","updatedAt":"2024-07-14T21:13:46.576639Z"}]"#,
         )
         .expect("response should deserialize");
 
@@ -177,12 +138,33 @@ mod tests {
 
         assert_eq!(transactions.len(), 1);
         assert_eq!(transactions[0].transaction_id, "tx-1");
-        assert_eq!(transactions[0].owner.as_deref(), Some("0xowner"));
-        assert_eq!(transactions[0].nonce.as_deref(), Some("7"));
-        assert_eq!(transactions[0].signer.as_deref(), Some("0xsigner"));
-        assert_eq!(transactions[0].proxy_address.as_deref(), Some("0xproxy"));
-        assert_eq!(transactions[0].safe_address.as_deref(), Some("0xsafe"));
-        assert_eq!(transactions[0].tx_hash.as_deref(), Some("0xhash"));
+        assert_eq!(transactions[0].transaction_hash.as_deref(), Some("0xhash"));
+        assert_eq!(
+            transactions[0].from_address.as_deref(),
+            Some("0x1111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            transactions[0].to_address.as_deref(),
+            Some("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            transactions[0].proxy_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(transactions[0].nonce.as_deref(), Some("60"));
+        assert_eq!(transactions[0].state.as_deref(), Some("STATE_CONFIRMED"));
+        assert_eq!(
+            transactions[0].wallet_type,
+            Some(RelayerTransactionType::Safe)
+        );
+        assert_eq!(
+            transactions[0].created_at.as_deref(),
+            Some("2024-07-14T21:13:08.819782Z")
+        );
+        assert_eq!(
+            transactions[0].updated_at.as_deref(),
+            Some("2024-07-14T21:13:46.576639Z")
+        );
     }
 
     #[test]

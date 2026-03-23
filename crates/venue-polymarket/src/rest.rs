@@ -1,5 +1,6 @@
 use std::fmt;
 
+use reqwest::header::HeaderMap;
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -152,17 +153,6 @@ impl PolymarketRestClient {
         self.execute_json(request).await
     }
 
-    pub(crate) async fn get_relayer<T>(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> Result<T, RestError>
-    where
-        T: DeserializeOwned,
-    {
-        self.get_json(&self.relayer_host, path, query).await
-    }
-
     async fn get_clob<T>(&self, path: &str, query: &[(&str, &str)]) -> Result<T, RestError>
     where
         T: DeserializeOwned,
@@ -180,8 +170,7 @@ impl PolymarketRestClient {
         let headers = build_l2_auth_headers(auth)?;
         let mut query = signer_query(auth);
         query.extend_from_slice(extra_query);
-        let url = join_url(base, path, &query)?;
-        Ok(self.http.get(url).headers(headers).build()?)
+        self.build_get_request(base, path, &query, Some(headers))
     }
 
     async fn get_json<T>(
@@ -193,12 +182,28 @@ impl PolymarketRestClient {
     where
         T: DeserializeOwned,
     {
-        let url = join_url(base, path, query)?;
-        let request = self.http.get(url).build()?;
+        let request = self.build_get_request(base, path, query, None)?;
         self.execute_json(request).await
     }
 
-    async fn execute_json<T>(&self, request: Request) -> Result<T, RestError>
+    pub(crate) fn build_get_request(
+        &self,
+        base: &Url,
+        path: &str,
+        query: &[(&str, &str)],
+        headers: Option<HeaderMap>,
+    ) -> Result<Request, RestError> {
+        let url = join_url(base, path, query)?;
+        let builder = self.http.get(url);
+        let builder = match headers {
+            Some(headers) => builder.headers(headers),
+            None => builder,
+        };
+
+        Ok(builder.build()?)
+    }
+
+    pub(crate) async fn execute_json<T>(&self, request: Request) -> Result<T, RestError>
     where
         T: DeserializeOwned,
     {
