@@ -69,8 +69,8 @@ impl std::error::Error for AuthError {}
 pub fn signature_type_label(signature_type: SignatureType) -> &'static str {
     match signature_type {
         SignatureType::Eoa => "EOA",
-        SignatureType::Proxy => "PROXY",
-        SignatureType::Safe => "SAFE",
+        SignatureType::Proxy => "POLY_PROXY",
+        SignatureType::Safe => "GNOSIS_SAFE",
     }
 }
 

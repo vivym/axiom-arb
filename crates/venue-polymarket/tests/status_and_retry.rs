@@ -153,6 +153,38 @@ fn open_orders_request_uses_authenticated_signer_context() {
 }
 
 #[test]
+fn proxy_balance_allowance_request_uses_documented_signature_type_value() {
+    let client = sample_client();
+    let request = client
+        .build_balance_allowance_request(&sample_proxy_auth(), "0xtoken")
+        .expect("proxy request should build");
+
+    assert_eq!(
+        header_value(request.headers(), "poly-signature-type"),
+        "POLY_PROXY"
+    );
+    let query = request.url().query().expect("query");
+    assert!(query.contains("signature_type=POLY_PROXY"));
+    assert!(query.contains("wallet_route=proxy"));
+}
+
+#[test]
+fn safe_open_orders_request_uses_documented_signature_type_value() {
+    let client = sample_client();
+    let request = client
+        .build_open_orders_request(&sample_safe_auth())
+        .expect("safe request should build");
+
+    assert_eq!(
+        header_value(request.headers(), "poly-signature-type"),
+        "GNOSIS_SAFE"
+    );
+    let query = request.url().query().expect("query");
+    assert!(query.contains("signature_type=GNOSIS_SAFE"));
+    assert!(query.contains("wallet_route=safe"));
+}
+
+#[test]
 fn authenticated_requests_reject_empty_funder_address() {
     let client = sample_client();
     let err = client
@@ -308,6 +340,36 @@ fn sample_auth_with_funder(funder_address: &'static str) -> L2AuthHeaders<'stati
         passphrase: "pass-1",
         timestamp: "1700000000",
         signature: "0xsig",
+    }
+}
+
+fn sample_proxy_auth() -> L2AuthHeaders<'static> {
+    L2AuthHeaders {
+        signer: SignerContext {
+            address: "0xproxyowner",
+            funder_address: "0xproxyfunder",
+            signature_type: SignatureType::Proxy,
+            wallet_route: WalletRoute::Proxy,
+        },
+        api_key: "proxy-key-1",
+        passphrase: "proxy-pass-1",
+        timestamp: "1700000001",
+        signature: "0xproxysig",
+    }
+}
+
+fn sample_safe_auth() -> L2AuthHeaders<'static> {
+    L2AuthHeaders {
+        signer: SignerContext {
+            address: "0xsafeowner",
+            funder_address: "0xsafefunder",
+            signature_type: SignatureType::Safe,
+            wallet_route: WalletRoute::Safe,
+        },
+        api_key: "safe-key-1",
+        passphrase: "safe-pass-1",
+        timestamp: "1700000002",
+        signature: "0xsafesig",
     }
 }
 
