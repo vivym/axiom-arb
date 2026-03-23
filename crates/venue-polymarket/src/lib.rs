@@ -18,5 +18,8 @@ pub use rest::{
     VenueStatusResponse,
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
-pub use ws_market::{parse_market_message, MarketBookUpdate, MarketWsEvent, WsParseError};
+pub use ws_market::{
+    parse_market_message, MarketBookUpdate, MarketWsEvent, WsChannelKind,
+    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
+};
 pub use ws_user::{parse_user_message, UserOrderUpdate, UserTradeUpdate, UserWsEvent};

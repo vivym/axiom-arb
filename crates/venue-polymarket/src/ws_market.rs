@@ -1,7 +1,9 @@
 use std::fmt;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
+
+use crate::UserWsEvent;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketWsEvent {
@@ -16,6 +18,114 @@ pub struct MarketBookUpdate {
     pub best_bid: Option<String>,
     pub best_ask: Option<String>,
     pub event_ts: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WsChannelKind {
+    Market,
+    User,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsChannelState {
+    pub channel: WsChannelKind,
+    pub last_message_at: DateTime<Utc>,
+    pub last_ping_at: Option<DateTime<Utc>>,
+    pub last_pong_at: Option<DateTime<Utc>>,
+    pub stale_since: Option<DateTime<Utc>>,
+    pub requires_reconcile_attention: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WsChannelReconcileReason {
+    StaleChannel { channel: WsChannelKind },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsChannelLivenessMonitor {
+    channel: WsChannelKind,
+    max_gap: Duration,
+}
+
+impl WsChannelState {
+    pub fn new(channel: WsChannelKind, observed_at: DateTime<Utc>) -> Self {
+        Self {
+            channel,
+            last_message_at: observed_at,
+            last_ping_at: None,
+            last_pong_at: None,
+            stale_since: None,
+            requires_reconcile_attention: false,
+        }
+    }
+}
+
+impl WsChannelLivenessMonitor {
+    pub fn new(channel: WsChannelKind, max_gap: Duration) -> Self {
+        Self { channel, max_gap }
+    }
+
+    pub fn record_market_event(
+        &self,
+        state: &mut WsChannelState,
+        event: &MarketWsEvent,
+        observed_at: DateTime<Utc>,
+    ) {
+        debug_assert_eq!(state.channel, WsChannelKind::Market);
+        debug_assert_eq!(self.channel, WsChannelKind::Market);
+
+        self.record_observation(state, observed_at);
+        match event {
+            MarketWsEvent::Ping => state.last_ping_at = Some(observed_at),
+            MarketWsEvent::Pong => state.last_pong_at = Some(observed_at),
+            MarketWsEvent::Book(_) => {}
+        }
+    }
+
+    pub fn record_user_event(
+        &self,
+        state: &mut WsChannelState,
+        event: &UserWsEvent,
+        observed_at: DateTime<Utc>,
+    ) {
+        debug_assert_eq!(state.channel, WsChannelKind::User);
+        debug_assert_eq!(self.channel, WsChannelKind::User);
+
+        self.record_observation(state, observed_at);
+        match event {
+            UserWsEvent::Ping => state.last_ping_at = Some(observed_at),
+            UserWsEvent::Pong => state.last_pong_at = Some(observed_at),
+            UserWsEvent::Order(_) | UserWsEvent::Trade(_) => {}
+        }
+    }
+
+    pub fn reconcile_trigger(
+        &self,
+        state: &mut WsChannelState,
+        now: DateTime<Utc>,
+    ) -> Option<WsChannelReconcileReason> {
+        debug_assert_eq!(state.channel, self.channel);
+
+        if now.signed_duration_since(state.last_message_at) <= self.max_gap {
+            return None;
+        }
+
+        if state.requires_reconcile_attention {
+            return None;
+        }
+
+        state.requires_reconcile_attention = true;
+        state.stale_since = Some(now);
+        Some(WsChannelReconcileReason::StaleChannel {
+            channel: self.channel,
+        })
+    }
+
+    fn record_observation(&self, state: &mut WsChannelState, observed_at: DateTime<Utc>) {
+        state.last_message_at = observed_at;
+        state.stale_since = None;
+        state.requires_reconcile_attention = false;
+    }
 }
 
 #[derive(Debug)]
