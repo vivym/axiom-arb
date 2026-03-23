@@ -42,7 +42,7 @@ impl RetryDecision {
             backoff: true,
             next_mode: Some(RuntimeMode::Reconciling),
             overlay: None,
-            reconcile_first: false,
+            reconcile_first: true,
             retry_of_order_id: None,
             preserved_identity: Some(identity.clone()),
         }

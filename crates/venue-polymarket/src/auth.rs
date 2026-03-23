@@ -84,6 +84,9 @@ pub fn build_l2_auth_headers(headers: &L2AuthHeaders<'_>) -> Result<HeaderMap, A
         return Err(AuthError::SignerMismatch);
     }
 
+    ensure_field("address", headers.signer.address)?;
+    ensure_field("funder_address", headers.signer.funder_address)?;
+
     let mut map = HeaderMap::new();
     insert_header(
         &mut map,
@@ -125,12 +128,18 @@ fn insert_header(
     field: &'static str,
     value: &str,
 ) -> Result<(), AuthError> {
-    if value.trim().is_empty() {
-        return Err(AuthError::EmptyField(field));
-    }
+    ensure_field(field, value)?;
 
     let header_value =
         HeaderValue::from_str(value).map_err(|_| AuthError::InvalidHeaderValue(field))?;
     map.insert(name, header_value);
+    Ok(())
+}
+
+fn ensure_field(field: &'static str, value: &str) -> Result<(), AuthError> {
+    if value.trim().is_empty() {
+        return Err(AuthError::EmptyField(field));
+    }
+
     Ok(())
 }

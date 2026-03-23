@@ -1,6 +1,6 @@
 use std::fmt;
 
-use reqwest::Client;
+use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use url::Url;
@@ -21,6 +21,7 @@ pub struct PolymarketRestClient {
 pub enum RestError {
     Auth(AuthError),
     Http(reqwest::Error),
+    HttpResponse { status: StatusCode, body: String },
     Url(url::ParseError),
     MissingField(&'static str),
 }
@@ -62,6 +63,9 @@ impl fmt::Display for RestError {
         match self {
             Self::Auth(err) => write!(f, "auth error: {err}"),
             Self::Http(err) => write!(f, "http error: {err}"),
+            Self::HttpResponse { status, body } => {
+                write!(f, "http response error {status}: {body}")
+            }
             Self::Url(err) => write!(f, "url error: {err}"),
             Self::MissingField(field) => write!(f, "missing response field: {field}"),
         }
@@ -190,16 +194,28 @@ impl PolymarketRestClient {
         T: DeserializeOwned,
     {
         let url = join_url(base, path, query)?;
-        let response = self.http.get(url).send().await?.error_for_status()?;
-        Ok(response.json::<T>().await?)
+        let request = self.http.get(url).build()?;
+        self.execute_json(request).await
     }
 
-    async fn execute_json<T>(&self, request: reqwest::Request) -> Result<T, RestError>
+    async fn execute_json<T>(&self, request: Request) -> Result<T, RestError>
     where
         T: DeserializeOwned,
     {
-        let response = self.http.execute(request).await?.error_for_status()?;
+        let response = self.execute(request).await?;
         Ok(response.json::<T>().await?)
+    }
+
+    async fn execute(&self, request: Request) -> Result<Response, RestError> {
+        let response = self.http.execute(request).await?;
+        let status = response.status();
+
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        let body = response.text().await?;
+        Err(RestError::HttpResponse { status, body })
     }
 }
 

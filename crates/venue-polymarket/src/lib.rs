@@ -7,7 +7,7 @@ pub use auth::{
     build_l2_auth_headers, signature_type_label, signature_type_to_wallet_route,
     wallet_route_label, wallet_route_to_signature_type, AuthError, L2AuthHeaders, SignerContext,
 };
-pub use relayer::RelayerTransaction;
+pub use relayer::{RelayerQuery, RelayerTransaction};
 pub use rest::{
     BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestError,
     VenueStatusResponse,

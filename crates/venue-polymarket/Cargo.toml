@@ -9,5 +9,9 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 serde = { version = "1.0.228", features = ["derive"] }
 url = "2.5.7"
 
+[dev-dependencies]
+serde_json = "1.0.145"
+tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
+
 [lib]
 path = "src/lib.rs"
