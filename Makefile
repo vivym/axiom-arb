@@ -1,7 +1,10 @@
-.PHONY: fmt check test db-up db-down
+.PHONY: fmt clippy check test db-up db-down live-paper
 
 fmt:
 	cargo fmt --all
+
+clippy:
+	cargo clippy --workspace --all-targets
 
 check:
 	cargo check --workspace
@@ -15,3 +18,5 @@ db-up:
 db-down:
 	docker compose down
 
+live-paper:
+	@echo "live-paper is a placeholder until the live app is implemented"

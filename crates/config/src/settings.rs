@@ -1,4 +1,5 @@
 use std::fmt;
+use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -90,17 +91,17 @@ impl Settings {
             let value = value.as_ref().trim();
             match key {
                 "DATABASE_URL" if !value.is_empty() => {
-                    db_url = Some(parse_url("DATABASE_URL", value)?);
+                    db_url = Some(parse_database_url(value)?);
                 }
                 "AXIOM_MODE" if !value.is_empty() => mode = Some(parse_runtime_mode(value)?),
                 "POLY_CLOB_HOST" if !value.is_empty() => {
-                    clob_host = Some(parse_url("POLY_CLOB_HOST", value)?);
+                    clob_host = Some(parse_polymarket_host("POLY_CLOB_HOST", value)?);
                 }
                 "POLY_DATA_API_HOST" if !value.is_empty() => {
-                    data_api_host = Some(parse_url("POLY_DATA_API_HOST", value)?);
+                    data_api_host = Some(parse_polymarket_host("POLY_DATA_API_HOST", value)?);
                 }
                 "POLY_RELAYER_HOST" if !value.is_empty() => {
-                    relayer_host = Some(parse_url("POLY_RELAYER_HOST", value)?);
+                    relayer_host = Some(parse_polymarket_host("POLY_RELAYER_HOST", value)?);
                 }
                 "POLY_SIGNATURE_TYPE" if !value.is_empty() => {
                     signature_type = Some(parse_signature_type(value)?);
@@ -127,49 +128,46 @@ impl Settings {
 }
 
 fn parse_url(key: &'static str, value: &str) -> Result<String, ConfigError> {
-    let (scheme, rest) = value
-        .split_once("://")
-        .ok_or_else(|| ConfigError::InvalidVar {
-            key,
-            value: value.to_owned(),
-        })?;
+    let parsed = Url::parse(value).map_err(|_| ConfigError::InvalidVar {
+        key,
+        value: value.to_owned(),
+    })?;
 
-    if scheme.is_empty()
-        || !scheme
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
-        || rest.is_empty()
-        || value.chars().any(char::is_whitespace)
-    {
+    if parsed.scheme() != "https" {
         return Err(ConfigError::InvalidVar {
             key,
             value: value.to_owned(),
         });
     }
 
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if authority.is_empty() {
+    if parsed.host_str().is_none() {
         return Err(ConfigError::InvalidVar {
             key,
             value: value.to_owned(),
         });
     }
 
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let host = if let Some(host) = host.strip_prefix('[') {
-        host.split_once(']').map(|(inner, _)| inner).unwrap_or("")
-    } else {
-        host.split(':').next().unwrap_or("")
-    };
+    Ok(parsed.as_str().to_owned())
+}
 
-    if host.is_empty() {
+fn parse_database_url(value: &str) -> Result<String, ConfigError> {
+    let parsed = Url::parse(value).map_err(|_| ConfigError::InvalidVar {
+        key: "DATABASE_URL",
+        value: value.to_owned(),
+    })?;
+
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
         return Err(ConfigError::InvalidVar {
-            key,
+            key: "DATABASE_URL",
             value: value.to_owned(),
         });
     }
 
-    Ok(value.to_owned())
+    Ok(parsed.as_str().to_owned())
+}
+
+fn parse_polymarket_host(key: &'static str, value: &str) -> Result<String, ConfigError> {
+    parse_url(key, value)
 }
 
 fn default_poly_clob_host() -> String {
