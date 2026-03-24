@@ -1,4 +1,9 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MetricKey(&'static str);
 
 impl MetricKey {
@@ -147,5 +152,103 @@ impl Default for RuntimeMetrics {
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MetricRegistry {
+    inner: Arc<Mutex<MetricRegistryState>>,
+}
+
+#[derive(Debug, Default)]
+struct MetricRegistryState {
+    gauges: HashMap<MetricKey, f64>,
+    counters: HashMap<MetricKey, u64>,
+    modes: HashMap<MetricKey, String>,
+}
+
+impl MetricRegistry {
+    pub fn record_gauge(&self, sample: GaugeSample) {
+        self.inner
+            .lock()
+            .expect("metric registry lock")
+            .gauges
+            .insert(sample.key(), sample.value());
+    }
+
+    pub fn record_counter(&self, sample: CounterSample) {
+        let mut state = self.inner.lock().expect("metric registry lock");
+        let entry = state.counters.entry(sample.key()).or_default();
+        *entry += sample.amount();
+    }
+
+    pub fn record_mode(&self, sample: ModeSample) {
+        self.inner
+            .lock()
+            .expect("metric registry lock")
+            .modes
+            .insert(sample.key(), sample.mode().to_owned());
+    }
+
+    pub fn snapshot(&self) -> MetricRegistrySnapshot {
+        let state = self.inner.lock().expect("metric registry lock");
+        MetricRegistrySnapshot {
+            gauges: state.gauges.clone(),
+            counters: state.counters.clone(),
+            modes: state.modes.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MetricRegistrySnapshot {
+    gauges: HashMap<MetricKey, f64>,
+    counters: HashMap<MetricKey, u64>,
+    modes: HashMap<MetricKey, String>,
+}
+
+impl MetricRegistrySnapshot {
+    pub fn gauge(&self, key: MetricKey) -> Option<f64> {
+        self.gauges.get(&key).copied()
+    }
+
+    pub fn counter(&self, key: MetricKey) -> Option<u64> {
+        self.counters.get(&key).copied()
+    }
+
+    pub fn mode(&self, key: MetricKey) -> Option<&str> {
+        self.modes.get(&key).map(String::as_str)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeMetricsRecorder {
+    metrics: RuntimeMetrics,
+    registry: MetricRegistry,
+}
+
+impl RuntimeMetricsRecorder {
+    pub fn new(metrics: RuntimeMetrics, registry: MetricRegistry) -> Self {
+        Self { metrics, registry }
+    }
+
+    pub fn record_heartbeat_freshness(&self, seconds: f64) {
+        self.registry
+            .record_gauge(self.metrics.heartbeat_freshness.sample(seconds));
+    }
+
+    pub fn record_runtime_mode(&self, mode: impl Into<String>) {
+        self.registry
+            .record_mode(self.metrics.runtime_mode.sample(mode));
+    }
+
+    pub fn record_relayer_pending_age(&self, seconds: f64) {
+        self.registry
+            .record_gauge(self.metrics.relayer_pending_age.sample(seconds));
+    }
+
+    pub fn increment_divergence_count(&self, amount: u64) {
+        self.registry
+            .record_counter(self.metrics.divergence_count.increment(amount));
     }
 }

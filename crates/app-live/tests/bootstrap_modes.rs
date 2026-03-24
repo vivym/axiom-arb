@@ -1,4 +1,4 @@
-use app_live::{AppRuntime, AppRuntimeMode};
+use app_live::{run_live, run_paper, AppRuntime, AppRuntimeMode, StaticSnapshotSource};
 use domain::{ConditionId, RuntimeMode, RuntimeOverlay, TokenId};
 use state::{ReconcileAttention, RemoteSnapshot};
 
@@ -43,4 +43,34 @@ fn app_runtime_distinguishes_paper_and_live_modes() {
 
     assert_eq!(paper.app_mode(), AppRuntimeMode::Paper);
     assert_eq!(live.app_mode(), AppRuntimeMode::Live);
+}
+
+#[test]
+fn run_paper_bootstraps_runtime_through_reconcile() {
+    let result = run_paper(&StaticSnapshotSource::empty());
+
+    assert_eq!(result.runtime.app_mode(), AppRuntimeMode::Paper);
+    assert!(result.report.succeeded);
+    assert!(result.report.promoted_from_bootstrap);
+    assert_eq!(
+        result.runtime.bootstrap_status(),
+        app_live::bootstrap::BootstrapStatus::Ready
+    );
+    assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Healthy);
+    assert_eq!(result.runtime.runtime_overlay(), None);
+}
+
+#[test]
+fn run_live_bootstraps_runtime_through_reconcile() {
+    let result = run_live(&StaticSnapshotSource::empty());
+
+    assert_eq!(result.runtime.app_mode(), AppRuntimeMode::Live);
+    assert!(result.report.succeeded);
+    assert!(result.report.promoted_from_bootstrap);
+    assert_eq!(
+        result.runtime.bootstrap_status(),
+        app_live::bootstrap::BootstrapStatus::Ready
+    );
+    assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Healthy);
+    assert_eq!(result.runtime.runtime_overlay(), None);
 }

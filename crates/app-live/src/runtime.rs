@@ -3,7 +3,7 @@ use std::{fmt, str::FromStr};
 use domain::{RuntimeMode, RuntimeOverlay};
 use state::{ReconcileReport, RemoteSnapshot, StateStore};
 
-use crate::bootstrap::{self, BootstrapStatus};
+use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -63,6 +63,12 @@ pub struct AppRuntime {
     app_mode: AppRuntimeMode,
 }
 
+#[derive(Debug)]
+pub struct AppRunResult {
+    pub runtime: AppRuntime,
+    pub report: ReconcileReport,
+}
+
 impl AppRuntime {
     pub fn new(app_mode: AppRuntimeMode) -> Self {
         Self {
@@ -90,4 +96,35 @@ impl AppRuntime {
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
         bootstrap::reconcile(&mut self.store, snapshot)
     }
+
+    pub fn bootstrap_once<S>(&mut self, source: &S) -> ReconcileReport
+    where
+        S: BootstrapSource,
+    {
+        bootstrap::bootstrap_once(&mut self.store, source)
+    }
+}
+
+pub fn run_paper<S>(source: &S) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    run_with_mode(AppRuntimeMode::Paper, source)
+}
+
+pub fn run_live<S>(source: &S) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    run_with_mode(AppRuntimeMode::Live, source)
+}
+
+fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    let mut runtime = AppRuntime::new(app_mode);
+    let report = runtime.bootstrap_once(source);
+
+    AppRunResult { runtime, report }
 }

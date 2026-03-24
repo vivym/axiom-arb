@@ -1,7 +1,8 @@
 use std::{env, process, str::FromStr};
 
-use app_live::{AppRuntime, AppRuntimeMode};
-use observability::Observability;
+use app_live::{run_live, run_paper, AppRuntimeMode, StaticSnapshotSource};
+use domain::RuntimeMode;
+use observability::{bootstrap_tracing, Observability};
 
 fn main() {
     if let Err(error) = run() {
@@ -13,19 +14,35 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
+    let _tracing = bootstrap_tracing("app-live");
     let observability = Observability::new("app-live");
-    let runtime = AppRuntime::new(app_mode);
-    let mode_metric = observability
-        .metrics()
-        .runtime_mode
-        .sample(runtime.app_mode().as_str());
+    let source = StaticSnapshotSource::empty();
+    let result = match app_mode {
+        AppRuntimeMode::Paper => run_paper(&source),
+        AppRuntimeMode::Live => run_live(&source),
+    };
+    observability
+        .recorder()
+        .record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
 
     println!(
-        "app-live starting in {} mode with bootstrap {:?} ({})",
-        runtime.app_mode().as_str(),
-        runtime.bootstrap_status(),
-        mode_metric.mode()
+        "app-live starting app_mode={} bootstrap_status={:?} promoted_from_bootstrap={} runtime_mode={:?}",
+        result.runtime.app_mode().as_str(),
+        result.runtime.bootstrap_status(),
+        result.report.promoted_from_bootstrap,
+        result.runtime.runtime_mode()
     );
 
     Ok(())
+}
+
+fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
+    match mode {
+        RuntimeMode::Bootstrapping => "bootstrapping",
+        RuntimeMode::Healthy => "healthy",
+        RuntimeMode::Reconciling => "reconciling",
+        RuntimeMode::Degraded => "degraded",
+        RuntimeMode::NoNewRisk => "no_new_risk",
+        RuntimeMode::GlobalHalt => "global_halt",
+    }
 }
