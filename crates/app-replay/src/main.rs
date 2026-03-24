@@ -1,6 +1,6 @@
 use std::process;
 
-use app_replay::{parse_args, replay_event_journal_from_env, NoopReplayConsumer};
+use app_replay::{parse_args, replay_event_journal_from_env, SummaryReplayConsumer};
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +12,8 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let range = parse_args(std::env::args())?;
-    let mut consumer = NoopReplayConsumer;
+    let mut consumer = SummaryReplayConsumer::default();
     replay_event_journal_from_env(range, &mut consumer).await?;
+    println!("app-replay {}", consumer.summary());
     Ok(())
 }

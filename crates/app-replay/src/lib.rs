@@ -1,12 +1,75 @@
-use std::{error::Error as StdError, fmt};
+use std::{collections::BTreeMap, error::Error as StdError, fmt};
 
 use journal::{replay_entries, JournalEntry, SourceKind};
 use persistence::{connect_pool_from_env, models::JournalEntryRow, JournalRepo, PersistenceError};
+use sqlx::PgPool;
 
 pub trait ReplayConsumer {
     type Error;
 
     fn consume(&mut self, entry: JournalEntry) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReplayStateSummary {
+    pub processed_count: u64,
+    pub last_journal_seq: Option<i64>,
+    pub per_stream: BTreeMap<String, u64>,
+    pub per_source_kind: BTreeMap<String, u64>,
+    pub per_event_type: BTreeMap<String, u64>,
+}
+
+impl ReplayStateSummary {
+    fn record(&mut self, entry: &JournalEntry) {
+        self.processed_count += 1;
+        self.last_journal_seq = Some(entry.journal_seq);
+        increment(&mut self.per_stream, &entry.stream);
+        increment(
+            &mut self.per_source_kind,
+            source_kind_label(entry.source_kind),
+        );
+        increment(&mut self.per_event_type, &entry.event_type);
+    }
+}
+
+impl fmt::Display for ReplayStateSummary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "processed_count={} last_journal_seq={} per_stream={:?} per_source_kind={:?} per_event_type={:?}",
+            self.processed_count,
+            self.last_journal_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_owned()),
+            self.per_stream,
+            self.per_source_kind,
+            self.per_event_type
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SummaryReplayConsumer {
+    summary: ReplayStateSummary,
+}
+
+impl SummaryReplayConsumer {
+    pub fn summary(&self) -> &ReplayStateSummary {
+        &self.summary
+    }
+
+    pub fn into_summary(self) -> ReplayStateSummary {
+        self.summary
+    }
+}
+
+impl ReplayConsumer for SummaryReplayConsumer {
+    type Error = std::convert::Infallible;
+
+    fn consume(&mut self, entry: JournalEntry) -> Result<(), Self::Error> {
+        self.summary.record(&entry);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +124,26 @@ where
     replay_journal(entries, consumer).map_err(ReplayExecutionError::Consumer)
 }
 
+pub async fn replay_event_journal_from_pool<C>(
+    pool: &PgPool,
+    range: ReplayRange,
+    consumer: &mut C,
+) -> Result<(), ReplayRunError<C::Error>>
+where
+    C: ReplayConsumer,
+{
+    let rows = JournalRepo
+        .list_after(pool, range.after_seq, range.effective_limit())
+        .await
+        .map_err(ReplayRunError::Persistence)?;
+    let entries = rows
+        .into_iter()
+        .map(|row| map_row(row).map_err(ReplayRunError::InvalidSourceKind))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    replay_journal(entries, consumer).map_err(ReplayRunError::Consumer)
+}
+
 pub fn parse_args<I, S>(args: I) -> Result<ReplayRange, ReplayArgsError>
 where
     I: IntoIterator<Item = S>,
@@ -105,16 +188,7 @@ where
     let pool = connect_pool_from_env()
         .await
         .map_err(ReplayRunError::Persistence)?;
-    let rows = JournalRepo
-        .list_after(&pool, range.after_seq, range.effective_limit())
-        .await
-        .map_err(ReplayRunError::Persistence)?;
-    let entries = rows
-        .into_iter()
-        .map(|row| map_row(row).map_err(ReplayRunError::InvalidSourceKind))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    replay_journal(entries, consumer).map_err(ReplayRunError::Consumer)
+    replay_event_journal_from_pool(&pool, range, consumer).await
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +282,11 @@ fn parse_i64(flag: &'static str, value: &str) -> Result<i64, ReplayArgsError> {
         })
 }
 
+fn increment(counts: &mut BTreeMap<String, u64>, key: &str) {
+    let entry = counts.entry(key.to_owned()).or_default();
+    *entry += 1;
+}
+
 fn map_row(row: JournalEntryRow) -> Result<JournalEntry, String> {
     Ok(JournalEntry {
         journal_seq: row.journal_seq,
@@ -232,5 +311,14 @@ fn parse_source_kind(value: &str) -> Result<SourceKind, String> {
         "rest_heartbeat" | "restheartbeat" => Ok(SourceKind::RestHeartbeat),
         "internal" | "test" => Ok(SourceKind::Internal),
         _ => Err(value.to_owned()),
+    }
+}
+
+fn source_kind_label(value: SourceKind) -> &'static str {
+    match value {
+        SourceKind::WsMarket => "ws_market",
+        SourceKind::WsUser => "ws_user",
+        SourceKind::RestHeartbeat => "rest_heartbeat",
+        SourceKind::Internal => "internal",
     }
 }
