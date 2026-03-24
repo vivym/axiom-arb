@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use domain::{
     ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
@@ -10,6 +10,7 @@ use crate::{
     bootstrap::{
         allows_automatic_repair, bootstrap_policy, reconcile_attention_policy, reconciled_policy,
     },
+    facts::{FactKey, PendingRef},
     reconcile::{reconcile_store, ReconcileReport, RemoteSnapshot},
 };
 
@@ -35,9 +36,13 @@ pub struct RelayerTxSummary {
 
 #[derive(Debug, Clone)]
 pub struct StateStore {
+    state_version: u64,
+    last_applied_journal_seq: Option<i64>,
     runtime_mode: RuntimeMode,
     overlay: Option<RuntimeOverlay>,
     first_reconcile_succeeded: bool,
+    applied_fact_journal: BTreeMap<FactKey, i64>,
+    pending_refs: BTreeSet<String>,
     open_orders: HashMap<OrderId, Order>,
     approvals: HashMap<ApprovalKey, ApprovalState>,
     inventory: HashMap<InventoryEntry, Decimal>,
@@ -50,9 +55,13 @@ impl StateStore {
         let policy = bootstrap_policy();
 
         Self {
+            state_version: 0,
+            last_applied_journal_seq: None,
             runtime_mode: policy.mode,
             overlay: policy.overlay,
             first_reconcile_succeeded: false,
+            applied_fact_journal: BTreeMap::new(),
+            pending_refs: BTreeSet::new(),
             open_orders: HashMap::new(),
             approvals: HashMap::new(),
             inventory: HashMap::new(),
@@ -75,6 +84,14 @@ impl StateStore {
 
     pub fn mode(&self) -> RuntimeMode {
         self.runtime_mode
+    }
+
+    pub fn state_version(&self) -> u64 {
+        self.state_version
+    }
+
+    pub fn last_applied_journal_seq(&self) -> Option<i64> {
+        self.last_applied_journal_seq
     }
 
     pub fn overlay(&self) -> Option<RuntimeOverlay> {
@@ -217,6 +234,21 @@ impl StateStore {
     fn apply_policy(&mut self, policy: RuntimePolicy) {
         self.runtime_mode = policy.mode;
         self.overlay = policy.overlay;
+    }
+
+    pub(crate) fn duplicate_journal_seq(&self, fact_key: &FactKey) -> Option<i64> {
+        self.applied_fact_journal.get(fact_key).copied()
+    }
+
+    pub(crate) fn record_applied_fact(&mut self, journal_seq: i64, fact_key: FactKey) -> u64 {
+        self.state_version += 1;
+        self.last_applied_journal_seq = Some(journal_seq);
+        self.applied_fact_journal.insert(fact_key, journal_seq);
+        self.state_version
+    }
+
+    pub(crate) fn record_pending_ref(&mut self, pending_ref: PendingRef) {
+        self.pending_refs.insert(pending_ref.0);
     }
 }
 
