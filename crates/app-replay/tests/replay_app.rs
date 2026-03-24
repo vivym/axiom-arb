@@ -1,6 +1,13 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    panic::AssertUnwindSafe,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use chrono::Utc;
+use futures_util::future::FutureExt;
 use journal::{JournalEntry, SourceKind};
 use persistence::{models::JournalEntryInput, run_migrations, JournalRepo};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -104,27 +111,62 @@ fn summary_consumer_materializes_deterministic_replay_state() {
 
 #[tokio::test]
 async fn replay_event_journal_from_pool_materializes_summary_from_db_rows() {
-    let db = TestDatabase::new().await;
-    run_migrations(&db.pool).await.unwrap();
-    seed_journal(&db.pool).await;
-    let mut consumer = SummaryReplayConsumer::default();
+    if database_url().is_none() {
+        return;
+    }
 
-    replay_event_journal_from_pool(&db.pool, ReplayRange::new(1, Some(2)), &mut consumer)
+    with_test_database(|db| async move {
+        run_migrations(&db.pool).await.unwrap();
+        seed_journal(&db.pool).await;
+        let mut consumer = SummaryReplayConsumer::default();
+
+        replay_event_journal_from_pool(&db.pool, ReplayRange::new(1, Some(2)), &mut consumer)
+            .await
+            .unwrap();
+
+        let summary = consumer.summary();
+        assert_eq!(summary.processed_count, 2);
+        assert_eq!(summary.last_journal_seq, Some(3));
+        assert_eq!(summary.per_stream.get("orders"), Some(&1));
+        assert_eq!(summary.per_stream.get("runtime"), Some(&1));
+        assert_eq!(summary.per_stream.get("markets"), None);
+        assert_eq!(summary.per_source_kind.get("ws_user"), Some(&1));
+        assert_eq!(summary.per_source_kind.get("internal"), Some(&1));
+        assert_eq!(summary.per_event_type.get("trade"), Some(&1));
+        assert_eq!(summary.per_event_type.get("heartbeat"), Some(&1));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn with_test_database_cleans_up_schema_after_panicking_body() {
+    let Some(database_url) = database_url() else {
+        return;
+    };
+
+    let schema_name = Arc::new(Mutex::new(None::<String>));
+    let captured = Arc::clone(&schema_name);
+
+    let panic = AssertUnwindSafe(with_test_database(move |db| {
+        let captured = Arc::clone(&captured);
+        async move {
+            *captured.lock().unwrap() = Some(db.schema().to_owned());
+            panic!("intentional panic to verify cleanup");
+        }
+    }))
+    .catch_unwind()
+    .await;
+
+    assert!(panic.is_err());
+
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
         .await
         .unwrap();
-
-    let summary = consumer.summary();
-    assert_eq!(summary.processed_count, 2);
-    assert_eq!(summary.last_journal_seq, Some(3));
-    assert_eq!(summary.per_stream.get("orders"), Some(&1));
-    assert_eq!(summary.per_stream.get("runtime"), Some(&1));
-    assert_eq!(summary.per_stream.get("markets"), None);
-    assert_eq!(summary.per_source_kind.get("ws_user"), Some(&1));
-    assert_eq!(summary.per_source_kind.get("internal"), Some(&1));
-    assert_eq!(summary.per_event_type.get("trade"), Some(&1));
-    assert_eq!(summary.per_event_type.get("heartbeat"), Some(&1));
-
-    db.cleanup().await;
+    let schema = schema_name.lock().unwrap().clone().unwrap();
+    assert!(!schema_exists(&admin_pool, &schema).await);
+    admin_pool.close().await;
 }
 
 #[derive(Default)]
@@ -193,6 +235,7 @@ fn sample_entry_with_kind(
     }
 }
 
+#[derive(Clone)]
 struct TestDatabase {
     admin_pool: PgPool,
     pool: PgPool,
@@ -200,13 +243,10 @@ struct TestDatabase {
 }
 
 impl TestDatabase {
-    async fn new() -> Self {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for app-replay tests");
-
+    async fn new(database_url: &str) -> Self {
         let admin_pool = PgPoolOptions::new()
             .max_connections(2)
-            .connect(&database_url)
+            .connect(database_url)
             .await
             .expect("test database should connect");
 
@@ -232,7 +272,7 @@ impl TestDatabase {
                     Ok(())
                 })
             })
-            .connect(&database_url)
+            .connect(database_url)
             .await
             .expect("isolated test pool should connect");
 
@@ -241,6 +281,10 @@ impl TestDatabase {
             pool,
             schema,
         }
+    }
+
+    fn schema(&self) -> &str {
+        &self.schema
     }
 
     async fn cleanup(self) {
@@ -312,4 +356,41 @@ async fn seed_journal(pool: &PgPool) {
     )
     .await
     .unwrap();
+}
+
+fn database_url() -> Option<String> {
+    std::env::var("DATABASE_URL").ok()
+}
+
+async fn with_test_database<F, Fut>(test: F)
+where
+    F: FnOnce(TestDatabase) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let database_url = database_url().expect("DATABASE_URL must be set for app-replay tests");
+    let db = TestDatabase::new(&database_url).await;
+    let result = AssertUnwindSafe(test(db.clone())).catch_unwind().await;
+    db.cleanup().await;
+
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+async fn schema_exists(pool: &PgPool, schema: &str) -> bool {
+    let row: (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.schemata
+            WHERE schema_name = $1
+        )
+        "#,
+    )
+    .bind(schema)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    row.0
 }
