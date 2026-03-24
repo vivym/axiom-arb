@@ -26,11 +26,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
 
     println!(
-        "app-live starting app_mode={} bootstrap_status={:?} promoted_from_bootstrap={} runtime_mode={:?}",
+        "app-live starting app_mode={} bootstrap_status={:?} promoted_from_bootstrap={} runtime_mode={:?} fullset_mode={:?} negrisk_mode={:?} published_snapshot_id={}",
         result.runtime.app_mode().as_str(),
         result.runtime.bootstrap_status(),
         result.report.promoted_from_bootstrap,
-        result.runtime.runtime_mode()
+        result.runtime.runtime_mode(),
+        result.summary.fullset_mode,
+        result.summary.negrisk_mode,
+        result
+            .summary
+            .published_snapshot_id
+            .as_deref()
+            .unwrap_or("none")
     );
 
     Ok(())

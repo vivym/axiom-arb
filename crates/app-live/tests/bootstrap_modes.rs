@@ -1,5 +1,5 @@
 use app_live::{run_live, run_paper, AppRuntime, AppRuntimeMode, StaticSnapshotSource};
-use domain::{ConditionId, RuntimeMode, RuntimeOverlay, TokenId};
+use domain::{ConditionId, ExecutionMode, RuntimeMode, RuntimeOverlay, TokenId};
 use state::{ReconcileAttention, RemoteSnapshot};
 
 #[test]
@@ -50,6 +50,8 @@ fn run_paper_bootstraps_runtime_through_reconcile() {
     let result = run_paper(&StaticSnapshotSource::empty());
 
     assert_eq!(result.runtime.app_mode(), AppRuntimeMode::Paper);
+    assert_eq!(result.summary.fullset_mode, ExecutionMode::Live);
+    assert_eq!(result.summary.negrisk_mode, ExecutionMode::Shadow);
     assert!(result.report.succeeded);
     assert!(result.report.promoted_from_bootstrap);
     assert_eq!(
@@ -65,6 +67,8 @@ fn run_live_bootstraps_runtime_through_reconcile() {
     let result = run_live(&StaticSnapshotSource::empty());
 
     assert_eq!(result.runtime.app_mode(), AppRuntimeMode::Live);
+    assert_eq!(result.summary.fullset_mode, ExecutionMode::Live);
+    assert_eq!(result.summary.negrisk_mode, ExecutionMode::Shadow);
     assert!(result.report.succeeded);
     assert!(result.report.promoted_from_bootstrap);
     assert_eq!(

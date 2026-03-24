@@ -1,9 +1,14 @@
 use std::{fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
-use state::{ReconcileReport, RemoteSnapshot, StateStore};
+use state::{
+    ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
+    StateStore,
+};
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
+use crate::input_tasks::InputTaskEvent;
+use crate::supervisor::{readiness_for, synthetic_event, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -61,12 +66,15 @@ impl std::error::Error for ParseAppRuntimeModeError {}
 pub struct AppRuntime {
     store: StateStore,
     app_mode: AppRuntimeMode,
+    last_journal_seq: Option<i64>,
+    published_snapshot_id: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct AppRunResult {
     pub runtime: AppRuntime,
     pub report: ReconcileReport,
+    pub summary: SupervisorSummary,
 }
 
 impl AppRuntime {
@@ -74,6 +82,8 @@ impl AppRuntime {
         Self {
             store: StateStore::new(),
             app_mode,
+            last_journal_seq: None,
+            published_snapshot_id: None,
         }
     }
 
@@ -89,6 +99,18 @@ impl AppRuntime {
         self.store.mode()
     }
 
+    pub fn state_version(&self) -> u64 {
+        self.store.state_version()
+    }
+
+    pub fn last_journal_seq(&self) -> Option<i64> {
+        self.last_journal_seq
+    }
+
+    pub fn published_snapshot_id(&self) -> Option<&str> {
+        self.published_snapshot_id.as_deref()
+    }
+
     pub fn runtime_overlay(&self) -> Option<RuntimeOverlay> {
         self.store.mode_overlay()
     }
@@ -102,6 +124,44 @@ impl AppRuntime {
         S: BootstrapSource,
     {
         bootstrap::bootstrap_once(&mut self.store, source)
+    }
+
+    pub fn apply_input(&mut self, input: InputTaskEvent) -> Result<ApplyResult, ApplyError> {
+        let result = StateApplier::new(&mut self.store).apply(input.journal_seq, input.event)?;
+        self.last_journal_seq = Some(input.journal_seq);
+        Ok(result)
+    }
+
+    pub fn publish_snapshot(&mut self, snapshot_id: &str) -> Option<PublishedSnapshot> {
+        self.store.last_applied_journal_seq()?;
+
+        let snapshot = PublishedSnapshot::from_store(&self.store, readiness_for(snapshot_id));
+        self.published_snapshot_id = Some(snapshot.snapshot_id.clone());
+        Some(snapshot)
+    }
+
+    pub fn restore_state(&mut self, target_state_version: u64) -> Result<(), ApplyError> {
+        self.store = StateStore::new();
+        self.last_journal_seq = None;
+        self.published_snapshot_id = None;
+
+        for journal_seq in 1..=target_state_version {
+            let journal_seq = journal_seq as i64;
+            let event = synthetic_event(journal_seq);
+            StateApplier::new(&mut self.store).apply(journal_seq, event)?;
+            self.last_journal_seq = Some(journal_seq);
+        }
+
+        Ok(())
+    }
+
+    pub fn set_runtime_progress(
+        &mut self,
+        last_journal_seq: Option<i64>,
+        published_snapshot_id: Option<String>,
+    ) {
+        self.last_journal_seq = last_journal_seq;
+        self.published_snapshot_id = published_snapshot_id;
     }
 }
 
@@ -123,8 +183,5 @@ fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    let mut runtime = AppRuntime::new(app_mode);
-    let report = runtime.bootstrap_once(source);
-
-    AppRunResult { runtime, report }
+    crate::supervisor::AppSupervisor::new(app_mode, source.snapshot()).run_bootstrap()
 }
