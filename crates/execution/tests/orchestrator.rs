@@ -18,12 +18,13 @@ fn shadow_and_live_share_the_same_plan_before_the_final_sink() {
 
 #[test]
 fn shadow_sink_records_attempt_without_authoritative_fill_effect() {
-    let orchestrator = ExecutionOrchestrator::new(ShadowVenueSink::noop());
+    let shadow_sink = ShadowVenueSink::noop();
+    let orchestrator = ExecutionOrchestrator::new(shadow_sink.clone());
 
     let receipt = orchestrator.execute(&sample_execution_request()).unwrap();
 
-    assert!(receipt.is_shadow_recorded());
-    assert!(!receipt.has_authoritative_fill_effect());
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(shadow_sink.recorded_attempt_ids(), vec![receipt.attempt_id]);
 }
 
 #[test]

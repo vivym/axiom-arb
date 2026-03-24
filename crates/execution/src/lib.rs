@@ -8,9 +8,9 @@ pub mod sink;
 pub use attempt::ExecutionAttemptFactory;
 pub use domain::{
     ExecutionAttempt, ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode,
-    ExecutionPlanRef, ExecutionRequest,
+    ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
 };
 pub use orchestrator::{
     ExecutionError, ExecutionOrchestrator, ExecutionPlanInput, ExecutionPlanningRequest,
 };
-pub use sink::{ExecutionReceipt, LiveVenueSink, ShadowVenueSink, VenueSink};
+pub use sink::{LiveVenueSink, ShadowVenueSink, VenueSink};

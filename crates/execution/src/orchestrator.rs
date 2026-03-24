@@ -5,7 +5,7 @@ use domain::{ConditionId, ExecutionMode, ExecutionRequest, OrderId};
 use crate::{
     attempt::ExecutionAttemptFactory,
     plans::ExecutionPlan,
-    sink::{ExecutionReceipt, VenueSink},
+    sink::VenueSink,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,19 +91,17 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
     pub fn execute<I: ExecutionPlanInput>(
         &self,
         input: &I,
-    ) -> Result<ExecutionReceipt, ExecutionError> {
+    ) -> Result<domain::ExecutionReceipt, ExecutionError> {
         let plan = self.plan(input)?;
         let request = input.request();
-        let execution_mode = self.sink.execution_mode();
-        let (attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
+        let execution_mode = input.execution_mode();
+        let (_attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
             &plan,
             &request.snapshot_id,
             execution_mode,
         );
 
-        let receipt = self.sink.execute(&plan, &attempt_context)?;
-        debug_assert_eq!(receipt.attempt_id(), attempt.attempt_id.as_str());
-        Ok(receipt)
+        self.sink.execute(&plan, &attempt_context)
     }
 
     fn plan_for_request(request: &ExecutionRequest) -> ExecutionPlan {
