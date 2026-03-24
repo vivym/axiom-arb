@@ -72,6 +72,12 @@ pub enum DecisionVerdict {
     ReconcileRequired,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateConfidence {
+    Certain,
+    Uncertain,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationDecision {
     pub mode: ExecutionMode,

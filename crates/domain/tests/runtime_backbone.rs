@@ -1,7 +1,8 @@
 use chrono::Utc;
 use domain::{
-    ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionMode, ExternalFactEvent,
-    IntentCandidate, RecoveryIntent,
+    ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionAttemptContext,
+    ExecutionAttemptOutcome, ExecutionMode, ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
+    ExternalFactEvent, IntentCandidate, RecoveryIntent, StateConfidence,
 };
 
 #[test]
@@ -16,11 +17,44 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
 
     assert_eq!(strategy.decision_input_id(), "intent-1");
     assert_eq!(recovery.decision_input_id(), "recovery-1");
-    assert!(matches!(ExecutionMode::Shadow, ExecutionMode::Shadow));
 
     let attempt = ExecutionAttempt::new("attempt-1", "plan-1", "snapshot-7", 1);
     assert_eq!(attempt.attempt_id.as_str(), "attempt-1");
     assert_eq!(attempt.plan_id.as_str(), "plan-1");
+
+    let request = ExecutionRequest {
+        request_id: "request-1".to_owned(),
+        decision_input_id: strategy.decision_input_id().to_owned(),
+        snapshot_id: "snapshot-7".to_owned(),
+    };
+    assert_eq!(request.request_id, "request-1");
+    assert_eq!(request.decision_input_id, "intent-1");
+    assert_eq!(request.snapshot_id, "snapshot-7");
+
+    let plan_ref = ExecutionPlanRef {
+        plan_id: "plan-1".to_owned(),
+        request_id: request.request_id.clone(),
+    };
+    assert_eq!(plan_ref.plan_id, "plan-1");
+    assert_eq!(plan_ref.request_id, "request-1");
+
+    let attempt_context = ExecutionAttemptContext {
+        attempt_id: attempt.attempt_id.clone(),
+        snapshot_id: attempt.snapshot_id.clone(),
+        execution_mode: ExecutionMode::Shadow,
+    };
+    assert_eq!(attempt_context.execution_mode, ExecutionMode::Shadow);
+    assert_eq!(attempt_context.snapshot_id, "snapshot-7");
+
+    let state_confidence = StateConfidence::Certain;
+    assert_eq!(state_confidence, StateConfidence::Certain);
+
+    let receipt = ExecutionReceipt {
+        attempt_id: attempt_context.attempt_id.clone(),
+        outcome: ExecutionAttemptOutcome::FailedAmbiguous,
+    };
+    assert_eq!(receipt.attempt_id, "attempt-1");
+    assert_eq!(receipt.outcome, ExecutionAttemptOutcome::FailedAmbiguous);
 }
 
 #[test]

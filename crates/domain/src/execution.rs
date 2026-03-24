@@ -6,10 +6,38 @@ pub struct PublishedSnapshotRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionRequest;
+pub struct ExecutionRequest {
+    pub request_id: String,
+    pub decision_input_id: String,
+    pub snapshot_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecutionReceipt;
+pub struct ExecutionPlanRef {
+    pub plan_id: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionAttemptOutcome {
+    Succeeded,
+    FailedDefinitive,
+    FailedAmbiguous,
+    RetryExhausted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionAttemptContext {
+    pub attempt_id: String,
+    pub snapshot_id: String,
+    pub execution_mode: crate::ExecutionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionReceipt {
+    pub attempt_id: String,
+    pub outcome: ExecutionAttemptOutcome,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionAttempt {
