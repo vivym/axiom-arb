@@ -9,7 +9,8 @@ pub enum RetryKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusinessRetryError {
-    IdentityUnchanged,
+    NonceUnchanged,
+    IdentityNonceMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,10 +43,15 @@ impl SignedOrderEnvelope {
     pub fn business_retry(
         &self,
         order_id: OrderId,
+        new_nonce: String,
         identity: SignedOrderIdentity,
     ) -> Result<Self, BusinessRetryError> {
-        if identity == self.identity {
-            return Err(BusinessRetryError::IdentityUnchanged);
+        if new_nonce == self.identity.nonce {
+            return Err(BusinessRetryError::NonceUnchanged);
+        }
+
+        if identity.nonce != new_nonce {
+            return Err(BusinessRetryError::IdentityNonceMismatch);
         }
 
         Ok(Self {
