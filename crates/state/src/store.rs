@@ -129,6 +129,20 @@ impl StateStore {
         &self.open_orders
     }
 
+    pub(crate) fn fullset_open_order_ids(&self) -> Vec<String> {
+        let mut open_orders = self
+            .open_orders
+            .keys()
+            .map(|order_id| order_id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        open_orders.sort();
+        open_orders
+    }
+
+    pub(crate) fn negrisk_family_ids(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     pub fn approvals(&self) -> &HashMap<ApprovalKey, ApprovalState> {
         &self.approvals
     }
