@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use domain::{ApprovalKey, ApprovalState, ConditionId, Order, OrderId, ResolutionState, TokenId};
+use domain::{
+    ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
+    TokenId,
+};
+use rust_decimal::Decimal;
 
-use crate::store::{approval_key, RelayerTxSummary, StateStore};
+use crate::store::{approval_key, InventoryEntry, RelayerTxSummary, StateStore};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReconcileAttention {
@@ -33,12 +37,17 @@ pub enum ReconcileAttention {
     RelayerTxMismatch {
         tx_id: String,
     },
+    InventoryMismatch {
+        token_id: TokenId,
+        bucket: InventoryBucket,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RemoteSnapshot {
     pub open_orders: Vec<Order>,
     pub approvals: Vec<ApprovalState>,
+    pub inventory: Vec<(TokenId, InventoryBucket, Decimal)>,
     pub resolution_states: Vec<ResolutionState>,
     pub relayer_txs: Vec<RelayerTxSummary>,
     pub attention: Vec<ReconcileAttention>,
@@ -90,10 +99,66 @@ pub(crate) fn reconcile_store(store: &mut StateStore, snapshot: RemoteSnapshot) 
 fn collect_attention(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
     let mut attention = snapshot.attention.clone();
 
+    attention.extend(detect_duplicate_signed_orders(snapshot));
+    attention.extend(detect_identifier_mismatches(snapshot));
     attention.extend(compare_orders(store, snapshot));
     attention.extend(compare_approvals(store, snapshot));
+    attention.extend(compare_inventory(store, snapshot));
     attention.extend(compare_resolutions(store, snapshot));
     attention.extend(compare_relayer_txs(store, snapshot));
+
+    attention
+}
+
+fn detect_duplicate_signed_orders(snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
+    let mut hash_to_order_id = HashMap::<String, OrderId>::new();
+    let mut attention = Vec::new();
+
+    for order in &snapshot.open_orders {
+        let Some(signed_order) = &order.signed_order else {
+            continue;
+        };
+
+        match hash_to_order_id.entry(signed_order.signed_order_hash.clone()) {
+            std::collections::hash_map::Entry::Occupied(existing)
+                if existing.get() != &order.order_id =>
+            {
+                attention.push(ReconcileAttention::DuplicateSignedOrder {
+                    order_id: order.order_id.clone(),
+                    signed_order_hash: signed_order.signed_order_hash.clone(),
+                });
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(order.order_id.clone());
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+    }
+
+    attention
+}
+
+fn detect_identifier_mismatches(snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
+    let mut token_to_condition = HashMap::<TokenId, ConditionId>::new();
+    let mut attention = Vec::new();
+
+    for order in &snapshot.open_orders {
+        match token_to_condition.entry(order.token_id.clone()) {
+            std::collections::hash_map::Entry::Occupied(existing)
+                if existing.get() != &order.condition_id =>
+            {
+                attention.push(ReconcileAttention::IdentifierMismatch {
+                    token_id: order.token_id.clone(),
+                    expected_condition_id: existing.get().clone(),
+                    remote_condition_id: order.condition_id.clone(),
+                });
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(order.condition_id.clone());
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+    }
 
     attention
 }
@@ -143,6 +208,22 @@ fn compare_approvals(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Recon
 
     compare_map(store.approvals(), &remote_map, |key| {
         ReconcileAttention::ApprovalMismatch { key }
+    })
+}
+
+fn compare_inventory(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
+    let remote_map = snapshot
+        .inventory
+        .iter()
+        .cloned()
+        .map(|(token_id, bucket, quantity)| (InventoryEntry { token_id, bucket }, quantity))
+        .collect::<HashMap<_, _>>();
+
+    compare_map(store.inventory(), &remote_map, |entry| {
+        ReconcileAttention::InventoryMismatch {
+            token_id: entry.token_id,
+            bucket: entry.bucket,
+        }
     })
 }
 

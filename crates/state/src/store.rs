@@ -101,6 +101,10 @@ impl StateStore {
         &self.approvals
     }
 
+    pub(crate) fn inventory(&self) -> &HashMap<InventoryEntry, Decimal> {
+        &self.inventory
+    }
+
     pub fn resolution(&self) -> &HashMap<ConditionId, ResolutionState> {
         &self.resolution
     }
@@ -153,6 +157,12 @@ impl StateStore {
             .cloned()
             .map(|approval| (approval_key(&approval), approval))
             .collect();
+        self.inventory = snapshot
+            .inventory
+            .iter()
+            .cloned()
+            .map(|(token_id, bucket, quantity)| (InventoryEntry { token_id, bucket }, quantity))
+            .collect();
         self.resolution = snapshot
             .resolution_states
             .iter()
@@ -197,5 +207,42 @@ pub(crate) fn approval_key(approval: &ApprovalState) -> ApprovalKey {
         token_id: approval.token_id.clone(),
         spender: approval.spender.clone(),
         owner_address: approval.owner_address.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use domain::{InventoryBucket, TokenId};
+    use rust_decimal::Decimal;
+
+    use super::StateStore;
+    use crate::RemoteSnapshot;
+
+    #[test]
+    fn complete_reconcile_applies_remote_inventory_to_store() {
+        let mut store = StateStore::new();
+        store.record_local_inventory(
+            TokenId::from("token-yes"),
+            InventoryBucket::Free,
+            Decimal::new(1, 0),
+        );
+
+        store.complete_reconcile(&RemoteSnapshot {
+            inventory: vec![(
+                TokenId::from("token-yes"),
+                InventoryBucket::Free,
+                Decimal::new(7, 0),
+            )],
+            ..RemoteSnapshot::empty()
+        });
+
+        assert_eq!(store.inventory.len(), 1);
+        assert_eq!(
+            store.inventory.get(&super::InventoryEntry {
+                token_id: TokenId::from("token-yes"),
+                bucket: InventoryBucket::Free,
+            }),
+            Some(&Decimal::new(7, 0))
+        );
     }
 }

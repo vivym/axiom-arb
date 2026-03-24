@@ -1,8 +1,8 @@
 use chrono::Utc;
 use domain::{
-    ApprovalState, ApprovalStatus, ConditionId, DisputeState, MarketId, Order, OrderId,
-    ResolutionState, ResolutionStatus, RuntimeMode, RuntimeOverlay, SettlementState, SignatureType,
-    SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
+    ApprovalState, ApprovalStatus, ConditionId, DisputeState, InventoryBucket, MarketId, Order,
+    OrderId, ResolutionState, ResolutionStatus, RuntimeMode, RuntimeOverlay, SettlementState,
+    SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use rust_decimal::Decimal;
 use state::{ReconcileAttention, RelayerTxSummary, RemoteSnapshot, StateStore};
@@ -101,6 +101,35 @@ fn duplicate_signed_order_detection_forces_reconcile_attention() {
 }
 
 #[test]
+fn duplicate_signed_order_in_remote_snapshot_forces_attention_without_upstream_signal() {
+    let mut store = StateStore::new();
+    let order_a = sample_order("order-1", "hash-shared");
+    let order_b = sample_order("order-2", "hash-shared");
+
+    store.record_local_order(order_a.clone());
+    store.record_local_order(order_b.clone());
+
+    let report = store.reconcile(RemoteSnapshot {
+        open_orders: vec![order_a, order_b],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert!(!store.first_reconcile_succeeded());
+    assert!(report.attention.iter().any(|attention| {
+        matches!(
+            attention,
+            ReconcileAttention::DuplicateSignedOrder {
+                signed_order_hash,
+                ..
+            } if signed_order_hash == "hash-shared"
+        )
+    }));
+}
+
+#[test]
 fn identifier_mismatch_forces_reconcile_attention() {
     let mut store = StateStore::new();
 
@@ -116,6 +145,68 @@ fn identifier_mismatch_forces_reconcile_attention() {
     assert_eq!(store.mode(), RuntimeMode::Reconciling);
     assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
     assert!(!store.first_reconcile_succeeded());
+}
+
+#[test]
+fn identifier_mismatch_in_remote_snapshot_forces_attention_without_upstream_signal() {
+    let mut store = StateStore::new();
+    let expected = sample_order("order-1", "hash-1");
+    let mismatched = sample_order_for_condition("order-2", "hash-2", "token-yes", "condition-b");
+
+    store.record_local_order(expected.clone());
+    store.record_local_order(mismatched.clone());
+
+    let report = store.reconcile(RemoteSnapshot {
+        open_orders: vec![expected, mismatched],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert!(report.attention.iter().any(|attention| {
+        matches!(
+            attention,
+            ReconcileAttention::IdentifierMismatch {
+                token_id,
+                expected_condition_id,
+                remote_condition_id,
+            } if token_id == &TokenId::from("token-yes")
+                && expected_condition_id == &ConditionId::from("condition-a")
+                && remote_condition_id == &ConditionId::from("condition-b")
+        )
+    }));
+}
+
+#[test]
+fn inventory_mismatch_forces_reconcile_attention() {
+    let mut store = StateStore::new();
+
+    store.record_local_inventory(
+        TokenId::from("token-yes"),
+        InventoryBucket::Free,
+        Decimal::new(5, 0),
+    );
+
+    let report = store.reconcile(RemoteSnapshot {
+        inventory: vec![(
+            TokenId::from("token-yes"),
+            InventoryBucket::Free,
+            Decimal::new(4, 0),
+        )],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert!(report.attention.iter().any(|attention| {
+        matches!(
+            attention,
+            ReconcileAttention::InventoryMismatch { token_id, bucket }
+                if token_id == &TokenId::from("token-yes") && bucket == &InventoryBucket::Free
+        )
+    }));
 }
 
 #[test]
@@ -147,11 +238,20 @@ fn unresolved_divergence_keeps_restrictive_mode_and_preserves_local_view() {
 }
 
 fn sample_order(order_id: &str, signed_order_hash: &str) -> Order {
+    sample_order_for_condition(order_id, signed_order_hash, "token-yes", "condition-a")
+}
+
+fn sample_order_for_condition(
+    order_id: &str,
+    signed_order_hash: &str,
+    token_id: &str,
+    condition_id: &str,
+) -> Order {
     Order {
         order_id: OrderId::from(order_id),
         market_id: MarketId::from("market-a"),
-        condition_id: ConditionId::from("condition-a"),
-        token_id: TokenId::from("token-yes"),
+        condition_id: ConditionId::from(condition_id),
+        token_id: TokenId::from(token_id),
         quantity: Decimal::new(5, 0),
         price: Decimal::new(55, 2),
         submission_state: SubmissionState::Acked,
