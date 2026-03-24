@@ -46,3 +46,26 @@ CREATE TABLE shadow_execution_artifacts (
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE OR REPLACE FUNCTION enforce_shadow_execution_artifact_attempt()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM execution_attempts
+    WHERE attempt_id = NEW.attempt_id
+      AND execution_mode = 'shadow'
+  ) THEN
+    RAISE EXCEPTION
+      'shadow_execution_artifacts requires a shadow execution attempt for attempt_id %',
+      NEW.attempt_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER shadow_execution_artifacts_enforce_shadow_attempt
+BEFORE INSERT OR UPDATE ON shadow_execution_artifacts
+FOR EACH ROW
+EXECUTE FUNCTION enforce_shadow_execution_artifact_attempt();

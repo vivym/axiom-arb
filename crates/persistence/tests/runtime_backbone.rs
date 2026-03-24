@@ -185,6 +185,41 @@ async fn shadow_artifacts_reject_live_attempt_ids() {
 }
 
 #[tokio::test]
+async fn shadow_artifact_table_rejects_live_attempt_ids_via_direct_sql() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-sql", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        INSERT INTO shadow_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-live-sql")
+    .bind("shadow.execution")
+    .bind(json!({ "attempt_id": "attempt-live-sql", "kind": "planned_order" }))
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("shadow_execution_artifacts requires a shadow execution attempt"),
+        "unexpected database error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
