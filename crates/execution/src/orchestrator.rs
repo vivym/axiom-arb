@@ -60,6 +60,13 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         }
     }
 
+    pub fn with_attempt_factory(sink: S, attempt_factory: ExecutionAttemptFactory) -> Self {
+        Self {
+            sink,
+            attempt_factory: RefCell::new(attempt_factory),
+        }
+    }
+
     pub fn plan(&self, input: &ExecutionPlanningInput) -> Result<ExecutionPlan, ExecutionError> {
         if input.execution_mode == ExecutionMode::ReduceOnly && input.plan.is_risk_expanding() {
             return Err(ExecutionError::ModeViolation {

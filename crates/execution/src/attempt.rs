@@ -14,7 +14,13 @@ impl ExecutionAttemptFactory {
         Self::default()
     }
 
-    fn request_bound_plan_id(plan: &ExecutionPlan, request: &ExecutionRequest) -> String {
+    pub fn with_seeded_attempt_numbers(next_attempt_no_by_plan: HashMap<String, u32>) -> Self {
+        Self {
+            next_attempt_no_by_plan,
+        }
+    }
+
+    pub fn request_bound_plan_id(plan: &ExecutionPlan, request: &ExecutionRequest) -> String {
         format!("{}:{}", request.request_id, plan.plan_id())
     }
 

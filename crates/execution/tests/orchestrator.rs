@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use domain::{ExecutionMode, ExecutionRequest};
 use execution::{
+    attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     sink::{LiveVenueSink, ShadowVenueSink},
 };
 
 #[test]
-fn shadow_and_live_share_the_same_plan_before_the_final_sink() {
+fn live_and_shadow_share_the_same_plan_before_sink_dispatch() {
     let live = ExecutionOrchestrator::new(LiveVenueSink::noop());
     let shadow = ExecutionOrchestrator::new(ShadowVenueSink::noop());
     let live_input = sample_planning_input(ExecutionMode::Live);
@@ -15,6 +18,28 @@ fn shadow_and_live_share_the_same_plan_before_the_final_sink() {
     let shadow_plan = shadow.plan(&shadow_input).unwrap();
 
     assert_eq!(live_plan, shadow_plan);
+}
+
+#[test]
+fn live_sink_accepts_reduce_only_for_non_risk_expanding_plans() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let receipt = orchestrator
+        .execute(&sample_non_risk_expanding_input(ExecutionMode::ReduceOnly))
+        .unwrap();
+
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+}
+
+#[test]
+fn live_sink_accepts_recovery_only_plans() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let receipt = orchestrator
+        .execute(&sample_non_risk_expanding_input(ExecutionMode::RecoveryOnly))
+        .unwrap();
+
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
 }
 
 #[test]
@@ -72,6 +97,36 @@ fn reduce_only_mode_refuses_plans_that_expand_risk() {
 }
 
 #[test]
+fn seeded_orchestrator_continues_attempt_numbering_after_resume() {
+    let request = ExecutionRequest {
+        request_id: "request-seeded".to_owned(),
+        decision_input_id: "intent-seeded".to_owned(),
+        snapshot_id: "snapshot-seeded".to_owned(),
+    };
+    let plan = execution_plan();
+    let plan_key = format!("{}:{}", request.request_id, plan.plan_id());
+    let attempt_factory =
+        ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 7)]));
+    let orchestrator = ExecutionOrchestrator::with_attempt_factory(
+        LiveVenueSink::noop(),
+        attempt_factory,
+    );
+
+    let receipt = orchestrator
+        .execute(&ExecutionPlanningInput::new(
+            request,
+            ExecutionMode::Live,
+            plan,
+        ))
+        .unwrap();
+
+    assert_eq!(
+        receipt.attempt_id,
+        "request-seeded:fullset-buy-merge:condition-1:attempt-8"
+    );
+}
+
+#[test]
 fn sink_failure_is_reported_separately_from_mode_violations() {
     let orchestrator = ExecutionOrchestrator::new(FailingVenueSink);
     let err = orchestrator
@@ -93,6 +148,18 @@ fn sample_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInpu
     )
 }
 
+fn sample_non_risk_expanding_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
+    ExecutionPlanningInput::new(
+        ExecutionRequest {
+            request_id: "request-non-risk".to_owned(),
+            decision_input_id: "intent-non-risk".to_owned(),
+            snapshot_id: "snapshot-non-risk".to_owned(),
+        },
+        execution_mode,
+        non_risk_expanding_plan(),
+    )
+}
+
 fn sample_reduce_only_explicit_input() -> ExecutionPlanningInput {
     ExecutionPlanningInput::new(
         ExecutionRequest {
@@ -108,6 +175,12 @@ fn sample_reduce_only_explicit_input() -> ExecutionPlanningInput {
 fn execution_plan() -> execution::plans::ExecutionPlan {
     execution::plans::ExecutionPlan::FullSetBuyThenMerge {
         condition_id: domain::ConditionId::from("condition-1"),
+    }
+}
+
+fn non_risk_expanding_plan() -> execution::plans::ExecutionPlan {
+    execution::plans::ExecutionPlan::CancelStale {
+        order_id: domain::OrderId::from("order-non-risk"),
     }
 }
 

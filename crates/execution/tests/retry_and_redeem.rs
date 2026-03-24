@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use domain::{ConditionId, OrderId, SignedOrderIdentity};
 use execution::{
     attempt::ExecutionAttemptFactory,
@@ -271,6 +273,31 @@ fn execution_attempt_factory_keeps_same_business_plan_independent_across_request
     assert_eq!(attempt_b.attempt_no, 1);
     assert_ne!(attempt_a.plan_id, attempt_b.plan_id);
     assert_ne!(attempt_a.attempt_id, attempt_b.attempt_id);
+}
+
+#[test]
+fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-seeded"),
+    };
+    let request = domain::ExecutionRequest {
+        request_id: "request-seeded".to_owned(),
+        decision_input_id: "decision-seeded".to_owned(),
+        snapshot_id: "snapshot-seeded".to_owned(),
+    };
+    let plan_key = format!("{}:{}", request.request_id, plan.plan_id());
+    let mut factory =
+        ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 4)]));
+
+    let (attempt, context) =
+        factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+
+    assert_eq!(attempt.attempt_no, 5);
+    assert_eq!(
+        attempt.attempt_id,
+        "request-seeded:redeem-resolved:condition-seeded:attempt-5"
+    );
+    assert_eq!(context.attempt_id, attempt.attempt_id);
 }
 
 #[test]

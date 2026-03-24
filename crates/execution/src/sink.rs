@@ -48,13 +48,28 @@ fn ensure_sink_mode(
     }
 }
 
+fn ensure_live_sink_mode(
+    plan: &ExecutionPlan,
+    actual: ExecutionMode,
+) -> Result<(), VenueSinkError> {
+    match actual {
+        ExecutionMode::Live | ExecutionMode::RecoveryOnly => Ok(()),
+        ExecutionMode::ReduceOnly if !plan.is_risk_expanding() => Ok(()),
+        other => Err(VenueSinkError::ModeMismatch {
+            sink: "live",
+            expected: ExecutionMode::Live,
+            actual: other,
+        }),
+    }
+}
+
 impl VenueSink for LiveVenueSink {
     fn execute(
         &self,
-        _plan: &ExecutionPlan,
+        plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
     ) -> Result<ExecutionReceipt, VenueSinkError> {
-        ensure_sink_mode("live", ExecutionMode::Live, attempt.execution_mode)?;
+        ensure_live_sink_mode(plan, attempt.execution_mode)?;
         Ok(ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
             outcome: ExecutionAttemptOutcome::Succeeded,
