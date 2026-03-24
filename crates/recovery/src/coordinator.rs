@@ -11,13 +11,21 @@ pub struct RecoveryCoordinator;
 
 impl RecoveryCoordinator {
     pub fn on_failed_ambiguous(&self, attempt: ExecutionAttempt) -> RecoveryOutputs {
+        let stable_plan_scope = stable_plan_scope(&attempt.plan_id);
         RecoveryOutputs {
             recovery_intent: Some(RecoveryIntent::new(
                 format!("recovery-{}", attempt.attempt_id),
                 attempt.snapshot_id,
-                format!("execution_path:{}", attempt.plan_id),
+                format!("execution_path:{}", stable_plan_scope),
             )),
             pending_reconcile: None,
         }
     }
+}
+
+fn stable_plan_scope(plan_id: &str) -> &str {
+    plan_id
+        .split_once(':')
+        .map(|(_, scope)| scope)
+        .unwrap_or(plan_id)
 }

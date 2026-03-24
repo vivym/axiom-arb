@@ -7,6 +7,15 @@ pub enum RecoveryScopeLock {
     ExecutionPath(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryScopeKind {
+    Market,
+    Condition,
+    Family,
+    InventorySet,
+    ExecutionPath,
+}
+
 impl RecoveryScopeLock {
     pub fn market(scope_id: impl Into<String>) -> Self {
         Self::Market(scope_id.into())
@@ -28,13 +37,27 @@ impl RecoveryScopeLock {
         Self::ExecutionPath(scope_id.into())
     }
 
-    pub fn blocks_expansion(&self, scope_id: &str) -> bool {
+    pub fn blocks_expansion(&self, candidate: &RecoveryScopeLock) -> bool {
+        self.scope_kind() == candidate.scope_kind() && self.scope_id() == candidate.scope_id()
+    }
+
+    fn scope_kind(&self) -> RecoveryScopeKind {
         match self {
-            Self::Market(current)
-            | Self::Condition(current)
-            | Self::Family(current)
-            | Self::InventorySet(current)
-            | Self::ExecutionPath(current) => current == scope_id,
+            Self::Market(_) => RecoveryScopeKind::Market,
+            Self::Condition(_) => RecoveryScopeKind::Condition,
+            Self::Family(_) => RecoveryScopeKind::Family,
+            Self::InventorySet(_) => RecoveryScopeKind::InventorySet,
+            Self::ExecutionPath(_) => RecoveryScopeKind::ExecutionPath,
+        }
+    }
+
+    fn scope_id(&self) -> &str {
+        match self {
+            Self::Market(scope_id)
+            | Self::Condition(scope_id)
+            | Self::Family(scope_id)
+            | Self::InventorySet(scope_id)
+            | Self::ExecutionPath(scope_id) => scope_id,
         }
     }
 }
