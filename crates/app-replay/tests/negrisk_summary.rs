@@ -4,10 +4,10 @@ use app_replay::{load_member_vector_from_journal, load_neg_risk_foundation_summa
 use chrono::{DateTime, Utc};
 use persistence::{
     models::{
-        FamilyHaltRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        FamilyHaltRow, JournalEntryInput, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
         NegRiskFamilyValidationRow,
     },
-    persist_discovery_snapshot, run_migrations, NegRiskFamilyRepo,
+    persist_discovery_snapshot, run_migrations, JournalRepo, NegRiskFamilyRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -15,11 +15,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tokio::test]
-async fn foundation_summary_reports_family_validation_and_halts() {
-    if database_url().is_none() {
-        return;
-    }
-
+async fn foundation_summary_reports_family_validation_halt_and_recent_event_counts() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();
         seed_foundation_rows(&db.pool).await;
@@ -31,6 +27,7 @@ async fn foundation_summary_reports_family_validation_and_halts() {
         assert_eq!(summary.excluded_family_count, 1);
         assert_eq!(summary.halted_family_count, 1);
         assert_eq!(summary.recent_validation_event_count, 2);
+        assert_eq!(summary.recent_halt_event_count, 1);
         assert_eq!(summary.latest_discovery_revision, 7);
 
         let family_2 = summary
@@ -57,11 +54,7 @@ async fn foundation_summary_reports_family_validation_and_halts() {
 }
 
 #[tokio::test]
-async fn foundation_summary_uses_latest_discovery_snapshot_as_authoritative_source() {
-    if database_url().is_none() {
-        return;
-    }
-
+async fn foundation_summary_filters_current_rows_by_latest_discovery_snapshot_family_set() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();
         seed_foundation_rows(&db.pool).await;
@@ -87,8 +80,62 @@ async fn foundation_summary_uses_latest_discovery_snapshot_as_authoritative_sour
 
         assert_eq!(summary.discovered_family_count, 1);
         assert_eq!(summary.latest_discovery_revision, 8);
-        assert_eq!(summary.validated_family_count, 2);
-        assert_eq!(summary.excluded_family_count, 1);
+        assert_eq!(summary.validated_family_count, 1);
+        assert_eq!(summary.excluded_family_count, 0);
+        assert_eq!(summary.halted_family_count, 0);
+        assert_eq!(summary.families.len(), 1);
+        assert_eq!(summary.families[0].event_family_id, "family-1");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn member_vector_path_matches_current_row_state_not_latest_event_only() {
+    with_test_database(|db| async move {
+        run_migrations(&db.pool).await.unwrap();
+        seed_foundation_rows(&db.pool).await;
+
+        let stale_vector = sample_member_vector("stale-family-2");
+        append_validation_journal_event(
+            &db.pool,
+            "family-2",
+            "sha256:snapshot-9",
+            9,
+            stale_vector.clone(),
+            "historical-validation-family-2",
+        )
+        .await;
+        append_halt_journal_event(
+            &db.pool,
+            "family-2",
+            "sha256:snapshot-9",
+            9,
+            stale_vector.clone(),
+            "historical-halt-family-2",
+        )
+        .await;
+
+        let summary = load_neg_risk_foundation_summary(&db.pool).await.unwrap();
+        assert_eq!(summary.recent_validation_event_count, 2);
+        assert_eq!(summary.recent_halt_event_count, 1);
+
+        let family_2 = summary
+            .families
+            .iter()
+            .find(|family| family.event_family_id == "family-2")
+            .unwrap();
+
+        let validation_path = family_2.validation_member_vector_path.as_ref().unwrap();
+        let validation_members = load_member_vector_from_journal(&db.pool, validation_path)
+            .await
+            .unwrap();
+        assert_eq!(validation_members, sample_member_vector("family-2"));
+
+        let halt_path = family_2.halt_member_vector_path.as_ref().unwrap();
+        let halt_members = load_member_vector_from_journal(&db.pool, halt_path)
+            .await
+            .unwrap();
+        assert_eq!(halt_members, sample_member_vector("family-2"));
     })
     .await;
 }
@@ -186,6 +233,80 @@ async fn seed_foundation_rows(pool: &PgPool) {
         .unwrap();
 }
 
+async fn append_validation_journal_event(
+    pool: &PgPool,
+    family_id: &str,
+    metadata_snapshot_hash: &str,
+    discovery_revision: i64,
+    member_vector: Vec<NegRiskFamilyMemberRow>,
+    source_event_id: &str,
+) {
+    JournalRepo
+        .append(
+            pool,
+            &JournalEntryInput {
+                stream: format!("neg_risk_family:{family_id}"),
+                source_kind: "test".to_owned(),
+                source_session_id: "historical-validation".to_owned(),
+                source_event_id: source_event_id.to_owned(),
+                dedupe_key: format!("historical-validation:{family_id}:{metadata_snapshot_hash}"),
+                causal_parent_id: None,
+                event_type: "family_validation".to_owned(),
+                event_ts: ts("2026-03-24T00:00:09Z"),
+                payload: json!({
+                    "event_family_id": family_id,
+                    "validation_status": "excluded",
+                    "exclusion_reason": "augmented_variant",
+                    "metadata_snapshot_hash": metadata_snapshot_hash,
+                    "discovery_revision": discovery_revision,
+                    "member_count": member_vector.len(),
+                    "first_seen_at": "2026-03-24T00:00:01Z",
+                    "last_seen_at": "2026-03-24T00:00:05Z",
+                    "validated_at": "2026-03-24T00:00:09Z",
+                    "member_vector": member_vector_to_json(&member_vector),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+async fn append_halt_journal_event(
+    pool: &PgPool,
+    family_id: &str,
+    metadata_snapshot_hash: &str,
+    discovery_revision: i64,
+    member_vector: Vec<NegRiskFamilyMemberRow>,
+    source_event_id: &str,
+) {
+    JournalRepo
+        .append(
+            pool,
+            &JournalEntryInput {
+                stream: format!("neg_risk_family:{family_id}"),
+                source_kind: "test".to_owned(),
+                source_session_id: "historical-halt".to_owned(),
+                source_event_id: source_event_id.to_owned(),
+                dedupe_key: format!("historical-halt:{family_id}:{metadata_snapshot_hash}"),
+                causal_parent_id: None,
+                event_type: "family_halt".to_owned(),
+                event_ts: ts("2026-03-24T00:00:09Z"),
+                payload: json!({
+                    "event_family_id": family_id,
+                    "halted": true,
+                    "reason": "operator_review",
+                    "blocks_new_risk": true,
+                    "metadata_snapshot_hash": metadata_snapshot_hash,
+                    "discovery_revision": discovery_revision,
+                    "set_at": "2026-03-24T00:00:09Z",
+                    "member_vector": member_vector_to_json(&member_vector),
+                }),
+            },
+        )
+        .await
+        .unwrap();
+}
+
 fn sample_member_vector(family_id: &str) -> Vec<NegRiskFamilyMemberRow> {
     vec![
         NegRiskFamilyMemberRow {
@@ -205,6 +326,24 @@ fn sample_member_vector(family_id: &str) -> Vec<NegRiskFamilyMemberRow> {
             neg_risk_variant: "augmented".to_owned(),
         },
     ]
+}
+
+fn member_vector_to_json(member_vector: &[NegRiskFamilyMemberRow]) -> serde_json::Value {
+    serde_json::Value::Array(
+        member_vector
+            .iter()
+            .map(|member| {
+                json!({
+                    "condition_id": member.condition_id,
+                    "token_id": member.token_id,
+                    "outcome_label": member.outcome_label,
+                    "is_placeholder": member.is_placeholder,
+                    "is_other": member.is_other,
+                    "neg_risk_variant": member.neg_risk_variant,
+                })
+            })
+            .collect(),
+    )
 }
 
 #[derive(Clone)]
@@ -267,16 +406,13 @@ impl TestDatabase {
     }
 }
 
-fn database_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
-
 async fn with_test_database<F, Fut>(test: F)
 where
     F: FnOnce(TestDatabase) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    let database_url = database_url().expect("DATABASE_URL must be set for app-replay tests");
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set for app-replay neg-risk summary tests");
     let db = TestDatabase::new(&database_url).await;
     test(db.clone()).await;
     db.cleanup().await;

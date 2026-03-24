@@ -1,4 +1,8 @@
-use std::{collections::HashMap, error::Error as StdError, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error as StdError,
+    fmt,
+};
 
 use persistence::{models::NegRiskFamilyMemberRow, NegRiskFamilyRepo, PersistenceError};
 use serde_json::Value;
@@ -11,6 +15,7 @@ pub struct NegRiskFoundationSummary {
     pub excluded_family_count: u64,
     pub halted_family_count: u64,
     pub recent_validation_event_count: u64,
+    pub recent_halt_event_count: u64,
     pub latest_discovery_revision: i64,
     pub families: Vec<NegRiskFoundationFamilySummary>,
 }
@@ -92,11 +97,35 @@ pub async fn load_neg_risk_foundation_summary(
     let discovery = latest_discovery_snapshot(pool)
         .await?
         .ok_or(NegRiskSummaryError::MissingDiscoverySnapshot)?;
-    let validation_rows = NegRiskFamilyRepo.list_validations(pool).await?;
-    let halt_rows = NegRiskFamilyRepo.list_halts(pool).await?;
+    let authoritative_family_ids = discovery.family_ids.clone();
+    let authoritative_family_set = authoritative_family_ids
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    let validation_rows = NegRiskFamilyRepo
+        .list_validations(pool)
+        .await?
+        .into_iter()
+        .filter(|row| authoritative_family_set.contains(&row.event_family_id))
+        .collect::<Vec<_>>();
+    let halt_rows = NegRiskFamilyRepo
+        .list_halts(pool)
+        .await?
+        .into_iter()
+        .filter(|row| authoritative_family_set.contains(&row.event_family_id))
+        .collect::<Vec<_>>();
+
     let member_paths = latest_member_vector_paths(pool).await?;
-    let recent_validation_event_count =
-        count_recent_validation_events(pool, discovery.latest_discovery_revision).await?;
+    let recent_validation_event_count = count_recent_family_events(
+        pool,
+        "family_validation",
+        discovery.latest_discovery_revision,
+    )
+    .await?;
+    let recent_halt_event_count =
+        count_recent_family_events(pool, "family_halt", discovery.latest_discovery_revision)
+            .await?;
 
     let validated_family_count = validation_rows.len() as u64;
     let excluded_family_count = validation_rows
@@ -105,25 +134,50 @@ pub async fn load_neg_risk_foundation_summary(
         .count() as u64;
     let halted_family_count = halt_rows.iter().filter(|row| row.halted).count() as u64;
 
-    let mut families_by_id = HashMap::<String, NegRiskFoundationFamilySummary>::new();
+    let mut families_by_id = authoritative_family_ids
+        .into_iter()
+        .map(|family_id| {
+            (
+                family_id.clone(),
+                NegRiskFoundationFamilySummary {
+                    event_family_id: family_id,
+                    validation_status: None,
+                    exclusion_reason: None,
+                    validation_metadata_snapshot_hash: None,
+                    halted: false,
+                    halt_reason: None,
+                    halt_metadata_snapshot_hash: None,
+                    validation_member_vector_path: None,
+                    halt_member_vector_path: None,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     for row in &validation_rows {
-        families_by_id.insert(
-            row.event_family_id.clone(),
-            NegRiskFoundationFamilySummary {
+        let entry = families_by_id
+            .entry(row.event_family_id.clone())
+            .or_insert_with(|| NegRiskFoundationFamilySummary {
                 event_family_id: row.event_family_id.clone(),
-                validation_status: Some(row.validation_status.clone()),
-                exclusion_reason: row.exclusion_reason.clone(),
-                validation_metadata_snapshot_hash: Some(row.metadata_snapshot_hash.clone()),
+                validation_status: None,
+                exclusion_reason: None,
+                validation_metadata_snapshot_hash: None,
                 halted: false,
                 halt_reason: None,
                 halt_metadata_snapshot_hash: None,
-                validation_member_vector_path: member_paths
-                    .validation
-                    .get(&row.event_family_id)
-                    .cloned(),
+                validation_member_vector_path: None,
                 halt_member_vector_path: None,
-            },
-        );
+            });
+        entry.validation_status = Some(row.validation_status.clone());
+        entry.exclusion_reason = row.exclusion_reason.clone();
+        entry.validation_metadata_snapshot_hash = Some(row.metadata_snapshot_hash.clone());
+        entry.validation_member_vector_path = member_paths
+            .validation
+            .get(&MemberVectorPathKey {
+                event_family_id: row.event_family_id.clone(),
+                metadata_snapshot_hash: Some(row.metadata_snapshot_hash.clone()),
+            })
+            .cloned();
     }
 
     for row in &halt_rows {
@@ -143,7 +197,13 @@ pub async fn load_neg_risk_foundation_summary(
         entry.halted = row.halted;
         entry.halt_reason = row.reason.clone();
         entry.halt_metadata_snapshot_hash = row.metadata_snapshot_hash.clone();
-        entry.halt_member_vector_path = member_paths.halt.get(&row.event_family_id).cloned();
+        entry.halt_member_vector_path = member_paths
+            .halt
+            .get(&MemberVectorPathKey {
+                event_family_id: row.event_family_id.clone(),
+                metadata_snapshot_hash: row.metadata_snapshot_hash.clone(),
+            })
+            .cloned();
     }
 
     let mut families = families_by_id.into_values().collect::<Vec<_>>();
@@ -155,6 +215,7 @@ pub async fn load_neg_risk_foundation_summary(
         excluded_family_count,
         halted_family_count,
         recent_validation_event_count,
+        recent_halt_event_count,
         latest_discovery_revision: discovery.latest_discovery_revision,
         families,
     })
@@ -214,6 +275,7 @@ pub async fn load_member_vector_from_journal(
 struct LatestDiscoverySnapshot {
     discovered_family_count: u64,
     latest_discovery_revision: i64,
+    family_ids: Vec<String>,
 }
 
 async fn latest_discovery_snapshot(
@@ -234,40 +296,47 @@ async fn latest_discovery_snapshot(
     payload
         .map(|payload| {
             let latest_discovery_revision = required_i64(&payload, "discovery_revision")?;
-            let discovered_family_count = payload
-                .get("discovered_family_count")
-                .and_then(Value::as_u64)
-                .or_else(|| {
-                    payload
-                        .get("family_ids")
-                        .and_then(Value::as_array)
-                        .map(|family_ids| family_ids.len() as u64)
-                })
+            let family_ids = payload
+                .get("family_ids")
+                .and_then(Value::as_array)
                 .ok_or_else(|| NegRiskSummaryError::InvalidPayload {
-                    field: "discovered_family_count",
+                    field: "family_ids",
                     value: payload.to_string(),
-                })?;
+                })?
+                .iter()
+                .map(|item| {
+                    item.as_str().map(str::to_owned).ok_or_else(|| {
+                        NegRiskSummaryError::InvalidPayload {
+                            field: "family_ids",
+                            value: item.to_string(),
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
             Ok(LatestDiscoverySnapshot {
-                discovered_family_count,
+                discovered_family_count: family_ids.len() as u64,
                 latest_discovery_revision,
+                family_ids,
             })
         })
         .transpose()
 }
 
-async fn count_recent_validation_events(
+async fn count_recent_family_events(
     pool: &PgPool,
+    event_type: &str,
     latest_discovery_revision: i64,
 ) -> Result<u64, NegRiskSummaryError> {
     let count: i64 = sqlx::query_scalar(
         r#"
         SELECT COUNT(*)
         FROM event_journal
-        WHERE event_type = 'family_validation'
-          AND payload ->> 'discovery_revision' = $1
+        WHERE event_type = $1
+          AND payload ->> 'discovery_revision' = $2
         "#,
     )
+    .bind(event_type)
     .bind(latest_discovery_revision.to_string())
     .fetch_one(pool)
     .await?;
@@ -276,8 +345,14 @@ async fn count_recent_validation_events(
 }
 
 struct MemberVectorPaths {
-    validation: HashMap<String, NegRiskMemberVectorPath>,
-    halt: HashMap<String, NegRiskMemberVectorPath>,
+    validation: HashMap<MemberVectorPathKey, NegRiskMemberVectorPath>,
+    halt: HashMap<MemberVectorPathKey, NegRiskMemberVectorPath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MemberVectorPathKey {
+    event_family_id: String,
+    metadata_snapshot_hash: Option<String>,
 }
 
 async fn latest_member_vector_paths(
@@ -306,17 +381,22 @@ async fn latest_member_vector_paths(
             .map_err(NegRiskSummaryError::Sqlx)?;
         let payload: Value = row.try_get("payload").map_err(NegRiskSummaryError::Sqlx)?;
         let family_id = required_str(&payload, "event_family_id")?.to_owned();
+        let key = MemberVectorPathKey {
+            event_family_id: family_id.clone(),
+            metadata_snapshot_hash: optional_str(&payload, "metadata_snapshot_hash")
+                .map(str::to_owned),
+        };
 
         let path = NegRiskMemberVectorPath {
             journal_seq,
             event_type: event_type.clone(),
-            event_family_id: family_id.clone(),
+            event_family_id: family_id,
         };
 
         if event_type == "family_validation" {
-            validation.entry(family_id).or_insert(path);
+            validation.entry(key).or_insert(path);
         } else if event_type == "family_halt" {
-            halt.entry(family_id).or_insert(path);
+            halt.entry(key).or_insert(path);
         }
     }
 
@@ -354,4 +434,8 @@ fn required_bool(payload: &Value, field: &'static str) -> Result<bool, NegRiskSu
             field,
             value: payload.to_string(),
         })
+}
+
+fn optional_str<'a>(payload: &'a Value, field: &'static str) -> Option<&'a str> {
+    payload.get(field).and_then(Value::as_str)
 }
