@@ -3,6 +3,12 @@ name = "app-replay"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+journal = { path = "../journal" }
+
 [lib]
 path = "src/lib.rs"
 
+[dev-dependencies]
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
+serde_json = "1.0.145"
