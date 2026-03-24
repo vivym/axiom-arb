@@ -5,10 +5,16 @@ use recovery::{RecoveryCoordinator, RecoveryIntent, RecoveryOutputs, RecoverySco
 fn recovery_scope_lock_blocks_nested_child_scopes_without_cross_variant_aliasing() {
     let family_lock = RecoveryScopeLock::family("family-a");
     let nested_family = RecoveryScopeLock::family("family-a:condition-12");
-    let same_id_other_variant = RecoveryScopeLock::market("family-a:condition-12");
+    let nested_condition = RecoveryScopeLock::condition("family-a:condition-12");
+    let nested_market = RecoveryScopeLock::market("family-a:condition-12:market-1");
+    let nested_path = RecoveryScopeLock::execution_path("family-a:condition-12:market-1:path-1");
+    let same_id_other_variant = RecoveryScopeLock::market("family-a");
     let different_family = RecoveryScopeLock::family("family-b");
 
     assert!(family_lock.blocks_expansion(&nested_family));
+    assert!(family_lock.blocks_expansion(&nested_condition));
+    assert!(family_lock.blocks_expansion(&nested_market));
+    assert!(family_lock.blocks_expansion(&nested_path));
     assert!(!family_lock.blocks_expansion(&same_id_other_variant));
     assert!(!family_lock.blocks_expansion(&different_family));
 }

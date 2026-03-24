@@ -38,8 +38,15 @@ impl RecoveryScopeLock {
     }
 
     pub fn blocks_expansion(&self, candidate: &RecoveryScopeLock) -> bool {
-        self.scope_kind() == candidate.scope_kind()
-            && scope_blocks(self.scope_id(), candidate.scope_id())
+        let parent_kind = self.scope_kind();
+        let candidate_kind = candidate.scope_kind();
+
+        kind_blocks(parent_kind, candidate_kind)
+            && scope_blocks(
+                self.scope_id(),
+                candidate.scope_id(),
+                parent_kind == candidate_kind,
+            )
     }
 
     fn scope_kind(&self) -> RecoveryScopeKind {
@@ -63,8 +70,25 @@ impl RecoveryScopeLock {
     }
 }
 
-fn scope_blocks(parent: &str, candidate: &str) -> bool {
-    if candidate == parent {
+fn kind_blocks(parent: RecoveryScopeKind, candidate: RecoveryScopeKind) -> bool {
+    matches!(
+        (parent, candidate),
+        (RecoveryScopeKind::Market, RecoveryScopeKind::Market)
+            | (RecoveryScopeKind::Market, RecoveryScopeKind::ExecutionPath)
+            | (RecoveryScopeKind::Condition, RecoveryScopeKind::Condition)
+            | (RecoveryScopeKind::Condition, RecoveryScopeKind::Market)
+            | (RecoveryScopeKind::Condition, RecoveryScopeKind::ExecutionPath)
+            | (RecoveryScopeKind::Family, RecoveryScopeKind::Family)
+            | (RecoveryScopeKind::Family, RecoveryScopeKind::Condition)
+            | (RecoveryScopeKind::Family, RecoveryScopeKind::Market)
+            | (RecoveryScopeKind::Family, RecoveryScopeKind::ExecutionPath)
+            | (RecoveryScopeKind::InventorySet, RecoveryScopeKind::InventorySet)
+            | (RecoveryScopeKind::ExecutionPath, RecoveryScopeKind::ExecutionPath)
+    )
+}
+
+fn scope_blocks(parent: &str, candidate: &str, allow_exact_match: bool) -> bool {
+    if allow_exact_match && candidate == parent {
         return true;
     }
 
