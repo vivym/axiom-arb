@@ -64,9 +64,13 @@ pub enum PricingError {
 
 impl QuantizationPolicy {
     pub fn usdc_cents() -> Self {
+        Self::with_price_quantum(Decimal::new(1, 3))
+    }
+
+    pub fn with_price_quantum(price_quantum: Decimal) -> Self {
         Self {
             usdc_dp: 2,
-            price_quantum: Decimal::new(1, 3),
+            price_quantum,
         }
     }
 

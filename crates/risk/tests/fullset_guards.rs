@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use domain::{
-    ApprovalState, ApprovalStatus, ConditionId, DisputeState, ResolutionState, ResolutionStatus,
-    RuntimeMode, SignatureType, TokenId, WalletRoute,
+    ApprovalKey, ApprovalState, ApprovalStatus, ConditionId, DisputeState, ResolutionState,
+    ResolutionStatus, RuntimeMode, SignatureType, TokenId, WalletRoute,
 };
 use risk::fullset::{
     evaluate_fullset_trade, evaluate_redeem, Freshness, FreshnessPolicy, FullSetRiskContext,
@@ -13,6 +13,7 @@ use rust_decimal::Decimal;
 fn mode_not_healthy_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Reconciling,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Approved,
             Decimal::new(100, 0),
@@ -30,6 +31,7 @@ fn mode_not_healthy_is_rejected() {
 fn approval_insufficient_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Approved,
             Decimal::new(49, 0),
@@ -50,6 +52,7 @@ fn approval_insufficient_is_rejected() {
 fn approval_status_not_approved_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Missing,
             Decimal::new(100, 0),
@@ -70,6 +73,7 @@ fn approval_status_not_approved_is_rejected() {
 fn freshness_stale_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Approved,
             Decimal::new(100, 0),
@@ -87,6 +91,7 @@ fn freshness_stale_is_rejected() {
 fn net_edge_below_threshold_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Approved,
             Decimal::new(100, 0),
@@ -107,6 +112,7 @@ fn net_edge_below_threshold_is_rejected() {
 fn net_edge_equal_to_threshold_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key()],
         approvals: vec![sample_approval(
             ApprovalStatus::Approved,
             Decimal::new(100, 0),
@@ -127,6 +133,7 @@ fn net_edge_equal_to_threshold_is_rejected() {
 fn any_insufficient_approval_rejects_trade() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key(), sample_no_approval_key()],
         approvals: vec![
             sample_approval(ApprovalStatus::Approved, Decimal::new(100, 0)),
             sample_approval(ApprovalStatus::Pending, Decimal::new(100, 0)),
@@ -138,6 +145,48 @@ fn any_insufficient_approval_rejects_trade() {
     });
 
     assert_eq!(
+        decision.reject_reason(),
+        Some(RejectReason::ApprovalInsufficient)
+    );
+}
+
+#[test]
+fn missing_required_approval_is_rejected() {
+    let decision = evaluate_fullset_trade(&FullSetRiskContext {
+        runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key(), sample_no_approval_key()],
+        approvals: vec![sample_approval(
+            ApprovalStatus::Approved,
+            Decimal::new(100, 0),
+        )],
+        net_edge_usdc: Decimal::new(10, 2),
+        thresholds: sample_thresholds(),
+        freshness: Freshness::fresh(Utc::now()),
+        freshness_policy: sample_freshness_policy(),
+    });
+
+    assert_eq!(
+        decision.reject_reason(),
+        Some(RejectReason::ApprovalInsufficient)
+    );
+}
+
+#[test]
+fn required_approvals_covering_all_keys_do_not_trigger_approval_rejection() {
+    let decision = evaluate_fullset_trade(&FullSetRiskContext {
+        runtime_mode: RuntimeMode::Healthy,
+        required_approval_keys: vec![sample_approval_key(), sample_no_approval_key()],
+        approvals: vec![
+            sample_approval(ApprovalStatus::Approved, Decimal::new(100, 0)),
+            sample_no_approval(ApprovalStatus::Approved, Decimal::new(100, 0)),
+        ],
+        net_edge_usdc: Decimal::new(10, 2),
+        thresholds: sample_thresholds(),
+        freshness: Freshness::fresh(Utc::now()),
+        freshness_policy: sample_freshness_policy(),
+    });
+
+    assert_ne!(
         decision.reject_reason(),
         Some(RejectReason::ApprovalInsufficient)
     );
@@ -243,6 +292,37 @@ fn sample_approval(status: ApprovalStatus, allowance: Decimal) -> ApprovalState 
         required_min_allowance: Decimal::new(50, 0),
         last_checked_at: Utc::now(),
         approval_status: status,
+    }
+}
+
+fn sample_no_approval(status: ApprovalStatus, allowance: Decimal) -> ApprovalState {
+    ApprovalState {
+        token_id: TokenId::from("token-no"),
+        spender: "0xspender".to_owned(),
+        owner_address: "0xowner".to_owned(),
+        funder_address: "0xfunder".to_owned(),
+        wallet_route: WalletRoute::Eoa,
+        signature_type: SignatureType::Eoa,
+        allowance,
+        required_min_allowance: Decimal::new(50, 0),
+        last_checked_at: Utc::now(),
+        approval_status: status,
+    }
+}
+
+fn sample_approval_key() -> ApprovalKey {
+    ApprovalKey {
+        token_id: TokenId::from("token-yes"),
+        spender: "0xspender".to_owned(),
+        owner_address: "0xowner".to_owned(),
+    }
+}
+
+fn sample_no_approval_key() -> ApprovalKey {
+    ApprovalKey {
+        token_id: TokenId::from("token-no"),
+        spender: "0xspender".to_owned(),
+        owner_address: "0xowner".to_owned(),
     }
 }
 

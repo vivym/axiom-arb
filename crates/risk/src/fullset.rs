@@ -1,5 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
-use domain::{ApprovalState, ApprovalStatus, DisputeState, ResolutionState, RuntimeMode};
+use domain::{
+    ApprovalKey, ApprovalState, ApprovalStatus, DisputeState, ResolutionState, RuntimeMode,
+};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,7 @@ pub struct Freshness {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FullSetRiskContext {
     pub runtime_mode: RuntimeMode,
+    pub required_approval_keys: Vec<ApprovalKey>,
     pub approvals: Vec<ApprovalState>,
     pub net_edge_usdc: Decimal,
     pub thresholds: FullSetRiskThresholds,
@@ -83,12 +86,13 @@ pub fn evaluate_fullset_trade(context: &FullSetRiskContext) -> RiskDecision {
         return RiskDecision::Reject(RejectReason::ModeNotHealthy);
     }
 
-    if context.approvals.is_empty()
-        || context.approvals.iter().any(|approval| {
-            approval.approval_status != ApprovalStatus::Approved
-                || approval.allowance < approval.required_min_allowance
+    if context.required_approval_keys.iter().any(|required_key| {
+        !context.approvals.iter().any(|approval| {
+            approval_key(approval) == *required_key
+                && approval.approval_status == ApprovalStatus::Approved
+                && approval.allowance >= approval.required_min_allowance
         })
-    {
+    }) {
         return RiskDecision::Reject(RejectReason::ApprovalInsufficient);
     }
 
@@ -101,6 +105,14 @@ pub fn evaluate_fullset_trade(context: &FullSetRiskContext) -> RiskDecision {
     }
 
     RiskDecision::Accept
+}
+
+fn approval_key(approval: &ApprovalState) -> ApprovalKey {
+    ApprovalKey {
+        token_id: approval.token_id.clone(),
+        spender: approval.spender.clone(),
+        owner_address: approval.owner_address.clone(),
+    }
 }
 
 pub fn evaluate_redeem(context: &RedeemRiskContext) -> RiskDecision {

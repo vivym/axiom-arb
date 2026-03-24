@@ -194,3 +194,54 @@ fn split_sell_rejects_price_off_tick() {
         })
     );
 }
+
+#[test]
+fn split_sell_accepts_price_on_custom_tick() {
+    let result = evaluate_split_sell_yes_sell_no(
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(33, 2),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(66, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2)),
+    );
+
+    assert!(result.is_ok(), "custom on-tick prices should price successfully");
+}
+
+#[test]
+fn split_sell_rejects_price_off_custom_tick() {
+    let result = evaluate_split_sell_yes_sell_no(
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(333, 3),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(66, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2)),
+    );
+
+    assert_eq!(
+        result,
+        Err(PricingError::PriceOffTick {
+            leg: "YES",
+            price_usdc: Decimal::new(333, 3),
+            price_quantum: Decimal::new(1, 2),
+        })
+    );
+}
