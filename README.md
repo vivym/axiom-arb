@@ -6,21 +6,22 @@
 
 1. Start local Postgres with `make db-up` or `docker compose up -d postgres`.
 2. Set `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb`.
-3. Run `cargo test --workspace` once the database is available.
+3. Run `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test --workspace` once the database is available.
+4. Treat `app-replay` as a consumer of existing journal rows. It does not run migrations or seed `event_journal` for you.
 
 ## Running The Binaries
 
-- Paper bootstrap: `AXIOM_MODE=paper cargo run -p app-live`
-- Live bootstrap: `AXIOM_MODE=live cargo run -p app-live`
-- Replay from the journal: `cargo run -p app-replay -- --from-seq 1`
+- Paper-mode bootstrap skeleton: `AXIOM_MODE=paper cargo run -p app-live`
+- Live-mode bootstrap skeleton: `AXIOM_MODE=live cargo run -p app-live`
+- Replay from the beginning of an existing journal: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo run -p app-replay -- --from-seq 0`
 
-`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. Live mode is wired in the binary, but actual venue connectivity still depends on external credentials and deployment setup.
+`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, both modes run the same local bootstrap skeleton over a static empty snapshot and print the resulting runtime status line; they do not yet connect to Polymarket feeds, order heartbeat, or Postgres from the binary entrypoint.
 
 ## Verification
 
 - `cargo fmt --all`
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace`
+- `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test --workspace`
 - `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test -p persistence`
 
 ## Docs

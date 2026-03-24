@@ -1,16 +1,25 @@
 # Bootstrap And Ramp
 
-This runbook covers the startup sequence, why the engine stays `CancelOnly` until the first successful reconcile, and how to ramp live size after paper validation.
+This runbook covers the bootstrap policy and launch gates for the `v1a` live candidate.
 
-## Bootstrap Sequence
+At current `HEAD`, `app-live` only exercises a local bootstrap skeleton:
 
-1. Start in paper mode.
-2. Load config, connect to Postgres, and start logs, metrics, feeds, and order heartbeat.
-3. Reconcile local state against venue state.
-4. Stay in `Bootstrapping` with `CancelOnly` until the first reconcile succeeds.
-5. Promote to `Healthy` only after the reconcile is clean.
+- select `paper` or `live` via `AXIOM_MODE`
+- run one bootstrap/reconcile pass over `StaticSnapshotSource::empty()`
+- print the resulting runtime status line
 
-Paper mode should exercise the same bootstrap, journal, replay, and reconcile path as live, but without real-money exposure.
+The binary entrypoint does not yet connect to Postgres, Polymarket feeds, or order heartbeat. The sequence below is the required operational target for the live candidate, not a claim that local `cargo run -p app-live` already performs the full venue-facing workflow.
+
+## Target Bootstrap Sequence
+
+1. Start in paper mode first.
+2. Load config, connect persistence, and start logs and metrics.
+3. Connect market and user feeds, then start order heartbeat once credentials are available.
+4. Reconcile local state against venue state, approvals, and relayer state.
+5. Stay in `Bootstrapping` with `CancelOnly` until the first reconcile succeeds.
+6. Promote to `Healthy` only after the reconcile is clean.
+
+Target state: paper mode should exercise the same bootstrap, journal, replay, and reconcile path as live, but without real-money exposure. Until that wiring lands, local paper runs only validate the bootstrap mode transition and reconcile skeleton.
 
 If the first reconcile fails or any materially relevant order becomes `Unknown`, keep the engine in `NoNewRisk` or `GlobalHalt` and resolve the divergence before resuming.
 

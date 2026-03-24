@@ -2,6 +2,8 @@
 
 Use this when a live incident needs immediate containment: stale venue state, duplicate or stuck orders, relayer problems, broken-leg inventory, or any situation where the engine must stop taking new risk.
 
+At current `HEAD`, this repo does not yet expose an in-repo halt-control or `cancel-all` operator surface. Treat this runbook as the target-state procedure for the live deployment and the external operator tooling that will wrap it, not as a claim that `cargo run -p app-live` already provides these controls locally.
+
 ## Before You Start
 
 - If the engine has not completed its first successful reconcile, it is still in bootstrap `CancelOnly`.
