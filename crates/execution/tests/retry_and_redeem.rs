@@ -301,7 +301,7 @@ fn relayer_id_cannot_be_rebound_and_old_index_remains_clean() {
             ConditionId::from("condition-8"),
             Some("relayer-tx-old".to_owned()),
             Some("nonce-8".to_owned()),
-            CtfOperationStatus::Submitted,
+            CtfOperationStatus::Planned,
         ))
         .expect("initial relayer transaction id should be accepted");
 
@@ -324,6 +324,88 @@ fn relayer_id_cannot_be_rebound_and_old_index_remains_clean() {
         tracker.operation_by_relayer_transaction_id("relayer-tx-new"),
         None
     );
+}
+
+#[test]
+fn submitted_operation_cannot_change_an_already_bound_nonce() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            ConditionId::from("condition-9"),
+            Some("relayer-tx-9".to_owned()),
+            Some("nonce-9".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("submitted operation should be valid");
+
+    let err = tracker
+        .attach_relayer_metadata(operation_id, None, Some("nonce-9b".to_owned()))
+        .expect_err("submitted operation must not allow nonce mutation");
+
+    assert_eq!(
+        err,
+        CtfTrackerError::RelayerMetadataFrozen {
+            status: CtfOperationStatus::Submitted,
+        }
+    );
+}
+
+#[test]
+fn confirmed_operation_cannot_attach_metadata_after_confirmation() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Redeem,
+            ConditionId::from("condition-10"),
+            Some("relayer-tx-10".to_owned()),
+            Some("nonce-10".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("submitted operation should be valid");
+
+    tracker
+        .update_status(
+            operation_id,
+            CtfOperationStatus::Confirmed,
+            Some("0xtx10".to_owned()),
+        )
+        .expect("confirmation should succeed");
+
+    let err = tracker
+        .attach_relayer_metadata(operation_id, None, Some("nonce-10".to_owned()))
+        .expect_err("confirmed operation must not allow metadata attachment");
+
+    assert_eq!(
+        err,
+        CtfTrackerError::RelayerMetadataFrozen {
+            status: CtfOperationStatus::Confirmed,
+        }
+    );
+}
+
+#[test]
+fn planned_operation_can_reaffirm_the_same_nonce_without_mutating_state() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            ConditionId::from("condition-11"),
+            Some("relayer-tx-11".to_owned()),
+            Some("nonce-11".to_owned()),
+            CtfOperationStatus::Planned,
+        ))
+        .expect("planned operation should be valid");
+
+    tracker
+        .attach_relayer_metadata(operation_id, None, Some("nonce-11".to_owned()))
+        .expect("reasserting the same nonce in planned state should be a no-op");
+
+    let tracked = tracker
+        .operation(operation_id)
+        .expect("operation should remain tracked");
+    assert_eq!(tracked.nonce.as_deref(), Some("nonce-11"));
+    assert_eq!(tracked.status, CtfOperationStatus::Planned);
 }
 
 fn sample_identity(label: &str) -> SignedOrderIdentity {

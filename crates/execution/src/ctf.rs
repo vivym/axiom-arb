@@ -55,6 +55,9 @@ pub enum CtfTrackerError {
     },
     SubmittedRequiresRelayerMetadata,
     ConfirmedRequiresTxHash,
+    RelayerMetadataFrozen {
+        status: CtfOperationStatus,
+    },
     IllegalStatusTransition {
         from: CtfOperationStatus,
         to: CtfOperationStatus,
@@ -63,6 +66,10 @@ pub enum CtfTrackerError {
         relayer_transaction_id: String,
     },
     RelayerTransactionIdAlreadyBound,
+    NonceAlreadyBound {
+        existing_nonce: String,
+        new_nonce: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -103,6 +110,12 @@ impl CtfTracker {
             return Err(CtfTrackerError::OperationNotFound { operation_id });
         };
 
+        if existing_operation.status != CtfOperationStatus::Planned {
+            return Err(CtfTrackerError::RelayerMetadataFrozen {
+                status: existing_operation.status,
+            });
+        }
+
         if let Some(ref relayer_transaction_id) = relayer_transaction_id {
             if let Some(existing) = existing_operation.relayer_transaction_id.as_deref() {
                 if existing != relayer_transaction_id {
@@ -110,7 +123,18 @@ impl CtfTracker {
                 }
             }
 
-            self.ensure_relayer_id_available(Some(&relayer_transaction_id), Some(operation_id))?;
+            self.ensure_relayer_id_available(Some(relayer_transaction_id), Some(operation_id))?;
+        }
+
+        if let Some(ref nonce) = nonce {
+            if let Some(existing_nonce) = existing_operation.nonce.as_ref() {
+                if existing_nonce != nonce {
+                    return Err(CtfTrackerError::NonceAlreadyBound {
+                        existing_nonce: existing_nonce.clone(),
+                        new_nonce: nonce.clone(),
+                    });
+                }
+            }
         }
 
         let operation = self
@@ -125,7 +149,9 @@ impl CtfTracker {
         }
 
         if let Some(nonce) = nonce {
-            operation.nonce = Some(nonce);
+            if operation.nonce.is_none() {
+                operation.nonce = Some(nonce);
+            }
         }
 
         Ok(())
