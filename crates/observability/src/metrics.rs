@@ -142,6 +142,11 @@ pub struct RuntimeMetrics {
     pub runtime_mode: ModeHandle,
     pub relayer_pending_age: GaugeHandle,
     pub divergence_count: CounterHandle,
+    pub neg_risk_family_discovered_count: GaugeHandle,
+    pub neg_risk_family_included_count: GaugeHandle,
+    pub neg_risk_family_excluded_count: GaugeHandle,
+    pub neg_risk_family_halt_count: GaugeHandle,
+    pub neg_risk_metadata_refresh_count: CounterHandle,
 }
 
 impl Default for RuntimeMetrics {
@@ -151,6 +156,19 @@ impl Default for RuntimeMetrics {
             runtime_mode: ModeHandle::new("axiom_runtime_mode"),
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
+            neg_risk_family_discovered_count: GaugeHandle::new(
+                "axiom_neg_risk_family_discovered_count",
+            ),
+            neg_risk_family_included_count: GaugeHandle::new(
+                "axiom_neg_risk_family_included_count",
+            ),
+            neg_risk_family_excluded_count: GaugeHandle::new(
+                "axiom_neg_risk_family_excluded_count",
+            ),
+            neg_risk_family_halt_count: GaugeHandle::new("axiom_neg_risk_family_halt_count"),
+            neg_risk_metadata_refresh_count: CounterHandle::new(
+                "axiom_neg_risk_metadata_refresh_total",
+            ),
         }
     }
 }
@@ -250,5 +268,33 @@ impl RuntimeMetricsRecorder {
     pub fn increment_divergence_count(&self, amount: u64) {
         self.registry
             .record_counter(self.metrics.divergence_count.increment(amount));
+    }
+
+    pub fn record_neg_risk_family_discovered_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.neg_risk_family_discovered_count.sample(count));
+    }
+
+    pub fn record_neg_risk_family_included_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.neg_risk_family_included_count.sample(count));
+    }
+
+    pub fn record_neg_risk_family_excluded_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.neg_risk_family_excluded_count.sample(count));
+    }
+
+    pub fn record_neg_risk_family_halt_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.neg_risk_family_halt_count.sample(count));
+    }
+
+    pub fn increment_neg_risk_metadata_refresh_count(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_metadata_refresh_count
+                .increment(amount),
+        );
     }
 }

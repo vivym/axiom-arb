@@ -24,6 +24,33 @@ fn observability_exposes_required_runtime_metric_keys() {
 }
 
 #[test]
+fn runtime_metrics_expose_neg_risk_family_counts() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+
+    assert_eq!(
+        metrics.neg_risk_family_discovered_count.key(),
+        MetricKey::new("axiom_neg_risk_family_discovered_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_family_included_count.key(),
+        MetricKey::new("axiom_neg_risk_family_included_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_family_excluded_count.key(),
+        MetricKey::new("axiom_neg_risk_family_excluded_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_family_halt_count.key(),
+        MetricKey::new("axiom_neg_risk_family_halt_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_metadata_refresh_count.key(),
+        MetricKey::new("axiom_neg_risk_metadata_refresh_total")
+    );
+}
+
+#[test]
 fn tracing_bootstrap_is_explicit_and_reports_service_name() {
     let tracing = bootstrap_tracing("app-live");
 
@@ -40,6 +67,11 @@ fn runtime_metrics_recorder_updates_registry() {
     recorder.record_runtime_mode("paper");
     recorder.record_relayer_pending_age(4.0);
     recorder.increment_divergence_count(3);
+    recorder.record_neg_risk_family_discovered_count(9.0);
+    recorder.record_neg_risk_family_included_count(6.0);
+    recorder.record_neg_risk_family_excluded_count(3.0);
+    recorder.record_neg_risk_family_halt_count(2.0);
+    recorder.increment_neg_risk_metadata_refresh_count(7);
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
@@ -49,4 +81,24 @@ fn runtime_metrics_recorder_updates_registry() {
     assert_eq!(snapshot.mode(metrics.runtime_mode.key()), Some("paper"));
     assert_eq!(snapshot.gauge(metrics.relayer_pending_age.key()), Some(4.0));
     assert_eq!(snapshot.counter(metrics.divergence_count.key()), Some(3));
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_family_discovered_count.key()),
+        Some(9.0)
+    );
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_family_included_count.key()),
+        Some(6.0)
+    );
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_family_excluded_count.key()),
+        Some(3.0)
+    );
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_family_halt_count.key()),
+        Some(2.0)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_metadata_refresh_count.key()),
+        Some(7)
+    );
 }

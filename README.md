@@ -17,6 +17,14 @@
 
 `app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, both modes run the same local bootstrap skeleton over a static empty snapshot and print the resulting runtime status line; they do not yet connect to Polymarket feeds, order heartbeat, or Postgres from the binary entrypoint.
 
+## V1b Neg-Risk Scope Status
+
+- `v1b foundation` exists today as library and replay support.
+- `v1b live` is not implemented.
+- `app-live` still does not place `neg-risk` orders.
+- Family-halt precedence is `GlobalHalt > family halt > market-local halt > strategy-local filter`.
+- Foundation-phase family halt blocks new `neg-risk` activation only; it does not override bootstrap `CancelOnly` or global emergency controls.
+
 ## Verification
 
 - `cargo fmt --all`
