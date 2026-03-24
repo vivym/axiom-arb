@@ -59,6 +59,7 @@ pub struct AppSupervisor {
     dispatcher: DispatchLoop,
     runtime: AppRuntime,
     bootstrap_snapshot: RemoteSnapshot,
+    committed_log: Vec<InputTaskEvent>,
     input_tasks: InputTaskQueue,
     seed: RuntimeSeed,
 }
@@ -69,6 +70,7 @@ impl AppSupervisor {
             dispatcher: DispatchLoop::default(),
             runtime: AppRuntime::new(app_mode),
             bootstrap_snapshot,
+            committed_log: Vec::new(),
             input_tasks: InputTaskQueue::default(),
             seed: RuntimeSeed::default(),
         }
@@ -134,6 +136,11 @@ impl AppSupervisor {
         self.seed.committed_state_version = Some(committed_state_version);
     }
 
+    pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
+        self.committed_log.push(input);
+        self.committed_log.sort_by_key(|entry| entry.journal_seq);
+    }
+
     pub fn seed_unapplied_journal_entry(&mut self, journal_seq: i64, input: InputTaskEvent) {
         let mut input = input;
         input.journal_seq = journal_seq;
@@ -149,23 +156,47 @@ impl AppSupervisor {
             .unwrap_or(self.seed.last_state_version);
         let last_journal_seq = match self.seed.last_journal_seq {
             Some(last_journal_seq) => last_journal_seq,
-            None if committed_state_version == 0 => 0,
+            None if committed_state_version == 0 && self.committed_log.is_empty() => 0,
             None => {
                 return Err(SupervisorError::new(
                     "durable last journal sequence is required to resume committed state",
                 ));
             }
         };
-        self.runtime.restore_durable_anchor(
-            committed_state_version,
-            last_journal_seq,
-            self.seed.published_snapshot_id.clone(),
-        );
+        self.runtime.replay_committed_history(&self.committed_log)?;
+        if self.runtime.state_version() != committed_state_version {
+            return Err(SupervisorError::new(format!(
+                "durable history rebuilt state version {} but expected {}",
+                self.runtime.state_version(),
+                committed_state_version
+            )));
+        }
+        if self.runtime.last_journal_seq() != Some(last_journal_seq) {
+            return Err(SupervisorError::new(format!(
+                "durable history rebuilt last journal seq {} but expected {}",
+                self.runtime.last_journal_seq().unwrap_or_default(),
+                last_journal_seq
+            )));
+        }
+
+        if self.runtime.state_version() > 0
+            || self.seed.published_snapshot_id.is_some()
+            || self.seed.last_state_version == 0
+        {
+            self.publish_current_snapshot();
+        }
 
         let pending_entries = self.input_tasks.drain_after(self.seed.last_journal_seq);
         for input in pending_entries {
             match self.runtime.apply_input(input.clone())? {
-                ApplyResult::Applied { state_version, .. } => {
+                ApplyResult::Applied {
+                    state_version,
+                    dirty_set,
+                    ..
+                } => {
+                    self.dispatcher.record_apply(state_version, dirty_set);
+                    self.committed_log.push(input);
+                    self.committed_log.sort_by_key(|entry| entry.journal_seq);
                     if let Some(snapshot) = self
                         .runtime
                         .publish_snapshot(&snapshot_id_for(state_version))

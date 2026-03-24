@@ -23,6 +23,14 @@ fn dispatcher_coalesces_dirty_snapshots_without_dropping_latest_version() {
     assert_eq!(dispatched.fullset_last_ready_state_version, Some(7));
     assert_eq!(dispatched.negrisk_last_ready_state_version, Some(8));
     assert_eq!(
+        dispatched.fullset_last_ready_snapshot_id.as_deref(),
+        Some("snapshot-7")
+    );
+    assert_eq!(
+        dispatched.negrisk_last_ready_snapshot_id.as_deref(),
+        Some("snapshot-8")
+    );
+    assert_eq!(
         dispatched.last_stable_snapshot_id.as_deref(),
         Some("snapshot-8")
     );

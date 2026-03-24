@@ -2,11 +2,13 @@ use chrono::Utc;
 
 use app_live::{AppSupervisor, InputTaskEvent};
 use domain::{ExternalFactEvent, RuntimeMode};
-use state::StateFactInput;
 
 #[test]
 fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
     let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
     supervisor.seed_runtime_progress(41, 7, None);
     supervisor.seed_committed_state_version(7);
 
@@ -22,6 +24,9 @@ fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
 #[test]
 fn restart_republishes_stale_snapshot_anchor_before_dispatch_resumes() {
     let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
     supervisor.seed_runtime_progress(41, 7, Some("snapshot-6"));
     supervisor.seed_committed_state_version(7);
 
@@ -37,8 +42,11 @@ fn restart_republishes_stale_snapshot_anchor_before_dispatch_resumes() {
 #[test]
 fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 36..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
     supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
-    supervisor.seed_unapplied_journal_entry(42, sample_input_task_event());
+    supervisor.seed_unapplied_journal_entry(42, sample_input_task_event(42));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -49,15 +57,15 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
 }
 
-fn sample_input_task_event() -> InputTaskEvent {
+fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
     InputTaskEvent::new(
-        42,
-        StateFactInput::new(ExternalFactEvent::new(
+        journal_seq,
+        ExternalFactEvent::new(
             "market_ws",
             "session-1",
-            "evt-42",
+            &format!("evt-{journal_seq}"),
             "v1",
             Utc::now(),
-        )),
+        ),
     )
 }

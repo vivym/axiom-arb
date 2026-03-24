@@ -137,7 +137,9 @@ impl AppRuntime {
     }
 
     pub fn apply_input(&mut self, input: InputTaskEvent) -> Result<ApplyResult, ApplyError> {
-        let result = StateApplier::new(&mut self.store).apply(input.journal_seq, input.fact)?;
+        let journal_seq = input.journal_seq;
+        let result =
+            StateApplier::new(&mut self.store).apply(journal_seq, input.into_state_fact_input())?;
         if matches!(result, ApplyResult::Applied { .. }) {
             self.published_snapshot = None;
         }
@@ -154,28 +156,25 @@ impl AppRuntime {
         Some(snapshot)
     }
 
-    pub fn restore_durable_anchor(
+    pub fn replay_committed_history(
         &mut self,
-        committed_state_version: u64,
-        last_journal_seq: i64,
-        published_snapshot_id: Option<String>,
-    ) {
+        history: &[InputTaskEvent],
+    ) -> Result<(), ApplyError> {
         self.store = StateStore::new();
         self.published_snapshot = None;
-        self.store
-            .restore_committed_anchor(committed_state_version, last_journal_seq);
 
-        if let Some(snapshot_id) = published_snapshot_id
-            .filter(|snapshot_id| snapshot_id == &format!("snapshot-{committed_state_version}"))
-        {
-            let _ = self.publish_snapshot(&snapshot_id);
+        for input in history.iter().cloned() {
+            let _ = StateApplier::new(&mut self.store)
+                .apply(input.journal_seq, input.into_state_fact_input())?;
         }
+
+        self.store.mark_reconciled_after_restore(0);
+        Ok(())
     }
 
     fn anchor_baseline_if_ready(&mut self, reconcile_succeeded: bool) {
         if reconcile_succeeded && self.store.last_applied_journal_seq().is_none() {
-            self.store
-                .restore_committed_anchor(self.store.state_version(), 0);
+            self.store.mark_reconciled_after_restore(0);
         }
     }
 }

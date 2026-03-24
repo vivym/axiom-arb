@@ -112,6 +112,21 @@ impl StateStore {
         self.apply_policy(reconciled_policy());
     }
 
+    pub fn mark_reconciled_after_restore(&mut self, baseline_journal_seq: i64) {
+        if self.last_applied_journal_seq.is_none() {
+            self.last_consumed_journal_seq = Some(baseline_journal_seq);
+            self.last_applied_journal_seq = Some(baseline_journal_seq);
+            self.fullset_anchor = Some(FullSetAnchor {
+                state_version: self.state_version,
+                committed_journal_seq: baseline_journal_seq,
+                open_orders: self.current_open_order_ids(),
+            });
+        }
+
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
     pub fn mode(&self) -> RuntimeMode {
         self.runtime_mode
     }
