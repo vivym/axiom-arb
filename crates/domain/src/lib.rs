@@ -1,5 +1,6 @@
 mod identifiers;
 mod inventory;
+mod negrisk;
 mod order;
 mod resolution;
 mod runtime_mode;
@@ -11,6 +12,11 @@ pub use identifiers::{
 pub use inventory::{
     ApprovalKey, ApprovalState, ApprovalStatus, InventoryBucket, ReservationState, SignatureType,
     WalletRoute,
+};
+pub use negrisk::{
+    FamilyExclusionReason, FamilyHaltPolicy, FamilyHaltState, FamilyHaltStatus, HaltPriority,
+    NegRiskExposureError, NegRiskExposureRollup, NegRiskExposureVector, NegRiskFamily,
+    NegRiskMemberExposure, NegRiskNode, NegRiskVariant,
 };
 pub use order::{
     Order, OrderId, SettlementState, SignedOrderIdentity, SubmissionState, VenueOrderState,

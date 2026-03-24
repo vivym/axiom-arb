@@ -3,4 +3,4 @@ mod reconcile;
 mod store;
 
 pub use reconcile::{ReconcileAttention, ReconcileReport, RemoteSnapshot};
-pub use store::{InventoryEntry, RelayerTxSummary, StateStore};
+pub use store::{InventoryEntry, InventorySnapshotRow, RelayerTxSummary, StateStore};

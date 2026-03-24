@@ -20,6 +20,13 @@ pub struct InventoryEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventorySnapshotRow {
+    pub token_id: TokenId,
+    pub bucket: InventoryBucket,
+    pub quantity: Decimal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayerTxSummary {
     pub tx_id: String,
     pub order_id: Option<OrderId>,
@@ -107,6 +114,27 @@ impl StateStore {
 
     pub fn relayer_txs(&self) -> &HashMap<String, RelayerTxSummary> {
         &self.relayer_txs
+    }
+
+    pub fn inventory_snapshot(&self) -> Vec<InventorySnapshotRow> {
+        let mut rows = self
+            .inventory
+            .iter()
+            .map(|(entry, quantity)| InventorySnapshotRow {
+                token_id: entry.token_id.clone(),
+                bucket: entry.bucket,
+                quantity: *quantity,
+            })
+            .collect::<Vec<_>>();
+
+        rows.sort_by(|left, right| {
+            left.token_id
+                .as_str()
+                .cmp(right.token_id.as_str())
+                .then_with(|| bucket_sort_key(left.bucket).cmp(&bucket_sort_key(right.bucket)))
+        });
+
+        rows
     }
 
     pub fn record_local_order(&mut self, order: Order) {
@@ -203,6 +231,18 @@ pub(crate) fn approval_key(approval: &ApprovalState) -> ApprovalKey {
         token_id: approval.token_id.clone(),
         spender: approval.spender.clone(),
         owner_address: approval.owner_address.clone(),
+    }
+}
+
+fn bucket_sort_key(bucket: InventoryBucket) -> usize {
+    match bucket {
+        InventoryBucket::Free => 0,
+        InventoryBucket::ReservedForOrder => 1,
+        InventoryBucket::MatchedUnsettled => 2,
+        InventoryBucket::PendingCtfIn => 3,
+        InventoryBucket::PendingCtfOut => 4,
+        InventoryBucket::Redeemable => 5,
+        InventoryBucket::Quarantined => 6,
     }
 }
 
