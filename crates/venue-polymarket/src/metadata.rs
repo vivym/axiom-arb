@@ -336,6 +336,7 @@ impl PolymarketRestClient {
             return Err(NegRiskMetadataError::EmptyDiscovery.into());
         }
 
+        canonicalize_rows(&mut rows);
         let metadata_snapshot_hash = snapshot_hash(&rows);
         Ok(NegRiskDiscovery {
             rows,
@@ -422,6 +423,23 @@ fn snapshot_hash(rows: &[CanonicalNegRiskRow]) -> String {
     }
 
     format!("sha256:{:016x}", hasher.finish())
+}
+
+fn canonicalize_rows(rows: &mut [CanonicalNegRiskRow]) {
+    rows.sort_by(|left, right| {
+        (
+            left.event_id.as_str(),
+            left.condition_id.as_str(),
+            left.token_id.as_str(),
+            left.outcome_label.as_str(),
+        )
+            .cmp(&(
+                right.event_id.as_str(),
+                right.condition_id.as_str(),
+                right.token_id.as_str(),
+                right.outcome_label.as_str(),
+            ))
+    });
 }
 
 fn hash_route(route: MarketRoute, hasher: &mut DefaultHasher) {

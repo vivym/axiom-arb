@@ -76,6 +76,34 @@ async fn augmented_family_is_classified_from_family_level_flags() {
         .any(|row| row.neg_risk_variant == NegRiskVariant::Augmented));
 }
 
+#[tokio::test]
+async fn out_of_order_rows_are_canonicalized_before_publication_and_hashing() {
+    let server = spawn_local_listener(sample_out_of_order_refreshing_neg_risk_payloads());
+    let client = test_client(server.base_url());
+
+    let initial = client.fetch_neg_risk_metadata_rows().await.unwrap();
+    let refreshed = client.fetch_neg_risk_metadata_rows().await.unwrap();
+
+    let initial_tokens: Vec<_> = initial.iter().map(|row| row.token_id.as_str()).collect();
+    let refreshed_tokens: Vec<_> = refreshed.iter().map(|row| row.token_id.as_str()).collect();
+
+    assert_eq!(
+        initial_tokens,
+        vec!["token-1", "token-2", "token-3", "token-4"]
+    );
+    assert_eq!(initial_tokens, refreshed_tokens);
+    assert_eq!(
+        initial
+            .iter()
+            .map(|row| row.metadata_snapshot_hash.as_str())
+            .collect::<Vec<_>>(),
+        refreshed
+            .iter()
+            .map(|row| row.metadata_snapshot_hash.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
 fn test_client(base_url: Url) -> PolymarketRestClient {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -208,6 +236,17 @@ fn sample_augmented_neg_risk_payloads() -> Vec<ScriptedResponse> {
     vec![augmented_page_one_ok()]
 }
 
+fn sample_out_of_order_refreshing_neg_risk_payloads() -> Vec<ScriptedResponse> {
+    vec![
+        out_of_order_first_page_one_ok(),
+        out_of_order_first_page_two_ok(),
+        out_of_order_first_page_three_empty(),
+        out_of_order_second_page_one_ok(),
+        out_of_order_second_page_two_ok(),
+        out_of_order_second_page_three_empty(),
+    ]
+}
+
 fn page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
@@ -309,5 +348,53 @@ fn augmented_page_one_ok() -> ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-aug-1","parentEvent":"family-aug","negRisk":true,"enableNegRisk":true,"negRiskAugmented":true,"markets":[{"conditionId":"condition-aug-1","clobTokenIds":"token-aug-1","outcomes":"Augmented","shortOutcomes":"Augmented","negRisk":true,"negRiskOther":false}]}]"#,
+    }
+}
+
+fn out_of_order_first_page_one_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        status_line: "200 OK",
+        body: r#"[{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
+    }
+}
+
+fn out_of_order_first_page_two_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        status_line: "200 OK",
+        body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]}]"#,
+    }
+}
+
+fn out_of_order_first_page_three_empty() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        status_line: "200 OK",
+        body: r#"[]"#,
+    }
+}
+
+fn out_of_order_second_page_one_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        status_line: "200 OK",
+        body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]}]"#,
+    }
+}
+
+fn out_of_order_second_page_two_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        status_line: "200 OK",
+        body: r#"[{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
+    }
+}
+
+fn out_of_order_second_page_three_empty() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        status_line: "200 OK",
+        body: r#"[]"#,
     }
 }
