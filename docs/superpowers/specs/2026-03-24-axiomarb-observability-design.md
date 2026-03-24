@@ -85,6 +85,7 @@ The following boundaries are hard requirements:
 - those crates may emit `tracing` spans and use repo-owned metric handles only
 - only the `observability` crate may own backend initialization and exporter configuration
 - typed metric names remain authoritative at the repo boundary even after OTel export is added
+- metric dimensions, if added, must also remain repo-owned and typed rather than exposing raw OTel attribute construction in business crates
 - disabling OTel export must not change business behavior
 
 ## 7. Signal Model
@@ -106,7 +107,6 @@ Tracing should become the primary causal graph for control flow. At minimum, fut
 
 Each span should carry stable identifiers where available:
 
-- `service.name`
 - `runtime_mode`
 - `app_mode`
 - `market_id`
@@ -120,6 +120,8 @@ Each span should carry stable identifiers where available:
 - `journal_seq`
 - `discovery_revision`
 - `metadata_snapshot_hash`
+
+`service.name` should be treated as resource-level metadata configured by the `observability` crate, not as a field that every span must redundantly emit.
 
 ### 7.2 Metrics
 
@@ -146,7 +148,38 @@ Metrics should remain repo-owned and typed. Current handles are acceptable as th
   - family halt count
   - metadata refresh count
 
-### 7.3 Logs
+### 7.3 Metric Dimensions
+
+The repo should explicitly support dimensions for signals that are not faithfully representable as one global scalar.
+
+Examples:
+
+- websocket reconnect count by `channel`
+- halt activation count by `scope`
+- reconcile attention count by `reason`
+- broken-leg inventory count by `strategy`
+
+Rules:
+
+- dimensions must be defined as repo-owned typed enums or constrained keys
+- business crates must not construct arbitrary backend-specific label maps
+- OTel attributes, if used later, are derived from repo-level typed dimensions inside `observability`
+- if a metric remains dimensionless in Phase 1, that is a deliberate contract and not an invitation to encode dimensions into metric names ad hoc
+
+### 7.4 Mode And State Signals
+
+`runtime_mode` and similar state-like signals are first-class repo semantics, but they should not be treated as requiring a one-to-one OTel metric instrument mapping.
+
+The contract is:
+
+- repo code may continue to record `runtime_mode` through a typed observability interface
+- the local in-process registry may store it as a string-like state sample
+- when OTel export is introduced, `observability` may map this signal to the most appropriate backend representation
+- acceptable backend representations include a structured log field, a trace field, or a numeric/state metric with typed attributes
+
+The important invariant is call-site stability at the repo boundary, not identity of the backend representation.
+
+### 7.5 Logs
 
 Logs should be treated as rendered trace events, not as a separate ad hoc channel. Human-readable logs may continue to use `tracing_subscriber::fmt()` locally, but structured fields must remain authoritative.
 
@@ -173,7 +206,10 @@ Before any OTel exporter is added, the repository should stabilize:
 - span names
 - required span fields
 - metric names and semantic meaning
+- metric dimensions and typed dimension vocabularies
+- mode and state signal mapping rules
 - initialization ownership inside the `observability` crate
+- binary entrypoint policy so `app-live` and `app-replay` stop bypassing structured tracing with direct terminal-only output on their main success paths
 
 This is the minimum stage required before exporter work is worth doing.
 
@@ -192,7 +228,7 @@ The backend must be opt-in and safe to disable.
 
 Once `app-live` runs real venue loops, add:
 
-- `service.name`, environment, instance, and run identifiers
+- resource metadata including `service.name`, environment, instance, and run identifiers
 - collector export configuration
 - sampling policy
 - failure handling rules for exporter backpressure or collector unavailability
@@ -238,5 +274,7 @@ That plan should cover:
 
 - required spans and fields by crate
 - metric ownership and emission points
+- metric dimensions and mode-signal contracts
 - bootstrap API shape in `observability`
+- entrypoint migration for `app-live` and `app-replay`
 - compatibility path for later `tracing-opentelemetry` integration
