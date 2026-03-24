@@ -2,7 +2,7 @@ use observability::{
     bootstrap_tracing,
     metric_dimensions::{Channel, HaltScope},
     metrics::{MetricDimension, MetricDimensions, MetricKey},
-    Observability, RuntimeMetrics,
+    CounterHandle, Observability, RuntimeMetrics,
 };
 
 #[test]
@@ -168,16 +168,28 @@ fn registry_round_trips_dimensioned_counter_samples() {
     let metrics = observability.metrics();
     let dims = MetricDimensions::new([MetricDimension::Channel(Channel::User)]);
 
-    observability.registry().record_counter_with_dimensions(
-        metrics
-            .websocket_reconnect_total
-            .increment_with_dimensions(2, dims.clone()),
-    );
+    observability
+        .recorder()
+        .increment_websocket_reconnect_total(2, dims.clone());
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
+        snapshot.counter(metrics.websocket_reconnect_total.key()),
+        None
+    );
+    assert_eq!(
         snapshot.counter_with_dimensions(metrics.websocket_reconnect_total.key(), &dims),
         Some(2)
+    );
+}
+
+#[test]
+#[should_panic(expected = "dimensioned counters must not be recorded through the scalar path")]
+fn registry_rejects_scalar_samples_for_dimensioned_counter_keys() {
+    let observability = Observability::new("app-live");
+
+    observability.registry().record_counter(
+        CounterHandle::new("axiom_websocket_reconnect_total").increment(1),
     );
 }
 
@@ -194,11 +206,9 @@ fn counter_dimension_order_is_canonicalized() {
         MetricDimension::HaltScope(HaltScope::Market),
     ]);
 
-    observability.registry().record_counter_with_dimensions(
-        metrics
-            .halt_activation_total
-            .increment_with_dimensions(1, recorded_dims),
-    );
+    observability
+        .recorder()
+        .increment_halt_activation_total(1, recorded_dims);
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
@@ -217,4 +227,13 @@ fn mode_samples_remain_queryable_without_forcing_numeric_encoding() {
         snapshot.mode(observability.metrics().runtime_mode.key()),
         Some("healthy")
     );
+}
+
+#[test]
+#[should_panic(expected = "conflicting metric dimension values for key channel")]
+fn metric_dimensions_reject_conflicting_values_for_the_same_key() {
+    let _ = MetricDimensions::new([
+        MetricDimension::Channel(Channel::User),
+        MetricDimension::Channel(Channel::Market),
+    ]);
 }
