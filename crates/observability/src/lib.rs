@@ -1,4 +1,4 @@
-pub mod conventions;
+mod conventions;
 pub mod metrics;
 mod tracing_bootstrap;
 
