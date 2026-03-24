@@ -3,6 +3,8 @@ name = "execution"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+domain = { path = "../domain" }
+
 [lib]
 path = "src/lib.rs"
-
