@@ -6,11 +6,11 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 
 use crate::{
     models::{
-        ApprovalStateRow, ExecutionAttemptRow, FamilyHaltRow, IdentifierRecordRow,
-        InventoryBucketRow, JournalEntryInput, JournalEntryRow, NegRiskDiscoverySnapshotInput,
-        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow, OrderRow,
-        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
-        SnapshotPublicationRow, StoredOrder,
+        execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
+        FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
+        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
+        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
+        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1361,7 +1361,7 @@ pub struct ExecutionAttemptRepo;
 
 impl ExecutionAttemptRepo {
     pub async fn append(&self, pool: &PgPool, row: &ExecutionAttemptRow) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO execution_attempts (
                 attempt_id,
@@ -1372,24 +1372,26 @@ impl ExecutionAttemptRepo {
                 idempotency_key
             )
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (attempt_id) DO UPDATE
-            SET plan_id = EXCLUDED.plan_id,
-                snapshot_id = EXCLUDED.snapshot_id,
-                execution_mode = EXCLUDED.execution_mode,
-                attempt_no = EXCLUDED.attempt_no,
-                idempotency_key = EXCLUDED.idempotency_key
             "#,
         )
         .bind(&row.attempt_id)
         .bind(&row.plan_id)
         .bind(&row.snapshot_id)
-        .bind(&row.execution_mode)
+        .bind(execution_mode_to_str(row.execution_mode))
         .bind(row.attempt_no)
         .bind(&row.idempotency_key)
         .execute(pool)
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("execution_attempts_pkey") => {
+                Err(PersistenceError::DuplicateExecutionAttempt {
+                    attempt_id: row.attempt_id.clone(),
+                })
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub async fn list_live_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
@@ -1403,10 +1405,11 @@ impl ExecutionAttemptRepo {
                 attempt_no,
                 idempotency_key
             FROM execution_attempts
-            WHERE execution_mode = 'live'
+            WHERE execution_mode = $1
             ORDER BY created_at, attempt_id
             "#,
         )
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
         .fetch_all(pool)
         .await?;
 
@@ -1424,7 +1427,7 @@ impl PendingReconcileRepo {
         row: &PendingReconcileRow,
         payload: &Value,
     ) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO pending_reconcile_items (
                 pending_ref,
@@ -1434,11 +1437,6 @@ impl PendingReconcileRepo {
                 payload
             )
             VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (pending_ref) DO UPDATE
-            SET scope_kind = EXCLUDED.scope_kind,
-                scope_id = EXCLUDED.scope_id,
-                reason = EXCLUDED.reason,
-                payload = EXCLUDED.payload
             "#,
         )
         .bind(&row.pending_ref)
@@ -1447,9 +1445,17 @@ impl PendingReconcileRepo {
         .bind(&row.reason)
         .bind(payload)
         .execute(pool)
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("pending_reconcile_items_pkey") => {
+                Err(PersistenceError::DuplicatePendingReconcile {
+                    pending_ref: row.pending_ref.clone(),
+                })
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }
 
@@ -1458,19 +1464,28 @@ pub struct ShadowArtifactRepo;
 
 impl ShadowArtifactRepo {
     pub async fn append(&self, pool: &PgPool, row: ShadowExecutionArtifactRow) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO shadow_execution_artifacts (attempt_id, stream, payload)
-            VALUES ($1, $2, $3)
+            SELECT $1, $2, $3
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $4
             "#,
         )
         .bind(&row.attempt_id)
         .bind(&row.stream)
         .bind(&row.payload)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Shadow))
         .execute(pool)
         .await?;
 
-        Ok(())
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(PersistenceError::ShadowArtifactRequiresShadowAttempt {
+                attempt_id: row.attempt_id,
+            })
+        }
     }
 }
 
@@ -1719,7 +1734,7 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         attempt_id: row.try_get("attempt_id")?,
         plan_id: row.try_get("plan_id")?,
         snapshot_id: row.try_get("snapshot_id")?,
-        execution_mode: row.try_get("execution_mode")?,
+        execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
     })

@@ -2,9 +2,10 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use domain::{
-    ApprovalState, ApprovalStatus, ConditionId, DisputeState, IdentifierRecord, InventoryBucket,
-    MarketId, MarketRoute, Order, OrderId, ResolutionState, ResolutionStatus, SettlementState,
-    SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
+    ApprovalState, ApprovalStatus, ConditionId, DisputeState, ExecutionMode, IdentifierRecord,
+    InventoryBucket, MarketId, MarketRoute, Order, OrderId, ResolutionState, ResolutionStatus,
+    SettlementState, SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState,
+    WalletRoute,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -289,7 +290,7 @@ pub struct ExecutionAttemptRow {
     pub attempt_id: String,
     pub plan_id: String,
     pub snapshot_id: String,
-    pub execution_mode: String,
+    pub execution_mode: ExecutionMode,
     pub attempt_no: i32,
     pub idempotency_key: String,
 }
@@ -613,5 +614,26 @@ fn dispute_state_from_str(value: &str) -> Result<DisputeState> {
         "challenged" => Ok(DisputeState::Challenged),
         "under_review" => Ok(DisputeState::UnderReview),
         _ => Err(PersistenceError::invalid_value("dispute_state", value)),
+    }
+}
+
+pub(crate) fn execution_mode_to_str(value: ExecutionMode) -> &'static str {
+    match value {
+        ExecutionMode::Disabled => "disabled",
+        ExecutionMode::Shadow => "shadow",
+        ExecutionMode::Live => "live",
+        ExecutionMode::ReduceOnly => "reduce_only",
+        ExecutionMode::RecoveryOnly => "recovery_only",
+    }
+}
+
+pub(crate) fn execution_mode_from_str(value: &str) -> Result<ExecutionMode> {
+    match value {
+        "disabled" => Ok(ExecutionMode::Disabled),
+        "shadow" => Ok(ExecutionMode::Shadow),
+        "live" => Ok(ExecutionMode::Live),
+        "reduce_only" => Ok(ExecutionMode::ReduceOnly),
+        "recovery_only" => Ok(ExecutionMode::RecoveryOnly),
+        _ => Err(PersistenceError::invalid_value("execution_mode", value)),
     }
 }

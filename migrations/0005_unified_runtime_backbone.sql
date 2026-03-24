@@ -20,7 +20,9 @@ CREATE TABLE execution_attempts (
   attempt_id TEXT PRIMARY KEY,
   plan_id TEXT NOT NULL,
   snapshot_id TEXT NOT NULL,
-  execution_mode TEXT NOT NULL,
+  execution_mode TEXT NOT NULL CHECK (
+    execution_mode IN ('disabled', 'shadow', 'live', 'reduce_only', 'recovery_only')
+  ),
   attempt_no INTEGER NOT NULL,
   idempotency_key TEXT NOT NULL,
   outcome TEXT,
@@ -39,7 +41,7 @@ CREATE TABLE pending_reconcile_items (
 
 CREATE TABLE shadow_execution_artifacts (
   artifact_id BIGSERIAL PRIMARY KEY,
-  attempt_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL REFERENCES execution_attempts (attempt_id),
   stream TEXT NOT NULL,
   payload JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

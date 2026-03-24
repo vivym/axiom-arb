@@ -1,8 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use domain::ExecutionMode;
 use persistence::{
-    models::ShadowExecutionArtifactRow, run_migrations, ExecutionAttemptRepo, RuntimeProgressRepo,
-    ShadowArtifactRepo,
+    models::{ExecutionAttemptRow, PendingReconcileRow, ShadowExecutionArtifactRow},
+    run_migrations, ExecutionAttemptRepo, PendingReconcileRepo, PersistenceError,
+    RuntimeProgressRepo, ShadowArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -86,6 +88,26 @@ fn sample_shadow_artifact(attempt_id: &str) -> ShadowExecutionArtifactRow {
     }
 }
 
+fn sample_attempt(attempt_id: &str, mode: ExecutionMode) -> ExecutionAttemptRow {
+    ExecutionAttemptRow {
+        attempt_id: attempt_id.to_owned(),
+        plan_id: format!("plan-{attempt_id}"),
+        snapshot_id: "snapshot-7".to_owned(),
+        execution_mode: mode,
+        attempt_no: 1,
+        idempotency_key: format!("idem-{attempt_id}"),
+    }
+}
+
+fn sample_pending_reconcile(pending_ref: &str) -> PendingReconcileRow {
+    PendingReconcileRow {
+        pending_ref: pending_ref.to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-1".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+    }
+}
+
 #[tokio::test]
 async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     let db = TestDatabase::new().await;
@@ -113,6 +135,14 @@ async fn shadow_artifacts_are_isolated_from_live_attempt_rows() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-shadow-1", ExecutionMode::Shadow),
+        )
+        .await
+        .unwrap();
+
     ShadowArtifactRepo
         .append(&db.pool, sample_shadow_artifact("attempt-shadow-1"))
         .await
@@ -123,6 +153,86 @@ async fn shadow_artifacts_are_isolated_from_live_attempt_rows() {
         .await
         .unwrap()
         .is_empty());
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn shadow_artifacts_reject_live_attempt_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-1", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    let err = ShadowArtifactRepo
+        .append(&db.pool, sample_shadow_artifact("attempt-live-1"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::ShadowArtifactRequiresShadowAttempt { ref attempt_id }
+        if attempt_id == "attempt-live-1"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_attempt("attempt-shadow-dup", ExecutionMode::Shadow);
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let err = ExecutionAttemptRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::DuplicateExecutionAttempt { ref attempt_id }
+        if attempt_id == "attempt-shadow-dup"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_append_rejects_duplicate_refs() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_pending_reconcile("pending-1");
+    PendingReconcileRepo
+        .append(
+            &db.pool,
+            &row,
+            &json!({ "attempt_id": "attempt-shadow-dup" }),
+        )
+        .await
+        .unwrap();
+
+    let err = PendingReconcileRepo
+        .append(
+            &db.pool,
+            &row,
+            &json!({ "attempt_id": "attempt-shadow-dup" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::DuplicatePendingReconcile { ref pending_ref }
+        if pending_ref == "pending-1"
+    ));
 
     db.cleanup().await;
 }

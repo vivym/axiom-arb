@@ -44,6 +44,15 @@ pub enum PersistenceError {
     MissingDiscoverySnapshot {
         discovery_revision: i64,
     },
+    DuplicateExecutionAttempt {
+        attempt_id: String,
+    },
+    DuplicatePendingReconcile {
+        pending_ref: String,
+    },
+    ShadowArtifactRequiresShadowAttempt {
+        attempt_id: String,
+    },
 }
 
 impl PersistenceError {
@@ -93,6 +102,16 @@ impl fmt::Display for PersistenceError {
             Self::MissingDiscoverySnapshot { discovery_revision } => write!(
                 f,
                 "missing neg-risk discovery snapshot for revision {discovery_revision}"
+            ),
+            Self::DuplicateExecutionAttempt { attempt_id } => {
+                write!(f, "execution attempt {attempt_id} already exists")
+            }
+            Self::DuplicatePendingReconcile { pending_ref } => {
+                write!(f, "pending reconcile item {pending_ref} already exists")
+            }
+            Self::ShadowArtifactRequiresShadowAttempt { attempt_id } => write!(
+                f,
+                "shadow artifact attempt {attempt_id} must reference an existing shadow execution attempt"
             ),
         }
     }
