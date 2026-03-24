@@ -38,7 +38,8 @@ impl RecoveryScopeLock {
     }
 
     pub fn blocks_expansion(&self, candidate: &RecoveryScopeLock) -> bool {
-        self.scope_kind() == candidate.scope_kind() && self.scope_id() == candidate.scope_id()
+        self.scope_kind() == candidate.scope_kind()
+            && scope_blocks(self.scope_id(), candidate.scope_id())
     }
 
     fn scope_kind(&self) -> RecoveryScopeKind {
@@ -60,4 +61,14 @@ impl RecoveryScopeLock {
             | Self::ExecutionPath(scope_id) => scope_id,
         }
     }
+}
+
+fn scope_blocks(parent: &str, candidate: &str) -> bool {
+    if candidate == parent {
+        return true;
+    }
+
+    candidate
+        .strip_prefix(parent)
+        .is_some_and(|remainder| remainder.starts_with(':'))
 }
