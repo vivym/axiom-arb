@@ -135,6 +135,27 @@ All external inputs must follow this path:
 
 `StateApplier` is the only component allowed to apply external facts into `StateStore`.
 
+### 6.4 Durability And Restart Anchors
+
+The single write path also needs a single restart and recovery contract.
+
+Three anchors must be treated as distinct:
+
+- `journal_seq`
+  - fact-ingest and durability anchor
+- `state_version`
+  - authoritative apply anchor
+- `snapshot_id`
+  - published projection anchor
+
+Hard rules:
+
+- the system must not infer progress after restart by guessing which stage "probably" completed
+- restart and recovery logic must reconcile progress by comparing durable `journal_seq`, authoritative `state_version`, and published `snapshot_id`
+- `journal append succeeded, apply not yet completed` must be recoverable by replaying unapplied journal entries
+- `state apply succeeded, snapshot publish not yet completed` must be recoverable by re-deriving and publishing missing projections for the committed state version
+- `journal` and `state` may be ahead of dispatcher consumption without violating correctness, as long as published snapshot boundaries remain explicit and resumable
+
 ## 7. Runtime Data Flow
 
 ### 7.1 External Facts
@@ -168,8 +189,17 @@ Rules:
 
 - state commit happens first
 - typed projections are derived from one committed version
-- a snapshot is not publishable until both `FullSetView` and `NegRiskView` for that same version are ready
-- downstream components may consume only published snapshots
+- projection readiness is tracked per projection family, not as an all-or-nothing global liveness gate
+- `PublishedSnapshot` is the authoritative committed state version plus explicit projection readiness flags
+- downstream components may consume only published snapshots, but they must respect the readiness contract of the projection they depend on
+
+This design deliberately chooses route-local degradation over global projection coupling.
+
+That means:
+
+- `full-set` dispatch must not be blocked merely because `NegRiskView` for the same committed version is unhealthy or unpublished
+- `neg-risk` dispatch must not proceed unless the `NegRiskView` it depends on is published and marked ready for that version
+- projection failure may degrade the dependent route while leaving unrelated routes able to continue on the same committed authoritative snapshot
 
 ### 7.4 Dispatcher Contract
 
@@ -194,6 +224,22 @@ Examples:
 
 - `neg-risk Disabled` may suppress strategy dispatch entirely
 - `Shadow`, `Live`, `ReduceOnly`, and `RecoveryOnly` still proceed through the decision backbone and affect downstream behavior explicitly
+
+### 7.6 Authority Precedence
+
+The runtime must not grow three parallel authorities for mode, safety, and recovery.
+
+The intended precedence chain is:
+
+`runtime overlays + family halt + recovery scope lock + rollout capability -> ActivationPolicy -> ActivationDecision -> Risk -> Planner`
+
+Interpretation rules:
+
+- runtime overlays, recovery-imposed overlays, family halts, and rollout capability are all inputs to `ActivationPolicy`
+- `ActivationPolicy` is the only component allowed to decide execution mode
+- `Risk` must not independently invent or override execution mode
+- `Risk` evaluates safety and admissibility within the execution mode it was given
+- planner behavior is constrained by the mode and by risk verdict, not by an independent enablement source
 
 ## 8. Route Rollout And Capability Model
 
@@ -239,6 +285,27 @@ The activation result should therefore carry replay anchors such as:
 - policy or capability revision
 - matched rule identifier, when available
 - evaluated snapshot identifier
+
+### 8.5 Execution Mode Behavior Matrix
+
+Execution modes are not complete until their effect on input handling and planner behavior is defined.
+
+Minimum behavior contract:
+
+| Execution Mode | Strategy Input | Recovery Input | Planner Action Envelope |
+| --- | --- | --- | --- |
+| `Disabled` | coarse dispatch may suppress entirely; otherwise rejected | allowed only if separately elevated by recovery/runtime policy | no new execution plan for route expansion |
+| `Shadow` | allowed | allowed | full planning and attempt artifacts allowed; final sink is shadow-only; no authoritative venue effect |
+| `Live` | allowed | allowed | normal route-specific planning allowed |
+| `ReduceOnly` | strategy inputs that expand risk must be rejected or suppressed | allowed | only actions that reduce, unwind, cancel, merge, redeem, hedge, or otherwise shrink authoritative risk |
+| `RecoveryOnly` | strategy inputs are suppressed or rejected | allowed | only recovery-scoped plans allowed |
+
+Additional rules:
+
+- `ReduceOnly` and `RecoveryOnly` are execution-mode semantics, not informal operator guidance
+- actions that increase route or path exposure are forbidden in `ReduceOnly`
+- `Shadow` must not be combined with fake authoritative fill or settlement effects
+- if combined-mode semantics are ever needed, they must be defined explicitly rather than inferred by stacking enums ad hoc
 
 ## 9. Decision Backbone
 
@@ -317,6 +384,12 @@ Each nontrivial result must carry a stable reference anchor such as:
 
 This is required so that replay, recovery, and operator tooling can reason about the same object graph without guessing from free text.
 
+`ApplyResult` must also preserve restart-resume meaning:
+
+- `journal_seq` anchors fact durability
+- `state_version` anchors authoritative apply completion
+- any deferred, duplicate, or reconcile-required path must point to the durable object that the runtime should resume from after restart
+
 ### 10.2 `PublishedSnapshot`
 
 Each published snapshot must carry:
@@ -325,10 +398,13 @@ Each published snapshot must carry:
 - state version
 - committed journal position
 - dirty set
-- `FullSetView`
-- `NegRiskView`
+- projection readiness metadata
+- `FullSetView`, when ready
+- `NegRiskView`, when ready
 
 All downstream artifacts must reference the snapshot they were based on.
+
+This means `PublishedSnapshot` is not "all projections are healthy." It is "this committed authoritative state version has been published together with explicit route-relevant projection readiness."
 
 ### 10.3 `RiskVerdict`
 
@@ -469,6 +545,17 @@ Ambiguous attempt outcomes should usually drive:
 - recovery work
 
 not silent drop or optimistic continuation.
+
+Hard follow-up rule:
+
+every `FailedAmbiguous` outcome must produce at least one explicit follow-up artifact:
+
+- scope marked `StateConfidence::Uncertain`
+- a `ReconcileRequired` decision path
+- a `RecoveryIntent`
+- or a durable pending reconcile item
+
+It is not acceptable for ambiguous execution outcomes to end as only a warning log plus an attempt receipt.
 
 ## 13. Recovery Model
 
