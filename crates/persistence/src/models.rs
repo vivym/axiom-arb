@@ -267,6 +267,49 @@ impl ResolutionStateRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProgressRow {
+    pub last_journal_seq: i64,
+    pub last_state_version: i64,
+    pub last_snapshot_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotPublicationRow {
+    pub snapshot_id: String,
+    pub state_version: i64,
+    pub committed_journal_seq: i64,
+    pub fullset_ready: bool,
+    pub negrisk_ready: bool,
+    pub metadata: Value,
+    pub published_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionAttemptRow {
+    pub attempt_id: String,
+    pub plan_id: String,
+    pub snapshot_id: String,
+    pub execution_mode: String,
+    pub attempt_no: i32,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingReconcileRow {
+    pub pending_ref: String,
+    pub scope_kind: String,
+    pub scope_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShadowExecutionArtifactRow {
+    pub attempt_id: String,
+    pub stream: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskFamilyMemberRow {
     pub condition_id: String,
     pub token_id: String,
