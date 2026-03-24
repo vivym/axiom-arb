@@ -43,7 +43,7 @@ This plan intentionally covers `v1b foundation` only.
 ### Venue Metadata
 
 - Create: `crates/venue-polymarket/src/metadata.rs`
-  Responsibility: parse raw market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, classify standard vs augmented semantics, and track metadata refresh revisions.
+  Responsibility: parse raw market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, classify standard vs augmented semantics, assign local `discovery_revision`, and derive canonical `metadata_snapshot_hash`.
 - Modify: `crates/venue-polymarket/src/rest.rs`
   Responsibility: add paginated request builders and fetchers for `neg-risk` discovery metadata, including completeness and refresh handling.
 - Modify: `crates/venue-polymarket/src/lib.rs`
@@ -58,7 +58,7 @@ This plan intentionally covers `v1b foundation` only.
 - Modify: `crates/persistence/src/models.rs`
   Responsibility: row models for family validation state, explainability metadata, and revision-aware family halt state.
 - Modify: `crates/persistence/src/repos.rs`
-  Responsibility: repositories to upsert/list family validation and halt rows and emit explainable validation or halt events.
+  Responsibility: repositories to upsert/list family validation and halt rows, persist successful discovery snapshot events, and emit explainable validation or halt events.
 - Modify: `crates/persistence/src/lib.rs`
   Responsibility: export new repositories.
 - Test: `crates/persistence/tests/negrisk.rs`
@@ -137,8 +137,8 @@ fn family_halt_precedence_stays_below_global_halt_and_above_strategy_filters() {
 
 #[test]
 fn stale_family_halt_remains_blocking_until_reconfirmed_or_cleared() {
-    let halt = FamilyHaltState::active("family-1", "sha256:rev-a");
-    let status = halt.reconcile_against_revision("sha256:rev-b");
+    let halt = FamilyHaltState::active("family-1", "sha256:snapshot-a");
+    let status = halt.reconcile_against_snapshot_hash("sha256:snapshot-b");
     assert_eq!(status, FamilyHaltStatus::StaleBlocking);
 }
 ```
@@ -194,7 +194,7 @@ Also define the family-halt precedence contract here:
 - family halt outranks market-local or strategy-local `neg-risk` activation filters.
 - foundation-phase family halt blocks new `neg-risk` risk only; it does not rewrite bootstrap or global cancel behavior.
 - family halt is scoped to `family_id`, but records the metadata snapshot it was evaluated against.
-- if an active halt's metadata snapshot does not match the latest discovered revision, it becomes `StaleBlocking`: still blocks new `neg-risk` risk until revalidated or manually cleared.
+- if an active halt's `metadata_snapshot_hash` does not match the latest discovered snapshot, it becomes `StaleBlocking`: still blocks new `neg-risk` risk until revalidated or manually cleared.
 
 - [ ] **Step 5: Run the domain and state smoke tests**
 
@@ -234,14 +234,28 @@ async fn fetch_neg_risk_metadata_discovers_all_pages_and_classifies_members() {
 }
 
 #[tokio::test]
-async fn metadata_refresh_replays_changed_family_revision_without_dropping_history() {
+async fn successful_refresh_publishes_a_new_discovery_revision() {
     let server = spawn_local_listener(sample_refreshing_neg_risk_payloads());
     let client = test_client(server.base_url());
 
     let initial = client.fetch_neg_risk_metadata().await.unwrap();
     let refreshed = client.fetch_neg_risk_metadata().await.unwrap();
 
-    assert_ne!(initial[0].metadata_revision, refreshed[0].metadata_revision);
+    assert!(initial[0].discovery_revision < refreshed[0].discovery_revision);
+}
+
+#[tokio::test]
+async fn failed_refresh_does_not_publish_a_new_revision_or_replace_current_view() {
+    let server = spawn_local_listener(sample_partial_failure_neg_risk_payloads());
+    let client = test_client(server.base_url());
+
+    let initial = client.fetch_neg_risk_metadata().await.unwrap();
+    let failed = client.try_fetch_neg_risk_metadata().await;
+    let after_failure = client.fetch_neg_risk_metadata().await.unwrap();
+
+    assert!(failed.is_err());
+    assert_eq!(initial[0].discovery_revision, after_failure[0].discovery_revision);
+    assert_eq!(initial[0].metadata_snapshot_hash, after_failure[0].metadata_snapshot_hash);
 }
 
 #[tokio::test]
@@ -278,7 +292,8 @@ pub struct NegRiskMarketMetadata {
     pub neg_risk_variant: NegRiskVariant,
     pub is_placeholder: bool,
     pub is_other: bool,
-    pub metadata_revision: String,
+    pub discovery_revision: i64,
+    pub metadata_snapshot_hash: String,
 }
 ```
 
@@ -286,11 +301,17 @@ Discovery rules for this task:
 - fetch raw `neg-risk` metadata without applying validator exclusions
 - traverse pagination until exhaustion
 - dedupe canonical member rows by `(event_family_id, condition_id, token_id)`
-- if duplicate rows disagree within the same `metadata_revision`, treat that as a data-quality error and surface it explicitly
-- `metadata_revision` is a local monotonic snapshot identifier assigned per completed discovery refresh, not an opaque remote string
-- if duplicate rows disagree across different revisions, prefer the highest local `metadata_revision` while preserving the older revision in journaled history
+- if duplicate rows disagree within the same `discovery_revision`, treat that as a data-quality error and surface it explicitly
+- `discovery_revision` is a local monotonic snapshot identifier assigned per completed discovery refresh
+- `metadata_snapshot_hash` is the content hash of the canonicalized family/member set produced by one successful refresh
+- if duplicate rows disagree across different revisions, prefer the highest local `discovery_revision` while preserving the older revision in journaled history
+- a refresh is published atomically: only after all pages are fetched, deduped, canonicalized, and classified
+- failed refreshes must not replace the current view and must not mint a new `discovery_revision`
 - retry page fetches using bounded transport retry rules
 - preserve enough classification metadata for later validator decisions
+- canonical member-vector ordering must be deterministic:
+  - use stable venue order if the upstream payload provides one
+  - otherwise sort by `(event_id, condition_id, token_id, outcome_label)`
 
 - [ ] **Step 4: Use a real local listener for HTTP mocking**
 
@@ -360,7 +381,7 @@ async fn validation_and_halt_updates_are_journaled_for_explainability() {
 }
 
 #[tokio::test]
-async fn validation_journal_payload_includes_member_snapshot_summary() {
+async fn validation_journal_payload_preserves_the_exact_member_vector() {
     let pool = test_db_pool().await;
     run_migrations(&pool).await.unwrap();
 
@@ -382,17 +403,17 @@ async fn validation_journal_payload_includes_member_snapshot_summary() {
 }
 
 #[tokio::test]
-async fn halt_state_records_the_metadata_revision_it_applies_to() {
+async fn halt_state_records_the_snapshot_hash_it_applies_to() {
     let pool = test_db_pool().await;
     run_migrations(&pool).await.unwrap();
 
     NegRiskFamilyRepo
-        .upsert_halt(&pool, &sample_halt("family-1", "sha256:rev-a"))
+        .upsert_halt(&pool, &sample_halt("family-1", "sha256:snapshot-a"))
         .await
         .unwrap();
 
     let row = NegRiskFamilyRepo.list_halts(&pool).await.unwrap().pop().unwrap();
-    assert_eq!(row.metadata_snapshot_hash.as_deref(), Some("sha256:rev-a"));
+    assert_eq!(row.metadata_snapshot_hash.as_deref(), Some("sha256:snapshot-a"));
 }
 
 #[tokio::test]
@@ -401,11 +422,11 @@ async fn repeated_halt_updates_append_multiple_halt_journal_events() {
     run_migrations(&pool).await.unwrap();
 
     NegRiskFamilyRepo
-        .upsert_halt(&pool, &sample_halt("family-1", "sha256:rev-a"))
+        .upsert_halt(&pool, &sample_halt("family-1", "sha256:snapshot-a"))
         .await
         .unwrap();
     NegRiskFamilyRepo
-        .upsert_halt(&pool, &sample_halt("family-1", "sha256:rev-b"))
+        .upsert_halt(&pool, &sample_halt("family-1", "sha256:snapshot-b"))
         .await
         .unwrap();
 
@@ -455,6 +476,7 @@ CREATE TABLE family_halt_settings (
 This task must also append `family_validation` and `family_halt` entries to the existing `event_journal` whenever the persisted verdict or halt state changes, including:
 - the metadata snapshot hash that the decision applied to
 - the exact ordered family member vector at decision time: `condition_id`, `token_id`, `outcome_label`, placeholder or `Other` classification, and `neg_risk_variant`
+- the `discovery_revision` that produced that canonical member vector
 
 - [ ] **Step 4: Implement repository and row conversions**
 
@@ -506,15 +528,15 @@ fn graph_builder_groups_conditions_by_event_family() {
 
 #[test]
 fn validator_excludes_augmented_or_other_families_from_initial_scope_without_hiding_them() {
-    let verdict = validate_family(sample_augmented_family(), sample_metadata_revision());
+    let verdict = validate_family(sample_augmented_family(), sample_discovery_revision(), "sha256:snapshot-a");
     assert_eq!(verdict.status, FamilyValidationStatus::Excluded);
     assert_eq!(verdict.reason, Some(FamilyExclusionReason::AugmentedVariant));
 }
 
 #[test]
-fn validator_recomputes_verdict_when_metadata_revision_changes() {
-    let first = validate_family(sample_placeholder_family(), "rev-a");
-    let second = validate_family(sample_named_family(), "rev-b");
+fn validator_recomputes_verdict_when_snapshot_hash_changes() {
+    let first = validate_family(sample_placeholder_family(), 7, "sha256:snapshot-a");
+    let second = validate_family(sample_named_family(), 8, "sha256:snapshot-b");
     assert_ne!(first.metadata_snapshot_hash, second.metadata_snapshot_hash);
 }
 ```
@@ -537,7 +559,11 @@ pub fn build_family_graph(
 - [ ] **Step 4: Implement the initial-scope validator**
 
 ```rust
-pub fn validate_family(family: &NegRiskFamily, metadata_revision: &str) -> FamilyValidation {
+pub fn validate_family(
+    family: &NegRiskFamily,
+    discovery_revision: i64,
+    metadata_snapshot_hash: &str,
+) -> FamilyValidation {
     // keep every discovered family visible, then emit Included or Excluded with reason
 }
 ```
@@ -616,6 +642,7 @@ pub struct FamilyExposure {
 }
 
 pub struct FamilyMemberExposure {
+    pub condition_id: ConditionId,
     pub token_id: TokenId,
     pub outcome_label: String,
     pub bucket_quantities: BTreeMap<InventoryBucket, Decimal>,
@@ -631,11 +658,13 @@ pub struct NegRiskFoundationSummary {
     pub excluded_family_count: u64,
     pub halted_family_count: u64,
     pub recent_validation_event_count: u64,
+    pub latest_discovery_revision: i64,
 }
 ```
 
 The summary helper should combine:
 - current validation and halt rows from persistence
+- the latest successful `neg_risk_discovery_snapshot` event from `event_journal` as the authoritative source for `discovered_family_count`
 - recent `family_validation` and `family_halt` event counts from `event_journal`
 - enough metadata to explain why a family is excluded right now
 - the metadata snapshot hash that the current halt state applies to, if any
@@ -654,11 +683,12 @@ Expected: PASS.
 async fn paginated_discovery_to_validation_to_summary_stays_explainable() {
     let metadata = fetch_sample_paginated_metadata().await;
     let graph = build_family_graph(sample_identifier_records(), metadata).unwrap();
-    let verdict = validate_family(&graph.families()[0], "rev-a");
+    let verdict = validate_family(&graph.families()[0], 7, "sha256:snapshot-a");
     persist_validation_and_summary_inputs(&pool, &verdict).await.unwrap();
 
     let summary = load_neg_risk_foundation_summary(&pool).await.unwrap();
     assert_eq!(summary.excluded_family_count, 1);
+    assert_eq!(summary.latest_discovery_revision, 7);
 }
 ```
 
@@ -671,6 +701,7 @@ Expected: PASS. This test must cover:
 - persistence upsert
 - replay or summary explainability
 - exact ordered family member vector round-trip from decision-time journal payload
+- failed refresh not replacing the last successful current view
 
 - [ ] **Step 7: Commit**
 
@@ -694,8 +725,8 @@ git commit -m "feat: add neg-risk exposure reconstruction and replay summaries"
 fn runtime_metrics_expose_neg_risk_family_counts() {
     let metrics = RuntimeMetrics::default();
     assert_eq!(
-        metrics.neg_risk_family_count.key(),
-        MetricKey::new("axiom_neg_risk_family_count")
+        metrics.neg_risk_family_included_count.key(),
+        MetricKey::new("axiom_neg_risk_family_included_count")
     );
 }
 ```
@@ -711,11 +742,19 @@ Expected: FAIL because the metrics do not exist yet.
 ```rust
 pub struct RuntimeMetrics {
     pub neg_risk_family_discovered_count: GaugeHandle,
-    pub neg_risk_family_count: GaugeHandle,
+    pub neg_risk_family_included_count: GaugeHandle,
     pub neg_risk_family_excluded_count: GaugeHandle,
     pub neg_risk_family_halt_count: GaugeHandle,
+    pub neg_risk_metadata_refresh_count: CounterHandle,
 }
 ```
+
+Metric source rules:
+- `neg_risk_family_discovered_count` comes from the latest successful `neg_risk_discovery_snapshot` event
+- `neg_risk_family_included_count` comes from current validation rows with `Included`
+- `neg_risk_family_excluded_count` comes from current validation rows with `Excluded`
+- `neg_risk_family_halt_count` comes from current active halt rows
+- `neg_risk_metadata_refresh_count` increments once per completed successful refresh attempt
 
 - [ ] **Step 4: Update the README to keep scope honest**
 
@@ -736,7 +775,7 @@ Run: `cargo clippy --workspace --all-targets -- -D warnings`
 
 Expected: PASS.
 
-Run: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test -p domain -p venue-polymarket -p persistence -p strategy-negrisk -p app-replay -p observability`
+Run: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test -p domain -p state -p venue-polymarket -p persistence -p strategy-negrisk -p app-replay -p observability`
 
 Expected: PASS.
 
@@ -755,4 +794,7 @@ git commit -m "docs: close out v1b foundation plan surface"
 - Keep raw discovery separate from validator exclusions. The fetch layer discovers and classifies; the validator decides inclusion or exclusion.
 - Use member-level exposure vectors as the canonical foundation shape. Rollups are derived views, not the only stored or returned shape.
 - Include pagination, completeness, dedupe, retry, and metadata-refresh tests in the venue discovery slice.
+- Treat `discovery_revision` and `metadata_snapshot_hash` as different concepts:
+  - `discovery_revision` orders successful refreshes
+  - `metadata_snapshot_hash` identifies canonical content equality and stale-halt checks
 - Treat augmented `neg-risk`, placeholder outcomes, and direct `Other` trading as explicit exclusions until a later spec changes that rule.
