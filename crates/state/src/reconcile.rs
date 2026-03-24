@@ -222,7 +222,6 @@ fn compare_relayer_txs(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Rec
     remote_ids
         .difference(&local_ids)
         .cloned()
-        .into_iter()
         .map(|tx_id| ReconcileAttention::RelayerTxMismatch { tx_id })
         .collect()
 }
