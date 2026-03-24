@@ -1,6 +1,8 @@
+pub mod conventions;
 pub mod metrics;
 mod tracing_bootstrap;
 
+pub use conventions::{field_keys, metric_dimensions, span_names};
 pub use metrics::{
     CounterHandle, GaugeHandle, MetricKey, MetricRegistry, MetricRegistrySnapshot, ModeHandle,
     RuntimeMetrics, RuntimeMetricsRecorder,
