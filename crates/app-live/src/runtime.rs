@@ -2,8 +2,8 @@ use std::{fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use state::{
-    ApplyError, ApplyResult, DirtyDomain, DirtySet, FullSetView, PublishedSnapshot,
-    ReconcileReport, RemoteSnapshot, StateApplier, StateStore,
+    ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
+    StateStore,
 };
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
@@ -66,8 +66,6 @@ impl std::error::Error for ParseAppRuntimeModeError {}
 pub struct AppRuntime {
     store: StateStore,
     app_mode: AppRuntimeMode,
-    last_journal_seq: Option<i64>,
-    durable_anchor: Option<DurableStateAnchor>,
     published_snapshot: Option<PublishedSnapshot>,
 }
 
@@ -78,19 +76,11 @@ pub struct AppRunResult {
     pub summary: SupervisorSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DurableStateAnchor {
-    committed_state_version: u64,
-    committed_journal_seq: i64,
-}
-
 impl AppRuntime {
     pub fn new(app_mode: AppRuntimeMode) -> Self {
         Self {
             store: StateStore::new(),
             app_mode,
-            last_journal_seq: None,
-            durable_anchor: None,
             published_snapshot: None,
         }
     }
@@ -108,14 +98,11 @@ impl AppRuntime {
     }
 
     pub fn state_version(&self) -> u64 {
-        self.durable_anchor
-            .as_ref()
-            .map(|anchor| anchor.committed_state_version)
-            .unwrap_or_else(|| self.store.state_version())
+        self.store.state_version()
     }
 
     pub fn last_journal_seq(&self) -> Option<i64> {
-        self.last_journal_seq
+        self.store.last_consumed_journal_seq()
     }
 
     pub fn published_snapshot_id(&self) -> Option<&str> {
@@ -135,58 +122,34 @@ impl AppRuntime {
     }
 
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
-        bootstrap::reconcile(&mut self.store, snapshot)
+        let report = bootstrap::reconcile(&mut self.store, snapshot);
+        self.anchor_baseline_if_ready(report.succeeded);
+        report
     }
 
     pub fn bootstrap_once<S>(&mut self, source: &S) -> ReconcileReport
     where
         S: BootstrapSource,
     {
-        bootstrap::bootstrap_once(&mut self.store, source)
+        let report = bootstrap::bootstrap_once(&mut self.store, source);
+        self.anchor_baseline_if_ready(report.succeeded);
+        report
     }
 
     pub fn apply_input(&mut self, input: InputTaskEvent) -> Result<ApplyResult, ApplyError> {
-        if let Some(anchor) = self.durable_anchor.as_mut() {
-            anchor.committed_state_version += 1;
-            anchor.committed_journal_seq = input.journal_seq;
-            self.last_journal_seq = Some(input.journal_seq);
+        let result = StateApplier::new(&mut self.store).apply(input.journal_seq, input.fact)?;
+        if matches!(result, ApplyResult::Applied { .. }) {
             self.published_snapshot = None;
-
-            return Ok(ApplyResult::Applied {
-                journal_seq: input.journal_seq,
-                state_version: anchor.committed_state_version,
-                dirty_set: DirtySet::new([
-                    DirtyDomain::Runtime,
-                    DirtyDomain::Orders,
-                    DirtyDomain::Inventory,
-                    DirtyDomain::Approvals,
-                    DirtyDomain::Resolution,
-                    DirtyDomain::Relayer,
-                    DirtyDomain::NegRiskFamilies,
-                ]),
-            });
         }
-
-        let result = StateApplier::new(&mut self.store).apply(input.journal_seq, input.event)?;
-        self.last_journal_seq = Some(input.journal_seq);
-        self.published_snapshot = None;
         Ok(result)
     }
 
     pub fn publish_snapshot(&mut self, snapshot_id: &str) -> Option<PublishedSnapshot> {
-        let snapshot = if let Some(anchor) = self.durable_anchor.as_ref() {
-            anchored_snapshot(
-                snapshot_id,
-                anchor.committed_state_version,
-                anchor.committed_journal_seq,
-            )
-        } else {
-            self.store.last_applied_journal_seq()?;
-            PublishedSnapshot::from_store(
-                &self.store,
-                state::ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id),
-            )
-        };
+        self.store.last_applied_journal_seq()?;
+        let snapshot = PublishedSnapshot::from_store(
+            &self.store,
+            state::ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id),
+        );
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
     }
@@ -198,42 +161,22 @@ impl AppRuntime {
         published_snapshot_id: Option<String>,
     ) {
         self.store = StateStore::new();
-        self.last_journal_seq = Some(last_journal_seq);
-        self.durable_anchor = (committed_state_version > 0).then_some(DurableStateAnchor {
-            committed_state_version,
-            committed_journal_seq: last_journal_seq,
-        });
-        self.published_snapshot = published_snapshot_id
-            .filter(|snapshot_id| snapshot_id == &format!("snapshot-{committed_state_version}"))
-            .and_then(|snapshot_id| {
-                self.durable_anchor.as_ref().map(|anchor| {
-                    anchored_snapshot(
-                        &snapshot_id,
-                        anchor.committed_state_version,
-                        anchor.committed_journal_seq,
-                    )
-                })
-            });
-    }
-}
+        self.published_snapshot = None;
+        self.store
+            .restore_committed_anchor(committed_state_version, last_journal_seq);
 
-fn anchored_snapshot(
-    snapshot_id: &str,
-    state_version: u64,
-    committed_journal_seq: i64,
-) -> PublishedSnapshot {
-    PublishedSnapshot {
-        snapshot_id: snapshot_id.to_owned(),
-        state_version,
-        committed_journal_seq,
-        fullset_ready: true,
-        negrisk_ready: false,
-        fullset: Some(FullSetView {
-            snapshot_id: snapshot_id.to_owned(),
-            state_version,
-            open_orders: Vec::new(),
-        }),
-        negrisk: None,
+        if let Some(snapshot_id) = published_snapshot_id
+            .filter(|snapshot_id| snapshot_id == &format!("snapshot-{committed_state_version}"))
+        {
+            let _ = self.publish_snapshot(&snapshot_id);
+        }
+    }
+
+    fn anchor_baseline_if_ready(&mut self, reconcile_succeeded: bool) {
+        if reconcile_succeeded && self.store.last_applied_journal_seq().is_none() {
+            self.store
+                .restore_committed_anchor(self.store.state_version(), 0);
+        }
     }
 }
 

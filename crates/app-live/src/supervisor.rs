@@ -84,12 +84,7 @@ impl AppSupervisor {
             self.runtime.bootstrap_once(&source);
         }
 
-        if let Some(snapshot) = self
-            .runtime
-            .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
-        {
-            self.dispatcher.observe_snapshot(snapshot);
-        }
+        self.publish_current_snapshot();
         let _ = self.dispatcher.flush();
 
         Ok(self.summary())
@@ -99,6 +94,8 @@ impl AppSupervisor {
         let mut supervisor = self;
         let source = StaticSnapshotSource::new(supervisor.bootstrap_snapshot.clone());
         let report = supervisor.runtime.bootstrap_once(&source);
+        supervisor.publish_current_snapshot();
+        let _ = supervisor.dispatcher.flush();
         let summary = supervisor.summary();
 
         AppRunResult {
@@ -183,12 +180,7 @@ impl AppSupervisor {
         }
 
         if self.runtime.published_snapshot_id().is_none() && self.runtime.state_version() > 0 {
-            if let Some(snapshot) = self
-                .runtime
-                .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
-            {
-                self.dispatcher.observe_snapshot(snapshot);
-            }
+            self.publish_current_snapshot();
         }
 
         let _ = self.dispatcher.flush();
@@ -208,6 +200,15 @@ impl AppSupervisor {
             published_snapshot_committed_journal_seq: self
                 .runtime
                 .published_snapshot_committed_journal_seq(),
+        }
+    }
+
+    fn publish_current_snapshot(&mut self) {
+        if let Some(snapshot) = self
+            .runtime
+            .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
+        {
+            self.dispatcher.observe_snapshot(snapshot);
         }
     }
 }

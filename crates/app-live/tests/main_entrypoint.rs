@@ -16,7 +16,7 @@ fn binary_entrypoint_runs_runtime_bootstrap_path() {
     assert!(stdout.contains("runtime_mode=Healthy"));
     assert!(stdout.contains("fullset_mode=Live"));
     assert!(stdout.contains("negrisk_mode=Shadow"));
-    assert!(stdout.contains("published_snapshot_id=none"));
+    assert!(stdout.contains("published_snapshot_id=snapshot-0"));
 }
 
 fn app_live_binary() -> PathBuf {

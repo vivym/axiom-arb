@@ -60,6 +60,14 @@ fn run_paper_bootstraps_runtime_through_reconcile() {
     );
     assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Healthy);
     assert_eq!(result.runtime.runtime_overlay(), None);
+    assert_eq!(
+        result.summary.published_snapshot_id.as_deref(),
+        Some("snapshot-0")
+    );
+    assert_eq!(
+        result.summary.published_snapshot_committed_journal_seq,
+        Some(0)
+    );
 }
 
 #[test]
@@ -77,6 +85,14 @@ fn run_live_bootstraps_runtime_through_reconcile() {
     );
     assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Healthy);
     assert_eq!(result.runtime.runtime_overlay(), None);
+    assert_eq!(
+        result.summary.published_snapshot_id.as_deref(),
+        Some("snapshot-0")
+    );
+    assert_eq!(
+        result.summary.published_snapshot_committed_journal_seq,
+        Some(0)
+    );
 }
 
 #[test]

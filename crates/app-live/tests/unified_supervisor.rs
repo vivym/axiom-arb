@@ -18,7 +18,7 @@ fn dispatcher_coalesces_dirty_snapshots_without_dropping_latest_version() {
 
     let dispatched = supervisor.flush_dispatch();
 
-    assert_eq!(dispatched.coalesced_versions, vec![7, 8, 9]);
+    assert_eq!(dispatched.coalesced_versions, vec![9]);
     assert_eq!(dispatched.last_stable_state_version, Some(8));
     assert_eq!(dispatched.fullset_last_ready_state_version, Some(7));
     assert_eq!(dispatched.negrisk_last_ready_state_version, Some(8));

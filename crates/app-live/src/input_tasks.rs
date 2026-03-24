@@ -1,11 +1,20 @@
 use std::collections::VecDeque;
 
-use domain::ExternalFactEvent;
+use state::StateFactInput;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputTaskEvent {
     pub journal_seq: i64,
-    pub event: ExternalFactEvent,
+    pub fact: StateFactInput,
+}
+
+impl InputTaskEvent {
+    pub fn new(journal_seq: i64, fact: impl Into<StateFactInput>) -> Self {
+        Self {
+            journal_seq,
+            fact: fact.into(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]

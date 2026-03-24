@@ -34,7 +34,11 @@ impl DispatchLoop {
     }
 
     pub fn flush(&mut self) -> DispatchSummary {
-        let coalesced_versions = std::mem::take(&mut self.dirty_versions);
+        let coalesced_versions = std::mem::take(&mut self.dirty_versions)
+            .into_iter()
+            .max()
+            .into_iter()
+            .collect();
         let last_stable_snapshot = latest_stable_snapshot(
             self.latest_ready_fullset.as_ref(),
             self.latest_ready_negrisk.as_ref(),

@@ -95,6 +95,23 @@ impl StateStore {
         reconcile_store(self, snapshot)
     }
 
+    pub fn restore_committed_anchor(
+        &mut self,
+        committed_state_version: u64,
+        committed_journal_seq: i64,
+    ) {
+        self.state_version = committed_state_version;
+        self.last_consumed_journal_seq = Some(committed_journal_seq);
+        self.last_applied_journal_seq = Some(committed_journal_seq);
+        self.fullset_anchor = Some(FullSetAnchor {
+            state_version: committed_state_version,
+            committed_journal_seq,
+            open_orders: self.current_open_order_ids(),
+        });
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
     pub fn mode(&self) -> RuntimeMode {
         self.runtime_mode
     }
