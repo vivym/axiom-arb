@@ -9,6 +9,7 @@ pub enum RejectReason {
     ApprovalInsufficient,
     FreshnessStale,
     RedeemBlockedByDispute,
+    RedeemNotRunnable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +37,17 @@ pub struct Freshness {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FullSetRiskContext {
     pub runtime_mode: RuntimeMode,
-    pub approval: ApprovalState,
+    pub approvals: Vec<ApprovalState>,
     pub net_edge_usdc: Decimal,
     pub thresholds: FullSetRiskThresholds,
+    pub freshness: Freshness,
+    pub freshness_policy: FreshnessPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedeemRiskContext {
+    pub runtime_mode: RuntimeMode,
+    pub resolution: ResolutionState,
     pub freshness: Freshness,
     pub freshness_policy: FreshnessPolicy,
 }
@@ -74,8 +83,11 @@ pub fn evaluate_fullset_trade(context: &FullSetRiskContext) -> RiskDecision {
         return RiskDecision::Reject(RejectReason::ModeNotHealthy);
     }
 
-    if context.approval.approval_status != ApprovalStatus::Approved
-        || context.approval.allowance < context.approval.required_min_allowance
+    if context.approvals.is_empty()
+        || context.approvals.iter().any(|approval| {
+            approval.approval_status != ApprovalStatus::Approved
+                || approval.allowance < approval.required_min_allowance
+        })
     {
         return RiskDecision::Reject(RejectReason::ApprovalInsufficient);
     }
@@ -84,26 +96,37 @@ pub fn evaluate_fullset_trade(context: &FullSetRiskContext) -> RiskDecision {
         return RiskDecision::Reject(RejectReason::FreshnessStale);
     }
 
-    if context.net_edge_usdc < context.thresholds.min_net_edge_usdc {
+    if context.net_edge_usdc <= context.thresholds.min_net_edge_usdc {
         return RiskDecision::Reject(RejectReason::NetEdgeBelowThreshold);
     }
 
     RiskDecision::Accept
 }
 
-pub fn evaluate_redeem(
-    resolution: &ResolutionState,
-    freshness: &Freshness,
-    freshness_policy: &FreshnessPolicy,
-) -> RiskDecision {
+pub fn evaluate_redeem(context: &RedeemRiskContext) -> RiskDecision {
+    if !matches!(
+        context.runtime_mode,
+        RuntimeMode::Healthy | RuntimeMode::NoNewRisk
+    ) {
+        return RiskDecision::Reject(RejectReason::ModeNotHealthy);
+    }
+
     if matches!(
-        resolution.dispute_state,
+        context.resolution.dispute_state,
         DisputeState::Disputed | DisputeState::Challenged | DisputeState::UnderReview
     ) {
         return RiskDecision::Reject(RejectReason::RedeemBlockedByDispute);
     }
 
-    if freshness.is_stale(freshness_policy) {
+    if context.resolution.resolution_status != domain::ResolutionStatus::Resolved
+        || context.resolution.resolved_at.is_none()
+        || context.resolution.redeemable_at.is_none()
+        || context.resolution.payout_vector.is_empty()
+    {
+        return RiskDecision::Reject(RejectReason::RedeemNotRunnable);
+    }
+
+    if context.freshness.is_stale(&context.freshness_policy) {
         return RiskDecision::Reject(RejectReason::FreshnessStale);
     }
 

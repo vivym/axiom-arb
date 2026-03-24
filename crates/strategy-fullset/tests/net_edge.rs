@@ -1,7 +1,7 @@
 use rust_decimal::Decimal;
 use strategy_fullset::pricing::{
     evaluate_buy_yes_buy_no_merge, evaluate_split_sell_yes_sell_no, FullSetFees, FullSetLeg,
-    QuantizationPolicy,
+    PricingError, QuantizationPolicy,
 };
 
 #[test]
@@ -80,4 +80,117 @@ fn buy_merge_rejects_mismatched_leg_quantities() {
     );
 
     assert!(result.is_err(), "mismatched full-set legs must be rejected");
+}
+
+#[test]
+fn buy_merge_rejects_negative_quantity() {
+    let result = evaluate_buy_yes_buy_no_merge(
+        FullSetLeg {
+            quantity: Decimal::new(-1, 0),
+            price_usdc: Decimal::new(49, 2),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(-1, 0),
+            price_usdc: Decimal::new(48, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::usdc_cents(),
+    );
+
+    assert_eq!(
+        result,
+        Err(PricingError::NegativeQuantity {
+            leg: "YES",
+            quantity: Decimal::new(-1, 0),
+        })
+    );
+}
+
+#[test]
+fn buy_merge_rejects_negative_price() {
+    let result = evaluate_buy_yes_buy_no_merge(
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(-1, 1),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(48, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::usdc_cents(),
+    );
+
+    assert_eq!(
+        result,
+        Err(PricingError::NegativePrice {
+            leg: "YES",
+            price_usdc: Decimal::new(-1, 1),
+        })
+    );
+}
+
+#[test]
+fn buy_merge_rejects_price_above_one_usdc() {
+    let result = evaluate_buy_yes_buy_no_merge(
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(1001, 3),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(48, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::usdc_cents(),
+    );
+
+    assert_eq!(
+        result,
+        Err(PricingError::PriceAboveOne {
+            leg: "YES",
+            price_usdc: Decimal::new(1001, 3),
+        })
+    );
+}
+
+#[test]
+fn split_sell_rejects_price_off_tick() {
+    let result = evaluate_split_sell_yes_sell_no(
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(3335, 4),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(1, 0),
+            price_usdc: Decimal::new(66, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::ZERO,
+        },
+        QuantizationPolicy::usdc_cents(),
+    );
+
+    assert_eq!(
+        result,
+        Err(PricingError::PriceOffTick {
+            leg: "YES",
+            price_usdc: Decimal::new(3335, 4),
+            price_quantum: Decimal::new(1, 3),
+        })
+    );
 }

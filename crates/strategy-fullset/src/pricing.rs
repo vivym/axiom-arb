@@ -18,6 +18,7 @@ pub struct FullSetFees {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuantizationPolicy {
     usdc_dp: u32,
+    price_quantum: Decimal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,11 +43,31 @@ pub enum PricingError {
         yes_quantity: Decimal,
         no_quantity: Decimal,
     },
+    NegativeQuantity {
+        leg: &'static str,
+        quantity: Decimal,
+    },
+    NegativePrice {
+        leg: &'static str,
+        price_usdc: Decimal,
+    },
+    PriceAboveOne {
+        leg: &'static str,
+        price_usdc: Decimal,
+    },
+    PriceOffTick {
+        leg: &'static str,
+        price_usdc: Decimal,
+        price_quantum: Decimal,
+    },
 }
 
 impl QuantizationPolicy {
     pub fn usdc_cents() -> Self {
-        Self { usdc_dp: 2 }
+        Self {
+            usdc_dp: 2,
+            price_quantum: Decimal::new(1, 3),
+        }
     }
 
     fn quantize(self, value: Decimal) -> Decimal {
@@ -70,6 +91,8 @@ pub fn evaluate_buy_yes_buy_no_merge(
     fees: FullSetFees,
     quantization: QuantizationPolicy,
 ) -> PricingResult<NormalizedEdge> {
+    validate_leg("YES", yes_leg, quantization)?;
+    validate_leg("NO", no_leg, quantization)?;
     let gross_usdc = matched_quantity(yes_leg, no_leg)?;
     let input_cost_usdc = yes_leg.notional() + no_leg.notional();
     let fee_usdc_equiv = quantized_leg_fees(yes_leg, no_leg, fees.leg_fee_rate, quantization)
@@ -92,6 +115,8 @@ pub fn evaluate_split_sell_yes_sell_no(
     fees: FullSetFees,
     quantization: QuantizationPolicy,
 ) -> PricingResult<NormalizedEdge> {
+    validate_leg("YES", yes_leg, quantization)?;
+    validate_leg("NO", no_leg, quantization)?;
     let input_cost_usdc = matched_quantity(yes_leg, no_leg)?;
     let gross_usdc = yes_leg.notional() + no_leg.notional();
     let quantized_yes_output = quantization.quantize(yes_leg.notional());
@@ -118,6 +143,44 @@ fn quantized_leg_fees(
 ) -> Decimal {
     quantization.quantize_fee(yes_leg.notional() * leg_fee_rate)
         + quantization.quantize_fee(no_leg.notional() * leg_fee_rate)
+}
+
+fn validate_leg(
+    leg: &'static str,
+    full_set_leg: FullSetLeg,
+    quantization: QuantizationPolicy,
+) -> PricingResult<()> {
+    if full_set_leg.quantity < Decimal::ZERO {
+        return Err(PricingError::NegativeQuantity {
+            leg,
+            quantity: full_set_leg.quantity,
+        });
+    }
+
+    if full_set_leg.price_usdc < Decimal::ZERO {
+        return Err(PricingError::NegativePrice {
+            leg,
+            price_usdc: full_set_leg.price_usdc,
+        });
+    }
+
+    if full_set_leg.price_usdc > Decimal::ONE {
+        return Err(PricingError::PriceAboveOne {
+            leg,
+            price_usdc: full_set_leg.price_usdc,
+        });
+    }
+
+    let ticks = full_set_leg.price_usdc / quantization.price_quantum;
+    if !ticks.fract().is_zero() {
+        return Err(PricingError::PriceOffTick {
+            leg,
+            price_usdc: full_set_leg.price_usdc,
+            price_quantum: quantization.price_quantum,
+        });
+    }
+
+    Ok(())
 }
 
 fn matched_quantity(yes_leg: FullSetLeg, no_leg: FullSetLeg) -> PricingResult<Decimal> {
