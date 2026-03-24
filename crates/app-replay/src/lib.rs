@@ -4,6 +4,14 @@ use journal::{replay_entries, JournalEntry, SourceKind};
 use persistence::{connect_pool_from_env, models::JournalEntryRow, JournalRepo, PersistenceError};
 use sqlx::PgPool;
 
+mod negrisk_summary;
+
+pub use negrisk_summary::{
+    load_member_vector_from_journal, load_neg_risk_foundation_summary,
+    NegRiskFoundationFamilySummary, NegRiskFoundationSummary, NegRiskMemberVectorPath,
+    NegRiskSummaryError,
+};
+
 pub trait ReplayConsumer {
     type Error;
 
