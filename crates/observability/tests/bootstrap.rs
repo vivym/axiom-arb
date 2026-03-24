@@ -1,4 +1,5 @@
 use observability::bootstrap_observability;
+use std::{env, process::Command};
 
 #[test]
 fn bootstrap_surface_returns_service_identity_metrics_and_registry() {
@@ -17,8 +18,31 @@ fn bootstrap_surface_returns_service_identity_metrics_and_registry() {
 
 #[test]
 fn bootstrap_surface_initializes_tracing_only_once() {
-    let first = bootstrap_observability("app-live");
-    let second = bootstrap_observability("app-live");
+    if env::var_os("OBSERVABILITY_BOOTSTRAP_ONCE_HELPER").is_some() {
+        let _first = bootstrap_observability("app-live");
+        let _second = bootstrap_observability("app-live");
+        return;
+    }
 
-    assert_eq!(first.service_name(), second.service_name());
+    let output = Command::new(env::current_exe().expect("current test binary"))
+        .arg("--exact")
+        .arg("bootstrap_surface_initializes_tracing_only_once")
+        .arg("--nocapture")
+        .env("OBSERVABILITY_BOOTSTRAP_ONCE_HELPER", "1")
+        .output()
+        .expect("spawn bootstrap helper");
+
+    assert!(
+        output.status.success(),
+        "bootstrap helper failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(combined_output.matches("tracing bootstrapped").count(), 1);
 }
