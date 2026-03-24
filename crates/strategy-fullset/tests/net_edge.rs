@@ -211,7 +211,8 @@ fn split_sell_accepts_price_on_custom_tick() {
             merge_fee_usdc: Decimal::ZERO,
             split_fee_usdc: Decimal::ZERO,
         },
-        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2)),
+        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2))
+            .expect("positive tick should construct policy"),
     );
 
     assert!(result.is_ok(), "custom on-tick prices should price successfully");
@@ -233,7 +234,8 @@ fn split_sell_rejects_price_off_custom_tick() {
             merge_fee_usdc: Decimal::ZERO,
             split_fee_usdc: Decimal::ZERO,
         },
-        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2)),
+        QuantizationPolicy::with_price_quantum(Decimal::new(1, 2))
+            .expect("positive tick should construct policy"),
     );
 
     assert_eq!(
@@ -242,6 +244,26 @@ fn split_sell_rejects_price_off_custom_tick() {
             leg: "YES",
             price_usdc: Decimal::new(333, 3),
             price_quantum: Decimal::new(1, 2),
+        })
+    );
+}
+
+#[test]
+fn with_price_quantum_rejects_zero() {
+    assert_eq!(
+        QuantizationPolicy::with_price_quantum(Decimal::ZERO),
+        Err(PricingError::InvalidPriceQuantum {
+            price_quantum: Decimal::ZERO,
+        })
+    );
+}
+
+#[test]
+fn with_price_quantum_rejects_negative_values() {
+    assert_eq!(
+        QuantizationPolicy::with_price_quantum(Decimal::new(-1, 2)),
+        Err(PricingError::InvalidPriceQuantum {
+            price_quantum: Decimal::new(-1, 2),
         })
     );
 }

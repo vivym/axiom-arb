@@ -39,6 +39,9 @@ pub struct NormalizedEdge {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PricingError {
+    InvalidPriceQuantum {
+        price_quantum: Decimal,
+    },
     QuantityMismatch {
         yes_quantity: Decimal,
         no_quantity: Decimal,
@@ -64,14 +67,21 @@ pub enum PricingError {
 
 impl QuantizationPolicy {
     pub fn usdc_cents() -> Self {
-        Self::with_price_quantum(Decimal::new(1, 3))
-    }
-
-    pub fn with_price_quantum(price_quantum: Decimal) -> Self {
         Self {
             usdc_dp: 2,
-            price_quantum,
+            price_quantum: Decimal::new(1, 3),
         }
+    }
+
+    pub fn with_price_quantum(price_quantum: Decimal) -> PricingResult<Self> {
+        if price_quantum <= Decimal::ZERO {
+            return Err(PricingError::InvalidPriceQuantum { price_quantum });
+        }
+
+        Ok(Self {
+            usdc_dp: 2,
+            price_quantum,
+        })
     }
 
     fn quantize(self, value: Decimal) -> Decimal {
