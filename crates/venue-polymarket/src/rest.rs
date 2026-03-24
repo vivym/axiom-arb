@@ -7,6 +7,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::{
@@ -21,6 +22,7 @@ pub struct PolymarketRestClient {
     pub data_api_host: Url,
     pub relayer_host: Url,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
+    pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
 }
 
 #[derive(Debug)]
@@ -117,6 +119,7 @@ impl PolymarketRestClient {
             data_api_host,
             relayer_host,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
+            metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 

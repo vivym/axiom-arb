@@ -1,11 +1,8 @@
-use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
-    fmt,
-    hash::{Hash, Hasher},
-};
+use std::{collections::HashMap, fmt};
 
 use domain::{MarketRoute, NegRiskVariant};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::rest::{PolymarketRestClient, RestError};
 
@@ -139,6 +136,8 @@ impl CanonicalNegRiskRow {
 struct GammaEvent {
     #[serde(default)]
     id: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
     #[serde(default, alias = "parentEvent", alias = "familyId")]
     parent_event_id: Option<String>,
     #[serde(default, alias = "negRisk")]
@@ -157,6 +156,10 @@ struct GammaMarket {
     condition_id: Option<String>,
     #[serde(default, alias = "clobTokenIds")]
     clob_token_ids: FlexibleStringList,
+    #[serde(default, alias = "groupItemTitle")]
+    group_item_title: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
     #[serde(default, alias = "shortOutcomes")]
     short_outcomes: FlexibleStringList,
     #[serde(default, alias = "outcomes")]
@@ -192,6 +195,8 @@ impl FlexibleStringList {
 }
 
 impl PolymarketRestClient {
+    /// Attempts a refresh and falls back to the last successful snapshot on failure.
+    /// Call `try_fetch_neg_risk_metadata_rows` when callers need the hard error instead.
     pub async fn fetch_neg_risk_metadata_rows(
         &self,
     ) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
@@ -215,6 +220,7 @@ impl PolymarketRestClient {
     pub async fn try_fetch_neg_risk_metadata_rows(
         &self,
     ) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
+        let _refresh_guard = self.metadata_refresh_lock.lock().await;
         let discovery = self.discover_neg_risk_metadata_rows().await?;
         let mut cache = self
             .metadata_state
@@ -274,12 +280,12 @@ impl PolymarketRestClient {
                             event_id: event_id.clone(),
                         })?;
                     let token_id = market
-                        .token_id()
+                        .yes_token_id()
                         .ok_or_else(|| NegRiskMetadataError::MissingTokenId {
                             event_id: event_id.clone(),
                             condition_id: condition_id.clone(),
                         })?;
-                    let outcome_label = market.outcome_label();
+                    let outcome_label = market.outcome_label(event.title.as_deref());
                     let is_other = market.neg_risk_other.unwrap_or(false)
                         || outcome_label.eq_ignore_ascii_case("other");
                     let is_placeholder = outcome_label.is_empty()
@@ -406,23 +412,30 @@ fn classify_variant(
 }
 
 fn snapshot_hash(rows: &[CanonicalNegRiskRow]) -> String {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = Sha256::new();
 
     for row in rows {
-        row.event_family_id.hash(&mut hasher);
-        row.event_id.hash(&mut hasher);
-        row.condition_id.hash(&mut hasher);
-        row.token_id.hash(&mut hasher);
-        row.outcome_label.hash(&mut hasher);
-        hash_route(row.route, &mut hasher);
-        row.enable_neg_risk.hash(&mut hasher);
-        row.neg_risk_augmented.hash(&mut hasher);
-        hash_variant(row.neg_risk_variant, &mut hasher);
-        row.is_placeholder.hash(&mut hasher);
-        row.is_other.hash(&mut hasher);
+        update_hash_field(&mut hasher, &row.event_family_id);
+        update_hash_field(&mut hasher, &row.event_id);
+        update_hash_field(&mut hasher, &row.condition_id);
+        update_hash_field(&mut hasher, &row.token_id);
+        update_hash_field(&mut hasher, &row.outcome_label);
+        update_hash_field(&mut hasher, market_route_label(row.route));
+        update_hash_field(
+            &mut hasher,
+            optional_bool_label(row.enable_neg_risk),
+        );
+        update_hash_field(
+            &mut hasher,
+            optional_bool_label(row.neg_risk_augmented),
+        );
+        update_hash_field(&mut hasher, neg_risk_variant_label(row.neg_risk_variant));
+        update_hash_field(&mut hasher, bool_label(row.is_placeholder));
+        update_hash_field(&mut hasher, bool_label(row.is_other));
+        hasher.update([b'\n']);
     }
 
-    format!("sha256:{:016x}", hasher.finish())
+    format!("sha256:{}", hex_digest(&hasher.finalize()))
 }
 
 fn canonicalize_rows(rows: &mut [CanonicalNegRiskRow]) {
@@ -442,18 +455,54 @@ fn canonicalize_rows(rows: &mut [CanonicalNegRiskRow]) {
     });
 }
 
-fn hash_route(route: MarketRoute, hasher: &mut DefaultHasher) {
+fn update_hash_field(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.as_bytes());
+    hasher.update([0x1f]);
+}
+
+fn market_route_label(route: MarketRoute) -> &'static str {
     match route {
-        MarketRoute::Standard => "standard".hash(hasher),
-        MarketRoute::NegRisk => "negrisk".hash(hasher),
+        MarketRoute::Standard => "standard",
+        MarketRoute::NegRisk => "negrisk",
     }
 }
 
-fn hash_variant(variant: NegRiskVariant, hasher: &mut DefaultHasher) {
+fn neg_risk_variant_label(variant: NegRiskVariant) -> &'static str {
     match variant {
-        NegRiskVariant::Standard => "standard".hash(hasher),
-        NegRiskVariant::Augmented => "augmented".hash(hasher),
-        NegRiskVariant::Unknown => "unknown".hash(hasher),
+        NegRiskVariant::Standard => "standard",
+        NegRiskVariant::Augmented => "augmented",
+        NegRiskVariant::Unknown => "unknown",
+    }
+}
+
+fn optional_bool_label(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    }
+}
+
+fn bool_label(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+
+    for byte in bytes {
+        output.push(nibble_to_hex(byte >> 4));
+        output.push(nibble_to_hex(byte & 0x0f));
+    }
+
+    output
+}
+
+fn nibble_to_hex(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'a' + (value - 10)) as char,
+        _ => unreachable!("nibble must be 0..=15"),
     }
 }
 
@@ -492,26 +541,52 @@ fn is_retryable_metadata_error(error: &RestError) -> bool {
 }
 
 impl GammaMarket {
-    fn token_id(&self) -> Option<String> {
+    // Gamma returns `clobTokenIds` as `[Yes token, No token]`. Neg-risk member
+    // discovery anchors the member row to the named outcome's Yes token.
+    fn yes_token_id(&self) -> Option<String> {
         self.clob_token_ids
             .clone()
             .into_vec()
             .into_iter()
-            .find(|value| !value.trim().is_empty())
+            .next()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
     }
 
-    fn outcome_label(&self) -> String {
+    fn outcome_label(&self, event_title: Option<&str>) -> String {
         let mut candidates = Vec::new();
-        candidates.extend(self.short_outcomes.clone().into_vec());
-        candidates.extend(self.outcomes.clone().into_vec());
+        candidates.extend(self.group_item_title.clone());
+        candidates.extend(self.title.clone());
         if let Some(question) = self.question.clone() {
             candidates.push(question);
         }
+        candidates.extend(
+            self.short_outcomes
+                .clone()
+                .into_vec()
+                .into_iter()
+                .filter(|value| !is_binary_outcome_label(value)),
+        );
+        candidates.extend(
+            self.outcomes
+                .clone()
+                .into_vec()
+                .into_iter()
+                .filter(|value| !is_binary_outcome_label(value)),
+        );
 
         candidates
             .into_iter()
             .map(|entry| entry.trim().to_owned())
-            .find(|entry| !entry.is_empty())
+            .find(|entry| {
+                !entry.is_empty()
+                    && !is_binary_outcome_label(entry)
+                    && event_title.is_none_or(|title| !entry.eq_ignore_ascii_case(title.trim()))
+            })
             .unwrap_or_default()
     }
+}
+
+fn is_binary_outcome_label(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "yes" | "no")
 }
