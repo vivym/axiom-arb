@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Request, Response, StatusCode};
@@ -9,6 +12,7 @@ use url::Url;
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
 };
+use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 
 #[derive(Debug, Clone)]
 pub struct PolymarketRestClient {
@@ -16,6 +20,7 @@ pub struct PolymarketRestClient {
     pub clob_host: Url,
     pub data_api_host: Url,
     pub relayer_host: Url,
+    pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
 }
 
 #[derive(Debug)]
@@ -23,6 +28,7 @@ pub enum RestError {
     Auth(AuthError),
     Http(reqwest::Error),
     HttpResponse { status: StatusCode, body: String },
+    Metadata(NegRiskMetadataError),
     Url(url::ParseError),
     MissingField(&'static str),
 }
@@ -67,6 +73,7 @@ impl fmt::Display for RestError {
             Self::HttpResponse { status, body } => {
                 write!(f, "http response error {status}: {body}")
             }
+            Self::Metadata(err) => write!(f, "metadata error: {err}"),
             Self::Url(err) => write!(f, "url error: {err}"),
             Self::MissingField(field) => write!(f, "missing response field: {field}"),
         }
@@ -109,6 +116,7 @@ impl PolymarketRestClient {
             clob_host,
             data_api_host,
             relayer_host,
+            metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
         }
     }
 
