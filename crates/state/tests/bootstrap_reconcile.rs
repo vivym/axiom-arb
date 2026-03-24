@@ -439,7 +439,7 @@ fn approval_key_set_mismatch_forces_reconcile_attention() {
 }
 
 #[test]
-fn inventory_bucket_set_mismatch_forces_reconcile_attention() {
+fn inventory_bucket_migration_reconciles_to_authoritative_remote_snapshot() {
     let mut store = StateStore::new();
     store.record_local_inventory(
         TokenId::from("token-yes"),
@@ -456,24 +456,12 @@ fn inventory_bucket_set_mismatch_forces_reconcile_attention() {
         ..RemoteSnapshot::empty()
     });
 
-    assert!(!report.succeeded);
-    assert_eq!(
-        report.attention,
-        vec![
-            ReconcileAttention::InventoryMismatch {
-                token_id: TokenId::from("token-yes"),
-                bucket: domain::InventoryBucket::Free,
-            },
-            ReconcileAttention::InventoryMismatch {
-                token_id: TokenId::from("token-yes"),
-                bucket: domain::InventoryBucket::ReservedForOrder,
-            },
-        ]
-    );
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
 }
 
 #[test]
-fn resolution_key_set_mismatch_forces_reconcile_attention() {
+fn resolution_key_change_reconciles_to_authoritative_remote_snapshot() {
     let mut store = StateStore::new();
     store.record_local_resolution(sample_resolution("condition-a"));
 
@@ -482,24 +470,33 @@ fn resolution_key_set_mismatch_forces_reconcile_attention() {
         ..RemoteSnapshot::empty()
     });
 
-    assert!(!report.succeeded);
-    assert_eq!(
-        report.attention,
-        vec![
-            ReconcileAttention::ResolutionMismatch {
-                condition_id: ConditionId::from("condition-a"),
-            },
-            ReconcileAttention::ResolutionMismatch {
-                condition_id: ConditionId::from("condition-b"),
-            },
-        ]
-    );
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+    assert!(store
+        .resolution()
+        .contains_key(&ConditionId::from("condition-b")));
+    assert!(!store
+        .resolution()
+        .contains_key(&ConditionId::from("condition-a")));
 }
 
 #[test]
-fn relayer_tx_key_set_mismatch_forces_reconcile_attention() {
+fn relayer_tx_missing_from_recent_remote_window_does_not_force_attention() {
     let mut store = StateStore::new();
     store.record_local_relayer_tx(sample_relayer_tx("tx-a"));
+
+    let report = store.reconcile(RemoteSnapshot {
+        relayer_txs: Vec::new(),
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+}
+
+#[test]
+fn unexpected_remote_relayer_tx_forces_reconcile_attention() {
+    let mut store = StateStore::new();
 
     let report = store.reconcile(RemoteSnapshot {
         relayer_txs: vec![sample_relayer_tx("tx-b")],
@@ -509,14 +506,9 @@ fn relayer_tx_key_set_mismatch_forces_reconcile_attention() {
     assert!(!report.succeeded);
     assert_eq!(
         report.attention,
-        vec![
-            ReconcileAttention::RelayerTxMismatch {
-                tx_id: "tx-a".to_owned(),
-            },
-            ReconcileAttention::RelayerTxMismatch {
-                tx_id: "tx-b".to_owned(),
-            },
-        ]
+        vec![ReconcileAttention::RelayerTxMismatch {
+            tx_id: "tx-b".to_owned(),
+        },]
     );
 }
 

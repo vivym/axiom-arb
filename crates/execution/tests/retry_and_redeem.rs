@@ -119,7 +119,36 @@ fn business_retry_rejects_reusing_the_original_order_id_across_retry_lineage() {
         )
         .expect_err("business retry must not reuse the lineage root order id");
 
-    assert_eq!(err, BusinessRetryError::OriginalOrderIdReused);
+    assert_eq!(err, BusinessRetryError::OrderIdReused);
+}
+
+#[test]
+fn business_retry_rejects_reusing_an_intermediate_retry_order_id() {
+    let original = SignedOrderEnvelope::new(OrderId::from("order-1"), sample_identity("original"));
+    let first_retry = original
+        .business_retry(
+            OrderId::from("order-2"),
+            "nonce-retry-1".to_owned(),
+            sample_identity("retry-1"),
+        )
+        .expect("first retry should succeed");
+    let second_retry = first_retry
+        .business_retry(
+            OrderId::from("order-3"),
+            "nonce-retry-2".to_owned(),
+            sample_identity("retry-2"),
+        )
+        .expect("second retry should succeed");
+
+    let err = second_retry
+        .business_retry(
+            OrderId::from("order-2"),
+            "nonce-retry-3".to_owned(),
+            sample_identity("retry-3"),
+        )
+        .expect_err("business retry must not reuse any order id already used in the lineage");
+
+    assert_eq!(err, BusinessRetryError::OrderIdReused);
 }
 
 #[test]

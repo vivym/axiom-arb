@@ -11,7 +11,7 @@ pub enum RetryKind {
 pub enum BusinessRetryError {
     NonceUnchanged,
     IdentityNonceMismatch,
-    OriginalOrderIdReused,
+    OrderIdReused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,15 +20,18 @@ pub struct SignedOrderEnvelope {
     pub identity: SignedOrderIdentity,
     pub retry_kind: RetryKind,
     pub retry_of_order_id: Option<OrderId>,
+    used_order_ids: Vec<OrderId>,
 }
 
 impl SignedOrderEnvelope {
     pub fn new(order_id: OrderId, identity: SignedOrderIdentity) -> Self {
+        let used_order_ids = vec![order_id.clone()];
         Self {
             order_id,
             identity,
             retry_kind: RetryKind::Initial,
             retry_of_order_id: None,
+            used_order_ids,
         }
     }
 
@@ -38,6 +41,7 @@ impl SignedOrderEnvelope {
             identity: self.identity.clone(),
             retry_kind: RetryKind::Transport,
             retry_of_order_id: self.retry_of_order_id.clone(),
+            used_order_ids: self.used_order_ids.clone(),
         }
     }
 
@@ -47,12 +51,9 @@ impl SignedOrderEnvelope {
         new_nonce: String,
         identity: SignedOrderIdentity,
     ) -> Result<Self, BusinessRetryError> {
-        let original_order_id = self
-            .retry_of_order_id
-            .clone()
-            .unwrap_or_else(|| self.order_id.clone());
-        if order_id == original_order_id {
-            return Err(BusinessRetryError::OriginalOrderIdReused);
+        let next_order_id = order_id.clone();
+        if self.used_order_ids.iter().any(|used| used == &order_id) {
+            return Err(BusinessRetryError::OrderIdReused);
         }
 
         if new_nonce == self.identity.nonce {
@@ -72,6 +73,11 @@ impl SignedOrderEnvelope {
                     .clone()
                     .unwrap_or_else(|| self.order_id.clone()),
             ),
+            used_order_ids: {
+                let mut used_order_ids = self.used_order_ids.clone();
+                used_order_ids.push(next_order_id);
+                used_order_ids
+            },
         })
     }
 }

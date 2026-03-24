@@ -103,8 +103,6 @@ fn collect_attention(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Recon
     attention.extend(detect_identifier_mismatches(snapshot));
     attention.extend(compare_orders(store, snapshot));
     attention.extend(compare_approvals(store, snapshot));
-    attention.extend(compare_inventory(store, snapshot));
-    attention.extend(compare_resolution_states(store, snapshot));
     attention.extend(compare_relayer_txs(store, snapshot));
     attention.sort_by(attention_sort_key);
 
@@ -213,40 +211,6 @@ fn compare_approvals(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Recon
         .collect()
 }
 
-fn compare_inventory(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
-    let local_keys = store.inventory().keys().cloned().collect::<HashSet<_>>();
-    let remote_keys = snapshot
-        .inventory
-        .iter()
-        .cloned()
-        .map(|(token_id, bucket, _)| crate::store::InventoryEntry { token_id, bucket })
-        .collect::<HashSet<_>>();
-
-    collect_symmetric_difference(local_keys, remote_keys)
-        .into_iter()
-        .map(|crate::store::InventoryEntry { token_id, bucket }| {
-            ReconcileAttention::InventoryMismatch { token_id, bucket }
-        })
-        .collect()
-}
-
-fn compare_resolution_states(
-    store: &StateStore,
-    snapshot: &RemoteSnapshot,
-) -> Vec<ReconcileAttention> {
-    let local_ids = store.resolution().keys().cloned().collect::<HashSet<_>>();
-    let remote_ids = snapshot
-        .resolution_states
-        .iter()
-        .map(|resolution| resolution.condition_id.clone())
-        .collect::<HashSet<_>>();
-
-    collect_symmetric_difference(local_ids, remote_ids)
-        .into_iter()
-        .map(|condition_id| ReconcileAttention::ResolutionMismatch { condition_id })
-        .collect()
-}
-
 fn compare_relayer_txs(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
     let local_ids = store.relayer_txs().keys().cloned().collect::<HashSet<_>>();
     let remote_ids = snapshot
@@ -255,7 +219,9 @@ fn compare_relayer_txs(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Rec
         .map(|tx| tx.tx_id.clone())
         .collect::<HashSet<_>>();
 
-    collect_symmetric_difference(local_ids, remote_ids)
+    remote_ids
+        .difference(&local_ids)
+        .cloned()
         .into_iter()
         .map(|tx_id| ReconcileAttention::RelayerTxMismatch { tx_id })
         .collect()

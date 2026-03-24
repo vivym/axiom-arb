@@ -101,10 +101,6 @@ impl StateStore {
         &self.approvals
     }
 
-    pub(crate) fn inventory(&self) -> &HashMap<InventoryEntry, Decimal> {
-        &self.inventory
-    }
-
     pub fn resolution(&self) -> &HashMap<ConditionId, ResolutionState> {
         &self.resolution
     }
