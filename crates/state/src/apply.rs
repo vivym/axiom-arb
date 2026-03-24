@@ -1,7 +1,7 @@
 use domain::ExternalFactEvent;
 
 use crate::{
-    facts::{DirtyDomain, DirtySet, FactKey, PendingRef},
+    facts::{classify_fact_for_apply, DirtyDomain, DirtySet, FactApplyHint, FactKey, PendingRef},
     store::{JournalConsumption, StateStore},
 };
 
@@ -75,10 +75,10 @@ impl<'a> StateApplier<'a> {
             }
             JournalConsumption::OutOfOrder => {
                 return Err(ApplyError::new(format!(
-                    "journal sequence {journal_seq} must be greater than last applied sequence {}",
+                    "journal sequence {journal_seq} must be greater than last consumed sequence {}",
                     self.store
-                        .last_applied_journal_seq()
-                        .expect("out-of-order journal consumption requires a recorded sequence")
+                        .last_consumed_journal_seq()
+                        .expect("out-of-order journal consumption requires a consumed sequence")
                 )));
             }
         }
@@ -91,18 +91,20 @@ impl<'a> StateApplier<'a> {
             });
         }
 
-        if is_out_of_order_user_trade(&event) {
-            let pending_ref = PendingRef(format!(
-                "pending:{}:{}:{}",
-                event.source_kind, event.source_session_id, event.source_event_id
-            ));
+        match classify_fact_for_apply(&fact_key) {
+            FactApplyHint::None => {}
+            FactApplyHint::ReconcileRequired {
+                pending_ref,
+                reason,
+            } => {
             self.store.record_pending_ref(pending_ref.clone());
 
             return Ok(ApplyResult::ReconcileRequired {
                 journal_seq,
                 pending_ref: Some(pending_ref),
-                reason: "user trade arrived out of authoritative order".to_owned(),
+                    reason: reason.to_owned(),
             });
+            }
         }
 
         let state_version = self.store.record_applied_fact(journal_seq, fact_key);
@@ -121,8 +123,4 @@ impl<'a> StateApplier<'a> {
             ]),
         })
     }
-}
-
-fn is_out_of_order_user_trade(event: &ExternalFactEvent) -> bool {
-    event.source_kind == "user_trade_out_of_order"
 }

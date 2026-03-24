@@ -11,12 +11,20 @@ fn duplicate_fact_returns_duplicate_anchor_without_mutating_state_version() {
     let first = applier.apply(17, event.clone()).unwrap();
     let duplicate = applier.apply(18, event).unwrap();
 
-    assert!(matches!(first, ApplyResult::Applied { .. }));
+    assert!(matches!(
+        first,
+        ApplyResult::Applied {
+            journal_seq: 17,
+            state_version: 1,
+            ..
+        }
+    ));
     assert!(matches!(
         duplicate,
         ApplyResult::Duplicate {
+            journal_seq: 18,
             duplicate_of_journal_seq: 17,
-            ..
+            state_version: 1,
         }
     ));
 }
@@ -60,6 +68,22 @@ fn consumed_journal_seq_cannot_be_reused_after_duplicate() {
 }
 
 #[test]
+fn decreasing_journal_seq_is_rejected() {
+    let mut store = StateStore::new();
+    let mut applier = StateApplier::new(&mut store);
+    let first = ExternalFactEvent::new("market_ws", "session-1", "evt-1", "v1", Utc::now());
+    let second = ExternalFactEvent::new("market_ws", "session-1", "evt-2", "v1", Utc::now());
+
+    applier.apply(17, first).unwrap();
+    let err = applier.apply(16, second).unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "journal sequence 16 must be greater than last consumed sequence 17"
+    );
+}
+
+#[test]
 fn out_of_order_fact_creates_reconcile_required_pending_ref() {
     let mut store = StateStore::new();
     let mut applier = StateApplier::new(&mut store);
@@ -69,10 +93,42 @@ fn out_of_order_fact_creates_reconcile_required_pending_ref() {
     assert!(matches!(
         result,
         ApplyResult::ReconcileRequired {
+            journal_seq: 19,
             pending_ref: Some(_),
             ..
         }
     ));
+}
+
+#[test]
+fn reconcile_required_does_not_advance_state_version() {
+    let mut store = StateStore::new();
+    let mut applier = StateApplier::new(&mut store);
+
+    let applied = applier
+        .apply(
+            17,
+            ExternalFactEvent::new("market_ws", "session-1", "evt-1", "v1", Utc::now()),
+        )
+        .unwrap();
+    let reconcile_required = applier.apply(19, sample_out_of_order_user_trade()).unwrap();
+
+    assert!(matches!(
+        applied,
+        ApplyResult::Applied {
+            state_version: 1,
+            ..
+        }
+    ));
+    assert!(matches!(
+        reconcile_required,
+        ApplyResult::ReconcileRequired {
+            journal_seq: 19,
+            pending_ref: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(store.state_version(), 1);
 }
 
 #[test]

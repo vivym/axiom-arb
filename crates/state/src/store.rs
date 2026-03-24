@@ -37,6 +37,7 @@ pub struct RelayerTxSummary {
 #[derive(Debug, Clone)]
 pub struct StateStore {
     state_version: u64,
+    last_consumed_journal_seq: Option<i64>,
     last_applied_journal_seq: Option<i64>,
     runtime_mode: RuntimeMode,
     overlay: Option<RuntimeOverlay>,
@@ -57,6 +58,7 @@ impl StateStore {
 
         Self {
             state_version: 0,
+            last_consumed_journal_seq: None,
             last_applied_journal_seq: None,
             runtime_mode: policy.mode,
             overlay: policy.overlay,
@@ -94,6 +96,10 @@ impl StateStore {
 
     pub fn last_applied_journal_seq(&self) -> Option<i64> {
         self.last_applied_journal_seq
+    }
+
+    pub fn last_consumed_journal_seq(&self) -> Option<i64> {
+        self.last_consumed_journal_seq
     }
 
     pub fn overlay(&self) -> Option<RuntimeOverlay> {
@@ -256,13 +262,13 @@ impl StateStore {
         }
 
         if self
-            .last_applied_journal_seq
-            .is_some_and(|last_applied_journal_seq| journal_seq <= last_applied_journal_seq)
+            .last_consumed_journal_seq
+            .is_some_and(|last_consumed_journal_seq| journal_seq <= last_consumed_journal_seq)
         {
             return JournalConsumption::OutOfOrder;
         }
 
-        self.last_applied_journal_seq = Some(journal_seq);
+        self.last_consumed_journal_seq = Some(journal_seq);
         self.consumed_journal.insert(journal_seq, fact_key.clone());
 
         JournalConsumption::Consumed
@@ -270,6 +276,7 @@ impl StateStore {
 
     pub(crate) fn record_applied_fact(&mut self, journal_seq: i64, fact_key: FactKey) -> u64 {
         self.state_version += 1;
+        self.last_applied_journal_seq = Some(journal_seq);
         self.applied_fact_journal.insert(fact_key, journal_seq);
         self.state_version
     }

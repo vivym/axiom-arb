@@ -16,6 +16,18 @@ pub enum DirtyDomain {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRef(pub String);
 
+impl PendingRef {
+    pub(crate) fn from_fact_key(fact_key: &FactKey) -> Self {
+        Self(format!(
+            "pending:{}:{}:{}:{}",
+            fact_key.source_kind,
+            fact_key.source_session_id,
+            fact_key.source_event_id,
+            fact_key.normalizer_version
+        ))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirtySet {
     pub domains: BTreeSet<DirtyDomain>,
@@ -46,4 +58,23 @@ impl FactKey {
             normalizer_version: event.normalizer_version.clone(),
         }
     }
+}
+
+pub(crate) enum FactApplyHint {
+    None,
+    ReconcileRequired {
+        pending_ref: PendingRef,
+        reason: &'static str,
+    },
+}
+
+pub(crate) fn classify_fact_for_apply(fact_key: &FactKey) -> FactApplyHint {
+    if fact_key.source_kind == "user_trade_out_of_order" {
+        return FactApplyHint::ReconcileRequired {
+            pending_ref: PendingRef::from_fact_key(fact_key),
+            reason: "user trade arrived out of authoritative order",
+        };
+    }
+
+    FactApplyHint::None
 }
