@@ -166,7 +166,7 @@ fn signed_order(
 async fn seed_identifier_graph(pool: &PgPool) {
     IdentifierRepo
         .upsert_record(
-            &pool,
+            pool,
             &identifier_record("market-1", "condition-1", "token-yes", "YES"),
         )
         .await

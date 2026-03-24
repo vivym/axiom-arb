@@ -215,7 +215,10 @@ fn split_sell_accepts_price_on_custom_tick() {
             .expect("positive tick should construct policy"),
     );
 
-    assert!(result.is_ok(), "custom on-tick prices should price successfully");
+    assert!(
+        result.is_ok(),
+        "custom on-tick prices should price successfully"
+    );
 }
 
 #[test]
