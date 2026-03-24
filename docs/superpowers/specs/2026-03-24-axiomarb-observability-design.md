@@ -209,6 +209,7 @@ Before any OTel exporter is added, the repository should stabilize:
 - metric dimensions and typed dimension vocabularies
 - mode and state signal mapping rules
 - initialization ownership inside the `observability` crate
+- a single repo-owned bootstrap surface so tracing initialization, service identity, and observability context creation do not remain split across separate public entrypoints
 - binary entrypoint policy so `app-live` and `app-replay` stop bypassing structured tracing with direct terminal-only output on their main success paths
 
 This is the minimum stage required before exporter work is worth doing.
@@ -275,6 +276,6 @@ That plan should cover:
 - required spans and fields by crate
 - metric ownership and emission points
 - metric dimensions and mode-signal contracts
-- bootstrap API shape in `observability`
+- single bootstrap API shape in `observability`
 - entrypoint migration for `app-live` and `app-replay`
 - compatibility path for later `tracing-opentelemetry` integration
