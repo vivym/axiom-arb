@@ -14,7 +14,12 @@ pub fn build_intents(view: &NegRiskView) -> Vec<DecisionInput> {
         .into_iter()
         .map(|family_id| {
             DecisionInput::Strategy(IntentCandidate::new(
-                stable_intent_id("neg-risk", &family_id, &view.snapshot_id, view.state_version),
+                stable_intent_id(
+                    "neg-risk",
+                    &family_id,
+                    &view.snapshot_id,
+                    view.state_version,
+                ),
                 &view.snapshot_id,
                 family_id,
             ))

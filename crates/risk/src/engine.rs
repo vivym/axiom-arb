@@ -11,8 +11,7 @@ pub fn evaluate_decision(
     if matches!(
         activation.mode,
         ExecutionMode::ReduceOnly | ExecutionMode::RecoveryOnly
-    )
-        && matches!(input, DecisionInput::Strategy(_))
+    ) && matches!(input, DecisionInput::Strategy(_))
     {
         return DecisionVerdict::Rejected;
     }

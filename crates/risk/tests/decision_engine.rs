@@ -50,7 +50,8 @@ fn reduce_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
 
 #[test]
 fn negrisk_entrypoint_rejects_live_mode_even_with_usable_projection() {
-    let verdict = risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Live);
+    let verdict =
+        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Live);
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
@@ -87,10 +88,8 @@ fn negrisk_entrypoint_rejects_reduce_only_even_with_usable_projection() {
 
 #[test]
 fn negrisk_entrypoint_rejects_recovery_only_even_with_usable_projection() {
-    let verdict = risk::negrisk::evaluate_negrisk_intent(
-        &sample_negrisk_view(),
-        ExecutionMode::RecoveryOnly,
-    );
+    let verdict =
+        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::RecoveryOnly);
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
