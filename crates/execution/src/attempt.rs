@@ -14,13 +14,17 @@ impl ExecutionAttemptFactory {
         Self::default()
     }
 
+    fn request_bound_plan_id(plan: &ExecutionPlan, request: &ExecutionRequest) -> String {
+        format!("{}:{}", request.request_id, plan.plan_id())
+    }
+
     pub fn next_for_plan(
         &mut self,
         plan: &ExecutionPlan,
         request: &ExecutionRequest,
         execution_mode: ExecutionMode,
     ) -> (ExecutionAttempt, ExecutionAttemptContext) {
-        let plan_id = plan.plan_id();
+        let plan_id = Self::request_bound_plan_id(plan, request);
         let next_attempt_no = self
             .next_attempt_no_by_plan
             .entry(plan_id.clone())

@@ -205,14 +205,17 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
 
     let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
 
-    assert_eq!(attempt.plan_id, plan.plan_id());
+    assert_eq!(
+        attempt.plan_id,
+        format!("{}:{}", request.request_id, plan.plan_id())
+    );
     assert_eq!(attempt.snapshot_id, "snapshot-4");
     assert_eq!(context.attempt_id, attempt.attempt_id);
     assert_eq!(context.execution_mode, domain::ExecutionMode::Shadow);
 }
 
 #[test]
-fn execution_attempt_factory_resets_attempt_numbers_per_plan() {
+fn execution_attempt_factory_resets_attempt_numbers_per_request_bound_plan_identity() {
     let mut factory = ExecutionAttemptFactory::default();
     let request_a = domain::ExecutionRequest {
         request_id: "request-a".to_owned(),
@@ -233,11 +236,41 @@ fn execution_attempt_factory_resets_attempt_numbers_per_plan() {
 
     let (attempt_a1, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
     let (attempt_a2, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
-    let (attempt_b1, _) = factory.next_for_plan(&plan_b, &request_b, domain::ExecutionMode::Live);
+    let (attempt_request_b1, _) =
+        factory.next_for_plan(&plan_a, &request_b, domain::ExecutionMode::Live);
+    let (attempt_plan_b1, _) =
+        factory.next_for_plan(&plan_b, &request_b, domain::ExecutionMode::Live);
 
     assert_eq!(attempt_a1.attempt_no, 1);
     assert_eq!(attempt_a2.attempt_no, 2);
-    assert_eq!(attempt_b1.attempt_no, 1);
+    assert_eq!(attempt_request_b1.attempt_no, 1);
+    assert_eq!(attempt_plan_b1.attempt_no, 1);
+}
+
+#[test]
+fn execution_attempt_factory_keeps_same_business_plan_independent_across_requests() {
+    let mut factory = ExecutionAttemptFactory::default();
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-cross-request"),
+    };
+    let request_a = domain::ExecutionRequest {
+        request_id: "request-cross-a".to_owned(),
+        decision_input_id: "decision-cross-a".to_owned(),
+        snapshot_id: "snapshot-cross-a".to_owned(),
+    };
+    let request_b = domain::ExecutionRequest {
+        request_id: "request-cross-b".to_owned(),
+        decision_input_id: "decision-cross-b".to_owned(),
+        snapshot_id: "snapshot-cross-b".to_owned(),
+    };
+
+    let (attempt_a, _) = factory.next_for_plan(&plan, &request_a, domain::ExecutionMode::Live);
+    let (attempt_b, _) = factory.next_for_plan(&plan, &request_b, domain::ExecutionMode::Live);
+
+    assert_eq!(attempt_a.attempt_no, 1);
+    assert_eq!(attempt_b.attempt_no, 1);
+    assert_ne!(attempt_a.plan_id, attempt_b.plan_id);
+    assert_ne!(attempt_a.attempt_id, attempt_b.attempt_id);
 }
 
 #[test]

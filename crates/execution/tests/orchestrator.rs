@@ -34,6 +34,33 @@ fn shadow_sink_records_attempt_without_authoritative_fill_effect() {
 }
 
 #[test]
+fn sink_rejects_attempts_with_the_wrong_execution_mode() {
+    let live_orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+    let shadow_err = live_orchestrator
+        .execute(&sample_planning_input(ExecutionMode::Shadow))
+        .unwrap_err();
+
+    assert!(matches!(
+        shadow_err,
+        execution::ExecutionError::Sink {
+            error: execution::VenueSinkError::ModeMismatch { .. }
+        }
+    ));
+
+    let shadow_orchestrator = ExecutionOrchestrator::new(ShadowVenueSink::noop());
+    let live_err = shadow_orchestrator
+        .execute(&sample_planning_input(ExecutionMode::Live))
+        .unwrap_err();
+
+    assert!(matches!(
+        live_err,
+        execution::ExecutionError::Sink {
+            error: execution::VenueSinkError::ModeMismatch { .. }
+        }
+    ));
+}
+
+#[test]
 fn reduce_only_mode_refuses_plans_that_expand_risk() {
     let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
 

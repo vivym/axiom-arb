@@ -1,13 +1,18 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionReceipt};
+use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode, ExecutionReceipt};
 
 use crate::plans::ExecutionPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VenueSinkError {
     Rejected { reason: String },
+    ModeMismatch {
+        sink: &'static str,
+        expected: ExecutionMode,
+        actual: ExecutionMode,
+    },
 }
 
 pub trait VenueSink {
@@ -27,12 +32,29 @@ impl LiveVenueSink {
     }
 }
 
+fn ensure_sink_mode(
+    sink: &'static str,
+    expected: ExecutionMode,
+    actual: ExecutionMode,
+) -> Result<(), VenueSinkError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(VenueSinkError::ModeMismatch {
+            sink,
+            expected,
+            actual,
+        })
+    }
+}
+
 impl VenueSink for LiveVenueSink {
     fn execute(
         &self,
         _plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
     ) -> Result<ExecutionReceipt, VenueSinkError> {
+        ensure_sink_mode("live", ExecutionMode::Live, attempt.execution_mode)?;
         Ok(ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
             outcome: ExecutionAttemptOutcome::Succeeded,
@@ -61,6 +83,7 @@ impl VenueSink for ShadowVenueSink {
         _plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
     ) -> Result<ExecutionReceipt, VenueSinkError> {
+        ensure_sink_mode("shadow", ExecutionMode::Shadow, attempt.execution_mode)?;
         self.recorded_attempt_ids
             .borrow_mut()
             .push(attempt.attempt_id.clone());
