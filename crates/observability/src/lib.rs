@@ -4,8 +4,9 @@ mod tracing_bootstrap;
 
 pub use conventions::{field_keys, metric_dimensions, span_names};
 pub use metrics::{
-    CounterHandle, GaugeHandle, MetricKey, MetricRegistry, MetricRegistrySnapshot, ModeHandle,
-    RuntimeMetrics, RuntimeMetricsRecorder,
+    CounterHandle, CounterSampleWithDimensions, GaugeHandle, MetricDimension, MetricDimensions,
+    MetricKey, MetricRegistry, MetricRegistrySnapshot, ModeHandle, RuntimeMetrics,
+    RuntimeMetricsRecorder,
 };
 pub use tracing_bootstrap::{bootstrap_tracing, TracingBootstrap};
 

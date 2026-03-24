@@ -1,4 +1,9 @@
-use observability::{bootstrap_tracing, metrics::MetricKey, Observability, RuntimeMetrics};
+use observability::{
+    bootstrap_tracing,
+    metric_dimensions::{Channel, HaltScope},
+    metrics::{MetricDimension, MetricDimensions, MetricKey},
+    Observability, RuntimeMetrics,
+};
 
 #[test]
 fn observability_exposes_required_runtime_metric_keys() {
@@ -69,6 +74,18 @@ fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
     assert_eq!(
         metrics.shadow_attempt_count.key(),
         MetricKey::new("axiom_shadow_attempt_total")
+    );
+    assert_eq!(
+        metrics.websocket_reconnect_total.key(),
+        MetricKey::new("axiom_websocket_reconnect_total")
+    );
+    assert_eq!(
+        metrics.halt_activation_total.key(),
+        MetricKey::new("axiom_halt_activation_total")
+    );
+    assert_eq!(
+        metrics.reconcile_attention_total.key(),
+        MetricKey::new("axiom_reconcile_attention_total")
     );
 }
 
@@ -142,5 +159,62 @@ fn runtime_metrics_recorder_updates_registry() {
     assert_eq!(
         snapshot.counter(metrics.neg_risk_metadata_refresh_count.key()),
         Some(7)
+    );
+}
+
+#[test]
+fn registry_round_trips_dimensioned_counter_samples() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let dims = MetricDimensions::new([MetricDimension::Channel(Channel::User)]);
+
+    observability.registry().record_counter_with_dimensions(
+        metrics
+            .websocket_reconnect_total
+            .increment_with_dimensions(2, dims.clone()),
+    );
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.websocket_reconnect_total.key(), &dims),
+        Some(2)
+    );
+}
+
+#[test]
+fn counter_dimension_order_is_canonicalized() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let recorded_dims = MetricDimensions::new([
+        MetricDimension::HaltScope(HaltScope::Market),
+        MetricDimension::Channel(Channel::User),
+    ]);
+    let lookup_dims = MetricDimensions::new([
+        MetricDimension::Channel(Channel::User),
+        MetricDimension::HaltScope(HaltScope::Market),
+    ]);
+
+    observability.registry().record_counter_with_dimensions(
+        metrics
+            .halt_activation_total
+            .increment_with_dimensions(1, recorded_dims),
+    );
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.halt_activation_total.key(), &lookup_dims),
+        Some(1)
+    );
+}
+
+#[test]
+fn mode_samples_remain_queryable_without_forcing_numeric_encoding() {
+    let observability = Observability::new("app-live");
+    observability.recorder().record_runtime_mode("healthy");
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.mode(observability.metrics().runtime_mode.key()),
+        Some("healthy")
     );
 }

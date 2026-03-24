@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
+    hash::{Hash, Hasher},
     sync::{Arc, Mutex},
 };
+
+use crate::metric_dimensions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MetricKey(&'static str);
@@ -78,6 +81,18 @@ impl CounterHandle {
             amount,
         }
     }
+
+    pub fn increment_with_dimensions(
+        self,
+        amount: u64,
+        dimensions: MetricDimensions,
+    ) -> CounterSampleWithDimensions {
+        CounterSampleWithDimensions {
+            key: self.key,
+            amount,
+            dimensions: dimensions.canonicalized(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +108,71 @@ impl CounterSample {
 
     pub const fn amount(self) -> u64 {
         self.amount
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetricDimension {
+    Channel(metric_dimensions::Channel),
+    HaltScope(metric_dimensions::HaltScope),
+}
+
+impl MetricDimension {
+    fn as_pair(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Channel(channel) => channel.as_pair(),
+            Self::HaltScope(scope) => scope.as_pair(),
+        }
+    }
+
+    fn canonical_key(&self) -> (&'static str, &'static str) {
+        self.as_pair()
+    }
+}
+
+impl Hash for MetricDimension {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_pair().hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct MetricDimensions(Vec<MetricDimension>);
+
+impl MetricDimensions {
+    pub fn new<I>(dimensions: I) -> Self
+    where
+        I: IntoIterator<Item = MetricDimension>,
+    {
+        Self(dimensions.into_iter().collect()).canonicalized()
+    }
+
+    fn canonicalized(&self) -> Self {
+        let mut dimensions = self.0.clone();
+        dimensions.sort_by_key(MetricDimension::canonical_key);
+        dimensions.dedup();
+        Self(dimensions)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterSampleWithDimensions {
+    key: MetricKey,
+    amount: u64,
+    dimensions: MetricDimensions,
+}
+
+impl CounterSampleWithDimensions {
+    pub const fn key(&self) -> MetricKey {
+        self.key
+    }
+
+    pub const fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    pub fn dimensions(&self) -> &MetricDimensions {
+        &self.dimensions
     }
 }
 
@@ -142,6 +222,9 @@ pub struct RuntimeMetrics {
     pub runtime_mode: ModeHandle,
     pub relayer_pending_age: GaugeHandle,
     pub divergence_count: CounterHandle,
+    pub websocket_reconnect_total: CounterHandle,
+    pub halt_activation_total: CounterHandle,
+    pub reconcile_attention_total: CounterHandle,
     pub dispatcher_backlog_count: GaugeHandle,
     pub projection_publish_lag_count: GaugeHandle,
     pub recovery_backlog_count: GaugeHandle,
@@ -160,6 +243,9 @@ impl Default for RuntimeMetrics {
             runtime_mode: ModeHandle::new("axiom_runtime_mode"),
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
+            websocket_reconnect_total: CounterHandle::new("axiom_websocket_reconnect_total"),
+            halt_activation_total: CounterHandle::new("axiom_halt_activation_total"),
+            reconcile_attention_total: CounterHandle::new("axiom_reconcile_attention_total"),
             dispatcher_backlog_count: GaugeHandle::new("axiom_dispatcher_backlog_count"),
             projection_publish_lag_count: GaugeHandle::new("axiom_projection_publish_lag_count"),
             recovery_backlog_count: GaugeHandle::new("axiom_recovery_backlog_count"),
@@ -190,6 +276,7 @@ pub struct MetricRegistry {
 struct MetricRegistryState {
     gauges: HashMap<MetricKey, f64>,
     counters: HashMap<MetricKey, u64>,
+    counters_with_dimensions: HashMap<(MetricKey, MetricDimensions), u64>,
     modes: HashMap<MetricKey, String>,
 }
 
@@ -208,6 +295,15 @@ impl MetricRegistry {
         *entry += sample.amount();
     }
 
+    pub fn record_counter_with_dimensions(&self, sample: CounterSampleWithDimensions) {
+        let mut state = self.inner.lock().expect("metric registry lock");
+        let entry = state
+            .counters_with_dimensions
+            .entry((sample.key(), sample.dimensions().canonicalized()))
+            .or_default();
+        *entry += sample.amount();
+    }
+
     pub fn record_mode(&self, sample: ModeSample) {
         self.inner
             .lock()
@@ -221,6 +317,7 @@ impl MetricRegistry {
         MetricRegistrySnapshot {
             gauges: state.gauges.clone(),
             counters: state.counters.clone(),
+            counters_with_dimensions: state.counters_with_dimensions.clone(),
             modes: state.modes.clone(),
         }
     }
@@ -230,6 +327,7 @@ impl MetricRegistry {
 pub struct MetricRegistrySnapshot {
     gauges: HashMap<MetricKey, f64>,
     counters: HashMap<MetricKey, u64>,
+    counters_with_dimensions: HashMap<(MetricKey, MetricDimensions), u64>,
     modes: HashMap<MetricKey, String>,
 }
 
@@ -240,6 +338,16 @@ impl MetricRegistrySnapshot {
 
     pub fn counter(&self, key: MetricKey) -> Option<u64> {
         self.counters.get(&key).copied()
+    }
+
+    pub fn counter_with_dimensions(
+        &self,
+        key: MetricKey,
+        dimensions: &MetricDimensions,
+    ) -> Option<u64> {
+        self.counters_with_dimensions
+            .get(&(key, dimensions.canonicalized()))
+            .copied()
     }
 
     pub fn mode(&self, key: MetricKey) -> Option<&str> {
