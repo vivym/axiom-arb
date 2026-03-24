@@ -418,6 +418,9 @@ fn spawn_local_listener(scripted_responses: Vec<ScriptedResponse>) -> ScriptedSe
                 }
                 Err(error) => panic!("accept request: {error}"),
             };
+            stream
+                .set_nonblocking(false)
+                .expect("set accepted stream blocking");
             let response = scripted_responses
                 .pop_front()
                 .expect("scripted response should exist");
