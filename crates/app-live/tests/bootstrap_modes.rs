@@ -74,3 +74,47 @@ fn run_live_bootstraps_runtime_through_reconcile() {
     assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Healthy);
     assert_eq!(result.runtime.runtime_overlay(), None);
 }
+
+#[test]
+fn run_paper_stays_cancel_only_when_bootstrap_reconcile_fails() {
+    let result = run_paper(&StaticSnapshotSource::new(
+        RemoteSnapshot::empty().with_attention(ReconcileAttention::IdentifierMismatch {
+            token_id: TokenId::from("token-yes"),
+            expected_condition_id: ConditionId::from("condition-a"),
+            remote_condition_id: ConditionId::from("condition-b"),
+        }),
+    ));
+
+    assert_eq!(
+        result.runtime.bootstrap_status(),
+        app_live::bootstrap::BootstrapStatus::CancelOnly
+    );
+    assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Reconciling);
+    assert_eq!(
+        result.runtime.runtime_overlay(),
+        Some(RuntimeOverlay::CancelOnly)
+    );
+    assert!(!result.report.promoted_from_bootstrap);
+}
+
+#[test]
+fn run_live_stays_cancel_only_when_bootstrap_reconcile_fails() {
+    let result = run_live(&StaticSnapshotSource::new(
+        RemoteSnapshot::empty().with_attention(ReconcileAttention::IdentifierMismatch {
+            token_id: TokenId::from("token-yes"),
+            expected_condition_id: ConditionId::from("condition-a"),
+            remote_condition_id: ConditionId::from("condition-b"),
+        }),
+    ));
+
+    assert_eq!(
+        result.runtime.bootstrap_status(),
+        app_live::bootstrap::BootstrapStatus::CancelOnly
+    );
+    assert_eq!(result.runtime.runtime_mode(), RuntimeMode::Reconciling);
+    assert_eq!(
+        result.runtime.runtime_overlay(),
+        Some(RuntimeOverlay::CancelOnly)
+    );
+    assert!(!result.report.promoted_from_bootstrap);
+}

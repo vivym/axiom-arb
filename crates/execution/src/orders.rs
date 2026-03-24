@@ -11,6 +11,7 @@ pub enum RetryKind {
 pub enum BusinessRetryError {
     NonceUnchanged,
     IdentityNonceMismatch,
+    OriginalOrderIdReused,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +47,14 @@ impl SignedOrderEnvelope {
         new_nonce: String,
         identity: SignedOrderIdentity,
     ) -> Result<Self, BusinessRetryError> {
+        let original_order_id = self
+            .retry_of_order_id
+            .clone()
+            .unwrap_or_else(|| self.order_id.clone());
+        if order_id == original_order_id {
+            return Err(BusinessRetryError::OriginalOrderIdReused);
+        }
+
         if new_nonce == self.identity.nonce {
             return Err(BusinessRetryError::NonceUnchanged);
         }

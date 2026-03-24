@@ -101,6 +101,28 @@ fn business_retry_of_business_retry_keeps_lineage_pointing_to_the_original_order
 }
 
 #[test]
+fn business_retry_rejects_reusing_the_original_order_id_across_retry_lineage() {
+    let original = SignedOrderEnvelope::new(OrderId::from("order-1"), sample_identity("original"));
+    let first_retry = original
+        .business_retry(
+            OrderId::from("order-2"),
+            "nonce-retry-1".to_owned(),
+            sample_identity("retry-1"),
+        )
+        .expect("first retry should succeed");
+
+    let err = first_retry
+        .business_retry(
+            OrderId::from("order-1"),
+            "nonce-retry-2".to_owned(),
+            sample_identity("retry-2"),
+        )
+        .expect_err("business retry must not reuse the lineage root order id");
+
+    assert_eq!(err, BusinessRetryError::OriginalOrderIdReused);
+}
+
+#[test]
 fn redeem_resolved_is_condition_scoped_and_amountless() {
     let condition_id = ConditionId::from("condition-1");
     let plan = ExecutionPlan::RedeemResolved {

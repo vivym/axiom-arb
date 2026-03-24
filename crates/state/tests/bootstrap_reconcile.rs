@@ -93,6 +93,8 @@ fn approval_progression_reconciles_successfully_and_applies_remote_value() {
         Utc.with_ymd_and_hms(2026, 3, 24, 10, 5, 0).unwrap(),
     );
 
+    store.record_local_approval(initial_approval.clone());
+
     let initial = store.reconcile(RemoteSnapshot {
         approvals: vec![initial_approval],
         ..RemoteSnapshot::empty()
@@ -119,11 +121,12 @@ fn approval_progression_reconciles_successfully_and_applies_remote_value() {
 #[test]
 fn resolution_progression_reconciles_successfully() {
     let mut store = StateStore::new();
+    let initial_resolution =
+        sample_resolution_with_status("condition-a", ResolutionStatus::Unresolved);
+    store.record_local_resolution(initial_resolution.clone());
+
     let initial = store.reconcile(RemoteSnapshot {
-        resolution_states: vec![sample_resolution_with_status(
-            "condition-a",
-            ResolutionStatus::Unresolved,
-        )],
+        resolution_states: vec![initial_resolution],
         ..RemoteSnapshot::empty()
     });
     assert!(initial.succeeded);
@@ -146,8 +149,11 @@ fn resolution_progression_reconciles_successfully() {
 #[test]
 fn relayer_tx_progression_reconciles_successfully_and_applies_remote_value() {
     let mut store = StateStore::new();
+    let initial_tx = sample_relayer_tx_with_status("tx-1", "submitted");
+    store.record_local_relayer_tx(initial_tx.clone());
+
     let initial = store.reconcile(RemoteSnapshot {
-        relayer_txs: vec![sample_relayer_tx_with_status("tx-1", "submitted")],
+        relayer_txs: vec![initial_tx],
         ..RemoteSnapshot::empty()
     });
     assert!(initial.succeeded);
@@ -400,6 +406,120 @@ fn unresolved_divergence_keeps_restrictive_mode_and_preserves_local_view() {
     ));
 }
 
+#[test]
+fn approval_key_set_mismatch_forces_reconcile_attention() {
+    let mut store = StateStore::new();
+    store.record_local_approval(sample_approval_for_spender("token-yes", "0xspender-a"));
+
+    let report = store.reconcile(RemoteSnapshot {
+        approvals: vec![sample_approval_for_spender("token-yes", "0xspender-b")],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::ApprovalMismatch {
+                key: domain::ApprovalKey {
+                    token_id: TokenId::from("token-yes"),
+                    spender: "0xspender-a".to_owned(),
+                    owner_address: "0xowner".to_owned(),
+                },
+            },
+            ReconcileAttention::ApprovalMismatch {
+                key: domain::ApprovalKey {
+                    token_id: TokenId::from("token-yes"),
+                    spender: "0xspender-b".to_owned(),
+                    owner_address: "0xowner".to_owned(),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn inventory_bucket_set_mismatch_forces_reconcile_attention() {
+    let mut store = StateStore::new();
+    store.record_local_inventory(
+        TokenId::from("token-yes"),
+        domain::InventoryBucket::Free,
+        Decimal::new(5, 0),
+    );
+
+    let report = store.reconcile(RemoteSnapshot {
+        inventory: vec![(
+            TokenId::from("token-yes"),
+            domain::InventoryBucket::ReservedForOrder,
+            Decimal::new(5, 0),
+        )],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::InventoryMismatch {
+                token_id: TokenId::from("token-yes"),
+                bucket: domain::InventoryBucket::Free,
+            },
+            ReconcileAttention::InventoryMismatch {
+                token_id: TokenId::from("token-yes"),
+                bucket: domain::InventoryBucket::ReservedForOrder,
+            },
+        ]
+    );
+}
+
+#[test]
+fn resolution_key_set_mismatch_forces_reconcile_attention() {
+    let mut store = StateStore::new();
+    store.record_local_resolution(sample_resolution("condition-a"));
+
+    let report = store.reconcile(RemoteSnapshot {
+        resolution_states: vec![sample_resolution("condition-b")],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::ResolutionMismatch {
+                condition_id: ConditionId::from("condition-a"),
+            },
+            ReconcileAttention::ResolutionMismatch {
+                condition_id: ConditionId::from("condition-b"),
+            },
+        ]
+    );
+}
+
+#[test]
+fn relayer_tx_key_set_mismatch_forces_reconcile_attention() {
+    let mut store = StateStore::new();
+    store.record_local_relayer_tx(sample_relayer_tx("tx-a"));
+
+    let report = store.reconcile(RemoteSnapshot {
+        relayer_txs: vec![sample_relayer_tx("tx-b")],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(!report.succeeded);
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::RelayerTxMismatch {
+                tx_id: "tx-a".to_owned(),
+            },
+            ReconcileAttention::RelayerTxMismatch {
+                tx_id: "tx-b".to_owned(),
+            },
+        ]
+    );
+}
+
 fn sample_order(order_id: &str, signed_order_hash: &str) -> Order {
     sample_order_for_condition(order_id, signed_order_hash, "token-yes", "condition-a")
 }
@@ -431,6 +551,13 @@ fn sample_order_for_condition(
 
 fn sample_approval(token_id: &str) -> ApprovalState {
     sample_approval_at(token_id, ApprovalStatus::Approved, Utc::now())
+}
+
+fn sample_approval_for_spender(token_id: &str, spender: &str) -> ApprovalState {
+    ApprovalState {
+        spender: spender.to_owned(),
+        ..sample_approval(token_id)
+    }
 }
 
 fn sample_approval_at(
