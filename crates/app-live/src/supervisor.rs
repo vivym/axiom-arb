@@ -1,6 +1,5 @@
-use chrono::{TimeZone, Utc};
-use domain::{ExecutionMode, ExternalFactEvent, RuntimeMode};
-use state::{ApplyResult, ProjectionReadiness, RemoteSnapshot};
+use domain::{ExecutionMode, RuntimeMode};
+use state::{ApplyResult, RemoteSnapshot};
 
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
@@ -18,6 +17,7 @@ pub struct SupervisorSummary {
     pub last_journal_seq: i64,
     pub last_state_version: u64,
     pub published_snapshot_id: Option<String>,
+    pub published_snapshot_committed_journal_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +108,14 @@ impl AppSupervisor {
         }
     }
 
-    pub fn push_dirty_snapshot(&mut self, state_version: u64) {
-        self.dispatcher.push_test_snapshot(state_version);
+    pub fn push_dirty_snapshot(
+        &mut self,
+        state_version: u64,
+        fullset_ready: bool,
+        negrisk_ready: bool,
+    ) {
+        self.dispatcher
+            .push_test_snapshot(state_version, fullset_ready, negrisk_ready);
     }
 
     pub fn flush_dispatch(&mut self) -> DispatchSummary {
@@ -144,9 +150,18 @@ impl AppSupervisor {
             .seed
             .committed_state_version
             .unwrap_or(self.seed.last_state_version);
-        self.runtime.restore_state(committed_state_version)?;
-        self.runtime.set_runtime_progress(
-            self.seed.last_journal_seq,
+        let last_journal_seq = match self.seed.last_journal_seq {
+            Some(last_journal_seq) => last_journal_seq,
+            None if committed_state_version == 0 => 0,
+            None => {
+                return Err(SupervisorError::new(
+                    "durable last journal sequence is required to resume committed state",
+                ));
+            }
+        };
+        self.runtime.restore_durable_anchor(
+            committed_state_version,
+            last_journal_seq,
             self.seed.published_snapshot_id.clone(),
         );
 
@@ -190,26 +205,13 @@ impl AppSupervisor {
             last_journal_seq: self.runtime.last_journal_seq().unwrap_or_default(),
             last_state_version: self.runtime.state_version(),
             published_snapshot_id: self.runtime.published_snapshot_id().map(str::to_owned),
+            published_snapshot_committed_journal_seq: self
+                .runtime
+                .published_snapshot_committed_journal_seq(),
         }
     }
 }
 
 fn snapshot_id_for(state_version: u64) -> String {
     format!("snapshot-{state_version}")
-}
-
-pub(crate) fn synthetic_event(journal_seq: i64) -> ExternalFactEvent {
-    ExternalFactEvent::new(
-        "replay",
-        "supervisor-seed",
-        &format!("evt-{journal_seq}"),
-        "v1",
-        Utc.with_ymd_and_hms(2026, 3, 25, 0, 0, 0)
-            .single()
-            .expect("static replay timestamp should be valid"),
-    )
-}
-
-pub(crate) fn readiness_for(snapshot_id: &str) -> ProjectionReadiness {
-    ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id)
 }

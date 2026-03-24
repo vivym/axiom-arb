@@ -14,6 +14,21 @@ fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
     assert_eq!(resumed.last_journal_seq, 41);
     assert_eq!(resumed.last_state_version, 7);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
+}
+
+#[test]
+fn restart_republishes_stale_snapshot_anchor_before_dispatch_resumes() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-6"));
+    supervisor.seed_committed_state_version(7);
+
+    let resumed = supervisor.resume_once().unwrap();
+
+    assert_eq!(resumed.last_journal_seq, 41);
+    assert_eq!(resumed.last_state_version, 7);
+    assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
 }
 
 #[test]
@@ -27,6 +42,7 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.last_journal_seq, 42);
     assert_eq!(resumed.last_state_version, 7);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
 }
 
 fn sample_input_task_event() -> InputTaskEvent {
