@@ -1153,7 +1153,12 @@ pub async fn persist_discovery_snapshot(
     ]);
 
     if let Value::Object(extra_payload) = snapshot.extra_payload {
-        payload.extend(extra_payload);
+        for (key, value) in extra_payload {
+            if is_reserved_discovery_snapshot_key(&key) {
+                continue;
+            }
+            payload.insert(key, value);
+        }
     }
 
     JournalRepo
@@ -1175,35 +1180,13 @@ pub async fn persist_discovery_snapshot(
 }
 
 pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i64) -> Result<()> {
-    let payload: Value = sqlx::query_scalar(
-        r#"
-        SELECT payload
-        FROM event_journal
-        WHERE event_type = 'neg_risk_discovery_snapshot'
-          AND payload ->> 'discovery_revision' = $1
-        ORDER BY journal_seq DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(discovery_revision.to_string())
-    .fetch_optional(pool)
-    .await?
-    .ok_or(PersistenceError::MissingDiscoverySnapshot { discovery_revision })?;
+    let _ = discovery_revision;
 
-    let family_ids = payload
-        .get("family_ids")
-        .and_then(Value::as_array)
-        .ok_or_else(|| PersistenceError::invalid_value("neg_risk_discovery_snapshot.family_ids", payload.to_string()))?
-        .iter()
-        .map(|item| {
-            item.as_str().map(str::to_owned).ok_or_else(|| {
-                PersistenceError::invalid_value(
-                    "neg_risk_discovery_snapshot.family_ids",
-                    item.to_string(),
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let latest_snapshot = latest_discovery_snapshot(pool)
+        .await?
+        .ok_or(PersistenceError::MissingDiscoverySnapshot { discovery_revision })?;
+    let family_ids = latest_snapshot.family_ids;
+    let authoritative_revision = latest_snapshot.discovery_revision;
 
     let mut tx = pool.begin().await?;
 
@@ -1225,7 +1208,7 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
         WHERE event_family_id = ANY($2)
         "#,
     )
-    .bind(discovery_revision)
+    .bind(authoritative_revision)
     .bind(&family_ids)
     .execute(&mut *tx)
     .await?;
@@ -1248,7 +1231,7 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
         WHERE event_family_id = ANY($2)
         "#,
     )
-    .bind(discovery_revision)
+    .bind(authoritative_revision)
     .bind(&family_ids)
     .execute(&mut *tx)
     .await?;
@@ -1345,6 +1328,75 @@ fn member_vector_json(member_vector: &[NegRiskFamilyMemberRow]) -> Value {
             })
             .collect(),
     )
+}
+
+fn is_reserved_discovery_snapshot_key(key: &str) -> bool {
+    matches!(
+        key,
+        "discovery_revision"
+            | "metadata_snapshot_hash"
+            | "discovered_family_count"
+            | "family_ids"
+            | "captured_at"
+    )
+}
+
+struct LatestDiscoverySnapshot {
+    discovery_revision: i64,
+    family_ids: Vec<String>,
+}
+
+async fn latest_discovery_snapshot(pool: &PgPool) -> Result<Option<LatestDiscoverySnapshot>> {
+    let payload = sqlx::query_scalar(
+        r#"
+        SELECT payload
+        FROM event_journal
+        WHERE event_type = 'neg_risk_discovery_snapshot'
+        ORDER BY journal_seq DESC
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    payload
+        .map(|payload: Value| {
+            let discovery_revision = payload
+                .get("discovery_revision")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    PersistenceError::invalid_value(
+                        "neg_risk_discovery_snapshot.discovery_revision",
+                        payload.to_string(),
+                    )
+                })?;
+
+            let family_ids = payload
+                .get("family_ids")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    PersistenceError::invalid_value(
+                        "neg_risk_discovery_snapshot.family_ids",
+                        payload.to_string(),
+                    )
+                })?
+                .iter()
+                .map(|item| {
+                    item.as_str().map(str::to_owned).ok_or_else(|| {
+                        PersistenceError::invalid_value(
+                            "neg_risk_discovery_snapshot.family_ids",
+                            item.to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(LatestDiscoverySnapshot {
+                discovery_revision,
+                family_ids,
+            })
+        })
+        .transpose()
 }
 
 async fn append_journal_entry<'e, E>(executor: E, entry: &JournalEntryInput) -> Result<JournalEntryRow>

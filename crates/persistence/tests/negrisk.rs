@@ -169,6 +169,16 @@ fn sample_discovery_snapshot(
     }
 }
 
+fn sample_discovery_snapshot_with_extra_payload(
+    source_event_id: &str,
+    family_ids: Vec<&str>,
+    extra_payload: serde_json::Value,
+) -> NegRiskDiscoverySnapshotInput {
+    let mut snapshot = sample_discovery_snapshot(source_event_id, family_ids);
+    snapshot.extra_payload = extra_payload;
+    snapshot
+}
+
 async fn stores_family_validation_revision_and_explainability_fields_case() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -213,9 +223,14 @@ mod negrisk {
             .upsert_validation(&db.pool, &sample_validation("family-1"))
             .await
             .unwrap();
+        NegRiskFamilyRepo
+            .upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
+            .await
+            .unwrap();
 
         let rows = JournalRepo.list_after(&db.pool, 0, 100).await.unwrap();
         assert!(rows.iter().any(|row| row.event_type == "family_validation"));
+        assert!(rows.iter().any(|row| row.event_type == "family_halt"));
 
         db.cleanup().await;
     }
@@ -297,6 +312,10 @@ mod negrisk {
             .upsert_validation(&db.pool, &sample_validation("family-2"))
             .await
             .unwrap();
+        NegRiskFamilyRepo
+            .upsert_halt(&db.pool, &sample_halt("family-2", "sha256:snapshot-a"))
+            .await
+            .unwrap();
 
         persist_discovery_snapshot(
             &db.pool,
@@ -319,6 +338,96 @@ mod negrisk {
             row.event_family_id == "family-1" && row.last_seen_discovery_revision == 8
         }));
         assert!(!rows.iter().any(|row| row.event_family_id == "family-2"));
+        let halts = NegRiskFamilyRepo.list_halts(&db.pool).await.unwrap();
+        assert!(!halts.iter().any(|row| row.event_family_id == "family-2"));
+
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn discovery_snapshot_preserves_mandatory_payload_fields() {
+        let db = TestDatabase::new().await;
+        run_migrations(&db.pool).await.unwrap();
+
+        persist_discovery_snapshot(
+            &db.pool,
+            sample_discovery_snapshot_with_extra_payload(
+                "rev-9",
+                vec!["family-1"],
+                json!({
+                    "discovery_revision": 1,
+                    "metadata_snapshot_hash": "sha256:wrong",
+                    "discovered_family_count": 99,
+                    "family_ids": ["family-x"],
+                    "captured_at": "2000-01-01T00:00:00Z",
+                    "extra_field": "kept"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let row = JournalRepo
+            .list_after(&db.pool, 0, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.event_type == "neg_risk_discovery_snapshot")
+            .unwrap();
+
+        assert_eq!(row.payload["discovery_revision"], json!(9));
+        assert_eq!(
+            row.payload["metadata_snapshot_hash"],
+            json!("sha256:discovery-9")
+        );
+        assert_eq!(row.payload["discovered_family_count"], json!(1));
+        assert_eq!(row.payload["family_ids"], json!(["family-1"]));
+        assert_eq!(row.payload["extra_field"], json!("kept"));
+        assert_ne!(row.payload["captured_at"], json!("2000-01-01T00:00:00Z"));
+
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn stale_requested_revision_cannot_override_newer_authoritative_snapshot() {
+        let db = TestDatabase::new().await;
+        run_migrations(&db.pool).await.unwrap();
+
+        NegRiskFamilyRepo
+            .upsert_validation(&db.pool, &sample_validation("family-1"))
+            .await
+            .unwrap();
+        NegRiskFamilyRepo
+            .upsert_validation(&db.pool, &sample_validation("family-2"))
+            .await
+            .unwrap();
+        NegRiskFamilyRepo
+            .upsert_halt(&db.pool, &sample_halt("family-2", "sha256:snapshot-a"))
+            .await
+            .unwrap();
+
+        persist_discovery_snapshot(
+            &db.pool,
+            sample_discovery_snapshot("rev-7", vec!["family-1", "family-2"]),
+        )
+        .await
+        .unwrap();
+        persist_discovery_snapshot(
+            &db.pool,
+            sample_discovery_snapshot("rev-8", vec!["family-1"]),
+        )
+        .await
+        .unwrap();
+
+        reconcile_current_family_view(&db.pool, 7).await.unwrap();
+
+        let rows = NegRiskFamilyRepo.list_validations(&db.pool).await.unwrap();
+        assert!(rows.iter().any(|row| {
+            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 8
+        }));
+        assert!(!rows.iter().any(|row| row.event_family_id == "family-2"));
+        let halts = NegRiskFamilyRepo.list_halts(&db.pool).await.unwrap();
+        assert!(halts.is_empty());
 
         db.cleanup().await;
     }
