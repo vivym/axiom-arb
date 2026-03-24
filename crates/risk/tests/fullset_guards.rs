@@ -41,6 +41,23 @@ fn approval_insufficient_is_rejected() {
 }
 
 #[test]
+fn approval_status_not_approved_is_rejected() {
+    let decision = evaluate_fullset_trade(&FullSetRiskContext {
+        runtime_mode: RuntimeMode::Healthy,
+        approval: sample_approval(ApprovalStatus::Missing, Decimal::new(100, 0)),
+        net_edge_usdc: Decimal::new(10, 2),
+        thresholds: sample_thresholds(),
+        freshness: Freshness::fresh(Utc::now()),
+        freshness_policy: sample_freshness_policy(),
+    });
+
+    assert_eq!(
+        decision.reject_reason(),
+        Some(RejectReason::ApprovalInsufficient)
+    );
+}
+
+#[test]
 fn freshness_stale_is_rejected() {
     let decision = evaluate_fullset_trade(&FullSetRiskContext {
         runtime_mode: RuntimeMode::Healthy,

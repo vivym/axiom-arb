@@ -1,5 +1,7 @@
 use rust_decimal::{Decimal, RoundingStrategy};
 
+pub type PricingResult<T> = Result<T, PricingError>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FullSetLeg {
     pub quantity: Decimal,
@@ -34,6 +36,14 @@ pub struct NormalizedEdge {
     pub net_edge_bps: Decimal,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PricingError {
+    QuantityMismatch {
+        yes_quantity: Decimal,
+        no_quantity: Decimal,
+    },
+}
+
 impl QuantizationPolicy {
     pub fn usdc_cents() -> Self {
         Self { usdc_dp: 2 }
@@ -59,21 +69,21 @@ pub fn evaluate_buy_yes_buy_no_merge(
     no_leg: FullSetLeg,
     fees: FullSetFees,
     quantization: QuantizationPolicy,
-) -> NormalizedEdge {
-    let gross_usdc = matched_quantity(yes_leg, no_leg);
+) -> PricingResult<NormalizedEdge> {
+    let gross_usdc = matched_quantity(yes_leg, no_leg)?;
     let input_cost_usdc = yes_leg.notional() + no_leg.notional();
     let fee_usdc_equiv = quantized_leg_fees(yes_leg, no_leg, fees.leg_fee_rate, quantization)
         + quantization.quantize_fee(fees.merge_fee_usdc);
     let net_output_usdc = quantization.quantize(gross_usdc);
     let rounding_loss_usdc = gross_usdc - net_output_usdc;
 
-    build_result(
+    Ok(build_result(
         gross_usdc,
         input_cost_usdc,
         fee_usdc_equiv,
         rounding_loss_usdc,
         net_output_usdc,
-    )
+    ))
 }
 
 pub fn evaluate_split_sell_yes_sell_no(
@@ -81,8 +91,8 @@ pub fn evaluate_split_sell_yes_sell_no(
     no_leg: FullSetLeg,
     fees: FullSetFees,
     quantization: QuantizationPolicy,
-) -> NormalizedEdge {
-    let input_cost_usdc = matched_quantity(yes_leg, no_leg);
+) -> PricingResult<NormalizedEdge> {
+    let input_cost_usdc = matched_quantity(yes_leg, no_leg)?;
     let gross_usdc = yes_leg.notional() + no_leg.notional();
     let quantized_yes_output = quantization.quantize(yes_leg.notional());
     let quantized_no_output = quantization.quantize(no_leg.notional());
@@ -91,13 +101,13 @@ pub fn evaluate_split_sell_yes_sell_no(
         + quantization.quantize_fee(fees.split_fee_usdc);
     let rounding_loss_usdc = gross_usdc - net_output_usdc;
 
-    build_result(
+    Ok(build_result(
         gross_usdc,
         input_cost_usdc,
         fee_usdc_equiv,
         rounding_loss_usdc,
         net_output_usdc,
-    )
+    ))
 }
 
 fn quantized_leg_fees(
@@ -110,13 +120,15 @@ fn quantized_leg_fees(
         + quantization.quantize_fee(no_leg.notional() * leg_fee_rate)
 }
 
-fn matched_quantity(yes_leg: FullSetLeg, no_leg: FullSetLeg) -> Decimal {
-    debug_assert_eq!(
-        yes_leg.quantity, no_leg.quantity,
-        "full-set pricing requires matched YES/NO quantities"
-    );
+fn matched_quantity(yes_leg: FullSetLeg, no_leg: FullSetLeg) -> PricingResult<Decimal> {
+    if yes_leg.quantity != no_leg.quantity {
+        return Err(PricingError::QuantityMismatch {
+            yes_quantity: yes_leg.quantity,
+            no_quantity: no_leg.quantity,
+        });
+    }
 
-    yes_leg.quantity.min(no_leg.quantity)
+    Ok(yes_leg.quantity)
 }
 
 fn build_result(

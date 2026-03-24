@@ -21,7 +21,8 @@ fn net_edge_uses_usdc_normalization_and_fee_rounding() {
             split_fee_usdc: Decimal::ZERO,
         },
         QuantizationPolicy::usdc_cents(),
-    );
+    )
+    .expect("matched legs should price");
 
     assert_eq!(result.breakdown.gross_usdc, Decimal::new(300, 2));
     assert_eq!(result.breakdown.input_cost_usdc, Decimal::new(291, 2));
@@ -45,14 +46,38 @@ fn rounding_loss_is_recorded_in_breakdown() {
         FullSetFees {
             leg_fee_rate: Decimal::ZERO,
             merge_fee_usdc: Decimal::ZERO,
+            split_fee_usdc: Decimal::new(2, 2),
+        },
+        QuantizationPolicy::usdc_cents(),
+    )
+    .expect("matched legs should price");
+
+    assert_eq!(result.breakdown.gross_usdc, Decimal::new(201, 2));
+    assert_eq!(result.breakdown.input_cost_usdc, Decimal::new(300, 2));
+    assert_eq!(result.breakdown.fee_usdc_equiv, Decimal::new(2, 2));
+    assert_eq!(result.breakdown.rounding_loss_usdc, Decimal::new(1, 2));
+    assert_eq!(result.breakdown.net_output_usdc, Decimal::new(200, 2));
+    assert_eq!(result.net_edge_usdc, Decimal::new(-102, 2));
+}
+
+#[test]
+fn buy_merge_rejects_mismatched_leg_quantities() {
+    let result = evaluate_buy_yes_buy_no_merge(
+        FullSetLeg {
+            quantity: Decimal::new(3, 0),
+            price_usdc: Decimal::new(49, 2),
+        },
+        FullSetLeg {
+            quantity: Decimal::new(2, 0),
+            price_usdc: Decimal::new(48, 2),
+        },
+        FullSetFees {
+            leg_fee_rate: Decimal::ZERO,
+            merge_fee_usdc: Decimal::ZERO,
             split_fee_usdc: Decimal::ZERO,
         },
         QuantizationPolicy::usdc_cents(),
     );
 
-    assert_eq!(result.breakdown.gross_usdc, Decimal::new(201, 2));
-    assert_eq!(result.breakdown.input_cost_usdc, Decimal::new(300, 2));
-    assert_eq!(result.breakdown.rounding_loss_usdc, Decimal::new(1, 2));
-    assert_eq!(result.breakdown.net_output_usdc, Decimal::new(200, 2));
-    assert_eq!(result.net_edge_usdc, Decimal::new(-100, 2));
+    assert!(result.is_err(), "mismatched full-set legs must be rejected");
 }
