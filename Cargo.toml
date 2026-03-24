@@ -9,6 +9,7 @@ members = [
   "crates/persistence",
   "crates/venue-polymarket",
   "crates/state",
+  "crates/strategy-negrisk",
   "crates/strategy-fullset",
   "crates/risk",
   "crates/execution",

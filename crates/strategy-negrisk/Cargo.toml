@@ -1,0 +1,11 @@
+[package]
+name = "strategy-negrisk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+domain = { path = "../domain" }
+venue-polymarket = { path = "../venue-polymarket" }
+
+[lib]
+path = "src/lib.rs"
