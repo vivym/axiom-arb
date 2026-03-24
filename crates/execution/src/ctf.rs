@@ -25,6 +25,7 @@ pub struct CtfOperation {
     pub nonce: Option<String>,
     pub tx_hash: Option<String>,
     pub status: CtfOperationStatus,
+    attempt_id: Option<String>,
 }
 
 impl CtfOperation {
@@ -42,7 +43,21 @@ impl CtfOperation {
             nonce,
             tx_hash: None,
             status,
+            attempt_id: None,
         }
+    }
+
+    pub fn with_attempt_id(mut self, attempt_id: impl Into<String>) -> Self {
+        self.attempt_id = Some(attempt_id.into());
+        self
+    }
+
+    pub fn with_attempt_context(self, attempt: &domain::ExecutionAttemptContext) -> Self {
+        self.with_attempt_id(attempt.attempt_id.clone())
+    }
+
+    pub fn attempt_id(&self) -> Option<&str> {
+        self.attempt_id.as_deref()
     }
 }
 

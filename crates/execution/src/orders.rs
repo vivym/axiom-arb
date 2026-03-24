@@ -20,6 +20,7 @@ pub struct SignedOrderEnvelope {
     pub identity: SignedOrderIdentity,
     pub retry_kind: RetryKind,
     pub retry_of_order_id: Option<OrderId>,
+    attempt_id: Option<String>,
     used_order_ids: Vec<OrderId>,
 }
 
@@ -31,8 +32,22 @@ impl SignedOrderEnvelope {
             identity,
             retry_kind: RetryKind::Initial,
             retry_of_order_id: None,
+            attempt_id: None,
             used_order_ids,
         }
+    }
+
+    pub fn with_attempt_id(mut self, attempt_id: impl Into<String>) -> Self {
+        self.attempt_id = Some(attempt_id.into());
+        self
+    }
+
+    pub fn attempt_id(&self) -> Option<&str> {
+        self.attempt_id.as_deref()
+    }
+
+    pub fn with_attempt_context(self, attempt: &domain::ExecutionAttemptContext) -> Self {
+        self.with_attempt_id(attempt.attempt_id.clone())
     }
 
     pub fn transport_retry(&self) -> Self {
@@ -41,6 +56,7 @@ impl SignedOrderEnvelope {
             identity: self.identity.clone(),
             retry_kind: RetryKind::Transport,
             retry_of_order_id: self.retry_of_order_id.clone(),
+            attempt_id: self.attempt_id.clone(),
             used_order_ids: self.used_order_ids.clone(),
         }
     }
@@ -73,6 +89,7 @@ impl SignedOrderEnvelope {
                     .clone()
                     .unwrap_or_else(|| self.order_id.clone()),
             ),
+            attempt_id: self.attempt_id.clone(),
             used_order_ids: {
                 let mut used_order_ids = self.used_order_ids.clone();
                 used_order_ids.push(next_order_id);

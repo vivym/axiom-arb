@@ -1,5 +1,6 @@
 use domain::{ConditionId, OrderId, SignedOrderIdentity};
 use execution::{
+    attempt::ExecutionAttemptFactory,
     ctf::{CtfOperation, CtfOperationKind, CtfOperationStatus, CtfTracker, CtfTrackerError},
     orders::{BusinessRetryError, RetryKind, SignedOrderEnvelope},
     plans::ExecutionPlan,
@@ -15,6 +16,25 @@ fn transport_retry_reuses_the_same_signed_order_identity() {
     assert_eq!(retry.order_id, order.order_id);
     assert_eq!(retry.identity, order.identity);
     assert_eq!(retry.retry_of_order_id, None);
+}
+
+#[test]
+fn order_envelope_carries_the_attempt_context_used_to_create_it() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-12"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+    let (attempt, context) =
+        factory.next_for_plan(&plan, "snapshot-12", domain::ExecutionMode::Shadow);
+
+    let order = SignedOrderEnvelope::new(OrderId::from("order-12"), sample_identity("attempt"))
+        .with_attempt_context(&context);
+
+    assert_eq!(order.attempt_id(), Some(attempt.attempt_id.as_str()));
+    assert_eq!(
+        order.transport_retry().attempt_id(),
+        Some(attempt.attempt_id.as_str())
+    );
 }
 
 #[test]
@@ -168,6 +188,22 @@ fn redeem_resolved_is_condition_scoped_and_amountless() {
 }
 
 #[test]
+fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-4"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+
+    let (attempt, context) =
+        factory.next_for_plan(&plan, "snapshot-4", domain::ExecutionMode::Shadow);
+
+    assert_eq!(attempt.plan_id, plan.plan_id());
+    assert_eq!(attempt.snapshot_id, "snapshot-4");
+    assert_eq!(context.attempt_id, attempt.attempt_id);
+    assert_eq!(context.execution_mode, domain::ExecutionMode::Shadow);
+}
+
+#[test]
 fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     let condition_id = ConditionId::from("condition-1");
     let mut tracker = CtfTracker::new();
@@ -202,6 +238,27 @@ fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     assert_eq!(tracked.nonce.as_deref(), Some("7"));
     assert_eq!(tracked.tx_hash.as_deref(), Some("0xabc123"));
     assert_eq!(tracked.status, CtfOperationStatus::Confirmed);
+}
+
+#[test]
+fn ctf_operation_carries_the_attempt_context_used_to_create_it() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-13"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+    let (attempt, context) =
+        factory.next_for_plan(&plan, "snapshot-13", domain::ExecutionMode::Live);
+
+    let operation = CtfOperation::new(
+        CtfOperationKind::Merge,
+        ConditionId::from("condition-13"),
+        None,
+        None,
+        CtfOperationStatus::Planned,
+    )
+    .with_attempt_context(&context);
+
+    assert_eq!(operation.attempt_id(), Some(attempt.attempt_id.as_str()));
 }
 
 #[test]

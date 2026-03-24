@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Reuses the domain-owned runtime backbone types directly.
 domain = { path = "../domain" }
 
 [lib]
