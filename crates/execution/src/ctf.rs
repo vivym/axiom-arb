@@ -48,6 +48,23 @@ impl CtfOperation {
 
 pub type CtfOperationId = usize;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CtfTrackerError {
+    OperationNotFound {
+        operation_id: CtfOperationId,
+    },
+    SubmittedRequiresRelayerMetadata,
+    ConfirmedRequiresTxHash,
+    IllegalStatusTransition {
+        from: CtfOperationStatus,
+        to: CtfOperationStatus,
+    },
+    RelayerTransactionIdConflict {
+        relayer_transaction_id: String,
+    },
+    RelayerTransactionIdAlreadyBound,
+}
+
 #[derive(Debug, Default)]
 pub struct CtfTracker {
     operations: HashMap<CtfOperationId, CtfOperation>,
@@ -60,7 +77,10 @@ impl CtfTracker {
         Self::default()
     }
 
-    pub fn record(&mut self, operation: CtfOperation) -> CtfOperationId {
+    pub fn record(&mut self, operation: CtfOperation) -> Result<CtfOperationId, CtfTrackerError> {
+        Self::validate_operation_for_status(&operation.status, &operation)?;
+        self.ensure_relayer_id_available(operation.relayer_transaction_id.as_deref(), None)?;
+
         let operation_id = self.next_operation_id;
         self.next_operation_id += 1;
 
@@ -70,7 +90,7 @@ impl CtfTracker {
         }
 
         self.operations.insert(operation_id, operation);
-        operation_id
+        Ok(operation_id)
     }
 
     pub fn attach_relayer_metadata(
@@ -78,10 +98,25 @@ impl CtfTracker {
         operation_id: CtfOperationId,
         relayer_transaction_id: Option<String>,
         nonce: Option<String>,
-    ) -> bool {
-        let Some(operation) = self.operations.get_mut(&operation_id) else {
-            return false;
+    ) -> Result<(), CtfTrackerError> {
+        let Some(existing_operation) = self.operations.get(&operation_id) else {
+            return Err(CtfTrackerError::OperationNotFound { operation_id });
         };
+
+        if let Some(ref relayer_transaction_id) = relayer_transaction_id {
+            if let Some(existing) = existing_operation.relayer_transaction_id.as_deref() {
+                if existing != relayer_transaction_id {
+                    return Err(CtfTrackerError::RelayerTransactionIdAlreadyBound);
+                }
+            }
+
+            self.ensure_relayer_id_available(Some(&relayer_transaction_id), Some(operation_id))?;
+        }
+
+        let operation = self
+            .operations
+            .get_mut(&operation_id)
+            .expect("operation exists after validation");
 
         if let Some(relayer_transaction_id) = relayer_transaction_id {
             self.relayer_index
@@ -93,7 +128,7 @@ impl CtfTracker {
             operation.nonce = Some(nonce);
         }
 
-        true
+        Ok(())
     }
 
     pub fn update_status(
@@ -101,10 +136,26 @@ impl CtfTracker {
         operation_id: CtfOperationId,
         status: CtfOperationStatus,
         tx_hash: Option<String>,
-    ) -> bool {
-        let Some(operation) = self.operations.get_mut(&operation_id) else {
-            return false;
+    ) -> Result<(), CtfTrackerError> {
+        let Some(existing_operation) = self.operations.get(&operation_id) else {
+            return Err(CtfTrackerError::OperationNotFound { operation_id });
         };
+
+        Self::validate_transition(existing_operation.status, status)?;
+
+        let mut candidate = existing_operation.clone();
+        candidate.status = status;
+
+        if let Some(tx_hash) = tx_hash.clone() {
+            candidate.tx_hash = Some(tx_hash);
+        }
+
+        Self::validate_operation_for_status(&status, &candidate)?;
+
+        let operation = self
+            .operations
+            .get_mut(&operation_id)
+            .expect("operation exists after validation");
 
         operation.status = status;
 
@@ -112,7 +163,7 @@ impl CtfTracker {
             operation.tx_hash = Some(tx_hash);
         }
 
-        true
+        Ok(())
     }
 
     pub fn operation(&self, operation_id: CtfOperationId) -> Option<&CtfOperation> {
@@ -126,5 +177,55 @@ impl CtfTracker {
         self.relayer_index
             .get(relayer_transaction_id)
             .and_then(|operation_id| self.operations.get(operation_id))
+    }
+
+    fn validate_transition(
+        from: CtfOperationStatus,
+        to: CtfOperationStatus,
+    ) -> Result<(), CtfTrackerError> {
+        if to == CtfOperationStatus::Planned && from != CtfOperationStatus::Planned {
+            return Err(CtfTrackerError::IllegalStatusTransition { from, to });
+        }
+
+        Ok(())
+    }
+
+    fn validate_operation_for_status(
+        status: &CtfOperationStatus,
+        operation: &CtfOperation,
+    ) -> Result<(), CtfTrackerError> {
+        if matches!(
+            status,
+            CtfOperationStatus::Submitted | CtfOperationStatus::Confirmed
+        ) && (operation.relayer_transaction_id.is_none() || operation.nonce.is_none())
+        {
+            return Err(CtfTrackerError::SubmittedRequiresRelayerMetadata);
+        }
+
+        if *status == CtfOperationStatus::Confirmed && operation.tx_hash.is_none() {
+            return Err(CtfTrackerError::ConfirmedRequiresTxHash);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_relayer_id_available(
+        &self,
+        relayer_transaction_id: Option<&str>,
+        operation_id: Option<CtfOperationId>,
+    ) -> Result<(), CtfTrackerError> {
+        let Some(relayer_transaction_id) = relayer_transaction_id else {
+            return Ok(());
+        };
+
+        if let Some(existing_operation_id) = self.relayer_index.get(relayer_transaction_id) {
+            if Some(*existing_operation_id) != operation_id {
+                return Err(CtfTrackerError::RelayerTransactionIdConflict {
+                    relayer_transaction_id: relayer_transaction_id.to_owned(),
+                });
+            }
+        }
+
+        Ok(())
     }
 }

@@ -58,7 +58,11 @@ impl SignedOrderEnvelope {
             order_id,
             identity,
             retry_kind: RetryKind::Business,
-            retry_of_order_id: Some(self.order_id.clone()),
+            retry_of_order_id: Some(
+                self.retry_of_order_id
+                    .clone()
+                    .unwrap_or_else(|| self.order_id.clone()),
+            ),
         })
     }
 }

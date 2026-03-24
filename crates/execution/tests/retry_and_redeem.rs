@@ -1,6 +1,6 @@
 use domain::{ConditionId, OrderId, SignedOrderIdentity};
 use execution::{
-    ctf::{CtfOperation, CtfOperationKind, CtfOperationStatus, CtfTracker},
+    ctf::{CtfOperation, CtfOperationKind, CtfOperationStatus, CtfTracker, CtfTrackerError},
     orders::{BusinessRetryError, RetryKind, SignedOrderEnvelope},
     plans::ExecutionPlan,
 };
@@ -72,6 +72,35 @@ fn business_retry_rejects_reusing_original_nonce_even_if_other_fields_change() {
 }
 
 #[test]
+fn business_retry_of_business_retry_keeps_lineage_pointing_to_the_original_order() {
+    let original = SignedOrderEnvelope::new(OrderId::from("order-1"), sample_identity("original"));
+    let first_retry = original
+        .business_retry(
+            OrderId::from("order-2"),
+            "nonce-retry-1".to_owned(),
+            sample_identity("retry-1"),
+        )
+        .expect("first retry should succeed");
+
+    let second_retry = first_retry
+        .business_retry(
+            OrderId::from("order-3"),
+            "nonce-retry-2".to_owned(),
+            sample_identity("retry-2"),
+        )
+        .expect("second retry should succeed");
+
+    assert_eq!(
+        first_retry.retry_of_order_id,
+        Some(OrderId::from("order-1"))
+    );
+    assert_eq!(
+        second_retry.retry_of_order_id,
+        Some(OrderId::from("order-1"))
+    );
+}
+
+#[test]
 fn redeem_resolved_is_condition_scoped_and_amountless() {
     let condition_id = ConditionId::from("condition-1");
     let plan = ExecutionPlan::RedeemResolved {
@@ -92,18 +121,22 @@ fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     let condition_id = ConditionId::from("condition-1");
     let mut tracker = CtfTracker::new();
 
-    let operation_id = tracker.record(CtfOperation::new(
-        CtfOperationKind::Redeem,
-        condition_id.clone(),
-        Some("relayer-tx-1".to_owned()),
-        Some("7".to_owned()),
-        CtfOperationStatus::Submitted,
-    ));
-    tracker.update_status(
-        operation_id,
-        CtfOperationStatus::Confirmed,
-        Some("0xabc123".to_owned()),
-    );
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Redeem,
+            condition_id.clone(),
+            Some("relayer-tx-1".to_owned()),
+            Some("7".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("submitted operation with relayer metadata should be valid");
+    tracker
+        .update_status(
+            operation_id,
+            CtfOperationStatus::Confirmed,
+            Some("0xabc123".to_owned()),
+        )
+        .expect("confirmed operation with tx hash should be valid");
 
     let tracked = tracker
         .operation(operation_id)
@@ -125,13 +158,15 @@ fn planned_ctf_operation_can_omit_relayer_metadata_until_later_update() {
     let condition_id = ConditionId::from("condition-2");
     let mut tracker = CtfTracker::new();
 
-    let operation_id = tracker.record(CtfOperation::new(
-        CtfOperationKind::Split,
-        condition_id.clone(),
-        None,
-        None,
-        CtfOperationStatus::Planned,
-    ));
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            condition_id.clone(),
+            None,
+            None,
+            CtfOperationStatus::Planned,
+        ))
+        .expect("planned operation without relayer metadata should be valid");
 
     let planned = tracker
         .operation(operation_id)
@@ -140,12 +175,16 @@ fn planned_ctf_operation_can_omit_relayer_metadata_until_later_update() {
     assert_eq!(planned.nonce, None);
     assert_eq!(planned.status, CtfOperationStatus::Planned);
 
-    tracker.attach_relayer_metadata(
-        operation_id,
-        Some("relayer-tx-2".to_owned()),
-        Some("nonce-22".to_owned()),
-    );
-    tracker.update_status(operation_id, CtfOperationStatus::Submitted, None);
+    tracker
+        .attach_relayer_metadata(
+            operation_id,
+            Some("relayer-tx-2".to_owned()),
+            Some("nonce-22".to_owned()),
+        )
+        .expect("attaching relayer metadata should succeed");
+    tracker
+        .update_status(operation_id, CtfOperationStatus::Submitted, None)
+        .expect("submitted operation with relayer metadata should be valid");
 
     let submitted = tracker
         .operation(operation_id)
@@ -156,6 +195,135 @@ fn planned_ctf_operation_can_omit_relayer_metadata_until_later_update() {
     );
     assert_eq!(submitted.nonce.as_deref(), Some("nonce-22"));
     assert_eq!(submitted.status, CtfOperationStatus::Submitted);
+}
+
+#[test]
+fn submitted_operation_without_relayer_metadata_is_rejected() {
+    let mut tracker = CtfTracker::new();
+
+    let err = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            ConditionId::from("condition-3"),
+            None,
+            None,
+            CtfOperationStatus::Submitted,
+        ))
+        .expect_err("submitted operation must already have relayer metadata");
+
+    assert_eq!(err, CtfTrackerError::SubmittedRequiresRelayerMetadata);
+}
+
+#[test]
+fn confirmed_operation_without_tx_hash_is_rejected() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Redeem,
+            ConditionId::from("condition-4"),
+            Some("relayer-tx-4".to_owned()),
+            Some("nonce-4".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("submitted operation should be valid");
+
+    let err = tracker
+        .update_status(operation_id, CtfOperationStatus::Confirmed, None)
+        .expect_err("confirmed operation must have a tx hash");
+
+    assert_eq!(err, CtfTrackerError::ConfirmedRequiresTxHash);
+}
+
+#[test]
+fn ctf_tracker_rejects_transitioning_back_to_planned() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Merge,
+            ConditionId::from("condition-5"),
+            Some("relayer-tx-5".to_owned()),
+            Some("nonce-5".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("submitted operation should be valid");
+
+    let err = tracker
+        .update_status(operation_id, CtfOperationStatus::Planned, None)
+        .expect_err("cannot move a submitted operation back to planned");
+
+    assert_eq!(
+        err,
+        CtfTrackerError::IllegalStatusTransition {
+            from: CtfOperationStatus::Submitted,
+            to: CtfOperationStatus::Planned,
+        }
+    );
+}
+
+#[test]
+fn duplicate_relayer_transaction_id_is_rejected() {
+    let mut tracker = CtfTracker::new();
+
+    tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            ConditionId::from("condition-6"),
+            Some("relayer-tx-dup".to_owned()),
+            Some("nonce-6".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("first relayer transaction id should be accepted");
+
+    let err = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Redeem,
+            ConditionId::from("condition-7"),
+            Some("relayer-tx-dup".to_owned()),
+            Some("nonce-7".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect_err("duplicate relayer transaction id must be rejected");
+
+    assert_eq!(
+        err,
+        CtfTrackerError::RelayerTransactionIdConflict {
+            relayer_transaction_id: "relayer-tx-dup".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn relayer_id_cannot_be_rebound_and_old_index_remains_clean() {
+    let mut tracker = CtfTracker::new();
+    let operation_id = tracker
+        .record(CtfOperation::new(
+            CtfOperationKind::Split,
+            ConditionId::from("condition-8"),
+            Some("relayer-tx-old".to_owned()),
+            Some("nonce-8".to_owned()),
+            CtfOperationStatus::Submitted,
+        ))
+        .expect("initial relayer transaction id should be accepted");
+
+    let err = tracker
+        .attach_relayer_metadata(
+            operation_id,
+            Some("relayer-tx-new".to_owned()),
+            Some("nonce-8b".to_owned()),
+        )
+        .expect_err("rebinding an existing relayer transaction id should be rejected");
+
+    assert_eq!(err, CtfTrackerError::RelayerTransactionIdAlreadyBound);
+    assert_eq!(
+        tracker
+            .operation_by_relayer_transaction_id("relayer-tx-old")
+            .map(|operation| operation.condition_id.as_str()),
+        Some("condition-8")
+    );
+    assert_eq!(
+        tracker.operation_by_relayer_transaction_id("relayer-tx-new"),
+        None
+    );
 }
 
 fn sample_identity(label: &str) -> SignedOrderIdentity {
