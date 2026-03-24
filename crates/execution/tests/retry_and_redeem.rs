@@ -289,8 +289,7 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
     let mut factory =
         ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 4)]));
 
-    let (attempt, context) =
-        factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
 
     assert_eq!(attempt.attempt_no, 5);
     assert_eq!(

@@ -17,6 +17,7 @@ fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
     assert_eq!(resumed.last_journal_seq, 41);
     assert_eq!(resumed.last_state_version, 7);
     assert_eq!(resumed.runtime_mode, RuntimeMode::Healthy);
+    assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
 }
@@ -35,6 +36,7 @@ fn restart_republishes_stale_snapshot_anchor_before_dispatch_resumes() {
     assert_eq!(resumed.last_journal_seq, 41);
     assert_eq!(resumed.last_state_version, 7);
     assert_eq!(resumed.runtime_mode, RuntimeMode::Healthy);
+    assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
 }
@@ -53,6 +55,7 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.last_journal_seq, 42);
     assert_eq!(resumed.last_state_version, 7);
     assert_eq!(resumed.runtime_mode, RuntimeMode::Healthy);
+    assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
 }
@@ -71,6 +74,7 @@ fn restart_replays_out_of_order_user_trade_from_durable_log() {
     assert_eq!(resumed.last_journal_seq, 42);
     assert_eq!(resumed.last_state_version, 6);
     assert_eq!(resumed.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(resumed.pending_reconcile_count, 1);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-6"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
 
@@ -80,12 +84,14 @@ fn restart_replays_out_of_order_user_trade_from_durable_log() {
         resumed.published_snapshot_id.as_deref(),
     );
     supervisor.seed_committed_state_version(resumed.last_state_version);
+    supervisor.seed_pending_reconcile_count(resumed.pending_reconcile_count);
 
     let replayed = supervisor.resume_once().unwrap();
 
     assert_eq!(replayed.last_journal_seq, 42);
     assert_eq!(replayed.last_state_version, 6);
     assert_eq!(replayed.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(replayed.pending_reconcile_count, 1);
     assert_eq!(
         replayed.published_snapshot_id.as_deref(),
         Some("snapshot-6")
@@ -110,13 +116,51 @@ fn restart_retains_failed_backlog_entries_for_retry() {
     assert_eq!(supervisor.pending_input_count(), 1);
 }
 
+#[test]
+fn restart_preserves_cleared_pending_reconcile_count_after_successful_reconcile() {
+    let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 36..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_committed_input(sample_out_of_order_user_trade(42));
+    supervisor.seed_runtime_progress(42, 6, Some("snapshot-6"));
+    supervisor.seed_committed_state_version(6);
+    supervisor.seed_pending_reconcile_count(0);
+
+    let resumed = supervisor.resume_once().unwrap();
+
+    assert_eq!(resumed.last_journal_seq, 42);
+    assert_eq!(resumed.last_state_version, 6);
+    assert_eq!(resumed.runtime_mode, RuntimeMode::Healthy);
+    assert_eq!(resumed.pending_reconcile_count, 0);
+    assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-6"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
+}
+
+#[test]
+fn restart_requires_durable_pending_reconcile_count_when_history_contains_follow_up_work() {
+    let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 36..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_committed_input(sample_out_of_order_user_trade(42));
+    supervisor.seed_runtime_progress(42, 6, Some("snapshot-6"));
+    supervisor.seed_committed_state_version(6);
+
+    let err = supervisor.resume_once().unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("durable pending reconcile count is required"));
+}
+
 fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
     InputTaskEvent::new(
         journal_seq,
         ExternalFactEvent::new(
             "market_ws",
             "session-1",
-            &format!("evt-{journal_seq}"),
+            format!("evt-{journal_seq}"),
             "v1",
             Utc::now(),
         ),
@@ -129,7 +173,7 @@ fn sample_out_of_order_user_trade(journal_seq: i64) -> InputTaskEvent {
         ExternalFactEvent::new(
             "market_ws",
             "session-2",
-            &format!("trade-{journal_seq}"),
+            format!("trade-{journal_seq}"),
             "v1",
             Utc::now(),
         ),
@@ -142,7 +186,7 @@ fn conflicting_input_task_event(journal_seq: i64) -> InputTaskEvent {
         ExternalFactEvent::new(
             "market_ws",
             "session-conflict",
-            &format!("evt-conflict-{journal_seq}"),
+            format!("evt-conflict-{journal_seq}"),
             "v1",
             Utc::now(),
         ),

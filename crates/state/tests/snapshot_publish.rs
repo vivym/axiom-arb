@@ -101,7 +101,7 @@ fn apply_event(store: &mut StateStore, journal_seq: i64) {
     let event = ExternalFactEvent::new(
         "market_ws",
         "session-1",
-        &format!("evt-{journal_seq}"),
+        format!("evt-{journal_seq}"),
         "v1",
         Utc.with_ymd_and_hms(2026, 3, 24, 10, 0, 0).unwrap(),
     );

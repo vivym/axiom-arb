@@ -29,7 +29,7 @@
 
 - Phase 1 on the unified runtime is `full-set Live`.
 - Phase 2 on the unified runtime is `neg-risk Shadow`.
-- Phase 3 `neg-risk Live` is not enabled by this task.
+- Phase 3 `neg-risk Live` is not enabled by this Phase 1/2 plan.
 - Shadow artifacts stay on isolated storage and stream paths; they do not share authoritative live sinks.
 
 ## Verification

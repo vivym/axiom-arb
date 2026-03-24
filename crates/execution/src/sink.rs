@@ -7,7 +7,9 @@ use crate::plans::ExecutionPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VenueSinkError {
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
     ModeMismatch {
         sink: &'static str,
         expected: ExecutionMode,

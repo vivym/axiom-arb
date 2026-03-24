@@ -71,4 +71,8 @@ impl InputTaskQueue {
     pub fn len(&self) -> usize {
         self.backlog.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.backlog.is_empty()
+    }
 }

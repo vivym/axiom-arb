@@ -1,5 +1,6 @@
 use app_live::{run_live, run_paper, AppRuntime, AppRuntimeMode, StaticSnapshotSource};
-use domain::{ConditionId, ExecutionMode, RuntimeMode, RuntimeOverlay, TokenId};
+use chrono::Utc;
+use domain::{ConditionId, ExecutionMode, ExternalFactEvent, RuntimeMode, RuntimeOverlay, TokenId};
 use state::{ReconcileAttention, RemoteSnapshot};
 
 #[test]
@@ -37,6 +38,31 @@ fn app_failed_reconcile_keeps_cancel_only_until_first_success() {
 }
 
 #[test]
+fn app_clears_pending_reconcile_count_after_successful_reconcile() {
+    let mut runtime = AppRuntime::new(AppRuntimeMode::Live);
+    let bootstrap = runtime.reconcile(RemoteSnapshot::empty());
+    assert!(bootstrap.succeeded);
+
+    let follow_up = runtime
+        .apply_input(app_live::InputTaskEvent::out_of_order_user_trade(
+            1,
+            ExternalFactEvent::new("market_ws", "session-2", "trade-1", "v1", Utc::now()),
+        ))
+        .unwrap();
+    assert!(matches!(
+        follow_up,
+        state::ApplyResult::ReconcileRequired { .. }
+    ));
+    assert_eq!(runtime.pending_reconcile_count(), 1);
+    assert_eq!(runtime.runtime_mode(), RuntimeMode::Reconciling);
+
+    let repaired = runtime.reconcile(RemoteSnapshot::empty());
+    assert!(repaired.succeeded);
+    assert_eq!(runtime.pending_reconcile_count(), 0);
+    assert_eq!(runtime.runtime_mode(), RuntimeMode::Healthy);
+}
+
+#[test]
 fn app_runtime_distinguishes_paper_and_live_modes() {
     let paper = AppRuntime::new(AppRuntimeMode::Paper);
     let live = AppRuntime::new(AppRuntimeMode::Live);
@@ -68,6 +94,7 @@ fn run_paper_bootstraps_runtime_through_reconcile() {
         result.summary.published_snapshot_committed_journal_seq,
         Some(0)
     );
+    assert_eq!(result.summary.pending_reconcile_count, 0);
 }
 
 #[test]
@@ -93,6 +120,7 @@ fn run_live_bootstraps_runtime_through_reconcile() {
         result.summary.published_snapshot_committed_journal_seq,
         Some(0)
     );
+    assert_eq!(result.summary.pending_reconcile_count, 0);
 }
 
 #[test]

@@ -77,13 +77,22 @@ fn kind_blocks(parent: RecoveryScopeKind, candidate: RecoveryScopeKind) -> bool 
             | (RecoveryScopeKind::Market, RecoveryScopeKind::ExecutionPath)
             | (RecoveryScopeKind::Condition, RecoveryScopeKind::Condition)
             | (RecoveryScopeKind::Condition, RecoveryScopeKind::Market)
-            | (RecoveryScopeKind::Condition, RecoveryScopeKind::ExecutionPath)
+            | (
+                RecoveryScopeKind::Condition,
+                RecoveryScopeKind::ExecutionPath
+            )
             | (RecoveryScopeKind::Family, RecoveryScopeKind::Family)
             | (RecoveryScopeKind::Family, RecoveryScopeKind::Condition)
             | (RecoveryScopeKind::Family, RecoveryScopeKind::Market)
             | (RecoveryScopeKind::Family, RecoveryScopeKind::ExecutionPath)
-            | (RecoveryScopeKind::InventorySet, RecoveryScopeKind::InventorySet)
-            | (RecoveryScopeKind::ExecutionPath, RecoveryScopeKind::ExecutionPath)
+            | (
+                RecoveryScopeKind::InventorySet,
+                RecoveryScopeKind::InventorySet
+            )
+            | (
+                RecoveryScopeKind::ExecutionPath,
+                RecoveryScopeKind::ExecutionPath
+            )
     )
 }
 

@@ -14,6 +14,7 @@ pub struct SupervisorSummary {
     pub negrisk_mode: ExecutionMode,
     pub bootstrap_status: BootstrapStatus,
     pub runtime_mode: RuntimeMode,
+    pub pending_reconcile_count: usize,
     pub last_journal_seq: i64,
     pub last_state_version: u64,
     pub published_snapshot_id: Option<String>,
@@ -53,6 +54,7 @@ struct RuntimeSeed {
     last_state_version: u64,
     published_snapshot_id: Option<String>,
     committed_state_version: Option<u64>,
+    pending_reconcile_count: Option<usize>,
 }
 
 pub struct AppSupervisor {
@@ -136,6 +138,10 @@ impl AppSupervisor {
         self.seed.committed_state_version = Some(committed_state_version);
     }
 
+    pub fn seed_pending_reconcile_count(&mut self, pending_reconcile_count: usize) {
+        self.seed.pending_reconcile_count = Some(pending_reconcile_count);
+    }
+
     pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
         self.record_committed_input(input);
     }
@@ -167,6 +173,23 @@ impl AppSupervisor {
             }
         };
         self.runtime.replay_committed_history(&self.committed_log)?;
+        match self.seed.pending_reconcile_count {
+            Some(0) => self.runtime.clear_pending_reconcile_after_restore(),
+            Some(expected) if self.runtime.pending_reconcile_count() != expected => {
+                return Err(SupervisorError::new(format!(
+                    "durable pending reconcile count {} did not match rebuilt count {}",
+                    expected,
+                    self.runtime.pending_reconcile_count()
+                )));
+            }
+            Some(_) => {}
+            None if self.runtime.pending_reconcile_count() == 0 => {}
+            None => {
+                return Err(SupervisorError::new(
+                    "durable pending reconcile count is required to resume pending follow-up work",
+                ));
+            }
+        }
         if self.runtime.state_version() != committed_state_version {
             return Err(SupervisorError::new(format!(
                 "durable history rebuilt state version {} but expected {}",
@@ -230,6 +253,7 @@ impl AppSupervisor {
             negrisk_mode: ExecutionMode::Shadow,
             bootstrap_status: self.runtime.bootstrap_status(),
             runtime_mode: self.runtime.runtime_mode(),
+            pending_reconcile_count: self.runtime.pending_reconcile_count(),
             last_journal_seq: self.runtime.last_journal_seq().unwrap_or_default(),
             last_state_version: self.runtime.state_version(),
             published_snapshot_id: self.runtime.published_snapshot_id().map(str::to_owned),

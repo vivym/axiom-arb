@@ -121,6 +121,10 @@ impl AppRuntime {
         self.store.mode_overlay()
     }
 
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.store.pending_reconcile_count()
+    }
+
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
         let report = bootstrap::reconcile(&mut self.store, snapshot);
         self.anchor_baseline_if_ready(report.succeeded);
@@ -183,6 +187,10 @@ impl AppRuntime {
             self.store.mark_reconcile_required();
         }
         Ok(())
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.store.clear_pending_reconcile_after_restore();
     }
 
     fn anchor_baseline_if_ready(&mut self, reconcile_succeeded: bool) {

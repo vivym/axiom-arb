@@ -108,6 +108,7 @@ impl StateStore {
             committed_journal_seq,
             open_orders: self.current_open_order_ids(),
         });
+        self.pending_refs.clear();
         self.first_reconcile_succeeded = true;
         self.apply_policy(reconciled_policy());
     }
@@ -123,6 +124,7 @@ impl StateStore {
             });
         }
 
+        self.pending_refs.clear();
         self.first_reconcile_succeeded = true;
         self.apply_policy(reconciled_policy());
     }
@@ -135,6 +137,13 @@ impl StateStore {
     pub fn mark_reconcile_required(&mut self) {
         self.first_reconcile_succeeded = true;
         self.enter_reconciling();
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.pending_refs.clear();
+        if self.first_reconcile_succeeded {
+            self.apply_policy(reconciled_policy());
+        }
     }
 
     pub fn mode(&self) -> RuntimeMode {
@@ -174,6 +183,10 @@ impl StateStore {
 
     pub fn allows_automatic_repair(&self) -> bool {
         allows_automatic_repair(self.first_reconcile_succeeded, self.runtime_mode)
+    }
+
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.pending_refs.len()
     }
 
     pub fn open_orders(&self) -> &HashMap<OrderId, Order> {
@@ -296,6 +309,7 @@ impl StateStore {
             .cloned()
             .map(|tx| (tx.tx_id.clone(), tx))
             .collect();
+        self.pending_refs.clear();
 
         let promoted_from_bootstrap = !self.first_reconcile_succeeded;
 
