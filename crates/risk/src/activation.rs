@@ -65,7 +65,7 @@ impl ActivationPolicy {
 
 fn clamp_phase_one_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
     if route == crate::negrisk::ROUTE {
-        return crate::negrisk::clamp_mode(mode);
+        return crate::negrisk::phase_one_effective_mode(mode);
     }
 
     mode

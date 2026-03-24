@@ -3,9 +3,9 @@ use state::NegRiskView;
 
 pub const ROUTE: &str = "neg-risk";
 
-pub fn clamp_mode(mode: ExecutionMode) -> ExecutionMode {
+pub fn phase_one_effective_mode(mode: ExecutionMode) -> ExecutionMode {
     match mode {
-        ExecutionMode::Live => ExecutionMode::Shadow,
+        ExecutionMode::Live => ExecutionMode::Disabled,
         other => other,
     }
 }
@@ -16,9 +16,10 @@ pub fn evaluate_negrisk_intent(view: &NegRiskView, mode: ExecutionMode) -> Decis
     }
 
     match mode {
-        ExecutionMode::Shadow | ExecutionMode::ReduceOnly | ExecutionMode::RecoveryOnly => {
-            DecisionVerdict::Approved
-        }
-        ExecutionMode::Disabled | ExecutionMode::Live => DecisionVerdict::Rejected,
+        ExecutionMode::Shadow => DecisionVerdict::Approved,
+        ExecutionMode::Disabled
+        | ExecutionMode::Live
+        | ExecutionMode::ReduceOnly
+        | ExecutionMode::RecoveryOnly => DecisionVerdict::Rejected,
     }
 }

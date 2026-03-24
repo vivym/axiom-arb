@@ -33,9 +33,9 @@ fn overlays_are_route_local_to_the_matching_route() {
 }
 
 #[test]
-fn neg_risk_route_is_clamped_away_from_live_even_with_overlay() {
+fn neg_risk_live_overlay_is_explicitly_disabled_in_phase_one() {
     let policy =
         ActivationPolicy::phase_one_defaults().with_overlay("neg-risk", "family-a", ExecutionMode::Live);
 
-    assert_eq!(policy.mode_for_route("neg-risk", "family-a"), ExecutionMode::Shadow);
+    assert_eq!(policy.mode_for_route("neg-risk", "family-a"), ExecutionMode::Disabled);
 }

@@ -8,7 +8,10 @@ pub fn evaluate_decision(
         return DecisionVerdict::Rejected;
     }
 
-    if matches!(activation.mode, ExecutionMode::RecoveryOnly)
+    if matches!(
+        activation.mode,
+        ExecutionMode::ReduceOnly | ExecutionMode::RecoveryOnly
+    )
         && matches!(input, DecisionInput::Strategy(_))
     {
         return DecisionVerdict::Rejected;
