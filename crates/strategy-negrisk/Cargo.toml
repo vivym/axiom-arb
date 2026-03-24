@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 domain = { path = "../domain" }
-rust_decimal = { version = "1.39.0" }
+rust_decimal = { version = "1.40.0" }
+state = { path = "../state" }
 venue-polymarket = { path = "../venue-polymarket" }
 
 [lib]

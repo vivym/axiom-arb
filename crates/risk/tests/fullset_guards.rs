@@ -1,11 +1,11 @@
 use chrono::{Duration, Utc};
 use domain::{
-    ApprovalKey, ApprovalState, ApprovalStatus, ConditionId, DisputeState, ResolutionState,
-    ResolutionStatus, RuntimeMode, SignatureType, TokenId, WalletRoute,
+    ApprovalKey, ApprovalState, ApprovalStatus, ConditionId, DisputeState, ExecutionMode,
+    ResolutionState, ResolutionStatus, RuntimeMode, SignatureType, TokenId, WalletRoute,
 };
 use risk::fullset::{
-    evaluate_fullset_trade, evaluate_redeem, Freshness, FreshnessPolicy, FullSetRiskContext,
-    FullSetRiskThresholds, RedeemRiskContext, RejectReason,
+    evaluate_fullset_trade, evaluate_fullset_trade_in_mode, evaluate_redeem, Freshness,
+    FreshnessPolicy, FullSetRiskContext, FullSetRiskThresholds, RedeemRiskContext, RejectReason,
 };
 use rust_decimal::Decimal;
 
@@ -278,6 +278,27 @@ fn redeem_allows_no_new_risk_when_resolution_is_runnable() {
     });
 
     assert_eq!(decision.reject_reason(), None);
+}
+
+#[test]
+fn non_live_modes_are_rejected_by_mode_aware_fullset_entrypoint() {
+    let decision = evaluate_fullset_trade_in_mode(
+        ExecutionMode::RecoveryOnly,
+        &FullSetRiskContext {
+            runtime_mode: RuntimeMode::Healthy,
+            required_approval_keys: vec![sample_approval_key()],
+            approvals: vec![sample_approval(
+                ApprovalStatus::Approved,
+                Decimal::new(100, 0),
+            )],
+            net_edge_usdc: Decimal::new(10, 2),
+            thresholds: sample_thresholds(),
+            freshness: Freshness::fresh(Utc::now()),
+            freshness_policy: sample_freshness_policy(),
+        },
+    );
+
+    assert_eq!(decision.reject_reason(), Some(RejectReason::ModeNotHealthy));
 }
 
 fn sample_approval(status: ApprovalStatus, allowance: Decimal) -> ApprovalState {
