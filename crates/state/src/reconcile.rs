@@ -6,7 +6,7 @@ use domain::{
 };
 use rust_decimal::Decimal;
 
-use crate::store::{approval_key, InventoryEntry, RelayerTxSummary, StateStore};
+use crate::store::{RelayerTxSummary, StateStore};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReconcileAttention {
@@ -102,10 +102,7 @@ fn collect_attention(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Recon
     attention.extend(detect_duplicate_signed_orders(snapshot));
     attention.extend(detect_identifier_mismatches(snapshot));
     attention.extend(compare_orders(store, snapshot));
-    attention.extend(compare_approvals(store, snapshot));
-    attention.extend(compare_inventory(store, snapshot));
-    attention.extend(compare_resolutions(store, snapshot));
-    attention.extend(compare_relayer_txs(store, snapshot));
+    attention.sort_by(attention_sort_key);
 
     attention
 }
@@ -190,7 +187,7 @@ fn compare_orders(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Reconcil
     attention.extend(local_ids.intersection(&remote_ids).filter_map(|order_id| {
         let local = store.open_orders().get(order_id)?;
         let remote = remote_map.get(order_id)?;
-        (local != remote).then(|| ReconcileAttention::OrderStateMismatch {
+        (!same_order_identity(local, remote)).then(|| ReconcileAttention::OrderStateMismatch {
             order_id: order_id.clone(),
         })
     }));
@@ -198,92 +195,78 @@ fn compare_orders(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<Reconcil
     attention
 }
 
-fn compare_approvals(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
-    let remote_map = snapshot
-        .approvals
-        .iter()
-        .cloned()
-        .map(|approval| (approval_key(&approval), approval))
-        .collect::<HashMap<_, _>>();
-
-    compare_map(store.approvals(), &remote_map, |key| {
-        ReconcileAttention::ApprovalMismatch { key }
-    })
+fn same_order_identity(local: &Order, remote: &Order) -> bool {
+    local.market_id == remote.market_id
+        && local.condition_id == remote.condition_id
+        && local.token_id == remote.token_id
+        && local.quantity == remote.quantity
+        && local.price == remote.price
+        && local.signed_order == remote.signed_order
 }
 
-fn compare_inventory(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
-    let remote_map = snapshot
-        .inventory
-        .iter()
-        .cloned()
-        .map(|(token_id, bucket, quantity)| (InventoryEntry { token_id, bucket }, quantity))
-        .collect::<HashMap<_, _>>();
+fn attention_sort_key(left: &ReconcileAttention, right: &ReconcileAttention) -> std::cmp::Ordering {
+    attention_key(left).cmp(&attention_key(right))
+}
 
-    compare_map(store.inventory(), &remote_map, |entry| {
-        ReconcileAttention::InventoryMismatch {
-            token_id: entry.token_id,
-            bucket: entry.bucket,
+fn attention_key(attention: &ReconcileAttention) -> (u8, String, String, String) {
+    match attention {
+        ReconcileAttention::DuplicateSignedOrder {
+            order_id,
+            signed_order_hash,
+        } => (
+            0,
+            signed_order_hash.clone(),
+            order_id.as_str().to_owned(),
+            String::new(),
+        ),
+        ReconcileAttention::IdentifierMismatch {
+            token_id,
+            expected_condition_id,
+            remote_condition_id,
+        } => (
+            1,
+            token_id.as_str().to_owned(),
+            expected_condition_id.as_str().to_owned(),
+            remote_condition_id.as_str().to_owned(),
+        ),
+        ReconcileAttention::MissingRemoteOrder { order_id } => (
+            2,
+            order_id.as_str().to_owned(),
+            String::new(),
+            String::new(),
+        ),
+        ReconcileAttention::UnexpectedRemoteOrder { order_id } => (
+            3,
+            order_id.as_str().to_owned(),
+            String::new(),
+            String::new(),
+        ),
+        ReconcileAttention::OrderStateMismatch { order_id } => (
+            4,
+            order_id.as_str().to_owned(),
+            String::new(),
+            String::new(),
+        ),
+        ReconcileAttention::ApprovalMismatch { key } => (
+            5,
+            key.token_id.as_str().to_owned(),
+            key.owner_address.clone(),
+            key.spender.clone(),
+        ),
+        ReconcileAttention::InventoryMismatch { token_id, bucket } => (
+            6,
+            token_id.as_str().to_owned(),
+            format!("{bucket:?}"),
+            String::new(),
+        ),
+        ReconcileAttention::ResolutionMismatch { condition_id } => (
+            7,
+            condition_id.as_str().to_owned(),
+            String::new(),
+            String::new(),
+        ),
+        ReconcileAttention::RelayerTxMismatch { tx_id } => {
+            (8, tx_id.clone(), String::new(), String::new())
         }
-    })
-}
-
-fn compare_resolutions(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
-    let remote_map = snapshot
-        .resolution_states
-        .iter()
-        .cloned()
-        .map(|resolution| (resolution.condition_id.clone(), resolution))
-        .collect::<HashMap<_, _>>();
-
-    compare_map(store.resolution(), &remote_map, |condition_id| {
-        ReconcileAttention::ResolutionMismatch { condition_id }
-    })
-}
-
-fn compare_relayer_txs(store: &StateStore, snapshot: &RemoteSnapshot) -> Vec<ReconcileAttention> {
-    let remote_map = snapshot
-        .relayer_txs
-        .iter()
-        .cloned()
-        .map(|tx| (tx.tx_id.clone(), tx))
-        .collect::<HashMap<_, _>>();
-
-    compare_map(store.relayer_txs(), &remote_map, |tx_id| {
-        ReconcileAttention::RelayerTxMismatch { tx_id }
-    })
-}
-
-fn compare_map<K, V, F>(
-    local: &HashMap<K, V>,
-    remote: &HashMap<K, V>,
-    into_attention: F,
-) -> Vec<ReconcileAttention>
-where
-    K: Clone + Eq + std::hash::Hash,
-    V: PartialEq,
-    F: Fn(K) -> ReconcileAttention,
-{
-    let local_keys = local.keys().cloned().collect::<HashSet<_>>();
-    let remote_keys = remote.keys().cloned().collect::<HashSet<_>>();
-
-    let mut attention = local_keys
-        .difference(&remote_keys)
-        .cloned()
-        .map(&into_attention)
-        .collect::<Vec<_>>();
-
-    attention.extend(
-        remote_keys
-            .difference(&local_keys)
-            .cloned()
-            .map(&into_attention),
-    );
-
-    attention.extend(local_keys.intersection(&remote_keys).filter_map(|key| {
-        let local_value = local.get(key)?;
-        let remote_value = remote.get(key)?;
-        (local_value != remote_value).then(|| into_attention(key.clone()))
-    }));
-
-    attention
+    }
 }

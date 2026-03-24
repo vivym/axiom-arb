@@ -101,10 +101,6 @@ impl StateStore {
         &self.approvals
     }
 
-    pub(crate) fn inventory(&self) -> &HashMap<InventoryEntry, Decimal> {
-        &self.inventory
-    }
-
     pub fn resolution(&self) -> &HashMap<ConditionId, ResolutionState> {
         &self.resolution
     }
@@ -243,6 +239,40 @@ mod tests {
                 bucket: InventoryBucket::Free,
             }),
             Some(&Decimal::new(7, 0))
+        );
+    }
+
+    #[test]
+    fn reconcile_allows_inventory_progression_and_applies_remote_quantity() {
+        let mut store = StateStore::new();
+
+        let initial = store.reconcile(RemoteSnapshot {
+            inventory: vec![(
+                TokenId::from("token-yes"),
+                InventoryBucket::Free,
+                Decimal::new(5, 0),
+            )],
+            ..RemoteSnapshot::empty()
+        });
+
+        assert!(initial.succeeded);
+
+        let progressed = store.reconcile(RemoteSnapshot {
+            inventory: vec![(
+                TokenId::from("token-yes"),
+                InventoryBucket::Free,
+                Decimal::new(4, 0),
+            )],
+            ..RemoteSnapshot::empty()
+        });
+
+        assert!(progressed.succeeded);
+        assert_eq!(
+            store.inventory.get(&super::InventoryEntry {
+                token_id: TokenId::from("token-yes"),
+                bucket: InventoryBucket::Free,
+            }),
+            Some(&Decimal::new(4, 0))
         );
     }
 }

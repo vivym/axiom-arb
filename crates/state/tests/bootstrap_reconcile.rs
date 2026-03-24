@@ -1,8 +1,8 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use domain::{
-    ApprovalState, ApprovalStatus, ConditionId, DisputeState, InventoryBucket, MarketId, Order,
-    OrderId, ResolutionState, ResolutionStatus, RuntimeMode, RuntimeOverlay, SettlementState,
-    SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
+    ApprovalState, ApprovalStatus, ConditionId, DisputeState, MarketId, Order, OrderId,
+    ResolutionState, ResolutionStatus, RuntimeMode, RuntimeOverlay, SettlementState, SignatureType,
+    SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use rust_decimal::Decimal;
 use state::{ReconcileAttention, RelayerTxSummary, RemoteSnapshot, StateStore};
@@ -45,6 +45,122 @@ fn first_reconcile_successfully_leaves_bootstrap_cancel_only() {
     assert!(store.allows_automatic_repair());
     assert_eq!(store.mode(), RuntimeMode::Healthy);
     assert_eq!(store.mode_overlay(), None);
+}
+
+#[test]
+fn open_order_state_progression_reconciles_successfully_and_applies_remote_value() {
+    let mut store = StateStore::new();
+    let initial_order = sample_order("order-1", "hash-1");
+    let progressed_order = Order {
+        submission_state: SubmissionState::Submitted,
+        venue_state: VenueOrderState::Matched,
+        settlement_state: SettlementState::Confirmed,
+        ..initial_order.clone()
+    };
+
+    store.record_local_order(initial_order.clone());
+
+    let initial = store.reconcile(RemoteSnapshot {
+        open_orders: vec![initial_order],
+        ..RemoteSnapshot::empty()
+    });
+    assert!(initial.succeeded);
+
+    let report = store.reconcile(RemoteSnapshot {
+        open_orders: vec![progressed_order.clone()],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+    assert_eq!(
+        store.open_orders().get(&OrderId::from("order-1")),
+        Some(&progressed_order)
+    );
+}
+
+#[test]
+fn approval_progression_reconciles_successfully_and_applies_remote_value() {
+    let mut store = StateStore::new();
+    let initial_approval = sample_approval_at(
+        "token-yes",
+        ApprovalStatus::Pending,
+        Utc.with_ymd_and_hms(2026, 3, 24, 10, 0, 0).unwrap(),
+    );
+    let progressed_approval = sample_approval_at(
+        "token-yes",
+        ApprovalStatus::Approved,
+        Utc.with_ymd_and_hms(2026, 3, 24, 10, 5, 0).unwrap(),
+    );
+
+    let initial = store.reconcile(RemoteSnapshot {
+        approvals: vec![initial_approval],
+        ..RemoteSnapshot::empty()
+    });
+    assert!(initial.succeeded);
+
+    let report = store.reconcile(RemoteSnapshot {
+        approvals: vec![progressed_approval.clone()],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+    assert_eq!(
+        store.approvals().get(&domain::ApprovalKey {
+            token_id: TokenId::from("token-yes"),
+            spender: "0xspender".to_owned(),
+            owner_address: "0xowner".to_owned(),
+        }),
+        Some(&progressed_approval)
+    );
+}
+
+#[test]
+fn resolution_progression_reconciles_successfully() {
+    let mut store = StateStore::new();
+    let initial = store.reconcile(RemoteSnapshot {
+        resolution_states: vec![sample_resolution_with_status(
+            "condition-a",
+            ResolutionStatus::Unresolved,
+        )],
+        ..RemoteSnapshot::empty()
+    });
+    assert!(initial.succeeded);
+
+    let progressed_resolution =
+        sample_resolution_with_status("condition-a", ResolutionStatus::Resolved);
+    let report = store.reconcile(RemoteSnapshot {
+        resolution_states: vec![progressed_resolution.clone()],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+    assert_eq!(
+        store.resolution().get(&ConditionId::from("condition-a")),
+        Some(&progressed_resolution)
+    );
+}
+
+#[test]
+fn relayer_tx_progression_reconciles_successfully_and_applies_remote_value() {
+    let mut store = StateStore::new();
+    let initial = store.reconcile(RemoteSnapshot {
+        relayer_txs: vec![sample_relayer_tx_with_status("tx-1", "submitted")],
+        ..RemoteSnapshot::empty()
+    });
+    assert!(initial.succeeded);
+
+    let progressed_tx = sample_relayer_tx_with_status("tx-1", "confirmed");
+    let report = store.reconcile(RemoteSnapshot {
+        relayer_txs: vec![progressed_tx.clone()],
+        ..RemoteSnapshot::empty()
+    });
+
+    assert!(report.succeeded);
+    assert!(report.attention.is_empty());
+    assert_eq!(store.relayer_txs().get("tx-1"), Some(&progressed_tx));
 }
 
 #[test]
@@ -179,34 +295,81 @@ fn identifier_mismatch_in_remote_snapshot_forces_attention_without_upstream_sign
 }
 
 #[test]
-fn inventory_mismatch_forces_reconcile_attention() {
+fn attention_order_is_stable_for_multiple_order_differences() {
     let mut store = StateStore::new();
 
-    store.record_local_inventory(
-        TokenId::from("token-yes"),
-        InventoryBucket::Free,
-        Decimal::new(5, 0),
-    );
+    store.record_local_order(sample_order("order-b", "hash-b"));
+    store.record_local_order(sample_order("order-a", "hash-a"));
 
     let report = store.reconcile(RemoteSnapshot {
-        inventory: vec![(
-            TokenId::from("token-yes"),
-            InventoryBucket::Free,
-            Decimal::new(4, 0),
-        )],
+        open_orders: vec![
+            sample_order("order-d", "hash-d"),
+            sample_order("order-c", "hash-c"),
+        ],
         ..RemoteSnapshot::empty()
     });
 
     assert!(!report.succeeded);
-    assert_eq!(store.mode(), RuntimeMode::Reconciling);
-    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
-    assert!(report.attention.iter().any(|attention| {
-        matches!(
-            attention,
-            ReconcileAttention::InventoryMismatch { token_id, bucket }
-                if token_id == &TokenId::from("token-yes") && bucket == &InventoryBucket::Free
-        )
-    }));
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::MissingRemoteOrder {
+                order_id: OrderId::from("order-a"),
+            },
+            ReconcileAttention::MissingRemoteOrder {
+                order_id: OrderId::from("order-b"),
+            },
+            ReconcileAttention::UnexpectedRemoteOrder {
+                order_id: OrderId::from("order-c"),
+            },
+            ReconcileAttention::UnexpectedRemoteOrder {
+                order_id: OrderId::from("order-d"),
+            },
+        ]
+    );
+}
+
+#[test]
+fn attention_order_is_deterministic_across_attention_sources() {
+    let mut store = StateStore::new();
+
+    store.record_local_order(sample_order("order-b", "hash-b"));
+    store.record_local_order(sample_order("order-a", "hash-a"));
+
+    let report = store.reconcile(
+        RemoteSnapshot {
+            open_orders: vec![
+                sample_order("order-d", "hash-d"),
+                sample_order("order-c", "hash-c"),
+            ],
+            ..RemoteSnapshot::empty()
+        }
+        .with_attention(ReconcileAttention::RelayerTxMismatch {
+            tx_id: "tx-9".to_owned(),
+        }),
+    );
+
+    assert!(!report.succeeded);
+    assert_eq!(
+        report.attention,
+        vec![
+            ReconcileAttention::MissingRemoteOrder {
+                order_id: OrderId::from("order-a"),
+            },
+            ReconcileAttention::MissingRemoteOrder {
+                order_id: OrderId::from("order-b"),
+            },
+            ReconcileAttention::UnexpectedRemoteOrder {
+                order_id: OrderId::from("order-c"),
+            },
+            ReconcileAttention::UnexpectedRemoteOrder {
+                order_id: OrderId::from("order-d"),
+            },
+            ReconcileAttention::RelayerTxMismatch {
+                tx_id: "tx-9".to_owned(),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -267,6 +430,14 @@ fn sample_order_for_condition(
 }
 
 fn sample_approval(token_id: &str) -> ApprovalState {
+    sample_approval_at(token_id, ApprovalStatus::Approved, Utc::now())
+}
+
+fn sample_approval_at(
+    token_id: &str,
+    approval_status: ApprovalStatus,
+    last_checked_at: chrono::DateTime<Utc>,
+) -> ApprovalState {
     ApprovalState {
         token_id: TokenId::from(token_id),
         spender: "0xspender".to_owned(),
@@ -276,15 +447,22 @@ fn sample_approval(token_id: &str) -> ApprovalState {
         signature_type: SignatureType::Eoa,
         allowance: Decimal::new(100, 0),
         required_min_allowance: Decimal::new(50, 0),
-        last_checked_at: Utc::now(),
-        approval_status: ApprovalStatus::Approved,
+        last_checked_at,
+        approval_status,
     }
 }
 
 fn sample_resolution(condition_id: &str) -> ResolutionState {
+    sample_resolution_with_status(condition_id, ResolutionStatus::Resolved)
+}
+
+fn sample_resolution_with_status(
+    condition_id: &str,
+    resolution_status: ResolutionStatus,
+) -> ResolutionState {
     ResolutionState {
         condition_id: ConditionId::from(condition_id),
-        resolution_status: ResolutionStatus::Resolved,
+        resolution_status,
         payout_vector: vec![Decimal::new(1, 0), Decimal::new(0, 0)],
         resolved_at: Some(Utc::now()),
         dispute_state: DisputeState::None,
@@ -293,9 +471,13 @@ fn sample_resolution(condition_id: &str) -> ResolutionState {
 }
 
 fn sample_relayer_tx(tx_id: &str) -> RelayerTxSummary {
+    sample_relayer_tx_with_status(tx_id, "confirmed")
+}
+
+fn sample_relayer_tx_with_status(tx_id: &str, status: &str) -> RelayerTxSummary {
     RelayerTxSummary {
         tx_id: tx_id.to_owned(),
         order_id: Some(OrderId::from("order-1")),
-        status: "confirmed".to_owned(),
+        status: status.to_owned(),
     }
 }
