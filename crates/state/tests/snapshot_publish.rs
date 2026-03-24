@@ -1,13 +1,13 @@
 use chrono::{TimeZone, Utc};
 use domain::{
-    ConditionId, ExternalFactEvent, MarketId, Order, OrderId, SettlementState,
-    SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState,
+    ConditionId, ExternalFactEvent, MarketId, Order, OrderId, SettlementState, SignedOrderIdentity,
+    SubmissionState, TokenId, VenueOrderState,
 };
 use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore};
 
 #[test]
 fn fullset_snapshot_publish_does_not_wait_for_negrisk_projection() {
-    let store = sample_store_with_fullset_only();
+    let store = sample_store_with_anchored_fullset();
     let snapshot = PublishedSnapshot::from_store(
         &store,
         ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-7"),
@@ -16,7 +16,13 @@ fn fullset_snapshot_publish_does_not_wait_for_negrisk_projection() {
     assert_eq!(snapshot.snapshot_id, "snapshot-7");
     assert_eq!(snapshot.state_version, 1);
     assert_eq!(snapshot.committed_journal_seq, 17);
-    assert!(snapshot.fullset.is_some());
+    assert_eq!(
+        snapshot
+            .fullset
+            .as_ref()
+            .map(|view| view.open_orders.clone()),
+        Some(vec!["order-1".to_owned()])
+    );
     assert!(snapshot.negrisk.is_none());
     assert!(snapshot.fullset_ready);
     assert!(!snapshot.negrisk_ready);
@@ -31,16 +37,52 @@ fn published_snapshot_keeps_projection_readiness_flags_explicit() {
     assert_eq!(snapshot.committed_journal_seq, 9);
     assert!(snapshot.fullset_ready);
     assert!(!snapshot.negrisk_ready);
+    assert_eq!(
+        snapshot
+            .fullset
+            .as_ref()
+            .map(|view| view.open_orders.clone()),
+        Some(vec!["order-9".to_owned()])
+    );
+}
+
+#[test]
+fn unanchored_fullset_mutation_is_downgraded_before_publication() {
+    let mut store = sample_store_with_anchored_fullset();
+    store.record_local_order(sample_order("order-2", "hash-2"));
+
+    let snapshot = PublishedSnapshot::from_store(
+        &store,
+        ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-8"),
+    );
+
+    assert_eq!(snapshot.snapshot_id, "snapshot-8");
+    assert_eq!(snapshot.state_version, 1);
+    assert_eq!(snapshot.committed_journal_seq, 17);
+    assert!(!snapshot.fullset_ready);
+    assert!(snapshot.fullset.is_none());
+}
+
+#[test]
+fn unsupported_negrisk_readiness_is_downgraded_before_publication() {
+    let store = sample_store_with_anchored_fullset();
+    let snapshot =
+        PublishedSnapshot::from_store(&store, ProjectionReadiness::new("snapshot-10", true, true));
+
+    assert_eq!(snapshot.snapshot_id, "snapshot-10");
+    assert!(snapshot.fullset_ready);
+    assert!(snapshot.fullset.is_some());
+    assert!(!snapshot.negrisk_ready);
+    assert!(snapshot.negrisk.is_none());
 }
 
 fn sample_snapshot(snapshot_id: &str) -> PublishedSnapshot {
     let mut store = StateStore::new();
+    store.record_local_order(sample_order("order-9", "hash-9"));
 
     for journal_seq in 1..=9 {
         apply_event(&mut store, journal_seq);
     }
-
-    store.record_local_order(sample_order("order-9", "hash-9"));
 
     PublishedSnapshot::from_store(
         &store,
@@ -48,10 +90,10 @@ fn sample_snapshot(snapshot_id: &str) -> PublishedSnapshot {
     )
 }
 
-fn sample_store_with_fullset_only() -> StateStore {
+fn sample_store_with_anchored_fullset() -> StateStore {
     let mut store = StateStore::new();
-    apply_event(&mut store, 17);
     store.record_local_order(sample_order("order-1", "hash-1"));
+    apply_event(&mut store, 17);
     store
 }
 

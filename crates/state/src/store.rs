@@ -34,11 +34,19 @@ pub struct RelayerTxSummary {
     pub status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FullSetAnchor {
+    pub state_version: u64,
+    pub committed_journal_seq: i64,
+    pub open_orders: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StateStore {
     state_version: u64,
     last_consumed_journal_seq: Option<i64>,
     last_applied_journal_seq: Option<i64>,
+    fullset_anchor: Option<FullSetAnchor>,
     runtime_mode: RuntimeMode,
     overlay: Option<RuntimeOverlay>,
     first_reconcile_succeeded: bool,
@@ -60,6 +68,7 @@ impl StateStore {
             state_version: 0,
             last_consumed_journal_seq: None,
             last_applied_journal_seq: None,
+            fullset_anchor: None,
             runtime_mode: policy.mode,
             overlay: policy.overlay,
             first_reconcile_succeeded: false,
@@ -129,7 +138,7 @@ impl StateStore {
         &self.open_orders
     }
 
-    pub(crate) fn fullset_open_order_ids(&self) -> Vec<String> {
+    fn current_open_order_ids(&self) -> Vec<String> {
         let mut open_orders = self
             .open_orders
             .keys()
@@ -139,8 +148,13 @@ impl StateStore {
         open_orders
     }
 
-    pub(crate) fn negrisk_family_ids(&self) -> Vec<String> {
-        Vec::new()
+    pub(crate) fn anchored_fullset(&self) -> Option<&FullSetAnchor> {
+        let committed_journal_seq = self.last_applied_journal_seq?;
+        let anchor = self.fullset_anchor.as_ref()?;
+
+        (anchor.state_version == self.state_version
+            && anchor.committed_journal_seq == committed_journal_seq)
+            .then_some(anchor)
     }
 
     pub fn approvals(&self) -> &HashMap<ApprovalKey, ApprovalState> {
@@ -177,6 +191,7 @@ impl StateStore {
     }
 
     pub fn record_local_order(&mut self, order: Order) {
+        self.fullset_anchor = None;
         self.open_orders.insert(order.order_id.clone(), order);
     }
 
@@ -208,6 +223,7 @@ impl StateStore {
     }
 
     pub(crate) fn complete_reconcile(&mut self, snapshot: &RemoteSnapshot) -> bool {
+        self.fullset_anchor = None;
         self.open_orders = snapshot
             .open_orders
             .iter()
@@ -292,6 +308,11 @@ impl StateStore {
         self.state_version += 1;
         self.last_applied_journal_seq = Some(journal_seq);
         self.applied_fact_journal.insert(fact_key, journal_seq);
+        self.fullset_anchor = Some(FullSetAnchor {
+            state_version: self.state_version,
+            committed_journal_seq: journal_seq,
+            open_orders: self.current_open_order_ids(),
+        });
         self.state_version
     }
 

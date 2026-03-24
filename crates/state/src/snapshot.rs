@@ -8,11 +8,7 @@ pub struct ProjectionReadiness {
 }
 
 impl ProjectionReadiness {
-    pub fn new(
-        snapshot_id: impl Into<String>,
-        fullset_ready: bool,
-        negrisk_ready: bool,
-    ) -> Self {
+    pub fn new(snapshot_id: impl Into<String>, fullset_ready: bool, negrisk_ready: bool) -> Self {
         Self {
             snapshot_id: snapshot_id.into(),
             fullset_ready,
@@ -39,24 +35,27 @@ pub struct PublishedSnapshot {
 impl PublishedSnapshot {
     pub fn from_store(store: &StateStore, readiness: ProjectionReadiness) -> Self {
         let state_version = store.state_version();
-        let committed_journal_seq = store.last_applied_journal_seq().unwrap_or_default();
-        let fullset = readiness.fullset_ready.then(|| FullSetView {
-            snapshot_id: readiness.snapshot_id.clone(),
-            state_version,
-            open_orders: store.fullset_open_order_ids(),
-        });
-        let negrisk = readiness.negrisk_ready.then(|| NegRiskView {
-            snapshot_id: readiness.snapshot_id.clone(),
-            state_version,
-            family_ids: store.negrisk_family_ids(),
-        });
+        let committed_journal_seq = store
+            .last_applied_journal_seq()
+            .expect("published snapshots require an applied journal anchor");
+        let fullset = store
+            .anchored_fullset()
+            .filter(|_| readiness.fullset_ready)
+            .map(|anchor| FullSetView {
+                snapshot_id: readiness.snapshot_id.clone(),
+                state_version: anchor.state_version,
+                open_orders: anchor.open_orders.clone(),
+            });
+        let fullset_ready = readiness.fullset_ready && fullset.is_some();
+        let negrisk_ready = false;
+        let negrisk = None;
 
         Self {
             snapshot_id: readiness.snapshot_id,
             state_version,
             committed_journal_seq,
-            fullset_ready: readiness.fullset_ready,
-            negrisk_ready: readiness.negrisk_ready,
+            fullset_ready,
+            negrisk_ready,
             fullset,
             negrisk,
         }
