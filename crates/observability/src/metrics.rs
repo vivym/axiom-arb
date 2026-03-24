@@ -142,6 +142,10 @@ pub struct RuntimeMetrics {
     pub runtime_mode: ModeHandle,
     pub relayer_pending_age: GaugeHandle,
     pub divergence_count: CounterHandle,
+    pub dispatcher_backlog_count: GaugeHandle,
+    pub projection_publish_lag_count: GaugeHandle,
+    pub recovery_backlog_count: GaugeHandle,
+    pub shadow_attempt_count: CounterHandle,
     pub neg_risk_family_discovered_count: GaugeHandle,
     pub neg_risk_family_included_count: GaugeHandle,
     pub neg_risk_family_excluded_count: GaugeHandle,
@@ -156,6 +160,10 @@ impl Default for RuntimeMetrics {
             runtime_mode: ModeHandle::new("axiom_runtime_mode"),
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
+            dispatcher_backlog_count: GaugeHandle::new("axiom_dispatcher_backlog_count"),
+            projection_publish_lag_count: GaugeHandle::new("axiom_projection_publish_lag_count"),
+            recovery_backlog_count: GaugeHandle::new("axiom_recovery_backlog_count"),
+            shadow_attempt_count: CounterHandle::new("axiom_shadow_attempt_total"),
             neg_risk_family_discovered_count: GaugeHandle::new(
                 "axiom_neg_risk_family_discovered_count",
             ),
@@ -268,6 +276,26 @@ impl RuntimeMetricsRecorder {
     pub fn increment_divergence_count(&self, amount: u64) {
         self.registry
             .record_counter(self.metrics.divergence_count.increment(amount));
+    }
+
+    pub fn record_dispatcher_backlog_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.dispatcher_backlog_count.sample(count));
+    }
+
+    pub fn record_projection_publish_lag_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.projection_publish_lag_count.sample(count));
+    }
+
+    pub fn record_recovery_backlog_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.recovery_backlog_count.sample(count));
+    }
+
+    pub fn increment_shadow_attempt_count(&self, amount: u64) {
+        self.registry
+            .record_counter(self.metrics.shadow_attempt_count.increment(amount));
     }
 
     pub fn record_neg_risk_family_discovered_count(&self, count: f64) {
