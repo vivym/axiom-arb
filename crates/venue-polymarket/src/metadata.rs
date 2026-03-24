@@ -349,10 +349,6 @@ impl PolymarketRestClient {
             offset += NEG_RISK_PAGE_LIMIT;
         }
 
-        if rows.is_empty() {
-            return Err(NegRiskMetadataError::EmptyDiscovery.into());
-        }
-
         canonicalize_rows(&mut rows);
         let metadata_snapshot_hash = snapshot_hash(&rows);
         Ok(NegRiskDiscovery {

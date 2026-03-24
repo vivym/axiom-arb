@@ -325,6 +325,10 @@ mod negrisk {
             .await
             .unwrap();
         NegRiskFamilyRepo
+            .upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
+            .await
+            .unwrap();
+        NegRiskFamilyRepo
             .upsert_halt(&db.pool, &sample_halt("family-2", "sha256:snapshot-a"))
             .await
             .unwrap();
@@ -347,11 +351,55 @@ mod negrisk {
 
         let rows = NegRiskFamilyRepo.list_validations(&db.pool).await.unwrap();
         assert!(rows.iter().any(|row| {
-            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 8
+            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 7
         }));
         assert!(!rows.iter().any(|row| row.event_family_id == "family-2"));
         let halts = NegRiskFamilyRepo.list_halts(&db.pool).await.unwrap();
+        assert!(halts.iter().any(|row| {
+            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 7
+        }));
         assert!(!halts.iter().any(|row| row.event_family_id == "family-2"));
+
+        db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn zero_family_refresh_replaces_the_previous_current_view() {
+        let db = TestDatabase::new().await;
+        run_migrations(&db.pool).await.unwrap();
+
+        NegRiskFamilyRepo
+            .upsert_validation(&db.pool, &sample_validation("family-1"))
+            .await
+            .unwrap();
+        NegRiskFamilyRepo
+            .upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
+            .await
+            .unwrap();
+
+        persist_discovery_snapshot(
+            &db.pool,
+            sample_discovery_snapshot("rev-7", vec!["family-1"]),
+        )
+        .await
+        .unwrap();
+        reconcile_current_family_view(&db.pool, 7).await.unwrap();
+
+        persist_discovery_snapshot(&db.pool, sample_discovery_snapshot("rev-8", vec![]))
+            .await
+            .unwrap();
+        reconcile_current_family_view(&db.pool, 8).await.unwrap();
+
+        assert!(NegRiskFamilyRepo
+            .list_validations(&db.pool)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(NegRiskFamilyRepo
+            .list_halts(&db.pool)
+            .await
+            .unwrap()
+            .is_empty());
 
         db.cleanup().await;
     }
@@ -435,7 +483,7 @@ mod negrisk {
 
         let rows = NegRiskFamilyRepo.list_validations(&db.pool).await.unwrap();
         assert!(rows.iter().any(|row| {
-            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 8
+            row.event_family_id == "family-1" && row.last_seen_discovery_revision == 7
         }));
         assert!(!rows.iter().any(|row| row.event_family_id == "family-2"));
         let halts = NegRiskFamilyRepo.list_halts(&db.pool).await.unwrap();

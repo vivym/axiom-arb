@@ -207,6 +207,15 @@ async fn negrisk_foundation_contract() {
     .await;
 }
 
+#[test]
+fn negrisk_foundation_contract_panics_when_scripted_responses_are_left_unconsumed() {
+    let result = std::panic::catch_unwind(|| {
+        let _server = spawn_local_listener(vec![first_success_page_one_ok()]);
+    });
+
+    assert!(result.is_err());
+}
+
 async fn append_failed_attempt_events(
     pool: &PgPool,
     family_id: &str,
@@ -448,6 +457,12 @@ fn spawn_local_listener(scripted_responses: Vec<ScriptedResponse>) -> ScriptedSe
                 .expect("write response");
             stream.flush().expect("flush response");
         }
+
+        assert!(
+            scripted_responses.is_empty(),
+            "scripted response queue not fully consumed: {} remaining",
+            scripted_responses.len()
+        );
     });
 
     ScriptedServer {

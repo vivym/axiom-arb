@@ -39,6 +39,20 @@ async fn successful_refresh_publishes_a_new_discovery_revision() {
 }
 
 #[tokio::test]
+async fn metadata_empty_refresh_publishes_an_authoritative_zero_family_snapshot() {
+    let server = spawn_local_listener(sample_empty_refreshing_neg_risk_payloads());
+    let client = test_client(server.base_url());
+
+    let initial = client.fetch_neg_risk_metadata_rows().await.unwrap();
+    let emptied = client.fetch_neg_risk_metadata_rows().await.unwrap();
+    let repopulated = client.fetch_neg_risk_metadata_rows().await.unwrap();
+
+    assert!(!initial.is_empty());
+    assert!(emptied.is_empty());
+    assert_eq!(repopulated[0].discovery_revision, initial[0].discovery_revision + 2);
+}
+
+#[tokio::test]
 async fn failed_refresh_does_not_publish_a_new_revision_or_replace_current_view() {
     let server = spawn_local_listener(sample_partial_failure_neg_risk_payloads());
     let client = test_client(server.base_url());
@@ -277,6 +291,18 @@ fn sample_partial_failure_neg_risk_payloads() -> Vec<ScriptedResponse> {
     ]
 }
 
+fn sample_empty_refreshing_neg_risk_payloads() -> Vec<ScriptedResponse> {
+    vec![
+        first_refresh_page_one_ok(),
+        first_refresh_page_two_ok(),
+        first_refresh_page_three_empty(),
+        empty_page_one_ok(),
+        second_refresh_page_one_ok(),
+        second_refresh_page_two_ok(),
+        second_refresh_page_three_empty(),
+    ]
+}
+
 fn sample_augmented_neg_risk_payloads() -> Vec<ScriptedResponse> {
     vec![augmented_page_one_ok()]
 }
@@ -351,6 +377,14 @@ fn first_refresh_page_two_ok() -> ScriptedResponse {
 fn first_refresh_page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        status_line: "200 OK",
+        body: r#"[]"#,
+    }
+}
+
+fn empty_page_one_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
         status_line: "200 OK",
         body: r#"[]"#,
     }

@@ -15,7 +15,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[tokio::test]
-async fn foundation_summary_reports_family_validation_halt_and_recent_event_counts() {
+async fn negrisk_summary_reports_family_validation_halt_and_recent_event_counts() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();
         seed_foundation_rows(&db.pool).await;
@@ -54,7 +54,7 @@ async fn foundation_summary_reports_family_validation_halt_and_recent_event_coun
 }
 
 #[tokio::test]
-async fn foundation_summary_filters_current_rows_by_latest_discovery_snapshot_family_set() {
+async fn negrisk_summary_uses_latest_discovery_family_set_without_counting_stale_state_rows() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();
         seed_foundation_rows(&db.pool).await;
@@ -80,17 +80,63 @@ async fn foundation_summary_filters_current_rows_by_latest_discovery_snapshot_fa
 
         assert_eq!(summary.discovered_family_count, 1);
         assert_eq!(summary.latest_discovery_revision, 8);
-        assert_eq!(summary.validated_family_count, 1);
+        assert_eq!(summary.validated_family_count, 0);
         assert_eq!(summary.excluded_family_count, 0);
         assert_eq!(summary.halted_family_count, 0);
         assert_eq!(summary.families.len(), 1);
         assert_eq!(summary.families[0].event_family_id, "family-1");
+        assert_eq!(summary.families[0].validation_status, None);
+        assert_eq!(summary.families[0].validation_metadata_snapshot_hash, None);
     })
     .await;
 }
 
 #[tokio::test]
-async fn member_vector_path_matches_current_row_state_not_latest_event_only() {
+async fn negrisk_summary_keeps_authoritative_families_visible_even_when_current_state_is_stale() {
+    with_test_database(|db| async move {
+        run_migrations(&db.pool).await.unwrap();
+        seed_foundation_rows(&db.pool).await;
+
+        persist_discovery_snapshot(
+            &db.pool,
+            NegRiskDiscoverySnapshotInput {
+                discovery_revision: 8,
+                metadata_snapshot_hash: "sha256:discovery-8".to_owned(),
+                family_ids: vec!["family-1".to_owned(), "family-2".to_owned()],
+                captured_at: ts("2026-03-24T00:00:08Z"),
+                source_kind: "test".to_owned(),
+                source_session_id: "session-8".to_owned(),
+                source_event_id: "discovery-8".to_owned(),
+                dedupe_key: "discovery:8".to_owned(),
+                extra_payload: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+        let summary = load_neg_risk_foundation_summary(&db.pool).await.unwrap();
+
+        assert_eq!(summary.discovered_family_count, 2);
+        assert_eq!(summary.latest_discovery_revision, 8);
+        assert_eq!(summary.validated_family_count, 0);
+        assert_eq!(summary.excluded_family_count, 0);
+        assert_eq!(summary.halted_family_count, 0);
+        assert_eq!(
+            summary
+                .families
+                .iter()
+                .map(|family| family.event_family_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["family-1", "family-2"]
+        );
+        assert!(summary.families.iter().all(|family| family.validation_status.is_none()));
+        assert!(summary.families.iter().all(|family| !family.halted));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn negrisk_summary_member_vector_path_matches_current_row_state_not_latest_event_only() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();
         seed_foundation_rows(&db.pool).await;

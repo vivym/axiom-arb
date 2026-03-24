@@ -1185,7 +1185,6 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
         .await?
         .ok_or(PersistenceError::MissingDiscoverySnapshot { discovery_revision })?;
     let family_ids = latest_snapshot.family_ids;
-    let authoritative_revision = latest_snapshot.discovery_revision;
 
     let mut tx = pool.begin().await?;
 
@@ -1201,36 +1200,10 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
 
     sqlx::query(
         r#"
-        UPDATE neg_risk_family_validations
-        SET last_seen_discovery_revision = $1,
-            updated_at = NOW()
-        WHERE event_family_id = ANY($2)
-        "#,
-    )
-    .bind(authoritative_revision)
-    .bind(&family_ids)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        r#"
         DELETE FROM family_halt_settings
         WHERE NOT (event_family_id = ANY($1))
         "#,
     )
-    .bind(&family_ids)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        r#"
-        UPDATE family_halt_settings
-        SET last_seen_discovery_revision = $1,
-            updated_at = NOW()
-        WHERE event_family_id = ANY($2)
-        "#,
-    )
-    .bind(authoritative_revision)
     .bind(&family_ids)
     .execute(&mut *tx)
     .await?;
@@ -1341,7 +1314,6 @@ fn is_reserved_discovery_snapshot_key(key: &str) -> bool {
 }
 
 struct LatestDiscoverySnapshot {
-    discovery_revision: i64,
     family_ids: Vec<String>,
 }
 
@@ -1360,7 +1332,7 @@ async fn latest_discovery_snapshot(pool: &PgPool) -> Result<Option<LatestDiscove
 
     payload
         .map(|payload: Value| {
-            let discovery_revision = payload
+            payload
                 .get("discovery_revision")
                 .and_then(Value::as_i64)
                 .ok_or_else(|| {
@@ -1391,7 +1363,6 @@ async fn latest_discovery_snapshot(pool: &PgPool) -> Result<Option<LatestDiscove
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(LatestDiscoverySnapshot {
-                discovery_revision,
                 family_ids,
             })
         })

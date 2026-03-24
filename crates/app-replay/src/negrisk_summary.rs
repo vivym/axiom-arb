@@ -107,13 +107,19 @@ pub async fn load_neg_risk_foundation_summary(
         .list_validations(pool)
         .await?
         .into_iter()
-        .filter(|row| authoritative_family_set.contains(&row.event_family_id))
+        .filter(|row| {
+            authoritative_family_set.contains(&row.event_family_id)
+                && row.last_seen_discovery_revision == discovery.latest_discovery_revision
+        })
         .collect::<Vec<_>>();
     let halt_rows = NegRiskFamilyRepo
         .list_halts(pool)
         .await?
         .into_iter()
-        .filter(|row| authoritative_family_set.contains(&row.event_family_id))
+        .filter(|row| {
+            authoritative_family_set.contains(&row.event_family_id)
+                && row.last_seen_discovery_revision == discovery.latest_discovery_revision
+        })
         .collect::<Vec<_>>();
 
     let member_paths = latest_member_vector_paths(pool).await?;
