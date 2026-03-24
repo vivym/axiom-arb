@@ -54,7 +54,11 @@ impl OrderHeartbeatMonitor {
     ) -> Option<HeartbeatReconcileReason> {
         let stale_onset = state.last_success_at + self.max_gap;
         if now > stale_onset {
-            return self.raise_attention(state, stale_onset, HeartbeatReconcileReason::MissedHeartbeat);
+            return self.raise_attention(
+                state,
+                stale_onset,
+                HeartbeatReconcileReason::MissedHeartbeat,
+            );
         }
 
         None

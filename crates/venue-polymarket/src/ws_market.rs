@@ -184,10 +184,7 @@ pub enum WsParseError {
     Json(serde_json::Error),
     MissingField(&'static str),
     UnknownEvent(String),
-    InvalidField {
-        field: &'static str,
-        value: String,
-    },
+    InvalidField { field: &'static str, value: String },
     InvalidTimestamp(String),
 }
 
@@ -274,19 +271,14 @@ pub fn parse_market_message(message: &str) -> Result<MarketWsEvent, WsParseError
             size: optional_string(envelope.size, "size")?,
             event_ts: parse_timestamp(envelope.ts)?,
         })),
-        "TICK_SIZE_CHANGE" => Ok(MarketWsEvent::TickSizeChange(
-            MarketTickSizeChangeUpdate {
-                asset_id: envelope
-                    .asset_id
-                    .ok_or(WsParseError::MissingField("asset_id"))?,
-                previous_tick_size: optional_string(
-                    envelope.previous_tick_size,
-                    "previous_tick_size",
-                )?,
-                tick_size: required_value(envelope.tick_size, "tick_size")?,
-                event_ts: parse_timestamp(envelope.ts)?,
-            },
-        )),
+        "TICK_SIZE_CHANGE" => Ok(MarketWsEvent::TickSizeChange(MarketTickSizeChangeUpdate {
+            asset_id: envelope
+                .asset_id
+                .ok_or(WsParseError::MissingField("asset_id"))?,
+            previous_tick_size: optional_string(envelope.previous_tick_size, "previous_tick_size")?,
+            tick_size: required_value(envelope.tick_size, "tick_size")?,
+            event_ts: parse_timestamp(envelope.ts)?,
+        })),
         "LIFECYCLE" | "STATUS" | "MARKET_STATUS" => {
             Ok(MarketWsEvent::Lifecycle(MarketLifecycleUpdate {
                 market_id: envelope.market_id,

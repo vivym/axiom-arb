@@ -2,8 +2,8 @@ use chrono::{TimeZone, Utc};
 use venue_polymarket::{
     parse_market_message, parse_user_message, MarketBookUpdate, MarketLifecycleUpdate,
     MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
-    UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
-    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
+    UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind, WsChannelLivenessMonitor,
+    WsChannelReconcileReason, WsChannelState, WsParseError,
 };
 
 #[test]
@@ -185,14 +185,17 @@ fn ws_user_parses_order_and_trade_settlement_fields() {
 #[test]
 fn ws_market_rejects_unknown_event_variants() {
     assert_eq!(
-        parse_market_message(r#"{"event":"mystery"}"#).unwrap_err().to_string(),
+        parse_market_message(r#"{"event":"mystery"}"#)
+            .unwrap_err()
+            .to_string(),
         WsParseError::UnknownEvent("MYSTERY".to_owned()).to_string()
     );
 }
 
 #[test]
 fn ws_market_channel_marks_stale_after_freshness_gap() {
-    let monitor = WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
+    let monitor =
+        WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
     let mut state = WsChannelState::new(WsChannelKind::Market, ts(10, 0, 0));
 
     monitor.record_market_event(&mut state, &MarketWsEvent::Ping, ts(10, 0, 10));
@@ -243,7 +246,8 @@ fn ws_user_channel_keeps_reconcile_attention_latched_after_new_message() {
 
 #[test]
 fn ws_channel_requires_explicit_reset_to_clear_reconcile_attention() {
-    let monitor = WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
+    let monitor =
+        WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
     let mut state = WsChannelState::new(WsChannelKind::Market, ts(10, 0, 0));
 
     assert_eq!(

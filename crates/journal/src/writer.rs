@@ -94,14 +94,22 @@ impl JournalWriter {
             ingested_at: Utc::now(),
         };
 
-        let mut entries = self.inner.entries.lock().map_err(|_| JournalError::Poisoned)?;
+        let mut entries = self
+            .inner
+            .entries
+            .lock()
+            .map_err(|_| JournalError::Poisoned)?;
         entries.push(entry.clone());
 
         Ok(entry)
     }
 
     pub fn entries(&self) -> Result<Vec<JournalEntry>, JournalError> {
-        let entries = self.inner.entries.lock().map_err(|_| JournalError::Poisoned)?;
+        let entries = self
+            .inner
+            .entries
+            .lock()
+            .map_err(|_| JournalError::Poisoned)?;
         Ok(entries.clone())
     }
 }

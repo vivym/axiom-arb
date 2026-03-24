@@ -1,7 +1,5 @@
 use chrono::{Duration, TimeZone, Utc};
-use venue_polymarket::{
-    HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
-};
+use venue_polymarket::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
 
 #[test]
 fn heartbeat_missing_success_triggers_reconcile_once_and_persists_attention() {
@@ -18,10 +16,7 @@ fn heartbeat_missing_success_triggers_reconcile_once_and_persists_attention() {
         monitor.reconcile_trigger(&mut state, ts(10, 0, 31)),
         Some(HeartbeatReconcileReason::MissedHeartbeat)
     );
-    assert_eq!(
-        monitor.reconcile_trigger(&mut state, ts(10, 0, 45)),
-        None
-    );
+    assert_eq!(monitor.reconcile_trigger(&mut state, ts(10, 0, 45)), None);
     assert!(state.requires_reconcile_attention);
     assert_eq!(
         state.reconcile_reason,
