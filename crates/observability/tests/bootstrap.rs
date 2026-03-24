@@ -19,8 +19,10 @@ fn bootstrap_surface_returns_service_identity_metrics_and_registry() {
 #[test]
 fn bootstrap_surface_initializes_tracing_only_once() {
     if env::var_os("OBSERVABILITY_BOOTSTRAP_ONCE_HELPER").is_some() {
-        let _first = bootstrap_observability("app-live");
-        let _second = bootstrap_observability("app-live");
+        let first = bootstrap_observability("app-live");
+        let second = bootstrap_observability("app-live");
+        assert!(first.tracing().initialized_global_subscriber());
+        assert!(!second.tracing().initialized_global_subscriber());
         return;
     }
 
@@ -38,11 +40,4 @@ fn bootstrap_surface_initializes_tracing_only_once() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let combined_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(combined_output.matches("tracing bootstrapped").count(), 1);
 }
