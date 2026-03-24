@@ -78,36 +78,36 @@ fn sample_identifier_records() -> Vec<IdentifierRecord> {
 
 fn sample_metadata() -> Vec<NegRiskMarketMetadata> {
     vec![
-        sample_metadata_row(
-            "family-a",
-            "event-a",
-            "condition-a",
-            "token-a",
-            "Alice",
-            NegRiskVariant::Standard,
-            false,
-            false,
-        ),
-        sample_metadata_row(
-            "family-a",
-            "event-b",
-            "condition-b",
-            "token-b",
-            "Other",
-            NegRiskVariant::Standard,
-            false,
-            true,
-        ),
-        sample_metadata_row(
-            "family-b",
-            "event-c",
-            "condition-c",
-            "token-c",
-            "Placeholder",
-            NegRiskVariant::Standard,
-            true,
-            false,
-        ),
+        sample_metadata_row(MetadataRowInput {
+            event_family_id: "family-a",
+            event_id: "event-a",
+            condition_id: "condition-a",
+            token_id: "token-a",
+            outcome_label: "Alice",
+            neg_risk_variant: NegRiskVariant::Standard,
+            is_placeholder: false,
+            is_other: false,
+        }),
+        sample_metadata_row(MetadataRowInput {
+            event_family_id: "family-a",
+            event_id: "event-b",
+            condition_id: "condition-b",
+            token_id: "token-b",
+            outcome_label: "Other",
+            neg_risk_variant: NegRiskVariant::Standard,
+            is_placeholder: false,
+            is_other: true,
+        }),
+        sample_metadata_row(MetadataRowInput {
+            event_family_id: "family-b",
+            event_id: "event-c",
+            condition_id: "condition-c",
+            token_id: "token-c",
+            outcome_label: "Placeholder",
+            neg_risk_variant: NegRiskVariant::Standard,
+            is_placeholder: true,
+            is_other: false,
+        }),
     ]
 }
 
@@ -123,16 +123,16 @@ fn sample_augmented_family() -> NegRiskGraphFamily {
                 outcome_label: "Augmented".to_owned(),
                 route: MarketRoute::NegRisk,
             }],
-            vec![sample_metadata_row(
-                "family-aug",
-                "event-aug",
-                "condition-aug",
-                "token-aug",
-                "Augmented",
-                NegRiskVariant::Augmented,
-                false,
-                false,
-            )],
+            vec![sample_metadata_row(MetadataRowInput {
+                event_family_id: "family-aug",
+                event_id: "event-aug",
+                condition_id: "condition-aug",
+                token_id: "token-aug",
+                outcome_label: "Augmented",
+                neg_risk_variant: NegRiskVariant::Augmented,
+                is_placeholder: false,
+                is_other: false,
+            })],
         )
         .expect("augmented graph should build"),
     )
@@ -150,16 +150,16 @@ fn sample_placeholder_family() -> NegRiskGraphFamily {
                 outcome_label: "Placeholder".to_owned(),
                 route: MarketRoute::NegRisk,
             }],
-            vec![sample_metadata_row(
-                "family-placeholder",
-                "event-placeholder",
-                "condition-placeholder",
-                "token-placeholder",
-                "Placeholder",
-                NegRiskVariant::Standard,
-                true,
-                false,
-            )],
+            vec![sample_metadata_row(MetadataRowInput {
+                event_family_id: "family-placeholder",
+                event_id: "event-placeholder",
+                condition_id: "condition-placeholder",
+                token_id: "token-placeholder",
+                outcome_label: "Placeholder",
+                neg_risk_variant: NegRiskVariant::Standard,
+                is_placeholder: true,
+                is_other: false,
+            })],
         )
         .expect("placeholder graph should build"),
     )
@@ -177,16 +177,16 @@ fn sample_named_family() -> NegRiskGraphFamily {
                 outcome_label: "Alice".to_owned(),
                 route: MarketRoute::NegRisk,
             }],
-            vec![sample_metadata_row(
-                "family-named",
-                "event-named",
-                "condition-named",
-                "token-named",
-                "Alice",
-                NegRiskVariant::Standard,
-                false,
-                false,
-            )],
+            vec![sample_metadata_row(MetadataRowInput {
+                event_family_id: "family-named",
+                event_id: "event-named",
+                condition_id: "condition-named",
+                token_id: "token-named",
+                outcome_label: "Alice",
+                neg_risk_variant: NegRiskVariant::Standard,
+                is_placeholder: false,
+                is_other: false,
+            })],
         )
         .expect("named graph should build"),
     )
@@ -204,28 +204,30 @@ fn sample_discovery_revision() -> i64 {
     7
 }
 
-fn sample_metadata_row(
-    event_family_id: &str,
-    event_id: &str,
-    condition_id: &str,
-    token_id: &str,
-    outcome_label: &str,
+struct MetadataRowInput<'a> {
+    event_family_id: &'a str,
+    event_id: &'a str,
+    condition_id: &'a str,
+    token_id: &'a str,
+    outcome_label: &'a str,
     neg_risk_variant: NegRiskVariant,
     is_placeholder: bool,
     is_other: bool,
-) -> NegRiskMarketMetadata {
+}
+
+fn sample_metadata_row(input: MetadataRowInput<'_>) -> NegRiskMarketMetadata {
     NegRiskMarketMetadata {
-        event_family_id: event_family_id.to_owned(),
-        event_id: event_id.to_owned(),
-        condition_id: condition_id.to_owned(),
-        token_id: token_id.to_owned(),
-        outcome_label: outcome_label.to_owned(),
+        event_family_id: input.event_family_id.to_owned(),
+        event_id: input.event_id.to_owned(),
+        condition_id: input.condition_id.to_owned(),
+        token_id: input.token_id.to_owned(),
+        outcome_label: input.outcome_label.to_owned(),
         route: MarketRoute::NegRisk,
         enable_neg_risk: Some(true),
-        neg_risk_augmented: Some(matches!(neg_risk_variant, NegRiskVariant::Augmented)),
-        neg_risk_variant,
-        is_placeholder,
-        is_other,
+        neg_risk_augmented: Some(matches!(input.neg_risk_variant, NegRiskVariant::Augmented)),
+        neg_risk_variant: input.neg_risk_variant,
+        is_placeholder: input.is_placeholder,
+        is_other: input.is_other,
         discovery_revision: 7,
         metadata_snapshot_hash: "sha256:test-snapshot".to_owned(),
     }

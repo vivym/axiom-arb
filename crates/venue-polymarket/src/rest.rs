@@ -10,10 +10,10 @@ use serde::Deserialize;
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
+use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
 };
-use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 
 #[derive(Debug, Clone)]
 pub struct PolymarketRestClient {

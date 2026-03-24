@@ -7,9 +7,8 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use crate::{
     models::{
         ApprovalStateRow, FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow,
-        JournalEntryInput, JournalEntryRow, NegRiskDiscoverySnapshotInput,
-        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow, OrderRow,
-        ResolutionStateRow, StoredOrder,
+        JournalEntryInput, JournalEntryRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, ResolutionStateRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1399,7 +1398,10 @@ async fn latest_discovery_snapshot(pool: &PgPool) -> Result<Option<LatestDiscove
         .transpose()
 }
 
-async fn append_journal_entry<'e, E>(executor: E, entry: &JournalEntryInput) -> Result<JournalEntryRow>
+async fn append_journal_entry<'e, E>(
+    executor: E,
+    entry: &JournalEntryInput,
+) -> Result<JournalEntryRow>
 where
     E: Executor<'e, Database = Postgres>,
 {

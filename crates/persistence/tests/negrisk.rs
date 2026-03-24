@@ -2,8 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{Duration, Utc};
 use persistence::{
-    models::{FamilyHaltRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow},
-    reconcile_current_family_view, run_migrations, persist_discovery_snapshot, JournalRepo,
+    models::{
+        FamilyHaltRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow,
+    },
+    persist_discovery_snapshot, reconcile_current_family_view, run_migrations, JournalRepo,
     NegRiskFamilyRepo,
 };
 use serde_json::json;
@@ -269,8 +272,16 @@ mod negrisk {
             .await
             .unwrap();
 
-        let row = NegRiskFamilyRepo.list_halts(&db.pool).await.unwrap().pop().unwrap();
-        assert_eq!(row.metadata_snapshot_hash.as_deref(), Some("sha256:snapshot-a"));
+        let row = NegRiskFamilyRepo
+            .list_halts(&db.pool)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(
+            row.metadata_snapshot_hash.as_deref(),
+            Some("sha256:snapshot-a")
+        );
 
         db.cleanup().await;
     }
@@ -300,7 +311,8 @@ mod negrisk {
     }
 
     #[tokio::test]
-    async fn successful_refresh_reconciles_current_view_and_drops_missing_families_from_current_counts() {
+    async fn successful_refresh_reconciles_current_view_and_drops_missing_families_from_current_counts(
+    ) {
         let db = TestDatabase::new().await;
         run_migrations(&db.pool).await.unwrap();
 

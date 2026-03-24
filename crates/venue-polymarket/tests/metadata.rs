@@ -5,9 +5,7 @@ use std::{
 };
 
 use url::Url;
-use venue_polymarket::{
-    NegRiskMetadataError, NegRiskVariant, PolymarketRestClient, RestError,
-};
+use venue_polymarket::{NegRiskMetadataError, NegRiskVariant, PolymarketRestClient, RestError};
 
 #[tokio::test]
 async fn fetch_neg_risk_metadata_rows_discovers_all_pages_and_classifies_members() {

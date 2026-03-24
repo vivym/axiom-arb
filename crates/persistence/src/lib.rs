@@ -8,7 +8,7 @@ pub mod repos;
 
 pub use models::StoredOrder;
 pub use repos::{
-    reconcile_current_family_view, persist_discovery_snapshot, ApprovalRepo, IdentifierRepo,
+    persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, IdentifierRepo,
     InventoryRepo, JournalRepo, NegRiskFamilyRepo, OrderRepo, ResolutionRepo,
 };
 

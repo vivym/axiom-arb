@@ -113,7 +113,11 @@ struct CanonicalNegRiskRow {
 }
 
 impl CanonicalNegRiskRow {
-    fn into_public(self, discovery_revision: i64, metadata_snapshot_hash: String) -> NegRiskMarketMetadata {
+    fn into_public(
+        self,
+        discovery_revision: i64,
+        metadata_snapshot_hash: String,
+    ) -> NegRiskMarketMetadata {
         NegRiskMarketMetadata {
             event_family_id: self.event_family_id,
             event_id: self.event_id,
@@ -252,9 +256,7 @@ impl PolymarketRestClient {
         Ok(snapshot.rows)
     }
 
-    async fn discover_neg_risk_metadata_rows(
-        &self,
-    ) -> Result<NegRiskDiscovery, RestError> {
+    async fn discover_neg_risk_metadata_rows(&self) -> Result<NegRiskDiscovery, RestError> {
         let mut rows = Vec::<CanonicalNegRiskRow>::new();
         let mut seen = HashMap::<NegRiskMemberKey, usize>::new();
         let mut offset = 0usize;
@@ -264,34 +266,43 @@ impl PolymarketRestClient {
             let page_count = page.len();
 
             for event in page {
-                let event_id = event.id.clone().ok_or(NegRiskMetadataError::MissingEventId)?;
-                let family_id = event.parent_event_id.clone().unwrap_or_else(|| event_id.clone());
+                let event_id = event
+                    .id
+                    .clone()
+                    .ok_or(NegRiskMetadataError::MissingEventId)?;
+                let family_id = event
+                    .parent_event_id
+                    .clone()
+                    .unwrap_or_else(|| event_id.clone());
 
                 for market in event.markets {
-                    let is_neg_risk = event.neg_risk.unwrap_or(false) || market.neg_risk.unwrap_or(false);
+                    let is_neg_risk =
+                        event.neg_risk.unwrap_or(false) || market.neg_risk.unwrap_or(false);
                     if !is_neg_risk {
                         continue;
                     }
 
-                    let condition_id = market
-                        .condition_id
-                        .clone()
-                        .ok_or_else(|| NegRiskMetadataError::MissingConditionId {
+                    let condition_id = market.condition_id.clone().ok_or_else(|| {
+                        NegRiskMetadataError::MissingConditionId {
                             event_id: event_id.clone(),
-                        })?;
-                    let token_id = market
-                        .yes_token_id()
-                        .ok_or_else(|| NegRiskMetadataError::MissingTokenId {
+                        }
+                    })?;
+                    let token_id = market.yes_token_id().ok_or_else(|| {
+                        NegRiskMetadataError::MissingTokenId {
                             event_id: event_id.clone(),
                             condition_id: condition_id.clone(),
-                        })?;
+                        }
+                    })?;
                     let outcome_label = market.outcome_label(event.title.as_deref());
                     let is_other = market.neg_risk_other.unwrap_or(false)
                         || outcome_label.eq_ignore_ascii_case("other");
                     let is_placeholder = outcome_label.is_empty()
                         || outcome_label.eq_ignore_ascii_case("placeholder");
-                    let neg_risk_variant =
-                        classify_variant(is_neg_risk, event.enable_neg_risk, event.neg_risk_augmented);
+                    let neg_risk_variant = classify_variant(
+                        is_neg_risk,
+                        event.enable_neg_risk,
+                        event.neg_risk_augmented,
+                    );
                     let row = CanonicalNegRiskRow {
                         event_family_id: family_id.clone(),
                         event_id: event_id.clone(),
@@ -365,12 +376,14 @@ impl PolymarketRestClient {
                 ("limit", limit.as_str()),
                 ("offset", offset.as_str()),
             ];
-            let request = self
-                .build_get_request(&self.data_api_host, "events", &query, None)?;
+            let request = self.build_get_request(&self.data_api_host, "events", &query, None)?;
 
             match self.execute_json(request).await {
                 Ok(page) => return Ok(page),
-                Err(err) if attempt + 1 < NEG_RISK_PAGE_MAX_ATTEMPTS && is_retryable_metadata_error(&err) => {
+                Err(err)
+                    if attempt + 1 < NEG_RISK_PAGE_MAX_ATTEMPTS
+                        && is_retryable_metadata_error(&err) =>
+                {
                     last_error = Some(err);
                     continue;
                 }
@@ -421,14 +434,8 @@ fn snapshot_hash(rows: &[CanonicalNegRiskRow]) -> String {
         update_hash_field(&mut hasher, &row.token_id);
         update_hash_field(&mut hasher, &row.outcome_label);
         update_hash_field(&mut hasher, market_route_label(row.route));
-        update_hash_field(
-            &mut hasher,
-            optional_bool_label(row.enable_neg_risk),
-        );
-        update_hash_field(
-            &mut hasher,
-            optional_bool_label(row.neg_risk_augmented),
-        );
+        update_hash_field(&mut hasher, optional_bool_label(row.enable_neg_risk));
+        update_hash_field(&mut hasher, optional_bool_label(row.neg_risk_augmented));
         update_hash_field(&mut hasher, neg_risk_variant_label(row.neg_risk_variant));
         update_hash_field(&mut hasher, bool_label(row.is_placeholder));
         update_hash_field(&mut hasher, bool_label(row.is_other));
@@ -484,7 +491,11 @@ fn optional_bool_label(value: Option<bool>) -> &'static str {
 }
 
 fn bool_label(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
+    if value {
+        "true"
+    } else {
+        "false"
+    }
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
@@ -532,11 +543,13 @@ fn parse_string_list(value: &str) -> Vec<String> {
 fn is_retryable_metadata_error(error: &RestError) -> bool {
     match error {
         RestError::Http(_) => true,
-        RestError::HttpResponse { status, .. } => matches!(
-            status.as_u16(),
-            425 | 429 | 500 | 502 | 503 | 504
-        ),
-        RestError::Metadata(_) | RestError::Auth(_) | RestError::Url(_) | RestError::MissingField(_) => false,
+        RestError::HttpResponse { status, .. } => {
+            matches!(status.as_u16(), 425 | 429 | 500 | 502 | 503 | 504)
+        }
+        RestError::Metadata(_)
+        | RestError::Auth(_)
+        | RestError::Url(_)
+        | RestError::MissingField(_) => false,
     }
 }
 
