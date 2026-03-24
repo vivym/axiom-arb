@@ -21,6 +21,7 @@ pub struct ExecutionPlanRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionAttemptOutcome {
     Succeeded,
+    ShadowRecorded,
     FailedDefinitive,
     FailedAmbiguous,
     RetryExhausted,

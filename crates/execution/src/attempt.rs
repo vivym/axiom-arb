@@ -1,10 +1,12 @@
-use domain::{ExecutionAttempt, ExecutionAttemptContext, ExecutionMode};
+use std::collections::HashMap;
+
+use domain::{ExecutionAttempt, ExecutionAttemptContext, ExecutionMode, ExecutionRequest};
 
 use crate::plans::ExecutionPlan;
 
 #[derive(Debug, Default)]
 pub struct ExecutionAttemptFactory {
-    next_attempt_no: u32,
+    next_attempt_no_by_plan: HashMap<String, u32>,
 }
 
 impl ExecutionAttemptFactory {
@@ -15,22 +17,26 @@ impl ExecutionAttemptFactory {
     pub fn next_for_plan(
         &mut self,
         plan: &ExecutionPlan,
-        snapshot_id: &str,
+        request: &ExecutionRequest,
         execution_mode: ExecutionMode,
     ) -> (ExecutionAttempt, ExecutionAttemptContext) {
-        let attempt_no = self.next_attempt_no + 1;
-        self.next_attempt_no = attempt_no;
+        let plan_id = plan.plan_id();
+        let next_attempt_no = self
+            .next_attempt_no_by_plan
+            .entry(plan_id.clone())
+            .or_insert(0);
+        *next_attempt_no += 1;
 
-        let attempt_id = format!("{}:attempt-{}", plan.plan_id(), attempt_no);
+        let attempt_id = format!("{}:attempt-{}", plan_id, *next_attempt_no);
         let attempt = ExecutionAttempt::new(
             attempt_id.clone(),
-            plan.plan_id(),
-            snapshot_id.to_owned(),
-            attempt_no,
+            plan_id,
+            request.snapshot_id.clone(),
+            *next_attempt_no,
         );
         let context = ExecutionAttemptContext {
             attempt_id,
-            snapshot_id: snapshot_id.to_owned(),
+            snapshot_id: request.snapshot_id.clone(),
             execution_mode,
         };
 

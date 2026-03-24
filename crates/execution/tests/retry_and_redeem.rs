@@ -24,8 +24,12 @@ fn order_envelope_carries_the_attempt_context_used_to_create_it() {
         condition_id: ConditionId::from("condition-12"),
     };
     let mut factory = ExecutionAttemptFactory::default();
-    let (attempt, context) =
-        factory.next_for_plan(&plan, "snapshot-12", domain::ExecutionMode::Shadow);
+    let request = domain::ExecutionRequest {
+        request_id: "request-12".to_owned(),
+        decision_input_id: "decision-12".to_owned(),
+        snapshot_id: "snapshot-12".to_owned(),
+    };
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
 
     let order = SignedOrderEnvelope::new(OrderId::from("order-12"), sample_identity("attempt"))
         .with_attempt_context(&context);
@@ -193,14 +197,47 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
         condition_id: ConditionId::from("condition-4"),
     };
     let mut factory = ExecutionAttemptFactory::default();
+    let request = domain::ExecutionRequest {
+        request_id: "request-4".to_owned(),
+        decision_input_id: "decision-4".to_owned(),
+        snapshot_id: "snapshot-4".to_owned(),
+    };
 
-    let (attempt, context) =
-        factory.next_for_plan(&plan, "snapshot-4", domain::ExecutionMode::Shadow);
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
 
     assert_eq!(attempt.plan_id, plan.plan_id());
     assert_eq!(attempt.snapshot_id, "snapshot-4");
     assert_eq!(context.attempt_id, attempt.attempt_id);
     assert_eq!(context.execution_mode, domain::ExecutionMode::Shadow);
+}
+
+#[test]
+fn execution_attempt_factory_resets_attempt_numbers_per_plan() {
+    let mut factory = ExecutionAttemptFactory::default();
+    let request_a = domain::ExecutionRequest {
+        request_id: "request-a".to_owned(),
+        decision_input_id: "decision-a".to_owned(),
+        snapshot_id: "snapshot-a".to_owned(),
+    };
+    let request_b = domain::ExecutionRequest {
+        request_id: "request-b".to_owned(),
+        decision_input_id: "decision-b".to_owned(),
+        snapshot_id: "snapshot-b".to_owned(),
+    };
+    let plan_a = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-a"),
+    };
+    let plan_b = ExecutionPlan::CancelStale {
+        order_id: OrderId::from("order-b"),
+    };
+
+    let (attempt_a1, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
+    let (attempt_a2, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
+    let (attempt_b1, _) = factory.next_for_plan(&plan_b, &request_b, domain::ExecutionMode::Live);
+
+    assert_eq!(attempt_a1.attempt_no, 1);
+    assert_eq!(attempt_a2.attempt_no, 2);
+    assert_eq!(attempt_b1.attempt_no, 1);
 }
 
 #[test]
@@ -246,8 +283,12 @@ fn ctf_operation_carries_the_attempt_context_used_to_create_it() {
         condition_id: ConditionId::from("condition-13"),
     };
     let mut factory = ExecutionAttemptFactory::default();
-    let (attempt, context) =
-        factory.next_for_plan(&plan, "snapshot-13", domain::ExecutionMode::Live);
+    let request = domain::ExecutionRequest {
+        request_id: "request-13".to_owned(),
+        decision_input_id: "decision-13".to_owned(),
+        snapshot_id: "snapshot-13".to_owned(),
+    };
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Live);
 
     let operation = CtfOperation::new(
         CtfOperationKind::Merge,

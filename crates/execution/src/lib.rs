@@ -10,7 +10,5 @@ pub use domain::{
     ExecutionAttempt, ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode,
     ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
 };
-pub use orchestrator::{
-    ExecutionError, ExecutionOrchestrator, ExecutionPlanInput, ExecutionPlanningRequest,
-};
-pub use sink::{LiveVenueSink, ShadowVenueSink, VenueSink};
+pub use orchestrator::{ExecutionError, ExecutionOrchestrator, ExecutionPlanningInput};
+pub use sink::{LiveVenueSink, ShadowVenueSink, VenueSink, VenueSinkError};

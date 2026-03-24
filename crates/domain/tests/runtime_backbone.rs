@@ -55,6 +55,15 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
     };
     assert_eq!(receipt.attempt_id, "attempt-1");
     assert_eq!(receipt.outcome, ExecutionAttemptOutcome::FailedAmbiguous);
+
+    let shadow_receipt = ExecutionReceipt {
+        attempt_id: attempt_context.attempt_id.clone(),
+        outcome: ExecutionAttemptOutcome::ShadowRecorded,
+    };
+    assert_eq!(
+        shadow_receipt.outcome,
+        ExecutionAttemptOutcome::ShadowRecorded
+    );
 }
 
 #[test]

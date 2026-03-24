@@ -3,14 +3,19 @@ use std::rc::Rc;
 
 use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionReceipt};
 
-use crate::{orchestrator::ExecutionError, plans::ExecutionPlan};
+use crate::plans::ExecutionPlan;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VenueSinkError {
+    Rejected { reason: String },
+}
 
 pub trait VenueSink {
     fn execute(
         &self,
         plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
-    ) -> Result<ExecutionReceipt, ExecutionError>;
+    ) -> Result<ExecutionReceipt, VenueSinkError>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -27,7 +32,7 @@ impl VenueSink for LiveVenueSink {
         &self,
         _plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
-    ) -> Result<ExecutionReceipt, ExecutionError> {
+    ) -> Result<ExecutionReceipt, VenueSinkError> {
         Ok(ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
             outcome: ExecutionAttemptOutcome::Succeeded,
@@ -55,14 +60,14 @@ impl VenueSink for ShadowVenueSink {
         &self,
         _plan: &ExecutionPlan,
         attempt: &ExecutionAttemptContext,
-    ) -> Result<ExecutionReceipt, ExecutionError> {
+    ) -> Result<ExecutionReceipt, VenueSinkError> {
         self.recorded_attempt_ids
             .borrow_mut()
             .push(attempt.attempt_id.clone());
 
         Ok(ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
-            outcome: ExecutionAttemptOutcome::Succeeded,
+            outcome: ExecutionAttemptOutcome::ShadowRecorded,
         })
     }
 }
