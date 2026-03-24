@@ -40,24 +40,32 @@ impl DispatchLoop {
     }
 
     pub fn flush(&mut self) -> DispatchSummary {
+        self.coalesce_dirty_records();
         let coalesced_versions = self
             .dirty_records
             .iter()
             .map(|record| record.state_version)
-            .into_iter()
-            .max()
-            .into_iter()
-            .collect();
-        let last_stable_snapshot = latest_stable_snapshot(
+            .collect::<Vec<_>>();
+        let last_stable_state_version = last_stable_state_version(
             self.latest_ready_fullset.as_ref(),
             self.latest_ready_negrisk.as_ref(),
         );
+        let last_stable_snapshot_id = last_stable_state_version.and_then(|state_version| {
+            self.latest_ready_fullset
+                .as_ref()
+                .filter(|snapshot| snapshot.state_version == state_version)
+                .or_else(|| {
+                    self.latest_ready_negrisk
+                        .as_ref()
+                        .filter(|snapshot| snapshot.state_version == state_version)
+                })
+                .map(|snapshot| snapshot.snapshot_id.clone())
+        });
 
         DispatchSummary {
             coalesced_versions,
-            last_stable_snapshot_id: last_stable_snapshot
-                .map(|snapshot| snapshot.snapshot_id.clone()),
-            last_stable_state_version: last_stable_snapshot.map(|snapshot| snapshot.state_version),
+            last_stable_snapshot_id,
+            last_stable_state_version,
             fullset_last_ready_snapshot_id: self
                 .latest_ready_fullset
                 .as_ref()
@@ -83,10 +91,7 @@ impl DispatchLoop {
         fullset_ready: bool,
         negrisk_ready: bool,
     ) {
-        self.record_apply(
-            state_version,
-            DirtySet::new(test_dirty_domains(fullset_ready, negrisk_ready)),
-        );
+        self.record_apply(state_version, DirtySet::new(all_domains()));
         self.observe_snapshot(PublishedSnapshot {
             snapshot_id: format!("snapshot-{state_version}"),
             state_version,
@@ -121,6 +126,48 @@ impl DispatchLoop {
         self.dirty_records
             .retain(|record| !record.domains.is_empty());
     }
+
+    fn coalesce_dirty_records(&mut self) {
+        let latest_fullset_dirty = self
+            .dirty_records
+            .iter()
+            .filter(|record| {
+                record
+                    .domains
+                    .iter()
+                    .any(|domain| is_fullset_domain(*domain))
+            })
+            .map(|record| record.state_version)
+            .max();
+        let latest_negrisk_dirty = self
+            .dirty_records
+            .iter()
+            .filter(|record| record.domains.contains(&DirtyDomain::NegRiskFamilies))
+            .map(|record| record.state_version)
+            .max();
+
+        let mut coalesced = std::collections::BTreeMap::<u64, BTreeSet<DirtyDomain>>::new();
+        if let Some(state_version) = latest_fullset_dirty {
+            coalesced
+                .entry(state_version)
+                .or_default()
+                .extend(fullset_domains());
+        }
+        if let Some(state_version) = latest_negrisk_dirty {
+            coalesced
+                .entry(state_version)
+                .or_default()
+                .insert(DirtyDomain::NegRiskFamilies);
+        }
+
+        self.dirty_records = coalesced
+            .into_iter()
+            .map(|(state_version, domains)| DirtyRecord {
+                state_version,
+                domains,
+            })
+            .collect();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,35 +191,23 @@ fn negrisk_domains() -> BTreeSet<DirtyDomain> {
     BTreeSet::from([DirtyDomain::NegRiskFamilies])
 }
 
-fn test_dirty_domains(fullset_ready: bool, negrisk_ready: bool) -> BTreeSet<DirtyDomain> {
-    match (fullset_ready, negrisk_ready) {
-        (true, false) => fullset_domains(),
-        (false, true) => negrisk_domains(),
-        (true, true) => fullset_domains()
-            .into_iter()
-            .chain(negrisk_domains())
-            .collect(),
-        (false, false) => fullset_domains()
-            .into_iter()
-            .chain(negrisk_domains())
-            .collect(),
+fn all_domains() -> BTreeSet<DirtyDomain> {
+    fullset_domains()
+        .into_iter()
+        .chain(negrisk_domains())
+        .collect()
+}
+
+fn last_stable_state_version(
+    fullset: Option<&PublishedSnapshot>,
+    negrisk: Option<&PublishedSnapshot>,
+) -> Option<u64> {
+    match (fullset, negrisk) {
+        (Some(fullset), Some(negrisk)) => Some(fullset.state_version.min(negrisk.state_version)),
+        _ => None,
     }
 }
 
-fn latest_stable_snapshot<'a>(
-    fullset: Option<&'a PublishedSnapshot>,
-    negrisk: Option<&'a PublishedSnapshot>,
-) -> Option<&'a PublishedSnapshot> {
-    match (fullset, negrisk) {
-        (Some(fullset), Some(negrisk)) => {
-            if fullset.state_version >= negrisk.state_version {
-                Some(fullset)
-            } else {
-                Some(negrisk)
-            }
-        }
-        (Some(fullset), None) => Some(fullset),
-        (None, Some(negrisk)) => Some(negrisk),
-        (None, None) => None,
-    }
+fn is_fullset_domain(domain: DirtyDomain) -> bool {
+    fullset_domains().contains(&domain)
 }

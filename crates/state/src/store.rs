@@ -127,6 +127,16 @@ impl StateStore {
         self.apply_policy(reconciled_policy());
     }
 
+    pub fn restore_reconciled_policy(&mut self) {
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
+    pub fn mark_reconcile_required(&mut self) {
+        self.first_reconcile_succeeded = true;
+        self.enter_reconciling();
+    }
+
     pub fn mode(&self) -> RuntimeMode {
         self.runtime_mode
     }

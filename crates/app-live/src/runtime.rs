@@ -140,8 +140,14 @@ impl AppRuntime {
         let journal_seq = input.journal_seq;
         let result =
             StateApplier::new(&mut self.store).apply(journal_seq, input.into_state_fact_input())?;
-        if matches!(result, ApplyResult::Applied { .. }) {
-            self.published_snapshot = None;
+        match &result {
+            ApplyResult::Applied { .. } => {
+                self.published_snapshot = None;
+            }
+            ApplyResult::ReconcileRequired { .. } => {
+                self.store.mark_reconcile_required();
+            }
+            ApplyResult::Duplicate { .. } | ApplyResult::Deferred { .. } => {}
         }
         Ok(result)
     }
@@ -162,13 +168,20 @@ impl AppRuntime {
     ) -> Result<(), ApplyError> {
         self.store = StateStore::new();
         self.published_snapshot = None;
+        let mut reconcile_required = false;
 
         for input in history.iter().cloned() {
-            let _ = StateApplier::new(&mut self.store)
+            let result = StateApplier::new(&mut self.store)
                 .apply(input.journal_seq, input.into_state_fact_input())?;
+            if matches!(result, ApplyResult::ReconcileRequired { .. }) {
+                reconcile_required = true;
+            }
         }
 
-        self.store.mark_reconciled_after_restore(0);
+        self.store.restore_reconciled_policy();
+        if reconcile_required {
+            self.store.mark_reconcile_required();
+        }
         Ok(())
     }
 

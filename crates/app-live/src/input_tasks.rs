@@ -56,19 +56,19 @@ impl InputTaskQueue {
             .sort_by_key(|entry| entry.journal_seq);
     }
 
-    pub fn drain_after(&mut self, last_journal_seq: Option<i64>) -> Vec<InputTaskEvent> {
-        let mut drained = Vec::new();
-        let mut retained = VecDeque::new();
+    pub fn next_after(&self, last_journal_seq: Option<i64>) -> Option<InputTaskEvent> {
+        self.backlog
+            .iter()
+            .find(|entry| last_journal_seq.is_none_or(|last| entry.journal_seq > last))
+            .cloned()
+    }
 
-        while let Some(entry) = self.backlog.pop_front() {
-            if last_journal_seq.is_none_or(|last| entry.journal_seq > last) {
-                drained.push(entry);
-            } else {
-                retained.push_back(entry);
-            }
-        }
+    pub fn remove(&mut self, input: &InputTaskEvent) -> Option<InputTaskEvent> {
+        let index = self.backlog.iter().position(|entry| entry == input)?;
+        self.backlog.remove(index)
+    }
 
-        self.backlog = retained;
-        drained
+    pub fn len(&self) -> usize {
+        self.backlog.len()
     }
 }

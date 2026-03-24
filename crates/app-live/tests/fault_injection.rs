@@ -57,6 +57,59 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
 }
 
+#[test]
+fn restart_replays_out_of_order_user_trade_from_durable_log() {
+    let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 36..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
+    supervisor.seed_unapplied_journal_entry(42, sample_out_of_order_user_trade(42));
+
+    let resumed = supervisor.resume_once().unwrap();
+
+    assert_eq!(resumed.last_journal_seq, 42);
+    assert_eq!(resumed.last_state_version, 6);
+    assert_eq!(resumed.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-6"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
+
+    supervisor.seed_runtime_progress(
+        resumed.last_journal_seq,
+        resumed.last_state_version,
+        resumed.published_snapshot_id.as_deref(),
+    );
+    supervisor.seed_committed_state_version(resumed.last_state_version);
+
+    let replayed = supervisor.resume_once().unwrap();
+
+    assert_eq!(replayed.last_journal_seq, 42);
+    assert_eq!(replayed.last_state_version, 6);
+    assert_eq!(replayed.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(
+        replayed.published_snapshot_id.as_deref(),
+        Some("snapshot-6")
+    );
+    assert_eq!(replayed.published_snapshot_committed_journal_seq, Some(41));
+}
+
+#[test]
+fn restart_retains_failed_backlog_entries_for_retry() {
+    let mut supervisor = AppSupervisor::for_tests();
+    for journal_seq in 36..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
+    supervisor.seed_unapplied_journal_entry(42, sample_input_task_event(42));
+    supervisor.seed_unapplied_journal_entry(42, conflicting_input_task_event(42));
+
+    let first_err = supervisor.resume_once().unwrap_err();
+    assert!(first_err
+        .to_string()
+        .contains("journal sequence 42 is already bound to a different fact"));
+    assert_eq!(supervisor.pending_input_count(), 1);
+}
+
 fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
     InputTaskEvent::new(
         journal_seq,
@@ -64,6 +117,32 @@ fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
             "market_ws",
             "session-1",
             &format!("evt-{journal_seq}"),
+            "v1",
+            Utc::now(),
+        ),
+    )
+}
+
+fn sample_out_of_order_user_trade(journal_seq: i64) -> InputTaskEvent {
+    InputTaskEvent::out_of_order_user_trade(
+        journal_seq,
+        ExternalFactEvent::new(
+            "market_ws",
+            "session-2",
+            &format!("trade-{journal_seq}"),
+            "v1",
+            Utc::now(),
+        ),
+    )
+}
+
+fn conflicting_input_task_event(journal_seq: i64) -> InputTaskEvent {
+    InputTaskEvent::new(
+        journal_seq,
+        ExternalFactEvent::new(
+            "market_ws",
+            "session-conflict",
+            &format!("evt-conflict-{journal_seq}"),
             "v1",
             Utc::now(),
         ),

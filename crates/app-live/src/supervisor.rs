@@ -137,14 +137,17 @@ impl AppSupervisor {
     }
 
     pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
-        self.committed_log.push(input);
-        self.committed_log.sort_by_key(|entry| entry.journal_seq);
+        self.record_committed_input(input);
     }
 
     pub fn seed_unapplied_journal_entry(&mut self, journal_seq: i64, input: InputTaskEvent) {
         let mut input = input;
         input.journal_seq = journal_seq;
         self.input_tasks.push(input);
+    }
+
+    pub fn pending_input_count(&self) -> usize {
+        self.input_tasks.len()
     }
 
     pub fn resume_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
@@ -186,8 +189,7 @@ impl AppSupervisor {
             self.publish_current_snapshot();
         }
 
-        let pending_entries = self.input_tasks.drain_after(self.seed.last_journal_seq);
-        for input in pending_entries {
+        while let Some(input) = self.input_tasks.next_after(self.seed.last_journal_seq) {
             match self.runtime.apply_input(input.clone())? {
                 ApplyResult::Applied {
                     state_version,
@@ -195,8 +197,8 @@ impl AppSupervisor {
                     ..
                 } => {
                     self.dispatcher.record_apply(state_version, dirty_set);
-                    self.committed_log.push(input);
-                    self.committed_log.sort_by_key(|entry| entry.journal_seq);
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
                     if let Some(snapshot) = self
                         .runtime
                         .publish_snapshot(&snapshot_id_for(state_version))
@@ -206,7 +208,10 @@ impl AppSupervisor {
                 }
                 ApplyResult::Duplicate { .. }
                 | ApplyResult::Deferred { .. }
-                | ApplyResult::ReconcileRequired { .. } => {}
+                | ApplyResult::ReconcileRequired { .. } => {
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                }
             }
         }
 
@@ -241,6 +246,15 @@ impl AppSupervisor {
         {
             self.dispatcher.observe_snapshot(snapshot);
         }
+    }
+
+    fn record_committed_input(&mut self, input: InputTaskEvent) {
+        if self.committed_log.iter().any(|entry| entry == &input) {
+            return;
+        }
+
+        self.committed_log.push(input);
+        self.committed_log.sort_by_key(|entry| entry.journal_seq);
     }
 }
 
