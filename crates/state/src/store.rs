@@ -42,6 +42,7 @@ pub struct StateStore {
     overlay: Option<RuntimeOverlay>,
     first_reconcile_succeeded: bool,
     applied_fact_journal: BTreeMap<FactKey, i64>,
+    consumed_journal: BTreeMap<i64, FactKey>,
     pending_refs: BTreeSet<String>,
     open_orders: HashMap<OrderId, Order>,
     approvals: HashMap<ApprovalKey, ApprovalState>,
@@ -61,6 +62,7 @@ impl StateStore {
             overlay: policy.overlay,
             first_reconcile_succeeded: false,
             applied_fact_journal: BTreeMap::new(),
+            consumed_journal: BTreeMap::new(),
             pending_refs: BTreeSet::new(),
             open_orders: HashMap::new(),
             approvals: HashMap::new(),
@@ -240,9 +242,34 @@ impl StateStore {
         self.applied_fact_journal.get(fact_key).copied()
     }
 
+    pub(crate) fn consume_journal_seq(
+        &mut self,
+        journal_seq: i64,
+        fact_key: &FactKey,
+    ) -> JournalConsumption {
+        if let Some(existing_fact) = self.consumed_journal.get(&journal_seq) {
+            return if existing_fact == fact_key {
+                JournalConsumption::AlreadyBoundToSameFact
+            } else {
+                JournalConsumption::AlreadyBoundToDifferentFact
+            };
+        }
+
+        if self
+            .last_applied_journal_seq
+            .is_some_and(|last_applied_journal_seq| journal_seq <= last_applied_journal_seq)
+        {
+            return JournalConsumption::OutOfOrder;
+        }
+
+        self.last_applied_journal_seq = Some(journal_seq);
+        self.consumed_journal.insert(journal_seq, fact_key.clone());
+
+        JournalConsumption::Consumed
+    }
+
     pub(crate) fn record_applied_fact(&mut self, journal_seq: i64, fact_key: FactKey) -> u64 {
         self.state_version += 1;
-        self.last_applied_journal_seq = Some(journal_seq);
         self.applied_fact_journal.insert(fact_key, journal_seq);
         self.state_version
     }
@@ -250,6 +277,14 @@ impl StateStore {
     pub(crate) fn record_pending_ref(&mut self, pending_ref: PendingRef) {
         self.pending_refs.insert(pending_ref.0);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JournalConsumption {
+    Consumed,
+    AlreadyBoundToSameFact,
+    AlreadyBoundToDifferentFact,
+    OutOfOrder,
 }
 
 impl Default for StateStore {

@@ -2,7 +2,7 @@ use domain::ExternalFactEvent;
 
 use crate::{
     facts::{DirtyDomain, DirtySet, FactKey, PendingRef},
-    store::StateStore,
+    store::{JournalConsumption, StateStore},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,9 +64,24 @@ impl<'a> StateApplier<'a> {
         journal_seq: i64,
         event: ExternalFactEvent,
     ) -> Result<ApplyResult, ApplyError> {
-        self.ensure_journal_seq_is_monotonic(journal_seq)?;
-
         let fact_key = FactKey::from_event(&event);
+
+        match self.store.consume_journal_seq(journal_seq, &fact_key) {
+            JournalConsumption::Consumed | JournalConsumption::AlreadyBoundToSameFact => {}
+            JournalConsumption::AlreadyBoundToDifferentFact => {
+                return Err(ApplyError::new(format!(
+                    "journal sequence {journal_seq} is already bound to a different fact"
+                )));
+            }
+            JournalConsumption::OutOfOrder => {
+                return Err(ApplyError::new(format!(
+                    "journal sequence {journal_seq} must be greater than last applied sequence {}",
+                    self.store
+                        .last_applied_journal_seq()
+                        .expect("out-of-order journal consumption requires a recorded sequence")
+                )));
+            }
+        }
 
         if let Some(duplicate_of_journal_seq) = self.store.duplicate_journal_seq(&fact_key) {
             return Ok(ApplyResult::Duplicate {
@@ -105,18 +120,6 @@ impl<'a> StateApplier<'a> {
                 DirtyDomain::NegRiskFamilies,
             ]),
         })
-    }
-
-    fn ensure_journal_seq_is_monotonic(&self, journal_seq: i64) -> Result<(), ApplyError> {
-        if let Some(last_applied_journal_seq) = self.store.last_applied_journal_seq() {
-            if journal_seq <= last_applied_journal_seq {
-                return Err(ApplyError::new(format!(
-                    "journal sequence {journal_seq} must be greater than last applied sequence {last_applied_journal_seq}"
-                )));
-            }
-        }
-
-        Ok(())
     }
 }
 
