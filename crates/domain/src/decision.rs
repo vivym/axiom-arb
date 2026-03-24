@@ -98,20 +98,6 @@ impl ActivationDecision {
         }
     }
 
-    pub fn disabled(
-        scope: impl Into<String>,
-        policy_version: impl Into<String>,
-        matched_rule_id: Option<impl Into<String>>,
-    ) -> Self {
-        Self::new(
-            ExecutionMode::Disabled,
-            scope,
-            "",
-            policy_version,
-            matched_rule_id,
-        )
-    }
-
     pub fn shadow(
         scope: impl Into<String>,
         policy_version: impl Into<String>,
@@ -119,48 +105,6 @@ impl ActivationDecision {
     ) -> Self {
         Self::new(
             ExecutionMode::Shadow,
-            scope,
-            "",
-            policy_version,
-            matched_rule_id,
-        )
-    }
-
-    pub fn live(
-        scope: impl Into<String>,
-        policy_version: impl Into<String>,
-        matched_rule_id: Option<impl Into<String>>,
-    ) -> Self {
-        Self::new(
-            ExecutionMode::Live,
-            scope,
-            "",
-            policy_version,
-            matched_rule_id,
-        )
-    }
-
-    pub fn reduce_only(
-        scope: impl Into<String>,
-        policy_version: impl Into<String>,
-        matched_rule_id: Option<impl Into<String>>,
-    ) -> Self {
-        Self::new(
-            ExecutionMode::ReduceOnly,
-            scope,
-            "",
-            policy_version,
-            matched_rule_id,
-        )
-    }
-
-    pub fn recovery_only(
-        scope: impl Into<String>,
-        policy_version: impl Into<String>,
-        matched_rule_id: Option<impl Into<String>>,
-    ) -> Self {
-        Self::new(
-            ExecutionMode::RecoveryOnly,
             scope,
             "",
             policy_version,
