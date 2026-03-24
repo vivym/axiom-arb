@@ -129,7 +129,10 @@ async fn negrisk_summary_keeps_authoritative_families_visible_even_when_current_
                 .collect::<Vec<_>>(),
             vec!["family-1", "family-2"]
         );
-        assert!(summary.families.iter().all(|family| family.validation_status.is_none()));
+        assert!(summary
+            .families
+            .iter()
+            .all(|family| family.validation_status.is_none()));
         assert!(summary.families.iter().all(|family| !family.halted));
     })
     .await;

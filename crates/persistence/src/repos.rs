@@ -1362,9 +1362,7 @@ async fn latest_discovery_snapshot(pool: &PgPool) -> Result<Option<LatestDiscove
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(LatestDiscoverySnapshot {
-                family_ids,
-            })
+            Ok(LatestDiscoverySnapshot { family_ids })
         })
         .transpose()
 }

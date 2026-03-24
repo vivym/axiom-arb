@@ -49,7 +49,10 @@ async fn metadata_empty_refresh_publishes_an_authoritative_zero_family_snapshot(
 
     assert!(!initial.is_empty());
     assert!(emptied.is_empty());
-    assert_eq!(repopulated[0].discovery_revision, initial[0].discovery_revision + 2);
+    assert_eq!(
+        repopulated[0].discovery_revision,
+        initial[0].discovery_revision + 2
+    );
 }
 
 #[tokio::test]
