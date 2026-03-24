@@ -1,6 +1,6 @@
 use chrono::Utc;
 use domain::ExternalFactEvent;
-use state::{ApplyResult, StateApplier, StateStore};
+use state::{ApplyResult, StateApplier, StateFactInput, StateStore};
 
 #[test]
 fn duplicate_fact_returns_duplicate_anchor_without_mutating_state_version() {
@@ -147,12 +147,12 @@ fn consumed_journal_seq_cannot_be_reused_after_reconcile_required() {
     );
 }
 
-fn sample_out_of_order_user_trade() -> ExternalFactEvent {
-    ExternalFactEvent::new(
-        "user_trade_out_of_order",
+fn sample_out_of_order_user_trade() -> StateFactInput {
+    StateFactInput::out_of_order_user_trade(ExternalFactEvent::new(
+        "market_ws",
         "session-2",
         "evt-2",
         "v1",
         Utc::now(),
-    )
+    ))
 }

@@ -60,21 +60,52 @@ impl FactKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateFactInput {
+    event: ExternalFactEvent,
+    hint: FactApplyHint,
+}
+
+impl StateFactInput {
+    pub fn new(event: ExternalFactEvent) -> Self {
+        Self {
+            event,
+            hint: FactApplyHint::None,
+        }
+    }
+
+    pub fn out_of_order_user_trade(event: ExternalFactEvent) -> Self {
+        let fact_key = FactKey::from_event(&event);
+
+        Self {
+            event,
+            hint: FactApplyHint::ReconcileRequired {
+                pending_ref: PendingRef::from_fact_key(&fact_key),
+                reason: "user trade arrived out of authoritative order",
+            },
+        }
+    }
+
+    pub(crate) fn fact_key(&self) -> FactKey {
+        FactKey::from_event(&self.event)
+    }
+
+    pub(crate) fn apply_hint(&self) -> &FactApplyHint {
+        &self.hint
+    }
+}
+
+impl From<ExternalFactEvent> for StateFactInput {
+    fn from(event: ExternalFactEvent) -> Self {
+        Self::new(event)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactApplyHint {
     None,
     ReconcileRequired {
         pending_ref: PendingRef,
         reason: &'static str,
     },
-}
-
-pub(crate) fn classify_fact_for_apply(fact_key: &FactKey) -> FactApplyHint {
-    if fact_key.source_kind == "user_trade_out_of_order" {
-        return FactApplyHint::ReconcileRequired {
-            pending_ref: PendingRef::from_fact_key(fact_key),
-            reason: "user trade arrived out of authoritative order",
-        };
-    }
-
-    FactApplyHint::None
 }

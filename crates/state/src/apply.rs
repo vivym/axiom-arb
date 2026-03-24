@@ -1,7 +1,5 @@
-use domain::ExternalFactEvent;
-
 use crate::{
-    facts::{classify_fact_for_apply, DirtyDomain, DirtySet, FactApplyHint, FactKey, PendingRef},
+    facts::{DirtyDomain, DirtySet, FactApplyHint, PendingRef, StateFactInput},
     store::{JournalConsumption, StateStore},
 };
 
@@ -62,9 +60,10 @@ impl<'a> StateApplier<'a> {
     pub fn apply(
         &mut self,
         journal_seq: i64,
-        event: ExternalFactEvent,
+        fact: impl Into<StateFactInput>,
     ) -> Result<ApplyResult, ApplyError> {
-        let fact_key = FactKey::from_event(&event);
+        let fact = fact.into();
+        let fact_key = fact.fact_key();
 
         match self.store.consume_journal_seq(journal_seq, &fact_key) {
             JournalConsumption::Consumed | JournalConsumption::AlreadyBoundToSameFact => {}
@@ -91,19 +90,19 @@ impl<'a> StateApplier<'a> {
             });
         }
 
-        match classify_fact_for_apply(&fact_key) {
+        match fact.apply_hint() {
             FactApplyHint::None => {}
             FactApplyHint::ReconcileRequired {
                 pending_ref,
                 reason,
             } => {
-            self.store.record_pending_ref(pending_ref.clone());
+                self.store.record_pending_ref(pending_ref.clone());
 
-            return Ok(ApplyResult::ReconcileRequired {
-                journal_seq,
-                pending_ref: Some(pending_ref),
-                    reason: reason.to_owned(),
-            });
+                return Ok(ApplyResult::ReconcileRequired {
+                    journal_seq,
+                    pending_ref: Some(pending_ref.clone()),
+                    reason: (*reason).to_owned(),
+                });
             }
         }
 
