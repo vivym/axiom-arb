@@ -1,7 +1,9 @@
+mod bootstrap;
 mod conventions;
 pub mod metrics;
 mod tracing_bootstrap;
 
+pub use bootstrap::{bootstrap_observability, BootstrappedObservability};
 pub use conventions::{field_keys, metric_dimensions, span_names};
 pub use metrics::{
     CounterHandle, CounterSampleWithDimensions, DimensionedCounterHandle, GaugeHandle,
