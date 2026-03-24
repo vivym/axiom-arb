@@ -104,7 +104,7 @@ fn seeded_orchestrator_continues_attempt_numbering_after_resume() {
         snapshot_id: "snapshot-seeded".to_owned(),
     };
     let plan = execution_plan();
-    let plan_key = format!("{}:{}", request.request_id, plan.plan_id());
+    let plan_key = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
     let attempt_factory =
         ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 7)]));
     let orchestrator = ExecutionOrchestrator::with_attempt_factory(
@@ -122,7 +122,7 @@ fn seeded_orchestrator_continues_attempt_numbering_after_resume() {
 
     assert_eq!(
         receipt.attempt_id,
-        "request-seeded:fullset-buy-merge:condition-1:attempt-8"
+        "request-bound:14:request-seeded:fullset-buy-merge:condition-1:attempt-8"
     );
 }
 

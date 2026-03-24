@@ -58,7 +58,7 @@ fn stable_business_plan_id_is_preserved_in_recovery_scope() {
 fn sample_ambiguous_attempt() -> ExecutionAttempt {
     ExecutionAttempt::new(
         "attempt-1",
-        "request-9:redeem-resolved:condition-12",
+        "request-bound:9:request-9:redeem-resolved:condition-12",
         "snapshot-1",
         1,
     )

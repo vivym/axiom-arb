@@ -209,7 +209,7 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
 
     assert_eq!(
         attempt.plan_id,
-        format!("{}:{}", request.request_id, plan.plan_id())
+        ExecutionAttemptFactory::request_bound_plan_id(&plan, &request)
     );
     assert_eq!(attempt.snapshot_id, "snapshot-4");
     assert_eq!(context.attempt_id, attempt.attempt_id);
@@ -285,7 +285,7 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
         decision_input_id: "decision-seeded".to_owned(),
         snapshot_id: "snapshot-seeded".to_owned(),
     };
-    let plan_key = format!("{}:{}", request.request_id, plan.plan_id());
+    let plan_key = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
     let mut factory =
         ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 4)]));
 
@@ -295,7 +295,7 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
     assert_eq!(attempt.attempt_no, 5);
     assert_eq!(
         attempt.attempt_id,
-        "request-seeded:redeem-resolved:condition-seeded:attempt-5"
+        "request-bound:14:request-seeded:redeem-resolved:condition-seeded:attempt-5"
     );
     assert_eq!(context.attempt_id, attempt.attempt_id);
 }

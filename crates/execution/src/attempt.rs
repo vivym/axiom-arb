@@ -21,7 +21,12 @@ impl ExecutionAttemptFactory {
     }
 
     pub fn request_bound_plan_id(plan: &ExecutionPlan, request: &ExecutionRequest) -> String {
-        format!("{}:{}", request.request_id, plan.plan_id())
+        format!(
+            "request-bound:{}:{}:{}",
+            request.request_id.len(),
+            request.request_id,
+            plan.plan_id()
+        )
     }
 
     pub fn next_for_plan(

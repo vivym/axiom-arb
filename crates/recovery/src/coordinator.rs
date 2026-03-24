@@ -24,26 +24,15 @@ impl RecoveryCoordinator {
 }
 
 fn stable_plan_scope(plan_id: &str) -> &str {
-    if is_stable_business_plan_id(plan_id) {
-        return plan_id;
-    }
-
-    if let Some((request_prefix, stable_scope)) = plan_id.split_once(':') {
-        if is_request_bound_plan_prefix(request_prefix) && is_stable_business_plan_id(stable_scope) {
-            return stable_scope;
+    if let Some(remainder) = plan_id.strip_prefix("request-bound:") {
+        if let Some((request_len, trailing)) = remainder.split_once(':') {
+            if let Ok(request_len) = request_len.parse::<usize>() {
+                if trailing.len() > request_len && trailing.as_bytes()[request_len] == b':' {
+                    return &trailing[request_len + 1..];
+                }
+            }
         }
     }
 
     plan_id
-}
-
-fn is_request_bound_plan_prefix(prefix: &str) -> bool {
-    prefix.starts_with("request-")
-}
-
-fn is_stable_business_plan_id(plan_id: &str) -> bool {
-    plan_id.starts_with("fullset-buy-merge:")
-        || plan_id.starts_with("fullset-split-sell:")
-        || plan_id.starts_with("cancel-stale:")
-        || plan_id.starts_with("redeem-resolved:")
 }
