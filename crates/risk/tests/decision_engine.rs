@@ -2,6 +2,7 @@ use domain::{
     ActivationDecision, DecisionInput, DecisionVerdict, ExecutionMode, IntentCandidate,
     RecoveryIntent,
 };
+use state::NegRiskView;
 
 #[test]
 fn recovery_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
@@ -25,10 +26,47 @@ fn recovery_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
     ));
 }
 
+#[test]
+fn negrisk_entrypoint_rejects_live_mode_even_with_usable_projection() {
+    let verdict = risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Live);
+
+    assert!(matches!(verdict, DecisionVerdict::Rejected));
+}
+
+#[test]
+fn negrisk_entrypoint_rejects_unusable_projection() {
+    let verdict = risk::negrisk::evaluate_negrisk_intent(
+        &NegRiskView {
+            snapshot_id: "snapshot-empty".to_owned(),
+            state_version: 9,
+            family_ids: Vec::new(),
+        },
+        ExecutionMode::Shadow,
+    );
+
+    assert!(matches!(verdict, DecisionVerdict::Rejected));
+}
+
+#[test]
+fn negrisk_entrypoint_approves_shadow_mode_when_projection_is_usable() {
+    let verdict =
+        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Shadow);
+
+    assert!(matches!(verdict, DecisionVerdict::Approved));
+}
+
 fn sample_strategy_input(scope: &str) -> DecisionInput {
     DecisionInput::Strategy(IntentCandidate::new("intent-1", "snapshot-1", scope))
 }
 
 fn sample_recovery_input(scope: &str) -> DecisionInput {
     DecisionInput::Recovery(RecoveryIntent::new("recovery-1", "snapshot-1", scope))
+}
+
+fn sample_negrisk_view() -> NegRiskView {
+    NegRiskView {
+        snapshot_id: "snapshot-negrisk-1".to_owned(),
+        state_version: 8,
+        family_ids: vec!["family-a".to_owned()],
+    }
 }
