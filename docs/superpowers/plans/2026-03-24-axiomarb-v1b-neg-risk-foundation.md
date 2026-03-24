@@ -30,7 +30,7 @@ This plan intentionally covers `v1b foundation` only.
 ### Domain And State
 
 - Create: `crates/domain/src/negrisk.rs`
-  Responsibility: `NegRiskFamily`, family nodes, validator results, exclusion reasons, member-level exposure vectors, family halt state, and halt precedence rules.
+  Responsibility: `NegRiskFamily`, family nodes, `neg-risk` variant classification, validator results, exclusion reasons, member-level exposure vectors, family halt state, and halt precedence rules.
 - Modify: `crates/domain/src/lib.rs`
   Responsibility: export `neg-risk` domain types.
 - Modify: `crates/state/src/store.rs`
@@ -43,7 +43,7 @@ This plan intentionally covers `v1b foundation` only.
 ### Venue Metadata
 
 - Create: `crates/venue-polymarket/src/metadata.rs`
-  Responsibility: parse raw market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, and track metadata refresh revisions.
+  Responsibility: parse raw market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, classify standard vs augmented semantics, and track metadata refresh revisions.
 - Modify: `crates/venue-polymarket/src/rest.rs`
   Responsibility: add paginated request builders and fetchers for `neg-risk` discovery metadata, including completeness and refresh handling.
 - Modify: `crates/venue-polymarket/src/lib.rs`
@@ -80,6 +80,7 @@ This plan intentionally covers `v1b foundation` only.
 - Modify: `crates/app-replay/src/lib.rs`
   Responsibility: export a persistence-backed `neg-risk` foundation summary helper while keeping existing generic `event_journal` replay behavior unchanged.
 - Test: `crates/app-replay/tests/negrisk_summary.rs`
+- Test: `crates/app-replay/tests/negrisk_foundation_contract.rs`
 
 ### Observability
 
@@ -133,6 +134,13 @@ fn family_halt_precedence_stays_below_global_halt_and_above_strategy_filters() {
     let policy = FamilyHaltPolicy::default_block_new_risk();
     assert_eq!(policy.priority(), HaltPriority::Family);
 }
+
+#[test]
+fn stale_family_halt_remains_blocking_until_reconfirmed_or_cleared() {
+    let halt = FamilyHaltState::active("family-1", "sha256:rev-a");
+    let status = halt.reconcile_against_revision("sha256:rev-b");
+    assert_eq!(status, FamilyHaltStatus::StaleBlocking);
+}
 ```
 
 - [ ] **Step 2: Run the domain test to verify failure**
@@ -153,6 +161,7 @@ pub struct NegRiskFamily {
 pub enum FamilyExclusionReason {
     PlaceholderOutcome,
     OtherOutcome,
+    AugmentedVariant,
     MissingNamedOutcomes,
     NonNegRiskRoute,
 }
@@ -161,6 +170,12 @@ pub struct NegRiskExposureVector {
     pub family_id: EventFamilyId,
     pub members: Vec<NegRiskMemberExposure>,
     pub rollup: NegRiskExposureRollup,
+}
+
+pub enum NegRiskVariant {
+    Standard,
+    Augmented,
+    Unknown,
 }
 ```
 
@@ -178,6 +193,8 @@ Also define the family-halt precedence contract here:
 - `GlobalHalt` overrides every family-level control.
 - family halt outranks market-local or strategy-local `neg-risk` activation filters.
 - foundation-phase family halt blocks new `neg-risk` risk only; it does not rewrite bootstrap or global cancel behavior.
+- family halt is scoped to `family_id`, but records the metadata snapshot it was evaluated against.
+- if an active halt's metadata snapshot does not match the latest discovered revision, it becomes `StaleBlocking`: still blocks new `neg-risk` risk until revalidated or manually cleared.
 
 - [ ] **Step 5: Run the domain and state smoke tests**
 
@@ -226,6 +243,18 @@ async fn metadata_refresh_replays_changed_family_revision_without_dropping_histo
 
     assert_ne!(initial[0].metadata_revision, refreshed[0].metadata_revision);
 }
+
+#[tokio::test]
+async fn augmented_family_is_classified_from_family_level_flags() {
+    let server = spawn_local_listener(sample_augmented_neg_risk_payloads());
+    let client = test_client(server.base_url());
+
+    let families = client.fetch_neg_risk_metadata().await.unwrap();
+
+    assert!(families
+        .iter()
+        .any(|family| family.neg_risk_variant == NegRiskVariant::Augmented));
+}
 ```
 
 - [ ] **Step 2: Run the failing venue test**
@@ -244,6 +273,9 @@ pub struct NegRiskMarketMetadata {
     pub token_id: String,
     pub outcome_label: String,
     pub route: MarketRoute,
+    pub enable_neg_risk: Option<bool>,
+    pub neg_risk_augmented: Option<bool>,
+    pub neg_risk_variant: NegRiskVariant,
     pub is_placeholder: bool,
     pub is_other: bool,
     pub metadata_revision: String,
@@ -253,7 +285,10 @@ pub struct NegRiskMarketMetadata {
 Discovery rules for this task:
 - fetch raw `neg-risk` metadata without applying validator exclusions
 - traverse pagination until exhaustion
-- dedupe repeated rows across pages
+- dedupe canonical member rows by `(event_family_id, condition_id, token_id)`
+- if duplicate rows disagree within the same `metadata_revision`, treat that as a data-quality error and surface it explicitly
+- `metadata_revision` is a local monotonic snapshot identifier assigned per completed discovery refresh, not an opaque remote string
+- if duplicate rows disagree across different revisions, prefer the highest local `metadata_revision` while preserving the older revision in journaled history
 - retry page fetches using bounded transport retry rules
 - preserve enough classification metadata for later validator decisions
 
@@ -322,6 +357,28 @@ async fn validation_and_halt_updates_are_journaled_for_explainability() {
 
     let rows = JournalRepo.list_after(&pool, 0, 100).await.unwrap();
     assert!(rows.iter().any(|row| row.event_type == "family_validation"));
+}
+
+#[tokio::test]
+async fn validation_journal_payload_includes_member_snapshot_summary() {
+    let pool = test_db_pool().await;
+    run_migrations(&pool).await.unwrap();
+
+    NegRiskFamilyRepo
+        .upsert_validation(&pool, &sample_validation("family-1"))
+        .await
+        .unwrap();
+
+    let row = JournalRepo
+        .list_after(&pool, 0, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.event_type == "family_validation")
+        .unwrap();
+    assert!(row.payload.to_string().contains("\"member_vector\""));
+    assert!(row.payload.to_string().contains("condition-1"));
+    assert!(row.payload.to_string().contains("token-1"));
 }
 
 #[tokio::test]
@@ -395,7 +452,9 @@ CREATE TABLE family_halt_settings (
 
 `family_halt_settings` is the current-view table only. Halt history is preserved in append-only `event_journal`.
 
-This task must also append `family_validation` and `family_halt` entries to the existing `event_journal` whenever the persisted verdict or halt state changes, including the metadata snapshot hash that the decision applied to.
+This task must also append `family_validation` and `family_halt` entries to the existing `event_journal` whenever the persisted verdict or halt state changes, including:
+- the metadata snapshot hash that the decision applied to
+- the exact ordered family member vector at decision time: `condition_id`, `token_id`, `outcome_label`, placeholder or `Other` classification, and `neg_risk_variant`
 
 - [ ] **Step 4: Implement repository and row conversions**
 
@@ -449,7 +508,7 @@ fn graph_builder_groups_conditions_by_event_family() {
 fn validator_excludes_augmented_or_other_families_from_initial_scope_without_hiding_them() {
     let verdict = validate_family(sample_augmented_family(), sample_metadata_revision());
     assert_eq!(verdict.status, FamilyValidationStatus::Excluded);
-    assert_eq!(verdict.reason, Some(FamilyExclusionReason::PlaceholderOutcome));
+    assert_eq!(verdict.reason, Some(FamilyExclusionReason::AugmentedVariant));
 }
 
 #[test]
@@ -487,6 +546,7 @@ Validator rules for this task:
 - raw discovery never drops a family merely because it is excluded from initial live scope
 - validator produces `Included` or `Excluded` verdicts plus explainability metadata
 - placeholder, direct `Other`, and augmented semantics remain explicit exclusion reasons
+- augmented exclusion must be driven by family-level variant evidence, not inferred only from individual member labels
 
 - [ ] **Step 5: Run the strategy test suite**
 
@@ -509,6 +569,7 @@ git commit -m "feat: add neg-risk graph and validator foundation"
 - Modify: `crates/app-replay/src/lib.rs`
 - Test: `crates/strategy-negrisk/tests/exposure.rs`
 - Test: `crates/app-replay/tests/negrisk_summary.rs`
+- Test: `crates/app-replay/tests/negrisk_foundation_contract.rs`
 
 - [ ] **Step 1: Write the failing exposure and foundation-summary tests**
 
@@ -578,6 +639,7 @@ The summary helper should combine:
 - recent `family_validation` and `family_halt` event counts from `event_journal`
 - enough metadata to explain why a family is excluded right now
 - the metadata snapshot hash that the current halt state applies to, if any
+- a path to recover the exact ordered member vector from the corresponding `family_validation` or `family_halt` journal entry
 
 - [ ] **Step 5: Run the strategy and app-replay tests**
 
@@ -585,7 +647,32 @@ Run: `cargo test -p strategy-negrisk exposure && DATABASE_URL=postgres://axiom:a
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Add a cross-crate foundation contract test**
+
+```rust
+#[tokio::test]
+async fn paginated_discovery_to_validation_to_summary_stays_explainable() {
+    let metadata = fetch_sample_paginated_metadata().await;
+    let graph = build_family_graph(sample_identifier_records(), metadata).unwrap();
+    let verdict = validate_family(&graph.families()[0], "rev-a");
+    persist_validation_and_summary_inputs(&pool, &verdict).await.unwrap();
+
+    let summary = load_neg_risk_foundation_summary(&pool).await.unwrap();
+    assert_eq!(summary.excluded_family_count, 1);
+}
+```
+
+Run: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test -p app-replay negrisk_foundation_contract -- --exact`
+
+Expected: PASS. This test must cover:
+- paginated raw metadata fetch
+- graph build
+- excluded-family validator verdict
+- persistence upsert
+- replay or summary explainability
+- exact ordered family member vector round-trip from decision-time journal payload
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add crates/strategy-negrisk crates/app-replay
