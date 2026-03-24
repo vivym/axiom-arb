@@ -43,7 +43,7 @@ This plan intentionally covers `v1b foundation` only.
 ### Venue Metadata
 
 - Create: `crates/venue-polymarket/src/metadata.rs`
-  Responsibility: parse raw market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, classify standard vs augmented semantics, assign local `discovery_revision`, and derive canonical `metadata_snapshot_hash`.
+  Responsibility: parse raw member-row market and event metadata needed to discover all standard `neg-risk` families, classify placeholder or `Other` outcomes, classify standard vs augmented semantics, assign local `discovery_revision`, and derive canonical `metadata_snapshot_hash`.
 - Modify: `crates/venue-polymarket/src/rest.rs`
   Responsibility: add paginated request builders and fetchers for `neg-risk` discovery metadata, including completeness and refresh handling.
 - Modify: `crates/venue-polymarket/src/lib.rs`
@@ -58,7 +58,7 @@ This plan intentionally covers `v1b foundation` only.
 - Modify: `crates/persistence/src/models.rs`
   Responsibility: row models for family validation state, explainability metadata, and revision-aware family halt state.
 - Modify: `crates/persistence/src/repos.rs`
-  Responsibility: repositories to upsert/list family validation and halt rows, persist successful discovery snapshot events, and emit explainable validation or halt events.
+  Responsibility: repositories to upsert/list family validation and halt rows, reconcile current-view rows against the latest successful discovery snapshot, persist successful discovery snapshot events, and emit explainable validation or halt events.
 - Modify: `crates/persistence/src/lib.rs`
   Responsibility: export new repositories.
 - Test: `crates/persistence/tests/negrisk.rs`
@@ -221,16 +221,14 @@ git commit -m "feat: add neg-risk domain and state boundaries"
 
 ```rust
 #[tokio::test]
-async fn fetch_neg_risk_metadata_discovers_all_pages_and_classifies_members() {
+async fn fetch_neg_risk_metadata_rows_discovers_all_pages_and_classifies_members() {
     let server = spawn_local_listener(sample_paginated_neg_risk_payloads());
     let client = test_client(server.base_url());
 
-    let families = client.fetch_neg_risk_metadata().await.unwrap();
+    let rows = client.fetch_neg_risk_metadata_rows().await.unwrap();
 
-    assert_eq!(families.len(), 2);
-    assert!(families
-        .iter()
-        .any(|family| family.members.iter().any(|member| member.is_other)));
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().any(|row| row.is_other));
 }
 
 #[tokio::test]
@@ -238,10 +236,19 @@ async fn successful_refresh_publishes_a_new_discovery_revision() {
     let server = spawn_local_listener(sample_refreshing_neg_risk_payloads());
     let client = test_client(server.base_url());
 
-    let initial = client.fetch_neg_risk_metadata().await.unwrap();
-    let refreshed = client.fetch_neg_risk_metadata().await.unwrap();
+    let initial = client.fetch_neg_risk_metadata_rows().await.unwrap();
+    let refreshed = client.fetch_neg_risk_metadata_rows().await.unwrap();
 
-    assert!(initial[0].discovery_revision < refreshed[0].discovery_revision);
+    let initial_row = initial
+        .iter()
+        .find(|row| row.event_family_id == "family-1" && row.token_id == "token-1")
+        .unwrap();
+    let refreshed_row = refreshed
+        .iter()
+        .find(|row| row.event_family_id == "family-1" && row.token_id == "token-1")
+        .unwrap();
+
+    assert!(initial_row.discovery_revision < refreshed_row.discovery_revision);
 }
 
 #[tokio::test]
@@ -249,13 +256,22 @@ async fn failed_refresh_does_not_publish_a_new_revision_or_replace_current_view(
     let server = spawn_local_listener(sample_partial_failure_neg_risk_payloads());
     let client = test_client(server.base_url());
 
-    let initial = client.fetch_neg_risk_metadata().await.unwrap();
-    let failed = client.try_fetch_neg_risk_metadata().await;
-    let after_failure = client.fetch_neg_risk_metadata().await.unwrap();
+    let initial = client.fetch_neg_risk_metadata_rows().await.unwrap();
+    let failed = client.try_fetch_neg_risk_metadata_rows().await;
+    let after_failure = client.fetch_neg_risk_metadata_rows().await.unwrap();
 
     assert!(failed.is_err());
-    assert_eq!(initial[0].discovery_revision, after_failure[0].discovery_revision);
-    assert_eq!(initial[0].metadata_snapshot_hash, after_failure[0].metadata_snapshot_hash);
+    assert_eq!(
+        initial.iter().map(|row| row.discovery_revision).max(),
+        after_failure.iter().map(|row| row.discovery_revision).max()
+    );
+    assert_eq!(
+        initial.iter().map(|row| row.metadata_snapshot_hash.clone()).max(),
+        after_failure
+            .iter()
+            .map(|row| row.metadata_snapshot_hash.clone())
+            .max()
+    );
 }
 
 #[tokio::test]
@@ -263,17 +279,17 @@ async fn augmented_family_is_classified_from_family_level_flags() {
     let server = spawn_local_listener(sample_augmented_neg_risk_payloads());
     let client = test_client(server.base_url());
 
-    let families = client.fetch_neg_risk_metadata().await.unwrap();
+    let rows = client.fetch_neg_risk_metadata_rows().await.unwrap();
 
-    assert!(families
+    assert!(rows
         .iter()
-        .any(|family| family.neg_risk_variant == NegRiskVariant::Augmented));
+        .any(|row| row.neg_risk_variant == NegRiskVariant::Augmented));
 }
 ```
 
 - [ ] **Step 2: Run the failing venue test**
 
-Run: `cargo test -p venue-polymarket fetch_neg_risk_metadata_discovers_all_pages_and_classifies_members -- --exact`
+Run: `cargo test -p venue-polymarket fetch_neg_risk_metadata_rows_discovers_all_pages_and_classifies_members -- --exact`
 
 Expected: FAIL because the metadata client and parser do not exist yet.
 
@@ -298,7 +314,7 @@ pub struct NegRiskMarketMetadata {
 ```
 
 Discovery rules for this task:
-- fetch raw `neg-risk` metadata without applying validator exclusions
+- fetch raw member-row `neg-risk` metadata without applying validator exclusions
 - traverse pagination until exhaustion
 - dedupe canonical member rows by `(event_family_id, condition_id, token_id)`
 - if duplicate rows disagree within the same `discovery_revision`, treat that as a data-quality error and surface it explicitly
@@ -317,9 +333,12 @@ Discovery rules for this task:
 
 ```rust
 let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+let scripted_responses = vec![page_one_ok(), page_two_ok(), page_two_retry_ok()];
 let handle = thread::spawn(move || {
-    let (mut stream, _) = listener.accept().expect("accept request");
-    // write raw HTTP response body here
+    for response in scripted_responses {
+        let (mut stream, _) = listener.accept().expect("accept request");
+        // inspect the request path/query and write the matching raw HTTP response here
+    }
 });
 ```
 
@@ -363,6 +382,7 @@ async fn stores_family_validation_revision_and_explainability_fields() {
         .pop()
         .unwrap();
     assert_eq!(row.member_count, 3);
+    assert_eq!(row.last_seen_discovery_revision, 7);
     assert!(row.metadata_snapshot_hash.starts_with("sha256:"));
 }
 
@@ -437,6 +457,28 @@ async fn repeated_halt_updates_append_multiple_halt_journal_events() {
         .count();
     assert_eq!(halt_rows, 2);
 }
+
+#[tokio::test]
+async fn successful_refresh_reconciles_current_view_and_drops_missing_families_from_current_counts() {
+    let pool = test_db_pool().await;
+    run_migrations(&pool).await.unwrap();
+
+    persist_discovery_snapshot(&pool, sample_discovery_snapshot("rev-7", vec!["family-1", "family-2"]))
+        .await
+        .unwrap();
+    reconcile_current_family_view(&pool, 7).await.unwrap();
+
+    persist_discovery_snapshot(&pool, sample_discovery_snapshot("rev-8", vec!["family-1"]))
+        .await
+        .unwrap();
+    reconcile_current_family_view(&pool, 8).await.unwrap();
+
+    let rows = NegRiskFamilyRepo.list_validations(&pool).await.unwrap();
+    assert!(rows.iter().any(|row| {
+        row.event_family_id == "family-1" && row.last_seen_discovery_revision == 8
+    }));
+    assert!(!rows.iter().any(|row| row.event_family_id == "family-2"));
+}
 ```
 
 - [ ] **Step 2: Run the failing persistence test**
@@ -453,6 +495,7 @@ CREATE TABLE neg_risk_family_validations (
   validation_status TEXT NOT NULL,
   exclusion_reason TEXT,
   metadata_snapshot_hash TEXT NOT NULL,
+  last_seen_discovery_revision BIGINT NOT NULL,
   member_count INTEGER NOT NULL,
   first_seen_at TIMESTAMPTZ NOT NULL,
   last_seen_at TIMESTAMPTZ NOT NULL,
@@ -466,12 +509,26 @@ CREATE TABLE family_halt_settings (
   reason TEXT,
   blocks_new_risk BOOLEAN NOT NULL,
   metadata_snapshot_hash TEXT,
+  last_seen_discovery_revision BIGINT NOT NULL,
   set_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
 ```
 
 `family_halt_settings` is the current-view table only. Halt history is preserved in append-only `event_journal`.
+
+Current-view reconciliation rules:
+- every successful discovery refresh must reconcile `neg_risk_family_validations` and `family_halt_settings` against the latest snapshot
+- rows whose `event_family_id` is absent from the latest successful snapshot must no longer contribute to current summary or current metrics
+- `last_seen_discovery_revision` is the minimum field required to make this reconciliation auditable
+- active halts for disappeared families remain in journal history, but they must not count as current active halts
+
+`neg_risk_discovery_snapshot` is the authoritative event for current discovery state. Its payload must include at least:
+- `discovery_revision`
+- `metadata_snapshot_hash`
+- `discovered_family_count`
+- `family_ids` or a verifiable equivalent digest of the discovered family set
+- `captured_at`
 
 This task must also append `family_validation` and `family_halt` entries to the existing `event_journal` whenever the persisted verdict or halt state changes, including:
 - the metadata snapshot hash that the decision applied to
