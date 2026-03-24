@@ -8,7 +8,8 @@ pub mod repos;
 
 pub use models::StoredOrder;
 pub use repos::{
-    ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo, ResolutionRepo,
+    reconcile_current_family_view, persist_discovery_snapshot, ApprovalRepo, IdentifierRepo,
+    InventoryRepo, JournalRepo, NegRiskFamilyRepo, OrderRepo, ResolutionRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -38,6 +39,9 @@ pub enum PersistenceError {
     },
     ImmutableOrderConflict {
         order_id: String,
+    },
+    MissingDiscoverySnapshot {
+        discovery_revision: i64,
     },
 }
 
@@ -85,6 +89,10 @@ impl fmt::Display for PersistenceError {
             Self::ImmutableOrderConflict { order_id } => {
                 write!(f, "order {order_id} already exists with immutable submitted fields")
             }
+            Self::MissingDiscoverySnapshot { discovery_revision } => write!(
+                f,
+                "missing neg-risk discovery snapshot for revision {discovery_revision}"
+            ),
         }
     }
 }

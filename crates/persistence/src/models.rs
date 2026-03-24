@@ -266,6 +266,65 @@ impl ResolutionStateRow {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskFamilyMemberRow {
+    pub condition_id: String,
+    pub token_id: String,
+    pub outcome_label: String,
+    pub is_placeholder: bool,
+    pub is_other: bool,
+    pub neg_risk_variant: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskFamilyValidationRow {
+    pub event_family_id: String,
+    pub validation_status: String,
+    pub exclusion_reason: Option<String>,
+    pub metadata_snapshot_hash: String,
+    pub last_seen_discovery_revision: i64,
+    pub member_count: i32,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub validated_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub member_vector: Vec<NegRiskFamilyMemberRow>,
+    pub source_kind: String,
+    pub source_session_id: String,
+    pub source_event_id: String,
+    pub event_ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyHaltRow {
+    pub event_family_id: String,
+    pub halted: bool,
+    pub reason: Option<String>,
+    pub blocks_new_risk: bool,
+    pub metadata_snapshot_hash: Option<String>,
+    pub last_seen_discovery_revision: i64,
+    pub set_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub member_vector: Vec<NegRiskFamilyMemberRow>,
+    pub source_kind: String,
+    pub source_session_id: String,
+    pub source_event_id: String,
+    pub event_ts: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NegRiskDiscoverySnapshotInput {
+    pub discovery_revision: i64,
+    pub metadata_snapshot_hash: String,
+    pub family_ids: Vec<String>,
+    pub captured_at: DateTime<Utc>,
+    pub source_kind: String,
+    pub source_session_id: String,
+    pub source_event_id: String,
+    pub dedupe_key: String,
+    pub extra_payload: Value,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct JournalEntryInput {
     pub stream: String,
