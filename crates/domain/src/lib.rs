@@ -1,3 +1,6 @@
+mod decision;
+mod execution;
+mod facts;
 mod identifiers;
 mod inventory;
 mod negrisk;
@@ -5,6 +8,12 @@ mod order;
 mod resolution;
 mod runtime_mode;
 
+pub use decision::{
+    ActivationDecision, DecisionInput, DecisionVerdict, ExecutionMode, IntentCandidate,
+    RecoveryIntent,
+};
+pub use execution::{ExecutionAttempt, ExecutionReceipt, ExecutionRequest, PublishedSnapshotRef};
+pub use facts::ExternalFactEvent;
 pub use identifiers::{
     Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap,
     IdentifierMapError, IdentifierRecord, Market, MarketId, MarketRoute, Token, TokenId,
