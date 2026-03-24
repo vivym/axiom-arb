@@ -69,3 +69,27 @@ CREATE TRIGGER shadow_execution_artifacts_enforce_shadow_attempt
 BEFORE INSERT OR UPDATE ON shadow_execution_artifacts
 FOR EACH ROW
 EXECUTE FUNCTION enforce_shadow_execution_artifact_attempt();
+
+CREATE OR REPLACE FUNCTION prevent_shadow_attempt_mode_drift()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.execution_mode = 'shadow'
+     AND NEW.execution_mode <> 'shadow'
+     AND EXISTS (
+       SELECT 1
+       FROM shadow_execution_artifacts
+       WHERE attempt_id = OLD.attempt_id
+     ) THEN
+    RAISE EXCEPTION
+      'execution_attempts with shadow artifacts cannot change away from shadow for attempt_id %',
+      OLD.attempt_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER execution_attempts_prevent_shadow_mode_drift
+BEFORE UPDATE ON execution_attempts
+FOR EACH ROW
+EXECUTE FUNCTION prevent_shadow_attempt_mode_drift();
