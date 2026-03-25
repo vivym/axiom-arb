@@ -1,30 +1,46 @@
 use std::collections::BTreeMap;
 
-use domain::ExecutionMode;
+use domain::{ActivationDecision, ExecutionMode};
+
+use crate::rollout::{index_rules, resolve_rule, RolloutRule, RolloutRuleMap};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationPolicy {
-    capability_matrix: BTreeMap<(String, String), ExecutionMode>,
+    capability_matrix: RolloutRuleMap,
     overlays: BTreeMap<(String, String), ExecutionMode>,
     policy_version: String,
+    clamp_negrisk_live: bool,
 }
 
 impl ActivationPolicy {
     pub fn phase_one_defaults() -> Self {
-        let mut capability_matrix = BTreeMap::new();
-        capability_matrix.insert(
-            ("full-set".to_owned(), "default".to_owned()),
-            ExecutionMode::Live,
-        );
-        capability_matrix.insert(
-            ("neg-risk".to_owned(), "default".to_owned()),
-            ExecutionMode::Shadow,
-        );
-
         Self {
-            capability_matrix,
+            capability_matrix: index_rules(vec![
+                RolloutRule::new(
+                    "full-set",
+                    "default",
+                    ExecutionMode::Live,
+                    "phase-one-fullset-default",
+                ),
+                RolloutRule::new(
+                    "neg-risk",
+                    "default",
+                    ExecutionMode::Shadow,
+                    "phase-one-negrisk-default",
+                ),
+            ]),
             overlays: BTreeMap::new(),
             policy_version: "phase-one-defaults".to_owned(),
+            clamp_negrisk_live: true,
+        }
+    }
+
+    pub fn from_rules(policy_version: impl Into<String>, rules: Vec<RolloutRule>) -> Self {
+        Self {
+            capability_matrix: index_rules(rules),
+            overlays: BTreeMap::new(),
+            policy_version: policy_version.into(),
+            clamp_negrisk_live: false,
         }
     }
 
@@ -39,27 +55,56 @@ impl ActivationPolicy {
     }
 
     pub fn mode_for_route(&self, route: &str, scope: &str) -> ExecutionMode {
-        clamp_phase_one_mode(
-            route,
-            self.overlays
-                .get(&(route.to_owned(), scope.to_owned()))
-                .copied()
-                .or_else(|| {
-                    self.capability_matrix
-                        .get(&(route.to_owned(), scope.to_owned()))
-                        .copied()
-                })
-                .or_else(|| {
-                    self.capability_matrix
-                        .get(&(route.to_owned(), "default".to_owned()))
-                        .copied()
-                })
-                .unwrap_or(ExecutionMode::Disabled),
+        self.activation_for(route, scope, "").mode
+    }
+
+    pub fn activation_for(
+        &self,
+        route: &str,
+        scope: &str,
+        snapshot_id: &str,
+    ) -> ActivationDecision {
+        let (mode, reason, matched_rule_id) = if let Some(mode) =
+            self.overlays.get(&(route.to_owned(), scope.to_owned())).copied()
+        {
+            (
+                mode,
+                format!("activation-overlay snapshot={snapshot_id}"),
+                None,
+            )
+        } else if let Some(rule) = resolve_rule(&self.capability_matrix, route, scope) {
+            (
+                rule.mode,
+                format!("activation-rollout snapshot={snapshot_id}"),
+                Some(rule.rule_id.clone()),
+            )
+        } else {
+            (
+                ExecutionMode::Disabled,
+                format!("activation-missing snapshot={snapshot_id}"),
+                None,
+            )
+        };
+
+        ActivationDecision::new(
+            self.clamp_mode(route, mode),
+            scope,
+            reason,
+            self.policy_version.clone(),
+            matched_rule_id,
         )
     }
 
     pub fn policy_version(&self) -> &str {
         &self.policy_version
+    }
+
+    fn clamp_mode(&self, route: &str, mode: ExecutionMode) -> ExecutionMode {
+        if self.clamp_negrisk_live {
+            return clamp_phase_one_mode(route, mode);
+        }
+
+        mode
     }
 }
 

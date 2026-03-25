@@ -1,5 +1,5 @@
 use domain::ExecutionMode;
-use risk::ActivationPolicy;
+use risk::{ActivationPolicy, RolloutRule};
 
 #[test]
 fn activation_policy_returns_live_for_fullset_and_shadow_for_negrisk() {
@@ -59,4 +59,19 @@ fn neg_risk_live_overlay_is_explicitly_disabled_in_phase_one() {
         policy.mode_for_route("neg-risk", "family-a"),
         ExecutionMode::Disabled
     );
+}
+
+#[test]
+fn family_specific_live_rule_overrides_default_shadow_rule() {
+    let policy = ActivationPolicy::from_rules(
+        "phase-three-rules",
+        vec![
+            RolloutRule::new("neg-risk", "default", ExecutionMode::Shadow, "default-shadow"),
+            RolloutRule::new("neg-risk", "family-a", ExecutionMode::Live, "family-a-live"),
+        ],
+    );
+
+    let activation = policy.activation_for("neg-risk", "family-a", "snapshot-12");
+    assert_eq!(activation.mode, ExecutionMode::Live);
+    assert_eq!(activation.matched_rule_id.as_deref(), Some("family-a-live"));
 }
