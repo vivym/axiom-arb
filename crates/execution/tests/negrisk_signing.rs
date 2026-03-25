@@ -15,11 +15,11 @@ fn deterministic_test_signer_attaches_signed_identity_to_each_planned_member_ord
     let signed = TestOrderSigner::default()
         .sign_family(&sample_family_plan())
         .unwrap();
-    assert_eq!(signed.orders.len(), 2);
+    assert_eq!(signed.members.len(), 2);
     assert!(signed
-        .orders
+        .members
         .iter()
-        .all(|order| order.order.signed_order.is_some()));
+        .all(|member| member.identity.signature.starts_with("test-sig:")));
 }
 
 #[test]
@@ -54,6 +54,21 @@ fn live_sink_does_not_apply_signer_to_non_negrisk_plans() {
 
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
     assert_eq!(called.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn live_sink_propagates_signer_error_for_negrisk_family_submit_plans() {
+    let called = Arc::new(AtomicUsize::new(0));
+    let sink = LiveVenueSink::with_order_signer(Arc::new(RejectingSigner {
+        called: called.clone(),
+    }));
+
+    let err = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap_err();
+
+    assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+    assert_eq!(called.load(Ordering::SeqCst), 1);
 }
 
 fn sample_family_plan() -> ExecutionPlan {

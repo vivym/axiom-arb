@@ -1,9 +1,6 @@
-use domain::{
-    MarketId, Order, OrderId, SettlementState, SignedOrderIdentity, SubmissionState, VenueOrderState,
-};
-
-use crate::orders::SignedOrderEnvelope;
 use crate::plans::ExecutionPlan;
+use domain::{ConditionId, SignedOrderIdentity, TokenId};
+use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SigningError {
@@ -17,15 +14,18 @@ pub trait OrderSigner: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignedFamilyMemberOrder {
-    pub order: Order,
-    pub envelope: SignedOrderEnvelope,
+pub struct SignedFamilyMember {
+    pub condition_id: ConditionId,
+    pub token_id: TokenId,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub identity: SignedOrderIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedFamilySubmission {
     pub plan_id: String,
-    pub orders: Vec<SignedFamilyMemberOrder>,
+    pub members: Vec<SignedFamilyMember>,
 }
 
 #[derive(Debug, Default)]
@@ -48,39 +48,26 @@ impl OrderSigner for TestOrderSigner {
         match plan {
             ExecutionPlan::NegRiskSubmitFamily { family_id, members } => {
                 let plan_id = plan.plan_id();
-                let orders = members
+                let _ = family_id; // family is already encoded into plan_id; keep signer output narrow.
+                let signed_members = members
                     .iter()
                     .enumerate()
                     .map(|(index, member)| {
                         let identity = self.sign_identity(&plan_id, index);
-                        let order_id = OrderId::from(format!(
-                            "test-order:{}:{}",
-                            family_id.as_str(),
-                            index + 1
-                        ));
-
-                        let order = Order {
-                            order_id: order_id.clone(),
-                            market_id: MarketId::from(format!(
-                                "test-market:{}",
-                                member.token_id.as_str()
-                            )),
+                        SignedFamilyMember {
                             condition_id: member.condition_id.clone(),
                             token_id: member.token_id.clone(),
-                            quantity: member.quantity,
                             price: member.price,
-                            submission_state: SubmissionState::Signed,
-                            venue_state: VenueOrderState::Unknown,
-                            settlement_state: SettlementState::Unknown,
-                            signed_order: Some(identity.clone()),
-                        };
-                        let envelope = SignedOrderEnvelope::new(order_id, identity);
-
-                        SignedFamilyMemberOrder { order, envelope }
+                            quantity: member.quantity,
+                            identity,
+                        }
                     })
                     .collect();
 
-                Ok(SignedFamilySubmission { plan_id, orders })
+                Ok(SignedFamilySubmission {
+                    plan_id,
+                    members: signed_members,
+                })
             }
             other => Err(SigningError::UnsupportedPlan {
                 plan_id: other.plan_id(),
@@ -88,4 +75,3 @@ impl OrderSigner for TestOrderSigner {
         }
     }
 }
-

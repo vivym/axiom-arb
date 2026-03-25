@@ -16,7 +16,7 @@ pub use auth::{
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
-pub use orders::{OrderPayload, SignedOrderPayload, SignedOrderSubmission};
+pub use orders::{OrderSide, OrderType, PostOrder, PostOrderRequest};
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
     BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestError,
