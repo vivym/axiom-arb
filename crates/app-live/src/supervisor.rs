@@ -16,6 +16,19 @@ use crate::{
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
 
+const DIVERGENCE_PENDING_RECONCILE_COUNT_MISMATCH: &str = "pending_reconcile_count_mismatch";
+const DIVERGENCE_STATE_VERSION_MISMATCH: &str = "state_version_mismatch";
+const DIVERGENCE_LAST_JOURNAL_SEQ_MISMATCH: &str = "last_journal_seq_mismatch";
+const DIVERGENCE_ROLLOUT_EVIDENCE_MISMATCH: &str = "rollout_evidence_mismatch";
+const DIVERGENCE_ROLLOUT_EVIDENCE_MISSING: &str = "rollout_evidence_missing";
+const DIVERGENCE_ROLLOUT_EVIDENCE_UNEXPECTED: &str = "rollout_evidence_unexpected";
+const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_ANCHORS_MISSING: &str =
+    "neg_risk_live_execution_anchors_missing";
+const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISSING: &str =
+    "neg_risk_live_execution_snapshot_missing";
+const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISMATCH: &str =
+    "neg_risk_live_execution_snapshot_mismatch";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSummary {
     pub fullset_mode: ExecutionMode,
@@ -307,11 +320,14 @@ impl AppSupervisor {
         match self.seed.pending_reconcile_count {
             Some(0) => self.runtime.clear_pending_reconcile_after_restore(),
             Some(expected) if self.runtime.pending_reconcile_count() != expected => {
-                return Err(SupervisorError::new(format!(
-                    "durable pending reconcile count {} did not match rebuilt count {}",
-                    expected,
-                    self.runtime.pending_reconcile_count()
-                )));
+                return Err(self.divergence_error(
+                    DIVERGENCE_PENDING_RECONCILE_COUNT_MISMATCH,
+                    format!(
+                        "durable pending reconcile count {} did not match rebuilt count {}",
+                        expected,
+                        self.runtime.pending_reconcile_count()
+                    ),
+                ));
             }
             Some(_) => {}
             None if self.runtime.pending_reconcile_count() == 0 => {}
@@ -322,18 +338,24 @@ impl AppSupervisor {
             }
         }
         if self.runtime.state_version() != committed_state_version {
-            return Err(SupervisorError::new(format!(
-                "durable history rebuilt state version {} but expected {}",
-                self.runtime.state_version(),
-                committed_state_version
-            )));
+            return Err(self.divergence_error(
+                DIVERGENCE_STATE_VERSION_MISMATCH,
+                format!(
+                    "durable history rebuilt state version {} but expected {}",
+                    self.runtime.state_version(),
+                    committed_state_version
+                ),
+            ));
         }
         if self.runtime.last_journal_seq() != Some(last_journal_seq) {
-            return Err(SupervisorError::new(format!(
-                "durable history rebuilt last journal seq {} but expected {}",
-                self.runtime.last_journal_seq().unwrap_or_default(),
-                last_journal_seq
-            )));
+            return Err(self.divergence_error(
+                DIVERGENCE_LAST_JOURNAL_SEQ_MISMATCH,
+                format!(
+                    "durable history rebuilt last journal seq {} but expected {}",
+                    self.runtime.last_journal_seq().unwrap_or_default(),
+                    last_journal_seq
+                ),
+            ));
         }
 
         if self.runtime.state_version() > 0
@@ -473,15 +495,22 @@ impl AppSupervisor {
             self.neg_risk_rollout_evidence.as_ref(),
         ) {
             (Some(expected), Some(actual)) if expected == actual => Ok(()),
-            (Some(expected), Some(actual)) => Err(SupervisorError::new(format!(
-                "durable rollout gate evidence {:?} did not match rebuilt evidence {:?}",
-                expected, actual
-            ))),
-            (Some(expected), None) => Err(SupervisorError::new(format!(
-                "durable rollout gate evidence {:?} could not be rebuilt",
-                expected
-            ))),
-            (None, Some(_)) => Err(SupervisorError::new(
+            (Some(expected), Some(actual)) => Err(self.divergence_error(
+                DIVERGENCE_ROLLOUT_EVIDENCE_MISMATCH,
+                format!(
+                    "durable rollout gate evidence {:?} did not match rebuilt evidence {:?}",
+                    expected, actual
+                ),
+            )),
+            (Some(expected), None) => Err(self.divergence_error(
+                DIVERGENCE_ROLLOUT_EVIDENCE_MISSING,
+                format!(
+                    "durable rollout gate evidence {:?} could not be rebuilt",
+                    expected
+                ),
+            )),
+            (None, Some(_)) => Err(self.divergence_error(
+                DIVERGENCE_ROLLOUT_EVIDENCE_UNEXPECTED,
                 "durable rollout gate evidence is required to resume live state",
             )),
             (None, None) => Ok(()),
@@ -614,13 +643,15 @@ impl AppSupervisor {
         }
 
         if self.neg_risk_live_execution_records.is_empty() {
-            return Err(SupervisorError::new(
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_LIVE_EXECUTION_ANCHORS_MISSING,
                 "durable neg-risk live attempt anchors are required to resume live state",
             ));
         }
 
         let Some(snapshot_id) = self.runtime.published_snapshot_id() else {
-            return Err(SupervisorError::new(
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISSING,
                 "durable neg-risk live attempt anchors require a published snapshot",
             ));
         };
@@ -629,12 +660,22 @@ impl AppSupervisor {
             .iter()
             .any(|record| record.snapshot_id != snapshot_id)
         {
-            return Err(SupervisorError::new(
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISMATCH,
                 "durable neg-risk live attempt anchors did not match the rebuilt snapshot",
             ));
         }
 
         Ok(())
+    }
+
+    fn divergence_error(
+        &self,
+        divergence_kind: &'static str,
+        message: impl Into<String>,
+    ) -> SupervisorError {
+        runtime_instrumentation(self.metrics_recorder.as_ref()).record_divergence(divergence_kind);
+        SupervisorError::new(message)
     }
 
     fn synthetic_live_ready_family_count(&self) -> usize {

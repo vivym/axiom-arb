@@ -180,6 +180,40 @@ fn run_once_resets_rollout_gauges_when_bootstrap_publication_fails() {
     );
 }
 
+#[test]
+fn resume_pending_reconcile_mismatch_records_divergence_span_and_counter() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(3);
+
+    let (captured_spans, err) = capture_spans(|| supervisor.resume_once().unwrap_err());
+
+    assert!(err.to_string().contains("pending reconcile count"));
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().divergence_count.key()),
+        Some(1)
+    );
+
+    let divergence_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_RECOVERY_DIVERGENCE)
+        .expect("divergence span missing");
+    assert_eq!(
+        divergence_span
+            .field(field_keys::DIVERGENCE_KIND)
+            .map(String::as_str),
+        Some("\"pending_reconcile_count_mismatch\"")
+    );
+}
+
 #[derive(Debug, Clone)]
 struct CapturedSpan {
     name: String,
