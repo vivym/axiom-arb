@@ -67,7 +67,7 @@ pub fn build_post_order_request_from_signed_member(
     member: &SignedFamilyMember,
     transport: &PostOrderTransport,
 ) -> Result<PostOrderRequest, PostOrderBuildError> {
-    let salt_str = member.identity.salt.trim();
+    let salt_str = member.identity.salt.as_str();
     let salt_is_numeric = !salt_str.is_empty() && salt_str.bytes().all(|b| b.is_ascii_digit());
     if !salt_is_numeric {
         return Err(PostOrderBuildError::InvalidSalt {

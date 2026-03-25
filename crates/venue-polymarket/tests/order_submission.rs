@@ -71,6 +71,21 @@ fn submit_order_builder_rejects_non_numeric_salt_values() {
 }
 
 #[test]
+fn submit_order_builder_rejects_whitespace_padded_salt_values() {
+    let signed = sample_signed_negrisk_family_submission();
+    let mut member = signed.members[0].clone();
+    member.identity.salt = " 123".to_owned();
+
+    let err = build_post_order_request_from_signed_member(&member, &sample_post_order_transport())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        venue_polymarket::PostOrderBuildError::InvalidSalt { .. }
+    ));
+}
+
+#[test]
 fn submit_order_builder_accepts_large_numeric_string_salt_without_loss() {
     let signed = sample_signed_negrisk_family_submission();
     let mut member = signed.members[0].clone();

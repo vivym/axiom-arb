@@ -118,11 +118,14 @@ impl VenueSink for LiveVenueSink {
     ) -> Result<ExecutionReceipt, VenueSinkError> {
         ensure_live_sink_mode(plan, attempt.execution_mode)?;
 
-        if let (Some(signer), ExecutionPlan::NegRiskSubmitFamily { .. }) =
-            (&self.order_signer, plan)
-        {
+        if let ExecutionPlan::NegRiskSubmitFamily { .. } = plan {
+            // Fail-closed: neg-risk family submit plans must never reach "Succeeded" without a signer.
+            let signer = self.order_signer.as_ref().ok_or_else(|| VenueSinkError::Rejected {
+                reason: "missing order signer for NegRiskSubmitFamily".to_owned(),
+            })?;
+
             // Narrow plumbing hook for Phase 3b neg-risk live submit: sign the planned orders
-            // deterministically. Non-neg-risk plans must remain unaffected by signer configuration.
+            // deterministically. Non-neg-risk plans must remain unaffected by signer/hook configuration.
             let signed = signer.sign_family(plan).map_err(|err| VenueSinkError::Rejected {
                 reason: format!("signing error: {err:?}"),
             })?;

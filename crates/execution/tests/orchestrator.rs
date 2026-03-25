@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 use domain::{ConditionId, EventFamilyId, ExecutionMode, ExecutionRequest, TokenId};
 use execution::{
     attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     plans::ExecutionPlan,
     sink::{LiveVenueSink, ShadowVenueSink},
+    TestOrderSigner,
 };
 use rust_decimal::Decimal;
 
@@ -123,7 +126,8 @@ fn reduce_only_mode_refuses_neg_risk_family_submission_plans() {
 
 #[test]
 fn recovery_only_mode_allows_neg_risk_family_submission_once_it_reaches_execution() {
-    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+    let orchestrator =
+        ExecutionOrchestrator::new(LiveVenueSink::with_order_signer(Arc::new(TestOrderSigner)));
 
     let receipt = orchestrator
         .execute(&sample_negrisk_planning_input(ExecutionMode::RecoveryOnly))

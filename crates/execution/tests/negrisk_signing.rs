@@ -74,6 +74,24 @@ fn live_sink_signs_negrisk_family_submit_plans_when_signer_is_configured() {
 }
 
 #[test]
+fn live_sink_rejects_negrisk_family_submit_plans_when_signer_is_missing_in_live_mode() {
+    let sink = LiveVenueSink::noop();
+    let err = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap_err();
+    assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+}
+
+#[test]
+fn live_sink_rejects_negrisk_family_submit_plans_when_signer_is_missing_in_recovery_only_mode() {
+    let sink = LiveVenueSink::noop();
+    let err = sink
+        .execute(&sample_family_plan(), &recovery_attempt())
+        .unwrap_err();
+    assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+}
+
+#[test]
 fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submits() {
     let called = Arc::new(AtomicUsize::new(0));
     let hook = Arc::new(SpySignedFamilyHook {
@@ -205,6 +223,17 @@ fn live_attempt() -> ExecutionAttemptContext {
         attempt_id: "attempt-1".to_string(),
         snapshot_id: "snapshot-1".to_string(),
         execution_mode: ExecutionMode::Live,
+        route: "route".to_string(),
+        scope: "scope".to_string(),
+        matched_rule_id: None,
+    }
+}
+
+fn recovery_attempt() -> ExecutionAttemptContext {
+    ExecutionAttemptContext {
+        attempt_id: "attempt-1".to_string(),
+        snapshot_id: "snapshot-1".to_string(),
+        execution_mode: ExecutionMode::RecoveryOnly,
         route: "route".to_string(),
         scope: "scope".to_string(),
         matched_rule_id: None,
