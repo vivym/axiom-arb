@@ -151,6 +151,9 @@ pub struct RuntimeMetrics {
     pub neg_risk_family_excluded_count: GaugeHandle,
     pub neg_risk_family_halt_count: GaugeHandle,
     pub neg_risk_metadata_refresh_count: CounterHandle,
+    pub neg_risk_live_ready_family_count: GaugeHandle,
+    pub neg_risk_live_gate_block_count: GaugeHandle,
+    pub neg_risk_rollout_parity_mismatch_count: CounterHandle,
 }
 
 impl Default for RuntimeMetrics {
@@ -176,6 +179,15 @@ impl Default for RuntimeMetrics {
             neg_risk_family_halt_count: GaugeHandle::new("axiom_neg_risk_family_halt_count"),
             neg_risk_metadata_refresh_count: CounterHandle::new(
                 "axiom_neg_risk_metadata_refresh_total",
+            ),
+            neg_risk_live_ready_family_count: GaugeHandle::new(
+                "axiom_neg_risk_live_ready_family_count",
+            ),
+            neg_risk_live_gate_block_count: GaugeHandle::new(
+                "axiom_neg_risk_live_gate_block_count",
+            ),
+            neg_risk_rollout_parity_mismatch_count: CounterHandle::new(
+                "axiom_neg_risk_rollout_parity_mismatch_total",
             ),
         }
     }
@@ -322,6 +334,30 @@ impl RuntimeMetricsRecorder {
         self.registry.record_counter(
             self.metrics
                 .neg_risk_metadata_refresh_count
+                .increment(amount),
+        );
+    }
+
+    pub fn record_neg_risk_live_ready_family_count(&self, count: f64) {
+        self.registry.record_gauge(
+            self.metrics
+                .neg_risk_live_ready_family_count
+                .sample(count),
+        );
+    }
+
+    pub fn record_neg_risk_live_gate_block_count(&self, count: f64) {
+        self.registry.record_gauge(
+            self.metrics
+                .neg_risk_live_gate_block_count
+                .sample(count),
+        );
+    }
+
+    pub fn increment_neg_risk_rollout_parity_mismatch_count(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_rollout_parity_mismatch_count
                 .increment(amount),
         );
     }
