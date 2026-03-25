@@ -21,6 +21,10 @@ impl VenueProducerInstrumentation {
     }
 
     pub fn record_ws_session_event(&self, event: &WsSessionEvent) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
         let channel = match event.channel {
             WsChannelKind::Market => metric_dimensions::Channel::Market,
             WsChannelKind::User => metric_dimensions::Channel::User,
@@ -42,12 +46,10 @@ impl VenueProducerInstrumentation {
         )
         .in_scope(|| {
             if matches!(event.status, WsSessionStatus::Reconnected) {
-                if let Some(recorder) = &self.recorder {
-                    recorder.increment_websocket_reconnect_total(
-                        1,
-                        MetricDimensions::new([MetricDimension::Channel(channel)]),
-                    );
-                }
+                recorder.increment_websocket_reconnect_total(
+                    1,
+                    MetricDimensions::new([MetricDimension::Channel(channel)]),
+                );
             }
         });
     }
