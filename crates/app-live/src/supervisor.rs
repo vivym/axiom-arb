@@ -511,11 +511,7 @@ impl AppSupervisor {
         }
 
         if allow_operator_synthesis {
-            let live_ready_family_count = self
-                .neg_risk_live_targets
-                .keys()
-                .filter(|family_id| self.neg_risk_live_ready_families.contains(*family_id))
-                .count();
+            let live_ready_family_count = self.synthetic_live_ready_family_count();
             return NegRiskRolloutEvidence {
                 snapshot_id: snapshot.snapshot_id.clone(),
                 live_ready_family_count,
@@ -569,6 +565,16 @@ impl AppSupervisor {
         }
 
         Ok(())
+    }
+
+    fn synthetic_live_ready_family_count(&self) -> usize {
+        self.neg_risk_live_targets
+            .keys()
+            .filter(|family_id| {
+                self.neg_risk_live_ready_families.contains(*family_id)
+                    && self.neg_risk_live_approved_families.contains(*family_id)
+            })
+            .count()
     }
 }
 

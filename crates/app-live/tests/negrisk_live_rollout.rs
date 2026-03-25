@@ -63,6 +63,61 @@ fn config_backed_family_without_live_approval_stays_shadow_and_emits_no_live_att
         summary.neg_risk_live_state_source,
         NegRiskLiveStateSource::None
     );
+    assert_eq!(
+        summary
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.live_ready_family_count),
+        Some(0)
+    );
+    assert_eq!(
+        summary
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.blocked_family_count),
+        Some(1)
+    );
+}
+
+#[test]
+fn resume_does_not_require_live_attempt_anchors_for_ready_but_unapproved_families() {
+    let mut boot = AppSupervisor::for_tests();
+    boot.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        sample_live_target("family-a"),
+    )]));
+    boot.seed_neg_risk_live_ready_family("family-a");
+
+    let boot_summary = boot.run_once().unwrap();
+
+    let mut resumed = AppSupervisor::for_tests();
+    resumed.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        sample_live_target("family-a"),
+    )]));
+    resumed.seed_neg_risk_live_ready_family("family-a");
+    resumed.seed_runtime_progress(
+        boot_summary.last_journal_seq,
+        boot_summary.last_state_version,
+        boot_summary.published_snapshot_id.as_deref(),
+    );
+    resumed.seed_committed_state_version(boot_summary.last_state_version);
+    resumed.seed_pending_reconcile_count(boot_summary.pending_reconcile_count);
+    resumed.seed_neg_risk_rollout_evidence(
+        boot_summary
+            .neg_risk_rollout_evidence
+            .clone()
+            .expect("boot summary should include rollout evidence"),
+    );
+
+    let resumed_summary = resumed.resume_once().unwrap();
+
+    assert_eq!(resumed_summary.negrisk_mode, ExecutionMode::Shadow);
+    assert_eq!(resumed_summary.neg_risk_live_attempt_count, 0);
+    assert_eq!(
+        resumed_summary.neg_risk_live_state_source,
+        NegRiskLiveStateSource::None
+    );
 }
 
 #[test]
