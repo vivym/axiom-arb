@@ -9,9 +9,9 @@ pub mod repos;
 pub use models::StoredOrder;
 pub use repos::{
     persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,
-    IdentifierRepo, InventoryRepo, JournalRepo, NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo,
-    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
-    LiveArtifactRepo,
+    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, NegRiskFamilyRepo, OrderRepo,
+    PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo,
+    SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -56,6 +56,10 @@ pub enum PersistenceError {
     },
     LiveArtifactRequiresLiveAttempt {
         attempt_id: String,
+    },
+    ConflictingLiveArtifactPayload {
+        attempt_id: String,
+        stream: String,
     },
 }
 
@@ -120,6 +124,10 @@ impl fmt::Display for PersistenceError {
             Self::LiveArtifactRequiresLiveAttempt { attempt_id } => write!(
                 f,
                 "live artifact attempt {attempt_id} must reference an existing live execution attempt"
+            ),
+            Self::ConflictingLiveArtifactPayload { attempt_id, stream } => write!(
+                f,
+                "live artifact ({attempt_id}, {stream}) already exists with a different payload"
             ),
         }
     }

@@ -146,19 +146,14 @@ async fn live_artifacts_append_is_idempotent_per_attempt_and_stream() {
         .await
         .unwrap();
 
-    let first = sample_live_artifact("attempt-live-idempotent-1");
-    let second = LiveExecutionArtifactRow {
-        attempt_id: "attempt-live-idempotent-1".to_owned(),
-        stream: "negrisk.live".to_owned(),
-        payload: json!({
-            "attempt_id": "attempt-live-idempotent-1",
-            "kind": "signed_order",
-        }),
-    };
+    let artifact = sample_live_artifact("attempt-live-idempotent-1");
 
-    LiveArtifactRepo.append(&db.pool, first).await.unwrap();
     LiveArtifactRepo
-        .append(&db.pool, second.clone())
+        .append(&db.pool, artifact.clone())
+        .await
+        .unwrap();
+    LiveArtifactRepo
+        .append(&db.pool, artifact.clone())
         .await
         .unwrap();
 
@@ -166,7 +161,61 @@ async fn live_artifacts_append_is_idempotent_per_attempt_and_stream() {
         .list_for_attempt(&db.pool, "attempt-live-idempotent-1")
         .await
         .unwrap();
-    assert_eq!(rows, vec![second]);
+    assert_eq!(rows, vec![artifact]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_artifacts_reject_conflicting_payload_for_same_attempt_and_stream() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-conflict-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let original = sample_live_artifact("attempt-live-conflict-1");
+    let conflicting = LiveExecutionArtifactRow {
+        attempt_id: "attempt-live-conflict-1".to_owned(),
+        stream: "negrisk.live".to_owned(),
+        payload: json!({
+            "attempt_id": "attempt-live-conflict-1",
+            "kind": "signed_order",
+        }),
+    };
+
+    LiveArtifactRepo
+        .append(&db.pool, original.clone())
+        .await
+        .unwrap();
+
+    let err = LiveArtifactRepo
+        .append(&db.pool, conflicting)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::ConflictingLiveArtifactPayload {
+            ref attempt_id,
+            ref stream,
+        }
+        if attempt_id == "attempt-live-conflict-1" && stream == "negrisk.live"
+    ));
+
+    let rows = LiveArtifactRepo
+        .list_for_attempt(&db.pool, "attempt-live-conflict-1")
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![original]);
 
     db.cleanup().await;
 }

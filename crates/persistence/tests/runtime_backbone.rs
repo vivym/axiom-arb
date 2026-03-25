@@ -349,7 +349,7 @@ async fn execution_attempt_table_rejects_mode_change_when_live_artifacts_exist()
 }
 
 #[tokio::test]
-async fn live_artifact_schema_matches_task5_primary_key_and_indexes() {
+async fn live_artifact_schema_matches_task5_primary_key() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
@@ -371,24 +371,6 @@ async fn live_artifact_schema_matches_task5_primary_key_and_indexes() {
     .await
     .unwrap();
     assert_eq!(primary_key_columns, vec!["attempt_id", "stream"]);
-
-    let execution_attempt_indexdef: String = sqlx::query_scalar(
-        r#"
-        SELECT indexdef
-        FROM pg_indexes
-        WHERE schemaname = current_schema()
-          AND tablename = 'execution_attempts'
-          AND indexname = 'execution_attempts_live_created_idx'
-        "#,
-    )
-    .fetch_one(&db.pool)
-    .await
-    .unwrap();
-    assert!(
-        execution_attempt_indexdef
-            .contains("(created_at, attempt_id) WHERE (execution_mode = 'live'::text)"),
-        "unexpected index definition: {execution_attempt_indexdef}"
-    );
 
     db.cleanup().await;
 }

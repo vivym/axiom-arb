@@ -189,7 +189,7 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
 }
 
 #[tokio::test]
-async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_retries() {
+async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_duplicate_append() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
@@ -218,7 +218,11 @@ async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_retri
     LiveArtifactRepo
         .append(
             &db.pool,
-            artifact("attempt-negrisk-live-dup-1", "negrisk.live", "signed_order"),
+            artifact(
+                "attempt-negrisk-live-dup-1",
+                "negrisk.live",
+                "planned_order",
+            ),
         )
         .await
         .unwrap();
@@ -232,7 +236,7 @@ async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_retri
             artifacts: vec![artifact(
                 "attempt-negrisk-live-dup-1",
                 "negrisk.live",
-                "signed_order",
+                "planned_order",
             )],
         }]
     );

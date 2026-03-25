@@ -1502,8 +1502,7 @@ impl LiveArtifactRepo {
             SELECT $1, $2, $3
             FROM execution_attempts
             WHERE attempt_id = $1 AND execution_mode = $4
-            ON CONFLICT (attempt_id, stream) DO UPDATE
-            SET payload = EXCLUDED.payload
+            ON CONFLICT (attempt_id, stream) DO NOTHING
             "#,
         )
         .bind(&row.attempt_id)
@@ -1514,11 +1513,30 @@ impl LiveArtifactRepo {
         .await?;
 
         if result.rows_affected() == 1 {
-            Ok(())
-        } else {
-            Err(PersistenceError::LiveArtifactRequiresLiveAttempt {
+            return Ok(());
+        }
+
+        let existing_payload = sqlx::query_scalar::<_, Value>(
+            r#"
+            SELECT payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = $1 AND stream = $2
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.stream)
+        .fetch_optional(pool)
+        .await?;
+
+        match existing_payload {
+            Some(payload) if payload == row.payload => Ok(()),
+            Some(_) => Err(PersistenceError::ConflictingLiveArtifactPayload {
                 attempt_id: row.attempt_id,
-            })
+                stream: row.stream,
+            }),
+            None => Err(PersistenceError::LiveArtifactRequiresLiveAttempt {
+                attempt_id: row.attempt_id,
+            }),
         }
     }
 
