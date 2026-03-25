@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use app_live::{AppInstrumentation, AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
+use app_live::{AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
 use chrono::Utc;
 use domain::ExternalFactEvent;
 use observability::{bootstrap_observability, field_keys, span_names};
@@ -19,8 +19,7 @@ use tracing::{
 #[test]
 fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
     let observability = bootstrap_observability("app-live-test");
-    let instrumentation = AppInstrumentation::enabled(observability.recorder());
-    let mut supervisor = AppSupervisor::for_tests_instrumented(instrumentation);
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
     for journal_seq in 35..=41 {
         supervisor.seed_committed_input(sample_input_task_event(journal_seq));
     }
@@ -101,8 +100,7 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
 #[test]
 fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
     let observability = bootstrap_observability("app-live-test");
-    let instrumentation = AppInstrumentation::enabled(observability.recorder());
-    let mut supervisor = AppSupervisor::for_tests_instrumented(instrumentation);
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
     supervisor.push_dirty_snapshot(5, false, false);
 
     let (captured_spans, summary) = capture_spans(|| supervisor.flush_dispatch());

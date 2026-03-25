@@ -1,5 +1,5 @@
 use domain::{ExecutionMode, RuntimeMode};
-use observability::{field_keys, span_names};
+use observability::{field_keys, span_names, RuntimeMetricsRecorder};
 use state::{ApplyResult, RemoteSnapshot};
 use tracing::field;
 
@@ -74,7 +74,7 @@ struct RuntimeSeed {
 pub struct AppSupervisor {
     dispatcher: DispatchLoop,
     runtime: AppRuntime,
-    instrumentation: AppInstrumentation,
+    metrics_recorder: Option<RuntimeMetricsRecorder>,
     bootstrap_snapshot: RemoteSnapshot,
     committed_log: Vec<InputTaskEvent>,
     input_tasks: InputTaskQueue,
@@ -84,22 +84,29 @@ pub struct AppSupervisor {
 
 impl AppSupervisor {
     pub fn new(app_mode: AppRuntimeMode, bootstrap_snapshot: RemoteSnapshot) -> Self {
-        Self::new_instrumented(
-            app_mode,
-            bootstrap_snapshot,
-            AppInstrumentation::disabled(),
-        )
+        Self::new_with_metrics(app_mode, bootstrap_snapshot, None)
     }
 
     pub fn new_instrumented(
         app_mode: AppRuntimeMode,
         bootstrap_snapshot: RemoteSnapshot,
-        instrumentation: AppInstrumentation,
+        recorder: RuntimeMetricsRecorder,
+    ) -> Self {
+        Self::new_with_metrics(app_mode, bootstrap_snapshot, Some(recorder))
+    }
+
+    fn new_with_metrics(
+        app_mode: AppRuntimeMode,
+        bootstrap_snapshot: RemoteSnapshot,
+        metrics_recorder: Option<RuntimeMetricsRecorder>,
     ) -> Self {
         Self {
             dispatcher: DispatchLoop::default(),
-            runtime: AppRuntime::new_instrumented(app_mode, instrumentation.clone()),
-            instrumentation,
+            runtime: AppRuntime::new_instrumented(
+                app_mode,
+                runtime_instrumentation(metrics_recorder.as_ref()),
+            ),
+            metrics_recorder,
             bootstrap_snapshot,
             committed_log: Vec::new(),
             input_tasks: InputTaskQueue::default(),
@@ -112,8 +119,8 @@ impl AppSupervisor {
         Self::new(AppRuntimeMode::Live, RemoteSnapshot::empty())
     }
 
-    pub fn for_tests_instrumented(instrumentation: AppInstrumentation) -> Self {
-        Self::new_instrumented(AppRuntimeMode::Live, RemoteSnapshot::empty(), instrumentation)
+    pub fn for_tests_instrumented(recorder: RuntimeMetricsRecorder) -> Self {
+        Self::new_instrumented(AppRuntimeMode::Live, RemoteSnapshot::empty(), recorder)
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
@@ -208,8 +215,10 @@ impl AppSupervisor {
         let _span_guard = span.enter();
         span.record(field_keys::APP_MODE, &self.runtime.app_mode().as_str());
 
-        self.runtime =
-            AppRuntime::new_instrumented(self.runtime.app_mode(), self.instrumentation.clone());
+        self.runtime = AppRuntime::new_instrumented(
+            self.runtime.app_mode(),
+            runtime_instrumentation(self.metrics_recorder.as_ref()),
+        );
         self.neg_risk_rollout_evidence = None;
         self.record_recovery_backlog(self.input_tasks.len());
 
@@ -317,7 +326,7 @@ impl AppSupervisor {
 
     fn summary(&self) -> SupervisorSummary {
         if let Some(evidence) = self.neg_risk_rollout_evidence.as_ref() {
-            self.instrumentation.record_rollout_evidence(evidence);
+            self.record_rollout_evidence(evidence);
         }
 
         SupervisorSummary {
@@ -342,7 +351,7 @@ impl AppSupervisor {
             .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
         {
             let evidence = rollout_evidence_from_snapshot(&snapshot);
-            self.instrumentation.record_rollout_evidence(&evidence);
+            self.record_rollout_evidence(&evidence);
             self.neg_risk_rollout_evidence = Some(evidence);
             self.dispatcher.observe_snapshot(snapshot);
         } else {
@@ -392,8 +401,20 @@ impl AppSupervisor {
     }
 
     fn record_recovery_backlog(&self, backlog_count: usize) {
-        self.instrumentation
-            .record_recovery_backlog_count(backlog_count);
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_recovery_backlog_count(backlog_count as f64);
+    }
+
+    fn record_rollout_evidence(&self, evidence: &NegRiskRolloutEvidence) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
+        recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
     }
 
     fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {
@@ -407,8 +428,9 @@ impl AppSupervisor {
         let _span_guard = span.enter();
 
         let backlog_count = self.dispatcher.pending_backlog_count();
-        self.instrumentation
-            .record_dispatcher_backlog_count(backlog_count);
+        if let Some(recorder) = &self.metrics_recorder {
+            recorder.record_dispatcher_backlog_count(backlog_count as f64);
+        }
         span.record(field_keys::BACKLOG_COUNT, &backlog_count);
 
         let summary = self.dispatcher.flush();
@@ -432,5 +454,12 @@ impl AppSupervisor {
         }
 
         summary
+    }
+}
+
+fn runtime_instrumentation(recorder: Option<&RuntimeMetricsRecorder>) -> AppInstrumentation {
+    match recorder.cloned() {
+        Some(recorder) => AppInstrumentation::enabled(recorder),
+        None => AppInstrumentation::disabled(),
     }
 }
