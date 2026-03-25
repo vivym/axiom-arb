@@ -141,7 +141,7 @@ impl AppRuntime {
             pending_reconcile_count = field::Empty
         );
         let _span_guard = span.enter();
-        span.record(field_keys::APP_MODE, &self.app_mode.as_str());
+        span.record(field_keys::APP_MODE, self.app_mode.as_str());
 
         let report = bootstrap::reconcile(&mut self.store, snapshot);
         if !report.attention.is_empty() {
@@ -151,7 +151,7 @@ impl AppRuntime {
         }
         self.anchor_baseline_if_ready(report.succeeded);
         let pending_reconcile_count = self.store.pending_reconcile_count();
-        span.record(field_keys::PENDING_RECONCILE_COUNT, &pending_reconcile_count);
+        span.record(field_keys::PENDING_RECONCILE_COUNT, pending_reconcile_count);
         report
     }
 
@@ -176,14 +176,16 @@ impl AppRuntime {
         );
         let _span_guard = span.enter();
         let journal_seq = input.journal_seq;
-        let result = match StateApplier::new(&mut self.store).apply(journal_seq, input.into_state_fact_input()) {
+        let result = match StateApplier::new(&mut self.store)
+            .apply(journal_seq, input.into_state_fact_input())
+        {
             Ok(result) => result,
             Err(error) => {
-                span.record(field_keys::APPLY_RESULT, &"error");
+                span.record(field_keys::APPLY_RESULT, "error");
                 return Err(error);
             }
         };
-        span.record(field_keys::APPLY_RESULT, &apply_result_label(&result));
+        span.record(field_keys::APPLY_RESULT, apply_result_label(&result));
         match &result {
             ApplyResult::Applied { .. } => {
                 self.published_snapshot = None;
@@ -210,8 +212,8 @@ impl AppRuntime {
             state::ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id),
         );
         span.record(field_keys::SNAPSHOT_ID, snapshot.snapshot_id.as_str());
-        span.record(field_keys::STATE_VERSION, &snapshot.state_version);
-        span.record(field_keys::COMMITTED_JOURNAL_SEQ, &snapshot.committed_journal_seq);
+        span.record(field_keys::STATE_VERSION, snapshot.state_version);
+        span.record(field_keys::COMMITTED_JOURNAL_SEQ, snapshot.committed_journal_seq);
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
     }

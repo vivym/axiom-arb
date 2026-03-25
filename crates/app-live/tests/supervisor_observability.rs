@@ -6,10 +6,11 @@ use std::{
     },
 };
 
-use app_live::{AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
+use app_live::{AppRuntimeMode, AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
 use chrono::Utc;
-use domain::ExternalFactEvent;
+use domain::{ConditionId, ExternalFactEvent, TokenId};
 use observability::{bootstrap_observability, field_keys, span_names};
+use state::{ReconcileAttention, RemoteSnapshot};
 use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
@@ -122,7 +123,40 @@ fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
     assert_eq!(summary.coalesced_versions, vec![5]);
     assert_eq!(
         snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
-        Some(1.0)
+        Some(0.0)
+    );
+}
+
+#[test]
+fn run_once_resets_rollout_gauges_when_bootstrap_publication_fails() {
+    let observability = bootstrap_observability("app-live-test");
+    let recorder = observability.recorder();
+    recorder.record_neg_risk_live_ready_family_count(7.0);
+    recorder.record_neg_risk_live_gate_block_count(11.0);
+
+    let failing_snapshot = RemoteSnapshot::empty().with_attention(
+        ReconcileAttention::IdentifierMismatch {
+            token_id: TokenId::from("token-yes"),
+            expected_condition_id: ConditionId::from("condition-a"),
+            remote_condition_id: ConditionId::from("condition-b"),
+        },
+    );
+    let mut supervisor = AppSupervisor::new_instrumented(
+        AppRuntimeMode::Live,
+        failing_snapshot,
+        recorder,
+    );
+    let summary = supervisor.run_once().unwrap();
+    let snapshot = observability.registry().snapshot();
+
+    assert!(summary.neg_risk_rollout_evidence.is_none());
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_ready_family_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_gate_block_count.key()),
+        Some(0.0)
     );
 }
 

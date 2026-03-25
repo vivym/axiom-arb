@@ -213,7 +213,7 @@ impl AppSupervisor {
             pending_reconcile_count = field::Empty
         );
         let _span_guard = span.enter();
-        span.record(field_keys::APP_MODE, &self.runtime.app_mode().as_str());
+        span.record(field_keys::APP_MODE, self.runtime.app_mode().as_str());
 
         self.runtime = AppRuntime::new_instrumented(
             self.runtime.app_mode(),
@@ -306,19 +306,19 @@ impl AppSupervisor {
             self.publish_current_snapshot();
         }
 
-        span.record(field_keys::PROCESSED_COUNT, &processed_count);
+        span.record(field_keys::PROCESSED_COUNT, processed_count);
         let _ = self.flush_dispatch_instrumented();
 
         let summary = self.summary();
-        span.record(field_keys::BACKLOG_COUNT, &self.input_tasks.len());
-        span.record(field_keys::LAST_JOURNAL_SEQ, &summary.last_journal_seq);
-        span.record(field_keys::STATE_VERSION, &summary.last_state_version);
+        span.record(field_keys::BACKLOG_COUNT, self.input_tasks.len());
+        span.record(field_keys::LAST_JOURNAL_SEQ, summary.last_journal_seq);
+        span.record(field_keys::STATE_VERSION, summary.last_state_version);
         span.record(
             field_keys::PENDING_RECONCILE_COUNT,
-            &summary.pending_reconcile_count,
+            summary.pending_reconcile_count,
         );
         if let Some(snapshot_id) = summary.published_snapshot_id.as_deref() {
-            span.record(field_keys::SNAPSHOT_ID, &snapshot_id);
+            span.record(field_keys::SNAPSHOT_ID, snapshot_id);
         }
 
         Ok(summary)
@@ -355,6 +355,7 @@ impl AppSupervisor {
             self.neg_risk_rollout_evidence = Some(evidence);
             self.dispatcher.observe_snapshot(snapshot);
         } else {
+            self.record_zero_rollout_evidence();
             self.neg_risk_rollout_evidence = None;
         }
     }
@@ -417,6 +418,15 @@ impl AppSupervisor {
         recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
     }
 
+    fn record_zero_rollout_evidence(&self) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_live_ready_family_count(0.0);
+        recorder.record_neg_risk_live_gate_block_count(0.0);
+    }
+
     fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {
         let span = tracing::info_span!(
             span_names::APP_DISPATCH_FLUSH,
@@ -428,20 +438,20 @@ impl AppSupervisor {
         let _span_guard = span.enter();
 
         let backlog_count = self.dispatcher.pending_backlog_count();
-        if let Some(recorder) = &self.metrics_recorder {
-            recorder.record_dispatcher_backlog_count(backlog_count as f64);
-        }
-        span.record(field_keys::BACKLOG_COUNT, &backlog_count);
+        span.record(field_keys::BACKLOG_COUNT, backlog_count);
 
         let summary = self.dispatcher.flush();
-        span.record(field_keys::PROCESSED_COUNT, &summary.coalesced_versions.len());
+        if let Some(recorder) = &self.metrics_recorder {
+            recorder.record_dispatcher_backlog_count(0.0);
+        }
+        span.record(field_keys::PROCESSED_COUNT, summary.coalesced_versions.len());
 
         let state_version = summary
             .fullset_last_ready_state_version
             .or(summary.negrisk_last_ready_state_version)
             .or_else(|| summary.coalesced_versions.last().copied());
         if let Some(state_version) = state_version {
-            span.record(field_keys::STATE_VERSION, &state_version);
+            span.record(field_keys::STATE_VERSION, state_version);
         }
 
         let snapshot_id = summary
@@ -450,7 +460,7 @@ impl AppSupervisor {
             .or(summary.negrisk_last_ready_snapshot_id.as_deref())
             .or(summary.last_stable_snapshot_id.as_deref());
         if let Some(snapshot_id) = snapshot_id {
-            span.record(field_keys::SNAPSHOT_ID, &snapshot_id);
+            span.record(field_keys::SNAPSHOT_ID, snapshot_id);
         }
 
         summary
