@@ -51,19 +51,20 @@ fn reduce_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
 #[test]
 fn negrisk_entrypoint_rejects_live_mode_even_with_usable_projection() {
     let verdict =
-        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Live);
+        risk::negrisk::evaluate_negrisk_family(&sample_negrisk_view(), "family-a", ExecutionMode::Live);
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
 
 #[test]
 fn negrisk_entrypoint_rejects_unusable_projection() {
-    let verdict = risk::negrisk::evaluate_negrisk_intent(
+    let verdict = risk::negrisk::evaluate_negrisk_family(
         &NegRiskView {
             snapshot_id: "snapshot-empty".to_owned(),
             state_version: 9,
             families: Vec::new(),
         },
+        "family-a",
         ExecutionMode::Shadow,
     );
 
@@ -72,24 +73,33 @@ fn negrisk_entrypoint_rejects_unusable_projection() {
 
 #[test]
 fn negrisk_entrypoint_approves_shadow_mode_when_projection_is_usable() {
-    let verdict =
-        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::Shadow);
+    let verdict = risk::negrisk::evaluate_negrisk_family(
+        &sample_negrisk_view(),
+        "family-a",
+        ExecutionMode::Shadow,
+    );
 
     assert!(matches!(verdict, DecisionVerdict::Approved));
 }
 
 #[test]
 fn negrisk_entrypoint_rejects_reduce_only_even_with_usable_projection() {
-    let verdict =
-        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::ReduceOnly);
+    let verdict = risk::negrisk::evaluate_negrisk_family(
+        &sample_negrisk_view(),
+        "family-a",
+        ExecutionMode::ReduceOnly,
+    );
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
 
 #[test]
 fn negrisk_entrypoint_rejects_recovery_only_even_with_usable_projection() {
-    let verdict =
-        risk::negrisk::evaluate_negrisk_intent(&sample_negrisk_view(), ExecutionMode::RecoveryOnly);
+    let verdict = risk::negrisk::evaluate_negrisk_family(
+        &sample_negrisk_view(),
+        "family-a",
+        ExecutionMode::RecoveryOnly,
+    );
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
@@ -106,18 +116,26 @@ fn sample_negrisk_view() -> NegRiskView {
     NegRiskView {
         snapshot_id: "snapshot-negrisk-1".to_owned(),
         state_version: 8,
-        families: vec![sample_family("family-a")],
+        families: vec![sample_family("family-a", false, false, false, false, false, false)],
     }
 }
 
-fn sample_family(family_id: &str) -> NegRiskFamilyRolloutReadiness {
+fn sample_family(
+    family_id: &str,
+    shadow_parity_ready: bool,
+    recovery_ready: bool,
+    replay_drift_ready: bool,
+    fault_injection_ready: bool,
+    conversion_path_ready: bool,
+    halt_semantics_ready: bool,
+) -> NegRiskFamilyRolloutReadiness {
     NegRiskFamilyRolloutReadiness {
         family_id: family_id.to_owned(),
-        shadow_parity_ready: false,
-        recovery_ready: false,
-        replay_drift_ready: false,
-        fault_injection_ready: false,
-        conversion_path_ready: false,
-        halt_semantics_ready: false,
+        shadow_parity_ready,
+        recovery_ready,
+        replay_drift_ready,
+        fault_injection_ready,
+        conversion_path_ready,
+        halt_semantics_ready,
     }
 }
