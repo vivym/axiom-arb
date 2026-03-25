@@ -230,9 +230,9 @@ fn registry_round_trips_dimensioned_counter_samples() {
 fn registry_rejects_scalar_samples_for_dimensioned_counter_keys() {
     let observability = Observability::new("app-live");
 
-    observability.registry().record_counter(
-        CounterHandle::new("axiom_websocket_reconnect_total").increment(1),
-    );
+    observability
+        .registry()
+        .record_counter(CounterHandle::new("axiom_websocket_reconnect_total").increment(1));
 }
 
 #[test]

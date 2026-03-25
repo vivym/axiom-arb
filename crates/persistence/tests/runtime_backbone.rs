@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::atomic::{AtomicU64, Ordering}};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use domain::ExecutionMode;
 use persistence::{

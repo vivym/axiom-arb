@@ -2,9 +2,8 @@ use domain::{SignatureType, WalletRoute};
 use serde_json::json;
 use url::Url;
 use venue_polymarket::{
-    build_post_order_request_from_signed_member, L2AuthHeaders, OrderType,
-    PolymarketRestClient, PostOrderTransport,
-    SignerContext,
+    build_post_order_request_from_signed_member, L2AuthHeaders, OrderType, PolymarketRestClient,
+    PostOrderTransport, SignerContext,
 };
 
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
@@ -20,11 +19,9 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
         .members
         .first()
         .expect("test plan should include at least one member");
-    let submission = build_post_order_request_from_signed_member(
-        member,
-        &sample_post_order_transport(),
-    )
-    .unwrap();
+    let submission =
+        build_post_order_request_from_signed_member(member, &sample_post_order_transport())
+            .unwrap();
     let request = client
         .build_submit_order_request(&sample_l2_auth(), &submission)
         .unwrap();
@@ -33,7 +30,9 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
     assert!(request.url().as_str().ends_with("/order"));
 
     let salt = member.identity.salt.parse::<u64>().unwrap();
-    assert_eq!(serde_json::to_value(submission).unwrap(), json!({
+    assert_eq!(
+        serde_json::to_value(submission).unwrap(),
+        json!({
           "order": {
             "maker": "0xmaker",
             "signer": "0xsigner",
@@ -52,7 +51,8 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
           "owner": "owner-uuid",
           "orderType": "GTC",
           "deferExec": false
-        }));
+        })
+    );
 }
 
 #[test]
@@ -106,8 +106,7 @@ fn sample_rest_client() -> PolymarketRestClient {
         .no_proxy()
         .build()
         .expect("test client");
-    let base =
-        Url::parse("https://clob.polymarket.com/").expect("clob url should parse for tests");
+    let base = Url::parse("https://clob.polymarket.com/").expect("clob url should parse for tests");
 
     PolymarketRestClient::with_http_client(client, base.clone(), base.clone(), base)
 }

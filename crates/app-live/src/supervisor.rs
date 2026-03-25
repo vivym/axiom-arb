@@ -181,7 +181,8 @@ impl AppSupervisor {
     }
 
     pub fn seed_neg_risk_live_ready_family(&mut self, family_id: &str) {
-        self.neg_risk_live_ready_families.insert(family_id.to_owned());
+        self.neg_risk_live_ready_families
+            .insert(family_id.to_owned());
     }
 
     pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
@@ -443,9 +444,7 @@ fn snapshot_id_for(state_version: u64) -> String {
 }
 
 fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> Option<NegRiskRolloutEvidence> {
-    let Some(negrisk) = snapshot.negrisk.as_ref() else {
-        return None;
-    };
+    let negrisk = snapshot.negrisk.as_ref()?;
 
     let live_ready_family_count = negrisk
         .families

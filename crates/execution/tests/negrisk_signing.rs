@@ -6,8 +6,8 @@ use std::sync::{
 use domain::{ConditionId, EventFamilyId, TokenId};
 use domain::{ExecutionAttemptContext, ExecutionMode};
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
-use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
 use execution::signing::{OrderSigner, TestOrderSigner};
+use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -66,7 +66,9 @@ fn live_sink_signs_negrisk_family_submit_plans_when_signer_and_hook_are_configur
     });
     let sink = LiveVenueSink::with_order_signer_and_hook(signer, Arc::new(NoopSignedFamilyHook));
 
-    let receipt = sink.execute(&sample_family_plan(), &live_attempt()).unwrap();
+    let receipt = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap();
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
     assert_eq!(called.load(Ordering::SeqCst), 1);
 }
@@ -121,10 +123,7 @@ fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submit
     let receipt = sink.execute(&plan, &live_attempt()).unwrap();
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
     assert_eq!(called.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        hook.last_plan_id.lock().unwrap().clone(),
-        Some(plan_id)
-    );
+    assert_eq!(hook.last_plan_id.lock().unwrap().clone(), Some(plan_id));
     assert_eq!(*hook.last_member_count.lock().unwrap(), Some(2));
 }
 

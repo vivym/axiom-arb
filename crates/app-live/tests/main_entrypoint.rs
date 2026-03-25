@@ -271,14 +271,20 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         Some("family-a"),
     );
 
-    assert!(output.status.success(), "live mode should boot with explicit operator inputs");
+    assert!(
+        output.status.success(),
+        "live mode should boot with explicit operator inputs"
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     let combined = format!("{stdout}{stderr}");
 
     assert!(combined.contains("negrisk_mode=Live"), "{combined}");
-    assert!(combined.contains("neg_risk_live_attempt_count=1"), "{combined}");
+    assert!(
+        combined.contains("neg_risk_live_attempt_count=1"),
+        "{combined}"
+    );
 }
 
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {

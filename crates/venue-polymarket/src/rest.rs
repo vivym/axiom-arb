@@ -173,7 +173,12 @@ impl PolymarketRestClient {
         let headers = build_l2_auth_headers(auth)?;
         let url = join_url(&self.clob_host, "order", &[])?;
 
-        Ok(self.http.post(url).headers(headers).json(submission).build()?)
+        Ok(self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(submission)
+            .build()?)
     }
 
     async fn get_clob<T>(&self, path: &str, query: &[(&str, &str)]) -> Result<T, RestError>

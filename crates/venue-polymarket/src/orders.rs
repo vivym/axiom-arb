@@ -76,8 +76,10 @@ pub fn build_post_order_request_from_signed_member(
     }
 
     // Keep the literal as-is (no u64 parsing). RawValue ensures it's valid JSON.
-    let salt = RawValue::from_string(salt_str.to_owned()).map_err(|_| PostOrderBuildError::InvalidSalt {
-        salt: member.identity.salt.clone(),
+    let salt = RawValue::from_string(salt_str.to_owned()).map_err(|_| {
+        PostOrderBuildError::InvalidSalt {
+            salt: member.identity.salt.clone(),
+        }
     })?;
 
     let side = match member.side.as_str() {

@@ -99,9 +99,7 @@ fn load_neg_risk_live_targets_env(
     }
 }
 
-fn load_family_scope_env(
-    var_name: &str,
-) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
+fn load_family_scope_env(var_name: &str) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
     match env::var(var_name) {
         Ok(value) => Ok(value
             .split(',')

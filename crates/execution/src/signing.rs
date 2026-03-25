@@ -4,9 +4,7 @@ use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SigningError {
-    UnsupportedPlan {
-        plan_id: String,
-    },
+    UnsupportedPlan { plan_id: String },
 }
 
 pub trait OrderSigner: Send + Sync {
