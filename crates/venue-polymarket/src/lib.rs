@@ -1,11 +1,13 @@
 mod auth;
 mod heartbeat;
+mod instrumentation;
 mod metadata;
 mod orders;
 mod relayer;
 mod rest;
 mod retry;
 mod ws_market;
+mod ws_session;
 mod ws_user;
 
 pub use auth::{
@@ -15,6 +17,7 @@ pub use auth::{
 };
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
+pub use instrumentation::VenueProducerInstrumentation;
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
 pub use orders::{
     build_post_order_request_from_signed_member, OrderSide, OrderType, PostOrder,
@@ -31,4 +34,5 @@ pub use ws_market::{
     MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent, WsChannelKind,
     WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
 };
+pub use ws_session::{WsSessionEvent, WsSessionMonitor, WsSessionState, WsSessionStatus};
 pub use ws_user::{parse_user_message, UserOrderUpdate, UserTradeUpdate, UserWsEvent};

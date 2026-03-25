@@ -9,10 +9,25 @@ pub struct OrderHeartbeatState {
     pub requires_reconcile_attention: bool,
 }
 
+impl OrderHeartbeatState {
+    pub fn freshness_seconds(&self, at: DateTime<Utc>) -> f64 {
+        (at - self.last_success_at).num_seconds() as f64
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeartbeatReconcileReason {
     MissedHeartbeat,
     InvalidHeartbeat,
+}
+
+impl HeartbeatReconcileReason {
+    pub const fn as_status(self) -> &'static str {
+        match self {
+            Self::MissedHeartbeat => "missed",
+            Self::InvalidHeartbeat => "invalid",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,12 +45,14 @@ impl OrderHeartbeatMonitor {
         state: &mut OrderHeartbeatState,
         heartbeat_id: impl Into<String>,
         at: DateTime<Utc>,
-    ) {
+    ) -> f64 {
+        let freshness_seconds = state.freshness_seconds(at);
         state.heartbeat_id = Some(heartbeat_id.into());
         state.last_success_at = at;
         state.reconcile_attention_since = None;
         state.reconcile_reason = None;
         state.requires_reconcile_attention = false;
+        freshness_seconds
     }
 
     pub fn record_invalid(
