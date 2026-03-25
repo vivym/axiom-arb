@@ -5,8 +5,8 @@ use std::{
 
 use domain::ExecutionMode;
 use persistence::{
-    models::{ExecutionAttemptRow, LiveExecutionArtifactRow},
-    run_migrations, ExecutionAttemptRepo, LiveArtifactRepo, PersistenceError,
+    models::{ExecutionAttemptRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow},
+    run_migrations, ExecutionAttemptRepo, LiveArtifactRepo, LiveSubmissionRepo, PersistenceError,
 };
 use serde_json::json;
 use sqlx::migrate::{Migration, MigrationType, Migrator};
@@ -101,6 +101,26 @@ fn sample_live_artifact(attempt_id: &str) -> LiveExecutionArtifactRow {
         payload: json!({
             "attempt_id": attempt_id,
             "kind": "planned_order",
+        }),
+    }
+}
+
+fn sample_live_submission_record(
+    attempt_id: &str,
+    submission_ref: &str,
+) -> LiveSubmissionRecordRow {
+    LiveSubmissionRecordRow {
+        submission_ref: submission_ref.to_owned(),
+        attempt_id: attempt_id.to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "submitted".to_owned(),
+        payload: json!({
+            "submission_ref": submission_ref,
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "submitted_for_execution",
         }),
     }
 }
@@ -407,6 +427,84 @@ async fn live_artifacts_support_bulk_listing_for_replay() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows["attempt-live-bulk-a"], vec![artifact_a]);
     assert_eq!(rows["attempt-live-bulk-b"], vec![artifact_b]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_round_trip_with_attempt_anchor() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = sample_live_submission_record("attempt-live-submit-1", "submission-ref-1");
+    LiveSubmissionRepo
+        .append(&db.pool, row.clone())
+        .await
+        .unwrap();
+
+    let rows = LiveSubmissionRepo
+        .list_for_attempt(&db.pool, "attempt-live-submit-1")
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![row]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_carry_resume_truth_payload() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-2",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = LiveSubmissionRecordRow {
+        submission_ref: "submission-ref-2".to_owned(),
+        attempt_id: "attempt-live-submit-2".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "pending_reconcile".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-2",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
+        }),
+    };
+
+    LiveSubmissionRepo
+        .append(&db.pool, row.clone())
+        .await
+        .unwrap();
+
+    let rows = LiveSubmissionRepo
+        .list_for_attempts(&db.pool, &["attempt-live-submit-2".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(rows["attempt-live-submit-2"], vec![row]);
 
     db.cleanup().await;
 }

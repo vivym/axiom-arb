@@ -10,9 +10,10 @@ use crate::{
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
-        LiveExecutionArtifactRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
-        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow,
-        RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        LiveExecutionArtifactRow, LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput,
+        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow, OrderRow,
+        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
+        SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1432,12 +1433,7 @@ impl ExecutionAttemptRepo {
 pub struct PendingReconcileRepo;
 
 impl PendingReconcileRepo {
-    pub async fn append(
-        &self,
-        pool: &PgPool,
-        row: &PendingReconcileRow,
-        payload: &Value,
-    ) -> Result<()> {
+    pub async fn append(&self, pool: &PgPool, row: &PendingReconcileRow) -> Result<()> {
         let result = sqlx::query(
             r#"
             INSERT INTO pending_reconcile_items (
@@ -1454,7 +1450,7 @@ impl PendingReconcileRepo {
         .bind(&row.scope_kind)
         .bind(&row.scope_id)
         .bind(&row.reason)
-        .bind(payload)
+        .bind(&row.payload)
         .execute(pool)
         .await;
 
@@ -1467,6 +1463,139 @@ impl PendingReconcileRepo {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub async fn list_all(&self, pool: &PgPool) -> Result<Vec<PendingReconcileRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT pending_ref, scope_kind, scope_id, reason, payload
+            FROM pending_reconcile_items
+            ORDER BY created_at, pending_ref
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(map_pending_reconcile_row).collect()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LiveSubmissionRepo;
+
+impl LiveSubmissionRepo {
+    pub async fn append(&self, pool: &PgPool, row: LiveSubmissionRecordRow) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO live_submission_records (
+                submission_ref,
+                attempt_id,
+                route,
+                scope,
+                provider,
+                state,
+                payload
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (submission_ref) DO NOTHING
+            "#,
+        )
+        .bind(&row.submission_ref)
+        .bind(&row.attempt_id)
+        .bind(&row.route)
+        .bind(&row.scope)
+        .bind(&row.provider)
+        .bind(&row.state)
+        .bind(&row.payload)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            FROM live_submission_records
+            WHERE submission_ref = $1
+            "#,
+        )
+        .bind(&row.submission_ref)
+        .fetch_optional(pool)
+        .await?;
+
+        match existing {
+            Some(existing) => {
+                let existing = map_live_submission_record_row(existing)?;
+                if existing == row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingLiveSubmissionRecord {
+                        submission_ref: row.submission_ref,
+                    })
+                }
+            }
+            None => Err(PersistenceError::LiveSubmissionRequiresLiveAttempt {
+                submission_ref: row.submission_ref,
+                attempt_id: row.attempt_id,
+            }),
+        }
+    }
+
+    pub async fn list_for_attempt(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Vec<LiveSubmissionRecordRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            FROM live_submission_records
+            WHERE attempt_id = $1
+            ORDER BY created_at, submission_ref
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_live_submission_record_row)
+            .collect()
+    }
+
+    pub async fn list_for_attempts(
+        &self,
+        pool: &PgPool,
+        attempt_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<LiveSubmissionRecordRow>>> {
+        if attempt_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            FROM live_submission_records
+            WHERE attempt_id = ANY($1)
+            ORDER BY attempt_id, created_at, submission_ref
+            "#,
+        )
+        .bind(attempt_ids)
+        .fetch_all(pool)
+        .await?;
+
+        let mut submissions = BTreeMap::<String, Vec<LiveSubmissionRecordRow>>::new();
+        for row in rows {
+            let submission = map_live_submission_record_row(row)?;
+            submissions
+                .entry(submission.attempt_id.clone())
+                .or_default()
+                .push(submission);
+        }
+
+        Ok(submissions)
     }
 }
 
@@ -1845,6 +1974,16 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
     })
 }
 
+fn map_pending_reconcile_row(row: PgRow) -> Result<PendingReconcileRow> {
+    Ok(PendingReconcileRow {
+        pending_ref: row.try_get("pending_ref")?,
+        scope_kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+        reason: row.try_get("reason")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
 fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
     Ok(ExecutionAttemptRow {
         attempt_id: row.try_get("attempt_id")?,
@@ -1863,6 +2002,18 @@ fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRo
     Ok(LiveExecutionArtifactRow {
         attempt_id: row.try_get("attempt_id")?,
         stream: row.try_get("stream")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_live_submission_record_row(row: PgRow) -> Result<LiveSubmissionRecordRow> {
+    Ok(LiveSubmissionRecordRow {
+        submission_ref: row.try_get("submission_ref")?,
+        attempt_id: row.try_get("attempt_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        provider: row.try_get("provider")?,
+        state: row.try_get("state")?,
         payload: row.try_get("payload")?,
     })
 }

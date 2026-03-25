@@ -298,12 +298,24 @@ pub struct ExecutionAttemptRow {
     pub idempotency_key: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PendingReconcileRow {
     pub pending_ref: String,
     pub scope_kind: String,
     pub scope_id: String,
     pub reason: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveSubmissionRecordRow {
+    pub submission_ref: String,
+    pub attempt_id: String,
+    pub route: String,
+    pub scope: String,
+    pub provider: String,
+    pub state: String,
+    pub payload: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]

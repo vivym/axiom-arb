@@ -3,8 +3,10 @@ use std::{collections::BTreeMap, error::Error as StdError, fmt};
 use journal::{replay_entries, JournalEntry, SourceKind};
 use persistence::{
     connect_pool_from_env,
-    models::{ExecutionAttemptRow, JournalEntryRow, LiveExecutionArtifactRow},
-    ExecutionAttemptRepo, JournalRepo, LiveArtifactRepo, PersistenceError,
+    models::{
+        ExecutionAttemptRow, JournalEntryRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
+    },
+    ExecutionAttemptRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo, PersistenceError,
 };
 use sqlx::PgPool;
 
@@ -20,6 +22,12 @@ pub use negrisk_summary::{
 pub struct NegRiskLiveAttemptArtifacts {
     pub attempt: ExecutionAttemptRow,
     pub artifacts: Vec<LiveExecutionArtifactRow>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NegRiskLiveSubmissionRecord {
+    pub attempt: ExecutionAttemptRow,
+    pub submissions: Vec<LiveSubmissionRecordRow>,
 }
 
 pub async fn load_negrisk_live_attempt_artifacts(
@@ -45,6 +53,37 @@ pub async fn load_negrisk_live_attempt_artifacts(
         .into_iter()
         .map(|attempt| NegRiskLiveAttemptArtifacts {
             artifacts: artifacts_by_attempt
+                .get(&attempt.attempt_id)
+                .cloned()
+                .unwrap_or_default(),
+            attempt,
+        })
+        .collect())
+}
+
+pub async fn load_negrisk_live_submission_records(
+    pool: &PgPool,
+) -> Result<Vec<NegRiskLiveSubmissionRecord>, PersistenceError> {
+    let attempts = ExecutionAttemptRepo
+        .list_live_attempts(pool)
+        .await?
+        .into_iter()
+        .filter(|attempt| attempt.route == "neg-risk")
+        .collect::<Vec<_>>();
+    let submissions_by_attempt = LiveSubmissionRepo
+        .list_for_attempts(
+            pool,
+            &attempts
+                .iter()
+                .map(|attempt| attempt.attempt_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+
+    Ok(attempts
+        .into_iter()
+        .map(|attempt| NegRiskLiveSubmissionRecord {
+            submissions: submissions_by_attempt
                 .get(&attempt.attempt_id)
                 .cloned()
                 .unwrap_or_default(),
