@@ -12,6 +12,7 @@ pub use config::{
 pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;
 pub use runtime::{
-    run_live, run_paper, AppRunResult, AppRuntime, AppRuntimeMode, ParseAppRuntimeModeError,
+    run_live, run_live_with_neg_risk_live_targets, run_paper, AppRunResult, AppRuntime,
+    AppRuntimeMode, ParseAppRuntimeModeError,
 };
 pub use supervisor::{AppSupervisor, NegRiskRolloutEvidence, SupervisorError, SupervisorSummary};

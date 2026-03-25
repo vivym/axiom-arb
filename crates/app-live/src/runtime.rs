@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use state::{
@@ -7,6 +7,7 @@ use state::{
 };
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
+use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 use crate::supervisor::SupervisorSummary;
 
@@ -218,6 +219,18 @@ where
     S: BootstrapSource,
 {
     run_with_mode(AppRuntimeMode::Live, source)
+}
+
+pub fn run_live_with_neg_risk_live_targets<S>(
+    source: &S,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    let mut supervisor = crate::supervisor::AppSupervisor::new(AppRuntimeMode::Live, source.snapshot());
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    supervisor.run_bootstrap()
 }
 
 fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult

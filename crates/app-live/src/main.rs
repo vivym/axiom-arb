@@ -1,7 +1,8 @@
-use std::{env, process, str::FromStr};
+use std::{collections::BTreeMap, env, process, str::FromStr};
 
 use app_live::{
-    load_neg_risk_live_targets, run_live, run_paper, AppRuntimeMode, StaticSnapshotSource,
+    load_neg_risk_live_targets, run_live_with_neg_risk_live_targets, run_paper, AppRuntimeMode,
+    NegRiskFamilyLiveTarget, StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
@@ -21,17 +22,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    if matches!(app_mode, AppRuntimeMode::Live) {
-        validate_neg_risk_live_targets_env()?;
-    }
+    let neg_risk_live_targets = load_neg_risk_live_targets_env(app_mode)?;
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
-        AppRuntimeMode::Live => run_live(&source),
+        AppRuntimeMode::Live => run_live_with_neg_risk_live_targets(&source, neg_risk_live_targets),
     };
-    observability
-        .recorder()
-        .record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
+    let recorder = observability.recorder();
+    recorder.record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
+    recorder.record_neg_risk_live_attempt_count(result.summary.neg_risk_live_attempt_count as f64);
+    if let Some(evidence) = result.summary.neg_risk_rollout_evidence.as_ref() {
+        recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
+        recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
+        recorder.increment_neg_risk_rollout_parity_mismatch_count(evidence.parity_mismatch_count);
+    }
 
     let completion_span = tracing::info_span!(
         span_names::APP_BOOTSTRAP_COMPLETE,
@@ -41,6 +45,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         runtime_mode = ?result.runtime.runtime_mode(),
         fullset_mode = ?result.summary.fullset_mode,
         negrisk_mode = ?result.summary.negrisk_mode,
+        neg_risk_live_attempt_count = result.summary.neg_risk_live_attempt_count,
         pending_reconcile_count = result.summary.pending_reconcile_count,
         published_snapshot_id = %result
             .summary
@@ -65,13 +70,14 @@ fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
     }
 }
 
-fn validate_neg_risk_live_targets_env() -> Result<(), Box<dyn std::error::Error>> {
+fn load_neg_risk_live_targets_env(
+    app_mode: AppRuntimeMode,
+) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, Box<dyn std::error::Error>> {
     match env::var(NEG_RISK_LIVE_TARGETS_ENV) {
-        Ok(value) => {
-            let _ = load_neg_risk_live_targets(Some(value.as_str()))?;
-            Ok(())
+        Ok(value) if matches!(app_mode, AppRuntimeMode::Live) => {
+            Ok(load_neg_risk_live_targets(Some(value.as_str()))?)
         }
-        Err(env::VarError::NotPresent) => Ok(()),
+        Ok(_) | Err(env::VarError::NotPresent) => Ok(BTreeMap::new()),
         Err(env::VarError::NotUnicode(_)) => Err(format!(
             "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
         )

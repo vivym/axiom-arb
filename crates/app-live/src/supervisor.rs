@@ -1,8 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use domain::{ExecutionMode, RuntimeMode};
 use state::{ApplyResult, PublishedSnapshot, RemoteSnapshot};
 
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
+    config::NegRiskFamilyLiveTarget,
     dispatch::{DispatchLoop, DispatchSummary},
     input_tasks::{InputTaskEvent, InputTaskQueue},
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
@@ -12,6 +15,7 @@ use crate::{
 pub struct SupervisorSummary {
     pub fullset_mode: ExecutionMode,
     pub negrisk_mode: ExecutionMode,
+    pub neg_risk_live_attempt_count: usize,
     pub bootstrap_status: BootstrapStatus,
     pub runtime_mode: RuntimeMode,
     pub pending_reconcile_count: usize,
@@ -74,6 +78,9 @@ pub struct AppSupervisor {
     committed_log: Vec<InputTaskEvent>,
     input_tasks: InputTaskQueue,
     seed: RuntimeSeed,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
 }
 
@@ -86,6 +93,9 @@ impl AppSupervisor {
             committed_log: Vec::new(),
             input_tasks: InputTaskQueue::default(),
             seed: RuntimeSeed::default(),
+            neg_risk_live_targets: BTreeMap::new(),
+            neg_risk_live_approved_families: BTreeSet::new(),
+            neg_risk_live_ready_families: BTreeSet::new(),
             neg_risk_rollout_evidence: None,
         }
     }
@@ -156,6 +166,22 @@ impl AppSupervisor {
 
     pub fn seed_neg_risk_rollout_evidence(&mut self, evidence: NegRiskRolloutEvidence) {
         self.seed.neg_risk_rollout_evidence = Some(evidence);
+    }
+
+    pub fn seed_neg_risk_live_targets(
+        &mut self,
+        targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    ) {
+        self.neg_risk_live_targets = targets;
+    }
+
+    pub fn seed_neg_risk_live_approval(&mut self, family_id: &str) {
+        self.neg_risk_live_approved_families
+            .insert(family_id.to_owned());
+    }
+
+    pub fn seed_neg_risk_live_ready_family(&mut self, family_id: &str) {
+        self.neg_risk_live_ready_families.insert(family_id.to_owned());
     }
 
     pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
@@ -261,9 +287,15 @@ impl AppSupervisor {
     }
 
     fn summary(&self) -> SupervisorSummary {
+        let neg_risk_live_attempt_count = self.neg_risk_live_attempt_count();
         SupervisorSummary {
             fullset_mode: ExecutionMode::Live,
-            negrisk_mode: ExecutionMode::Shadow,
+            negrisk_mode: if neg_risk_live_attempt_count > 0 {
+                ExecutionMode::Live
+            } else {
+                ExecutionMode::Shadow
+            },
+            neg_risk_live_attempt_count,
             bootstrap_status: self.runtime.bootstrap_status(),
             runtime_mode: self.runtime.runtime_mode(),
             pending_reconcile_count: self.runtime.pending_reconcile_count(),
@@ -282,7 +314,10 @@ impl AppSupervisor {
             .runtime
             .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
         {
-            self.neg_risk_rollout_evidence = Some(rollout_evidence_from_snapshot(&snapshot));
+            self.neg_risk_rollout_evidence = Some(rollout_evidence_from_snapshot(
+                &snapshot,
+                &self.neg_risk_live_ready_families,
+            ));
             self.dispatcher.observe_snapshot(snapshot);
         } else {
             self.neg_risk_rollout_evidence = None;
@@ -341,17 +376,43 @@ impl AppSupervisor {
         self.committed_log.push(input);
         self.committed_log.sort_by_key(|entry| entry.journal_seq);
     }
+
+    fn neg_risk_live_attempt_count(&self) -> usize {
+        if self.runtime.app_mode() != AppRuntimeMode::Live {
+            return 0;
+        }
+
+        let Some(rollout_evidence) = self.neg_risk_rollout_evidence.as_ref() else {
+            return 0;
+        };
+        if rollout_evidence.live_ready_family_count == 0 {
+            return 0;
+        }
+
+        self.neg_risk_live_targets
+            .keys()
+            .filter(|family_id| {
+                self.neg_risk_live_approved_families.contains(*family_id)
+                    && self.neg_risk_live_ready_families.contains(*family_id)
+            })
+            .count()
+    }
 }
 
 fn snapshot_id_for(state_version: u64) -> String {
     format!("snapshot-{state_version}")
 }
 
-fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> NegRiskRolloutEvidence {
+fn rollout_evidence_from_snapshot(
+    snapshot: &PublishedSnapshot,
+    fallback_live_ready_families: &BTreeSet<String>,
+) -> NegRiskRolloutEvidence {
     let Some(negrisk) = snapshot.negrisk.as_ref() else {
         return NegRiskRolloutEvidence {
             snapshot_id: snapshot.snapshot_id.clone(),
-            ..NegRiskRolloutEvidence::default()
+            live_ready_family_count: fallback_live_ready_families.len(),
+            blocked_family_count: 0,
+            parity_mismatch_count: 0,
         };
     };
 
