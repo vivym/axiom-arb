@@ -2,8 +2,8 @@ use domain::{SignatureType, WalletRoute};
 use serde_json::json;
 use url::Url;
 use venue_polymarket::{
-    build_post_order_request_from_signed_member, L2AuthHeaders, OrderSide, OrderType,
-    PolymarketRestClient, PostOrderContext, PostOrderMemberFields,
+    build_post_order_request_from_signed_member, L2AuthHeaders, OrderType,
+    PolymarketRestClient, PostOrderTransport,
     SignerContext,
 };
 
@@ -22,12 +22,7 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
         .expect("test plan should include at least one member");
     let submission = build_post_order_request_from_signed_member(
         member,
-        &PostOrderMemberFields {
-            maker_amount: "100".to_owned(),
-            taker_amount: "45".to_owned(),
-            side: OrderSide::Buy,
-        },
-        &sample_post_order_context(),
+        &sample_post_order_transport(),
     )
     .unwrap();
     let request = client
@@ -44,12 +39,12 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
             "signer": "0xsigner",
             "taker": "0x0000000000000000000000000000000000000000",
             "tokenId": "token-1",
-            "makerAmount": "100",
-            "takerAmount": "45",
+            "makerAmount": member.maker_amount,
+            "takerAmount": member.taker_amount,
             "side": "BUY",
-            "expiration": "0",
+            "expiration": member.expiration,
             "nonce": member.identity.nonce,
-            "feeRateBps": "30",
+            "feeRateBps": member.fee_rate_bps,
             "signature": member.identity.signature,
             "salt": salt,
             "signatureType": 0
@@ -58,6 +53,21 @@ fn submit_order_request_uses_documented_post_path_and_signed_payload() {
           "orderType": "GTC",
           "deferExec": false
         }));
+}
+
+#[test]
+fn submit_order_builder_rejects_non_numeric_salt_values() {
+    let signed = sample_signed_negrisk_family_submission();
+    let mut member = signed.members[0].clone();
+    member.identity.salt = "not-a-number".to_owned();
+
+    let err = build_post_order_request_from_signed_member(&member, &sample_post_order_transport())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        venue_polymarket::PostOrderBuildError::InvalidSalt { .. }
+    ));
 }
 
 fn sample_rest_client() -> PolymarketRestClient {
@@ -86,17 +96,11 @@ fn sample_l2_auth() -> L2AuthHeaders<'static> {
     }
 }
 
-fn sample_post_order_context() -> PostOrderContext {
-    PostOrderContext {
-        maker: "0xmaker".to_owned(),
-        signer: "0xsigner".to_owned(),
-        taker: "0x0000000000000000000000000000000000000000".to_owned(),
+fn sample_post_order_transport() -> PostOrderTransport {
+    PostOrderTransport {
         owner: "owner-uuid".to_owned(),
-        expiration: "0".to_owned(),
-        fee_rate_bps: "30".to_owned(),
         order_type: OrderType::Gtc,
         defer_exec: false,
-        signature_type: 0,
     }
 }
 

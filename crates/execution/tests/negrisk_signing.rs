@@ -9,6 +9,7 @@ use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
 use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
 use execution::signing::{OrderSigner, TestOrderSigner};
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 #[test]
 fn deterministic_test_signer_attaches_signed_identity_to_each_planned_member_order() {
@@ -20,6 +21,42 @@ fn deterministic_test_signer_attaches_signed_identity_to_each_planned_member_ord
         .members
         .iter()
         .all(|member| member.identity.signature.starts_with("test-sig:")));
+}
+
+#[test]
+fn deterministic_test_signer_canonicalizes_member_ordering_for_equivalent_family_plans() {
+    let plan_a = sample_family_plan();
+    let mut plan_b = sample_family_plan();
+    if let ExecutionPlan::NegRiskSubmitFamily { members, .. } = &mut plan_b {
+        members.reverse();
+    }
+
+    let signed_a = TestOrderSigner::default().sign_family(&plan_a).unwrap();
+    let signed_b = TestOrderSigner::default().sign_family(&plan_b).unwrap();
+
+    assert_eq!(signed_a.plan_id, signed_b.plan_id);
+    assert_eq!(signed_a.members, signed_b.members);
+
+    fn to_map(
+        signed: &execution::signing::SignedFamilySubmission,
+    ) -> HashMap<String, domain::SignedOrderIdentity> {
+        signed
+            .members
+            .iter()
+            .map(|member| {
+                let key = format!(
+                    "{}:{}:{}:{}",
+                    member.condition_id.as_str(),
+                    member.token_id.as_str(),
+                    member.price.normalize(),
+                    member.quantity.normalize()
+                );
+                (key, member.identity.clone())
+            })
+            .collect()
+    }
+
+    assert_eq!(to_map(&signed_a), to_map(&signed_b));
 }
 
 #[test]
@@ -57,6 +94,29 @@ fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submit
         Some(plan_id)
     );
     assert_eq!(*hook.last_member_count.lock().unwrap(), Some(2));
+}
+
+#[test]
+fn live_sink_propagates_hook_errors_for_negrisk_family_submits() {
+    let hook_called = Arc::new(AtomicUsize::new(0));
+    let sign_called = Arc::new(AtomicUsize::new(0));
+
+    let hook = Arc::new(RejectingSignedFamilyHook {
+        called: hook_called.clone(),
+    });
+    let signer = Arc::new(SpySigner {
+        inner: TestOrderSigner::default(),
+        called: sign_called.clone(),
+    });
+    let sink = LiveVenueSink::with_order_signer_and_hook(signer, hook);
+
+    let err = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap_err();
+
+    assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+    assert_eq!(sign_called.load(Ordering::SeqCst), 1);
+    assert_eq!(hook_called.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -201,5 +261,23 @@ impl SignedFamilyHook for SpySignedFamilyHook {
         *self.last_plan_id.lock().unwrap() = Some(signed.plan_id.clone());
         *self.last_member_count.lock().unwrap() = Some(signed.members.len());
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct RejectingSignedFamilyHook {
+    called: Arc<AtomicUsize>,
+}
+
+impl SignedFamilyHook for RejectingSignedFamilyHook {
+    fn on_signed_family(
+        &self,
+        _signed: &execution::signing::SignedFamilySubmission,
+        _attempt: &ExecutionAttemptContext,
+    ) -> Result<(), SignedFamilyHookError> {
+        self.called.fetch_add(1, Ordering::SeqCst);
+        Err(SignedFamilyHookError {
+            reason: "hook failure".to_owned(),
+        })
     }
 }

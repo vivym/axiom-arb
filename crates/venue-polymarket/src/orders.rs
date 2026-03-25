@@ -48,34 +48,21 @@ pub struct PostOrderRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostOrderContext {
-    pub maker: String,
-    pub signer: String,
-    pub taker: String,
+pub struct PostOrderTransport {
     pub owner: String,
-    pub expiration: String,
-    pub fee_rate_bps: String,
     pub order_type: OrderType,
     pub defer_exec: bool,
-    pub signature_type: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostOrderMemberFields {
-    pub maker_amount: String,
-    pub taker_amount: String,
-    pub side: OrderSide,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PostOrderBuildError {
     InvalidSalt { salt: String },
+    InvalidSide { side: String },
 }
 
 pub fn build_post_order_request_from_signed_member(
     member: &SignedFamilyMember,
-    member_fields: &PostOrderMemberFields,
-    ctx: &PostOrderContext,
+    transport: &PostOrderTransport,
 ) -> Result<PostOrderRequest, PostOrderBuildError> {
     let salt = member
         .identity
@@ -85,24 +72,34 @@ pub fn build_post_order_request_from_signed_member(
             salt: member.identity.salt.clone(),
         })?;
 
+    let side = match member.side.as_str() {
+        "BUY" => OrderSide::Buy,
+        "SELL" => OrderSide::Sell,
+        other => {
+            return Err(PostOrderBuildError::InvalidSide {
+                side: other.to_owned(),
+            })
+        }
+    };
+
     Ok(PostOrderRequest {
         order: PostOrder {
-            maker: ctx.maker.clone(),
-            signer: ctx.signer.clone(),
-            taker: ctx.taker.clone(),
+            maker: member.maker.clone(),
+            signer: member.signer.clone(),
+            taker: member.taker.clone(),
             token_id: member.token_id.as_str().to_owned(),
-            maker_amount: member_fields.maker_amount.clone(),
-            taker_amount: member_fields.taker_amount.clone(),
-            side: member_fields.side.clone(),
-            expiration: ctx.expiration.clone(),
+            maker_amount: member.maker_amount.clone(),
+            taker_amount: member.taker_amount.clone(),
+            side,
+            expiration: member.expiration.clone(),
             nonce: member.identity.nonce.clone(),
-            fee_rate_bps: ctx.fee_rate_bps.clone(),
+            fee_rate_bps: member.fee_rate_bps.clone(),
             signature: member.identity.signature.clone(),
             salt,
-            signature_type: ctx.signature_type,
+            signature_type: member.signature_type,
         },
-        owner: ctx.owner.clone(),
-        order_type: ctx.order_type.clone(),
-        defer_exec: ctx.defer_exec,
+        owner: transport.owner.clone(),
+        order_type: transport.order_type.clone(),
+        defer_exec: transport.defer_exec,
     })
 }

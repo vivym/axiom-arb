@@ -19,6 +19,17 @@ pub struct SignedFamilyMember {
     pub token_id: TokenId,
     pub price: Decimal,
     pub quantity: Decimal,
+    // Signature-covered venue fields (per Polymarket L1 docs). The venue layer should not
+    // reconstruct these, only transport them.
+    pub maker: String,
+    pub signer: String,
+    pub taker: String,
+    pub maker_amount: String,
+    pub taker_amount: String,
+    pub side: String,
+    pub expiration: String,
+    pub fee_rate_bps: String,
+    pub signature_type: u8,
     pub identity: SignedOrderIdentity,
 }
 
@@ -51,16 +62,51 @@ impl OrderSigner for TestOrderSigner {
             ExecutionPlan::NegRiskSubmitFamily { family_id, members } => {
                 let plan_id = plan.plan_id();
                 let _ = family_id; // family is already encoded into plan_id; keep signer output narrow.
-                let signed_members = members
-                    .iter()
+
+                // Canonicalize member ordering so logically-equivalent plans sign deterministically.
+                // Keep the effective ordering consistent with the canonical plan identity.
+                let mut canonical_members: Vec<_> = members.iter().collect();
+                canonical_members.sort_by(|left, right| {
+                    left.condition_id
+                        .as_str()
+                        .cmp(right.condition_id.as_str())
+                        .then_with(|| left.token_id.as_str().cmp(right.token_id.as_str()))
+                        .then_with(|| {
+                            left.price
+                                .normalize()
+                                .to_string()
+                                .cmp(&right.price.normalize().to_string())
+                        })
+                        .then_with(|| {
+                            left.quantity
+                                .normalize()
+                                .to_string()
+                                .cmp(&right.quantity.normalize().to_string())
+                        })
+                });
+
+                let signed_members = canonical_members
+                    .into_iter()
                     .enumerate()
                     .map(|(index, member)| {
                         let identity = self.sign_identity(&plan_id, index);
+                        let maker_amount = member.quantity.normalize().to_string();
+                        let taker_amount = (member.price * member.quantity).normalize().to_string();
+
                         SignedFamilyMember {
                             condition_id: member.condition_id.clone(),
                             token_id: member.token_id.clone(),
                             price: member.price,
                             quantity: member.quantity,
+                            maker: "0xmaker".to_owned(),
+                            signer: "0xsigner".to_owned(),
+                            taker: "0x0000000000000000000000000000000000000000".to_owned(),
+                            maker_amount,
+                            taker_amount,
+                            side: "BUY".to_owned(),
+                            expiration: "0".to_owned(),
+                            fee_rate_bps: "30".to_owned(),
+                            signature_type: 0,
                             identity,
                         }
                     })
