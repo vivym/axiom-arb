@@ -74,12 +74,16 @@ fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_ar
     );
     assert_eq!(records[0].artifacts.len(), 1);
     assert_eq!(records[0].artifacts[0].stream, "neg-risk-live-orders");
-    assert_eq!(
-        records[0].artifacts[0].payload["requests"][0]["order"]["tokenId"],
-        "token-1"
-    );
     assert_eq!(records[0].order_requests.len(), 1);
-    assert_eq!(records[0].order_requests[0]["order"]["tokenId"], "token-1");
+    let expected_order_request = expected_bootstrap_order_request();
+    assert_eq!(records[0].order_requests[0], expected_order_request);
+    assert_eq!(
+        records[0].artifacts[0].payload,
+        expected_bootstrap_artifact_payload(
+            records[0].attempt_id.as_str(),
+            &expected_order_request,
+        )
+    );
 }
 
 #[test]
@@ -356,4 +360,41 @@ fn sample_live_execution_record(snapshot_id: &str) -> NegRiskLiveExecutionRecord
             }
         })],
     }
+}
+
+fn expected_bootstrap_order_request() -> serde_json::Value {
+    json!({
+        "order": {
+            "maker": "0xmaker",
+            "signer": "0xsigner",
+            "taker": "0x0000000000000000000000000000000000000000",
+            "tokenId": "token-1",
+            "makerAmount": "10",
+            "takerAmount": "4.5",
+            "side": "BUY",
+            "expiration": "0",
+            "nonce": "0",
+            "feeRateBps": "30",
+            "signature": "test-sig:negrisk-submit-family:family-a:condition-1:token-1:0.45:10:0",
+            "salt": 123,
+            "signatureType": 0
+        },
+        "owner": "owner-family-a",
+        "orderType": "GTC",
+        "deferExec": false
+    })
+}
+
+fn expected_bootstrap_artifact_payload(
+    attempt_id: &str,
+    order_request: &serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "attempt_id": attempt_id,
+        "route": "neg-risk",
+        "scope": "family-a",
+        "matched_rule_id": "family-a-live",
+        "plan_id": "negrisk-submit-family:family-a:condition-1:token-1:0.45:10",
+        "requests": [order_request],
+    })
 }
