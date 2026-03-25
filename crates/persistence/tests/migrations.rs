@@ -7,9 +7,9 @@ use domain::{
     SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use persistence::{
-    models::{InventoryBucketRow, JournalEntryInput, NewOrderRow},
+    models::{InventoryBucketRow, JournalEntryInput, NewOrderRow, PendingReconcileRow},
     run_migrations, ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo,
-    PersistenceError, ResolutionRepo,
+    PendingReconcileRepo, PersistenceError, ResolutionRepo,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -399,7 +399,7 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 }
 
 #[tokio::test]
-async fn live_submission_migration_preserves_existing_live_artifacts_and_blocks_mode_drift() {
+async fn live_submission_migration_preserves_existing_live_artifacts_pending_reconcile_anchors_and_blocks_mode_drift() {
     let db = TestDatabase::new().await;
 
     apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
@@ -414,6 +414,19 @@ async fn live_submission_migration_preserves_existing_live_artifacts_and_blocks_
     apply_migration_file(&db.pool, "0008_execution_attempt_audit_anchor.sql")
         .await
         .unwrap();
+
+    let pending_reconcile = PendingReconcileRow {
+        pending_ref: "pending-reconcile-0009-1".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-a".to_owned(),
+        reason: "awaiting_resolve".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-0009-1",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
+        }),
+    };
 
     sqlx::query(
         r#"
@@ -438,6 +451,11 @@ async fn live_submission_migration_preserves_existing_live_artifacts_and_blocks_
     .await
     .unwrap();
 
+    PendingReconcileRepo
+        .append(&db.pool, &pending_reconcile)
+        .await
+        .unwrap();
+
     sqlx::query(
         r#"
         INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
@@ -456,6 +474,9 @@ async fn live_submission_migration_preserves_existing_live_artifacts_and_blocks_
         .unwrap();
 
     assert!(table_exists(&db.pool, "live_submission_records").await);
+
+    let pending_rows = PendingReconcileRepo.list_all(&db.pool).await.unwrap();
+    assert_eq!(pending_rows, vec![pending_reconcile]);
 
     let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
         r#"
