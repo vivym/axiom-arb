@@ -442,7 +442,7 @@ impl AppSupervisor {
 
         let summary = self.dispatcher.flush();
         if let Some(recorder) = &self.metrics_recorder {
-            recorder.record_dispatcher_backlog_count(0.0);
+            recorder.record_dispatcher_backlog_count(self.dispatcher.pending_backlog_count() as f64);
         }
         span.record(field_keys::PROCESSED_COUNT, summary.coalesced_versions.len());
 

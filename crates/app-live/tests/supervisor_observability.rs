@@ -123,7 +123,7 @@ fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
     assert_eq!(summary.coalesced_versions, vec![5]);
     assert_eq!(
         snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
-        Some(0.0)
+        Some(1.0)
     );
 }
 
