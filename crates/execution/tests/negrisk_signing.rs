@@ -13,9 +13,7 @@ use std::collections::HashMap;
 
 #[test]
 fn deterministic_test_signer_attaches_signed_identity_to_each_planned_member_order() {
-    let signed = TestOrderSigner::default()
-        .sign_family(&sample_family_plan())
-        .unwrap();
+    let signed = TestOrderSigner.sign_family(&sample_family_plan()).unwrap();
     assert_eq!(signed.members.len(), 2);
     assert!(signed
         .members
@@ -31,8 +29,8 @@ fn deterministic_test_signer_canonicalizes_member_ordering_for_equivalent_family
         members.reverse();
     }
 
-    let signed_a = TestOrderSigner::default().sign_family(&plan_a).unwrap();
-    let signed_b = TestOrderSigner::default().sign_family(&plan_b).unwrap();
+    let signed_a = TestOrderSigner.sign_family(&plan_a).unwrap();
+    let signed_b = TestOrderSigner.sign_family(&plan_b).unwrap();
 
     assert_eq!(signed_a.plan_id, signed_b.plan_id);
     assert_eq!(signed_a.members, signed_b.members);
@@ -60,17 +58,33 @@ fn deterministic_test_signer_canonicalizes_member_ordering_for_equivalent_family
 }
 
 #[test]
-fn live_sink_signs_negrisk_family_submit_plans_when_signer_is_configured() {
+fn live_sink_signs_negrisk_family_submit_plans_when_signer_and_hook_are_configured() {
     let called = Arc::new(AtomicUsize::new(0));
     let signer = Arc::new(SpySigner {
-        inner: TestOrderSigner::default(),
+        inner: TestOrderSigner,
         called: called.clone(),
     });
-    let sink = LiveVenueSink::with_order_signer(signer);
+    let sink = LiveVenueSink::with_order_signer_and_hook(signer, Arc::new(NoopSignedFamilyHook));
 
     let receipt = sink.execute(&sample_family_plan(), &live_attempt()).unwrap();
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
     assert_eq!(called.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn live_sink_rejects_negrisk_family_submit_plans_when_hook_is_missing() {
+    let called = Arc::new(AtomicUsize::new(0));
+    let sink = LiveVenueSink::with_order_signer(Arc::new(SpySigner {
+        inner: TestOrderSigner,
+        called: called.clone(),
+    }));
+
+    let err = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap_err();
+
+    assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+    assert_eq!(called.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -99,7 +113,7 @@ fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submit
         last_plan_id: Arc::new(std::sync::Mutex::new(None)),
         last_member_count: Arc::new(std::sync::Mutex::new(None)),
     });
-    let signer = Arc::new(TestOrderSigner::default());
+    let signer = Arc::new(TestOrderSigner);
     let sink = LiveVenueSink::with_order_signer_and_hook(signer, hook.clone());
 
     let plan = sample_family_plan();
@@ -123,7 +137,7 @@ fn live_sink_propagates_hook_errors_for_negrisk_family_submits() {
         called: hook_called.clone(),
     });
     let signer = Arc::new(SpySigner {
-        inner: TestOrderSigner::default(),
+        inner: TestOrderSigner,
         called: sign_called.clone(),
     });
     let sink = LiveVenueSink::with_order_signer_and_hook(signer, hook);
@@ -186,9 +200,12 @@ fn live_sink_does_not_forward_signed_family_submission_for_non_negrisk_plans() {
 #[test]
 fn live_sink_propagates_signer_error_for_negrisk_family_submit_plans() {
     let called = Arc::new(AtomicUsize::new(0));
-    let sink = LiveVenueSink::with_order_signer(Arc::new(RejectingSigner {
-        called: called.clone(),
-    }));
+    let sink = LiveVenueSink::with_order_signer_and_hook(
+        Arc::new(RejectingSigner {
+            called: called.clone(),
+        }),
+        Arc::new(NoopSignedFamilyHook),
+    );
 
     let err = sink
         .execute(&sample_family_plan(), &live_attempt())
@@ -289,6 +306,19 @@ impl SignedFamilyHook for SpySignedFamilyHook {
         self.called.fetch_add(1, Ordering::SeqCst);
         *self.last_plan_id.lock().unwrap() = Some(signed.plan_id.clone());
         *self.last_member_count.lock().unwrap() = Some(signed.members.len());
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct NoopSignedFamilyHook;
+
+impl SignedFamilyHook for NoopSignedFamilyHook {
+    fn on_signed_family(
+        &self,
+        _signed: &execution::signing::SignedFamilySubmission,
+        _attempt: &ExecutionAttemptContext,
+    ) -> Result<(), SignedFamilyHookError> {
         Ok(())
     }
 }

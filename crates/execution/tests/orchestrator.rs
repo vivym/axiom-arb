@@ -7,7 +7,7 @@ use execution::{
     attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     plans::ExecutionPlan,
-    sink::{LiveVenueSink, ShadowVenueSink},
+    sink::{LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError},
     TestOrderSigner,
 };
 use rust_decimal::Decimal;
@@ -126,14 +126,29 @@ fn reduce_only_mode_refuses_neg_risk_family_submission_plans() {
 
 #[test]
 fn recovery_only_mode_allows_neg_risk_family_submission_once_it_reaches_execution() {
-    let orchestrator =
-        ExecutionOrchestrator::new(LiveVenueSink::with_order_signer(Arc::new(TestOrderSigner)));
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::with_order_signer_and_hook(
+        Arc::new(TestOrderSigner),
+        Arc::new(NoopSignedFamilyHook),
+    ));
 
     let receipt = orchestrator
         .execute(&sample_negrisk_planning_input(ExecutionMode::RecoveryOnly))
         .unwrap();
 
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+}
+
+#[derive(Debug)]
+struct NoopSignedFamilyHook;
+
+impl SignedFamilyHook for NoopSignedFamilyHook {
+    fn on_signed_family(
+        &self,
+        _signed: &execution::signing::SignedFamilySubmission,
+        _attempt: &execution::ExecutionAttemptContext,
+    ) -> Result<(), SignedFamilyHookError> {
+        Ok(())
+    }
 }
 
 #[test]

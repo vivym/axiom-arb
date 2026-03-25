@@ -119,10 +119,17 @@ impl VenueSink for LiveVenueSink {
         ensure_live_sink_mode(plan, attempt.execution_mode)?;
 
         if let ExecutionPlan::NegRiskSubmitFamily { .. } = plan {
-            // Fail-closed: neg-risk family submit plans must never reach "Succeeded" without a signer.
+            // Fail-closed: neg-risk family submit plans must never reach "Succeeded" without both a
+            // signer and a downstream consumer hook.
             let signer = self.order_signer.as_ref().ok_or_else(|| VenueSinkError::Rejected {
                 reason: "missing order signer for NegRiskSubmitFamily".to_owned(),
             })?;
+            let hook =
+                self.signed_family_hook
+                    .as_ref()
+                    .ok_or_else(|| VenueSinkError::Rejected {
+                        reason: "missing signed family hook for NegRiskSubmitFamily".to_owned(),
+                    })?;
 
             // Narrow plumbing hook for Phase 3b neg-risk live submit: sign the planned orders
             // deterministically. Non-neg-risk plans must remain unaffected by signer/hook configuration.
@@ -130,12 +137,10 @@ impl VenueSink for LiveVenueSink {
                 reason: format!("signing error: {err:?}"),
             })?;
 
-            if let Some(hook) = &self.signed_family_hook {
-                hook.on_signed_family(&signed, attempt)
-                    .map_err(|err| VenueSinkError::Rejected {
-                        reason: format!("signed-family hook error: {err:?}"),
-                    })?;
-            }
+            hook.on_signed_family(&signed, attempt)
+                .map_err(|err| VenueSinkError::Rejected {
+                    reason: format!("signed-family hook error: {err:?}"),
+                })?;
         }
 
         Ok(ExecutionReceipt {

@@ -145,5 +145,5 @@ fn sample_signed_negrisk_family_submission() -> execution::signing::SignedFamily
             quantity: Decimal::new(10, 0),
         }],
     };
-    TestOrderSigner::default().sign_family(&plan).unwrap()
+    TestOrderSigner.sign_family(&plan).unwrap()
 }
