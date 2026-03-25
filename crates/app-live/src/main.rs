@@ -28,20 +28,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    let neg_risk_live_targets = load_neg_risk_live_targets_env(app_mode)?;
-    let neg_risk_live_approved_families =
-        load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV, app_mode)?;
-    let neg_risk_live_ready_families =
-        load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV, app_mode)?;
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
-        AppRuntimeMode::Live => run_live_with_neg_risk_live_targets(
-            &source,
-            neg_risk_live_targets,
-            neg_risk_live_approved_families,
-            neg_risk_live_ready_families,
-        ),
+        AppRuntimeMode::Live => {
+            let neg_risk_live_targets = load_neg_risk_live_targets_env()?;
+            let neg_risk_live_approved_families =
+                load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
+            let neg_risk_live_ready_families =
+                load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
+            run_live_with_neg_risk_live_targets(
+                &source,
+                neg_risk_live_targets,
+                neg_risk_live_approved_families,
+                neg_risk_live_ready_families,
+            )
+        }
     };
     let recorder = observability.recorder();
     recorder.record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
@@ -86,13 +88,10 @@ fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
 }
 
 fn load_neg_risk_live_targets_env(
-    app_mode: AppRuntimeMode,
 ) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, Box<dyn std::error::Error>> {
     match env::var(NEG_RISK_LIVE_TARGETS_ENV) {
-        Ok(value) if matches!(app_mode, AppRuntimeMode::Live) => {
-            Ok(load_neg_risk_live_targets(Some(value.as_str()))?)
-        }
-        Ok(_) | Err(env::VarError::NotPresent) => Ok(BTreeMap::new()),
+        Ok(value) => Ok(load_neg_risk_live_targets(Some(value.as_str()))?),
+        Err(env::VarError::NotPresent) => Ok(BTreeMap::new()),
         Err(env::VarError::NotUnicode(_)) => Err(format!(
             "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
         )
@@ -102,16 +101,15 @@ fn load_neg_risk_live_targets_env(
 
 fn load_family_scope_env(
     var_name: &str,
-    app_mode: AppRuntimeMode,
 ) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
     match env::var(var_name) {
-        Ok(value) if matches!(app_mode, AppRuntimeMode::Live) => Ok(value
+        Ok(value) => Ok(value
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .collect()),
-        Ok(_) | Err(env::VarError::NotPresent) => Ok(BTreeSet::new()),
+        Err(env::VarError::NotPresent) => Ok(BTreeSet::new()),
         Err(env::VarError::NotUnicode(_)) => {
             Err(format!("invalid value for {var_name}: value is not valid UTF-8").into())
         }

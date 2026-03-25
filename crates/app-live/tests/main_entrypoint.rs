@@ -211,6 +211,36 @@ fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn paper_entrypoint_ignores_non_utf8_live_only_env_vars() {
+    let cases = [
+        (
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+            Option::<OsString>::None,
+            Option::<OsString>::None,
+        ),
+        (
+            Option::<OsString>::None,
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+            Option::<OsString>::None,
+        ),
+        (
+            Option::<OsString>::None,
+            Option::<OsString>::None,
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+        ),
+    ];
+
+    for (targets, approved, ready) in cases {
+        let output = app_live_output_raw_env("paper", targets, approved, ready);
+        assert!(
+            output.status.success(),
+            "paper mode should ignore live-only env vars"
+        );
+    }
+}
+
 #[test]
 fn live_entrypoint_boots_without_neg_risk_target_config() {
     let output = app_live_output("live", None);
