@@ -52,6 +52,7 @@ pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
     (captured, result)
 }
 
+#[allow(dead_code)]
 pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -61,6 +62,7 @@ pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
     PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
 }
 
+#[allow(dead_code)]
 pub fn sample_builder_relayer_auth() -> RelayerAuth<'static> {
     RelayerAuth::BuilderApiKey {
         api_key: "builder-key-1",
@@ -131,6 +133,7 @@ pub fn sample_safe_auth() -> L2AuthHeaders<'static> {
     }
 }
 
+#[allow(dead_code)]
 pub struct MockServer {
     base_url: Url,
     #[allow(dead_code)]
@@ -139,6 +142,7 @@ pub struct MockServer {
     handle: Option<thread::JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl MockServer {
     pub fn spawn(status_line: &str, body: &str) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");

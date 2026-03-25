@@ -23,7 +23,10 @@ fn observability_conventions_define_stable_span_names_and_field_keys() {
 #[test]
 fn execution_recovery_and_relayer_conventions_are_repo_owned() {
     assert_eq!(span_names::EXECUTION_ATTEMPT, "axiom.execution.attempt");
-    assert_eq!(span_names::APP_RECOVERY_DIVERGENCE, "axiom.app.recovery.divergence");
+    assert_eq!(
+        span_names::APP_RECOVERY_DIVERGENCE,
+        "axiom.app.recovery.divergence"
+    );
     assert_eq!(span_names::VENUE_RELAYER_POLL, "axiom.venue.relayer.poll");
 
     assert_eq!(field_keys::EXECUTION_MODE, "execution_mode");

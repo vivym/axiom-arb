@@ -235,11 +235,9 @@ fn resume_missing_durable_rollout_evidence_does_not_record_divergence_signal() {
             .counter(observability.metrics().divergence_count.key()),
         None
     );
-    assert!(
-        captured_spans
-            .iter()
-            .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE)
-    );
+    assert!(captured_spans
+        .iter()
+        .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE));
 }
 
 #[test]
@@ -266,11 +264,9 @@ fn resume_missing_live_attempt_anchors_does_not_record_divergence_signal() {
             .counter(observability.metrics().divergence_count.key()),
         None
     );
-    assert!(
-        captured_spans
-            .iter()
-            .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE)
-    );
+    assert!(captured_spans
+        .iter()
+        .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE));
 }
 
 #[derive(Debug, Clone)]
