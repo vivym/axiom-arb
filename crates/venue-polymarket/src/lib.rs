@@ -23,6 +23,7 @@ pub use orders::{
     build_post_order_request_from_signed_member, OrderSide, OrderType, PostOrder,
     PostOrderBuildError, PostOrderRequest, PostOrderTransport,
 };
+pub(crate) use relayer::summarize_recent_transactions;
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
     BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestError,

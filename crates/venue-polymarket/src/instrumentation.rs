@@ -5,7 +5,8 @@ use observability::{
 };
 
 use crate::{
-    HeartbeatReconcileReason, OrderHeartbeatState, WsChannelKind, WsSessionEvent, WsSessionStatus,
+    summarize_recent_transactions, HeartbeatReconcileReason, OrderHeartbeatState,
+    RelayerTransaction, WsChannelKind, WsSessionEvent, WsSessionStatus,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -99,5 +100,28 @@ impl VenueProducerInstrumentation {
         }
 
         span.in_scope(|| {});
+    }
+
+    pub fn record_relayer_transactions(
+        &self,
+        transactions: &[RelayerTransaction],
+        observed_at: DateTime<Utc>,
+    ) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        let (relayer_tx_count, pending_tx_count, pending_age_seconds) =
+            summarize_recent_transactions(transactions, observed_at);
+
+        recorder.record_relayer_pending_age(pending_age_seconds);
+
+        tracing::info_span!(
+            span_names::VENUE_RELAYER_POLL,
+            relayer_tx_count = relayer_tx_count,
+            pending_tx_count = pending_tx_count,
+            pending_age_seconds = pending_age_seconds,
+        )
+        .in_scope(|| {});
     }
 }
