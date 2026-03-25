@@ -1,8 +1,12 @@
 use std::{env, process, str::FromStr};
 
-use app_live::{run_live, run_paper, AppRuntimeMode, StaticSnapshotSource};
+use app_live::{
+    load_neg_risk_live_targets, run_live, run_paper, AppRuntimeMode, StaticSnapshotSource,
+};
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
+
+const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
 
 fn main() {
     if let Err(error) = run() {
@@ -17,6 +21,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
+    if matches!(app_mode, AppRuntimeMode::Live) {
+        let neg_risk_live_targets = env::var(NEG_RISK_LIVE_TARGETS_ENV).ok();
+        let _neg_risk_live_targets = load_neg_risk_live_targets(neg_risk_live_targets.as_deref())?;
+    }
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
