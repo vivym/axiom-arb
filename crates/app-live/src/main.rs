@@ -22,8 +22,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     if matches!(app_mode, AppRuntimeMode::Live) {
-        let neg_risk_live_targets = env::var(NEG_RISK_LIVE_TARGETS_ENV).ok();
-        let _neg_risk_live_targets = load_neg_risk_live_targets(neg_risk_live_targets.as_deref())?;
+        validate_neg_risk_live_targets_env()?;
     }
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
@@ -63,5 +62,19 @@ fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
         RuntimeMode::Degraded => "degraded",
         RuntimeMode::NoNewRisk => "no_new_risk",
         RuntimeMode::GlobalHalt => "global_halt",
+    }
+}
+
+fn validate_neg_risk_live_targets_env() -> Result<(), Box<dyn std::error::Error>> {
+    match env::var(NEG_RISK_LIVE_TARGETS_ENV) {
+        Ok(value) => {
+            let _ = load_neg_risk_live_targets(Some(value.as_str()))?;
+            Ok(())
+        }
+        Err(env::VarError::NotPresent) => Ok(()),
+        Err(env::VarError::NotUnicode(_)) => Err(format!(
+            "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
+        )
+        .into()),
     }
 }

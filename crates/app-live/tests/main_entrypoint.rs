@@ -1,5 +1,8 @@
 use observability::span_names;
-use std::{path::PathBuf, process::Command};
+use std::{ffi::OsString, path::PathBuf, process::Command};
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 #[test]
 fn binary_entrypoint_emits_structured_bootstrap_log() {
@@ -65,6 +68,30 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
 }
 
 #[test]
+fn paper_entrypoint_ignores_invalid_neg_risk_target_config() {
+    let output = app_live_output(
+        "paper",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              },
+            ]
+            "#,
+        ),
+    );
+
+    assert!(
+        output.status.success(),
+        "paper mode should ignore live config"
+    );
+}
+
+#[test]
 fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     let output = app_live_output(
         "live",
@@ -101,11 +128,38 @@ fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
+    let output = app_live_output_raw_env("live", Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])));
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for non-UTF-8 neg-risk live target config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid value for AXIOM_NEG_RISK_LIVE_TARGETS"),
+        "{combined}"
+    );
+}
+
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {
+    app_live_output_raw_env(app_mode, neg_risk_live_targets.map(OsString::from))
+}
+
+fn app_live_output_raw_env(
+    app_mode: &str,
+    neg_risk_live_targets: Option<impl Into<OsString>>,
+) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);
     if let Some(value) = neg_risk_live_targets {
-        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value);
+        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value.into());
     }
     command.output().expect("app-live should run")
 }
