@@ -122,20 +122,14 @@ fn reduce_only_mode_refuses_neg_risk_family_submission_plans() {
 }
 
 #[test]
-fn recovery_only_mode_refuses_strategy_originated_neg_risk_family_submission_plans() {
+fn recovery_only_mode_allows_neg_risk_family_submission_once_it_reaches_execution() {
     let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
 
-    let err = orchestrator
-        .plan(&sample_negrisk_planning_input(ExecutionMode::RecoveryOnly))
-        .unwrap_err();
+    let receipt = orchestrator
+        .execute(&sample_negrisk_planning_input(ExecutionMode::RecoveryOnly))
+        .unwrap();
 
-    assert!(matches!(
-        err,
-        execution::ExecutionError::ModeViolation {
-            execution_mode: ExecutionMode::RecoveryOnly,
-            plan: ExecutionPlan::NegRiskSubmitFamily { .. },
-        }
-    ));
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
 }
 
 #[test]
