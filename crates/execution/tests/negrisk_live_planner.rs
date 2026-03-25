@@ -107,6 +107,26 @@ fn neg_risk_family_plan_id_is_canonical_across_member_order_and_decimal_scale() 
     assert_eq!(canonical.plan_id(), reordered_and_scaled.plan_id());
 }
 
+#[test]
+fn planner_canonicalizes_member_order_before_returning_family_plan() {
+    let request = sample_negrisk_request(ExecutionMode::Live, "family-a");
+    let mut config = sample_family_target("family-a");
+    config.members.reverse();
+
+    let plan = execution::negrisk::plan_family_submission(&request, &config).unwrap();
+
+    match plan {
+        ExecutionPlan::NegRiskSubmitFamily { members, .. } => {
+            assert_eq!(members.len(), 2);
+            assert_eq!(members[0].condition_id, ConditionId::from("condition-1"));
+            assert_eq!(members[0].token_id, TokenId::from("token-1"));
+            assert_eq!(members[1].condition_id, ConditionId::from("condition-2"));
+            assert_eq!(members[1].token_id, TokenId::from("token-2"));
+        }
+        other => panic!("unexpected plan: {other:?}"),
+    }
+}
+
 fn sample_negrisk_request(execution_mode: ExecutionMode, scope: &str) -> ExecutionRequest {
     ExecutionRequest {
         request_id: format!("request-{scope}-{execution_mode:?}"),
