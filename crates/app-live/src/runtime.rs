@@ -121,6 +121,10 @@ impl AppRuntime {
         self.store.mode_overlay()
     }
 
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.store.pending_reconcile_count()
+    }
+
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
         let report = bootstrap::reconcile(&mut self.store, snapshot);
         self.anchor_baseline_if_ready(report.succeeded);
@@ -178,11 +182,21 @@ impl AppRuntime {
             }
         }
 
-        self.store.restore_reconciled_policy();
         if reconcile_required {
+            self.store.restore_reconciled_policy();
             self.store.mark_reconcile_required();
+        } else if self.store.last_applied_journal_seq().is_none() {
+            // An empty committed history still needs a baseline anchor so restart can
+            // validate journal progress and re-publish the synthetic snapshot-0 boundary.
+            self.store.mark_reconciled_after_restore(0);
+        } else {
+            self.store.restore_reconciled_policy();
         }
         Ok(())
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.store.clear_pending_reconcile_after_restore();
     }
 
     fn anchor_baseline_if_ready(&mut self, reconcile_succeeded: bool) {

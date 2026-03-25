@@ -21,7 +21,7 @@ fn recovery_scope_lock_blocks_nested_child_scopes_without_cross_variant_aliasing
 
 #[test]
 fn ambiguous_attempt_emits_recovery_intent_or_pending_reconcile() {
-    let coordinator = RecoveryCoordinator::default();
+    let coordinator = RecoveryCoordinator;
     let outputs = coordinator.on_failed_ambiguous(sample_ambiguous_attempt());
 
     assert_eq!(
@@ -39,7 +39,7 @@ fn ambiguous_attempt_emits_recovery_intent_or_pending_reconcile() {
 
 #[test]
 fn stable_business_plan_id_is_preserved_in_recovery_scope() {
-    let coordinator = RecoveryCoordinator::default();
+    let coordinator = RecoveryCoordinator;
     let outputs = coordinator.on_failed_ambiguous(sample_stable_attempt());
 
     assert_eq!(
@@ -65,10 +65,5 @@ fn sample_ambiguous_attempt() -> ExecutionAttempt {
 }
 
 fn sample_stable_attempt() -> ExecutionAttempt {
-    ExecutionAttempt::new(
-        "attempt-2",
-        "redeem-resolved:condition-12",
-        "snapshot-2",
-        2,
-    )
+    ExecutionAttempt::new("attempt-2", "redeem-resolved:condition-12", "snapshot-2", 2)
 }

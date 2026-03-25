@@ -10,4 +10,4 @@ pub use input_tasks::InputTaskEvent;
 pub use runtime::{
     run_live, run_paper, AppRunResult, AppRuntime, AppRuntimeMode, ParseAppRuntimeModeError,
 };
-pub use supervisor::{AppSupervisor, SupervisorError, SupervisorSummary};
+pub use supervisor::{AppSupervisor, NegRiskRolloutEvidence, SupervisorError, SupervisorSummary};

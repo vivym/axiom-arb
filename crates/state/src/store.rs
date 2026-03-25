@@ -103,11 +103,8 @@ impl StateStore {
         self.state_version = committed_state_version;
         self.last_consumed_journal_seq = Some(committed_journal_seq);
         self.last_applied_journal_seq = Some(committed_journal_seq);
-        self.fullset_anchor = Some(FullSetAnchor {
-            state_version: committed_state_version,
-            committed_journal_seq,
-            open_orders: self.current_open_order_ids(),
-        });
+        self.rebuild_fullset_anchor(committed_journal_seq);
+        self.pending_refs.clear();
         self.first_reconcile_succeeded = true;
         self.apply_policy(reconciled_policy());
     }
@@ -116,13 +113,10 @@ impl StateStore {
         if self.last_applied_journal_seq.is_none() {
             self.last_consumed_journal_seq = Some(baseline_journal_seq);
             self.last_applied_journal_seq = Some(baseline_journal_seq);
-            self.fullset_anchor = Some(FullSetAnchor {
-                state_version: self.state_version,
-                committed_journal_seq: baseline_journal_seq,
-                open_orders: self.current_open_order_ids(),
-            });
+            self.rebuild_fullset_anchor(baseline_journal_seq);
         }
 
+        self.pending_refs.clear();
         self.first_reconcile_succeeded = true;
         self.apply_policy(reconciled_policy());
     }
@@ -135,6 +129,13 @@ impl StateStore {
     pub fn mark_reconcile_required(&mut self) {
         self.first_reconcile_succeeded = true;
         self.enter_reconciling();
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.pending_refs.clear();
+        if self.first_reconcile_succeeded {
+            self.apply_policy(reconciled_policy());
+        }
     }
 
     pub fn mode(&self) -> RuntimeMode {
@@ -174,6 +175,10 @@ impl StateStore {
 
     pub fn allows_automatic_repair(&self) -> bool {
         allows_automatic_repair(self.first_reconcile_succeeded, self.runtime_mode)
+    }
+
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.pending_refs.len()
     }
 
     pub fn open_orders(&self) -> &HashMap<OrderId, Order> {
@@ -296,6 +301,10 @@ impl StateStore {
             .cloned()
             .map(|tx| (tx.tx_id.clone(), tx))
             .collect();
+        self.pending_refs.clear();
+        if let Some(committed_journal_seq) = self.last_applied_journal_seq {
+            self.rebuild_fullset_anchor(committed_journal_seq);
+        }
 
         let promoted_from_bootstrap = !self.first_reconcile_succeeded;
 
@@ -350,16 +359,20 @@ impl StateStore {
         self.state_version += 1;
         self.last_applied_journal_seq = Some(journal_seq);
         self.applied_fact_journal.insert(fact_key, journal_seq);
-        self.fullset_anchor = Some(FullSetAnchor {
-            state_version: self.state_version,
-            committed_journal_seq: journal_seq,
-            open_orders: self.current_open_order_ids(),
-        });
+        self.rebuild_fullset_anchor(journal_seq);
         self.state_version
     }
 
     pub(crate) fn record_pending_ref(&mut self, pending_ref: PendingRef) {
         self.pending_refs.insert(pending_ref.0);
+    }
+
+    fn rebuild_fullset_anchor(&mut self, committed_journal_seq: i64) {
+        self.fullset_anchor = Some(FullSetAnchor {
+            state_version: self.state_version,
+            committed_journal_seq,
+            open_orders: self.current_open_order_ids(),
+        });
     }
 }
 

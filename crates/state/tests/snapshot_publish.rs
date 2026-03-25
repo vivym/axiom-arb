@@ -3,7 +3,37 @@ use domain::{
     ConditionId, ExternalFactEvent, MarketId, Order, OrderId, SettlementState, SignedOrderIdentity,
     SubmissionState, TokenId, VenueOrderState,
 };
-use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore};
+use state::{
+    NegRiskFamilyRolloutReadiness, NegRiskView, ProjectionReadiness, PublishedSnapshot,
+    StateApplier, StateStore,
+};
+
+#[test]
+fn successful_reconcile_reanchors_fullset_before_publication() {
+    let mut store = sample_store_with_anchored_fullset();
+    let report = store.reconcile(state::RemoteSnapshot {
+        open_orders: vec![sample_order("order-1", "hash-1")],
+        ..state::RemoteSnapshot::empty()
+    });
+    assert!(report.succeeded);
+
+    let snapshot = PublishedSnapshot::from_store(
+        &store,
+        ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-17"),
+    );
+
+    assert_eq!(snapshot.snapshot_id, "snapshot-17");
+    assert_eq!(snapshot.state_version, 1);
+    assert_eq!(snapshot.committed_journal_seq, 17);
+    assert!(snapshot.fullset_ready);
+    assert_eq!(
+        snapshot
+            .fullset
+            .as_ref()
+            .map(|view| view.open_orders.clone()),
+        Some(vec!["order-1".to_owned()])
+    );
+}
 
 #[test]
 fn fullset_snapshot_publish_does_not_wait_for_negrisk_projection() {
@@ -76,6 +106,33 @@ fn unsupported_negrisk_readiness_is_downgraded_before_publication() {
     assert!(snapshot.negrisk.is_none());
 }
 
+#[test]
+fn published_snapshot_exposes_family_level_rollout_readiness() {
+    let snapshot = PublishedSnapshot {
+        snapshot_id: "snapshot-12".to_owned(),
+        state_version: 12,
+        committed_journal_seq: 44,
+        fullset_ready: true,
+        negrisk_ready: true,
+        fullset: None,
+        negrisk: Some(NegRiskView {
+            snapshot_id: "snapshot-12".to_owned(),
+            state_version: 12,
+            families: vec![NegRiskFamilyRolloutReadiness {
+                family_id: "family-a".to_owned(),
+                shadow_parity_ready: true,
+                recovery_ready: true,
+                replay_drift_ready: false,
+                fault_injection_ready: true,
+                conversion_path_ready: true,
+                halt_semantics_ready: true,
+            }],
+        }),
+    };
+
+    assert!(!snapshot.negrisk.as_ref().unwrap().families[0].replay_drift_ready);
+}
+
 fn sample_snapshot(snapshot_id: &str) -> PublishedSnapshot {
     let mut store = StateStore::new();
     store.record_local_order(sample_order("order-9", "hash-9"));
@@ -101,7 +158,7 @@ fn apply_event(store: &mut StateStore, journal_seq: i64) {
     let event = ExternalFactEvent::new(
         "market_ws",
         "session-1",
-        &format!("evt-{journal_seq}"),
+        format!("evt-{journal_seq}"),
         "v1",
         Utc.with_ymd_and_hms(2026, 3, 24, 10, 0, 0).unwrap(),
     );

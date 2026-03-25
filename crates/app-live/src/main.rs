@@ -34,6 +34,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         runtime_mode = ?result.runtime.runtime_mode(),
         fullset_mode = ?result.summary.fullset_mode,
         negrisk_mode = ?result.summary.negrisk_mode,
+        pending_reconcile_count = result.summary.pending_reconcile_count,
         published_snapshot_id = %result
             .summary
             .published_snapshot_id

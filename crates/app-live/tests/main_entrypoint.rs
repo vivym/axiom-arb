@@ -28,6 +28,7 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
     assert!(combined.contains("runtime_mode=Healthy"), "{combined}");
     assert!(combined.contains("fullset_mode=Live"), "{combined}");
     assert!(combined.contains("negrisk_mode=Shadow"), "{combined}");
+    assert!(combined.contains("pending_reconcile_count=0"), "{combined}");
     assert!(combined.contains("published_snapshot_id=snapshot-0"), "{combined}");
 }
 

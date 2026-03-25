@@ -56,6 +56,24 @@ fn runtime_metrics_expose_neg_risk_family_counts() {
 }
 
 #[test]
+fn runtime_metrics_expose_neg_risk_rollout_gate_counts() {
+    let metrics = RuntimeMetrics::default();
+
+    assert_eq!(
+        metrics.neg_risk_live_ready_family_count.key(),
+        MetricKey::new("axiom_neg_risk_live_ready_family_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_live_gate_block_count.key(),
+        MetricKey::new("axiom_neg_risk_live_gate_block_count")
+    );
+    assert_eq!(
+        metrics.neg_risk_rollout_parity_mismatch_count.key(),
+        MetricKey::new("axiom_neg_risk_rollout_parity_mismatch_total")
+    );
+}
+
+#[test]
 fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
     let metrics = RuntimeMetrics::default();
 
@@ -115,6 +133,9 @@ fn runtime_metrics_recorder_updates_registry() {
     recorder.record_neg_risk_family_excluded_count(3.0);
     recorder.record_neg_risk_family_halt_count(2.0);
     recorder.increment_neg_risk_metadata_refresh_count(7);
+    recorder.record_neg_risk_live_ready_family_count(4.0);
+    recorder.record_neg_risk_live_gate_block_count(5.0);
+    recorder.increment_neg_risk_rollout_parity_mismatch_count(2);
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
@@ -159,6 +180,18 @@ fn runtime_metrics_recorder_updates_registry() {
     assert_eq!(
         snapshot.counter(metrics.neg_risk_metadata_refresh_count.key()),
         Some(7)
+    );
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_live_ready_family_count.key()),
+        Some(4.0)
+    );
+    assert_eq!(
+        snapshot.gauge(metrics.neg_risk_live_gate_block_count.key()),
+        Some(5.0)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_rollout_parity_mismatch_count.key()),
+        Some(2)
     );
 }
 
