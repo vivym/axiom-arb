@@ -6,7 +6,9 @@ pub(crate) fn snapshot_id_for(state_version: u64) -> String {
     format!("snapshot-{state_version}")
 }
 
-pub(crate) fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> NegRiskRolloutEvidence {
+pub(crate) fn rollout_evidence_from_snapshot(
+    snapshot: &PublishedSnapshot,
+) -> NegRiskRolloutEvidence {
     let Some(negrisk) = snapshot.negrisk.as_ref() else {
         return NegRiskRolloutEvidence {
             snapshot_id: snapshot.snapshot_id.clone(),

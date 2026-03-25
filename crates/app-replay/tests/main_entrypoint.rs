@@ -78,7 +78,10 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_cli_args() {
 
     assert!(combined.contains("app-replay replay failed"), "{combined}");
     assert!(combined.contains(span_names::REPLAY_RUN), "{combined}");
-    assert!(combined.contains("missing required argument --from-seq"), "{combined}");
+    assert!(
+        combined.contains("missing required argument --from-seq"),
+        "{combined}"
+    );
 }
 
 fn app_replay_binary() -> PathBuf {

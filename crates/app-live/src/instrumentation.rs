@@ -27,7 +27,10 @@ impl AppInstrumentation {
         };
 
         let reason = reconcile_reason(attention);
-        tracing::debug!(attention_reason = reason.as_pair().1, "recorded reconcile attention");
+        tracing::debug!(
+            attention_reason = reason.as_pair().1,
+            "recorded reconcile attention"
+        );
         recorder.increment_reconcile_attention_total(
             1,
             MetricDimensions::new([MetricDimension::ReconcileReason(reason)]),

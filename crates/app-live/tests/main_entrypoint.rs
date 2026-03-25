@@ -53,7 +53,10 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     let combined = format!("{stdout}{stderr}");
 
-    assert!(combined.contains("ERROR app-live bootstrap failed"), "{combined}");
+    assert!(
+        combined.contains("ERROR app-live bootstrap failed"),
+        "{combined}"
+    );
     assert!(
         combined.contains("unsupported AXIOM_MODE 'invalid-mode'"),
         "{combined}"

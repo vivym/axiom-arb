@@ -6,8 +6,8 @@ use tracing::field;
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
     dispatch::{DispatchLoop, DispatchSummary},
-    instrumentation::AppInstrumentation,
     input_tasks::{InputTaskEvent, InputTaskQueue},
+    instrumentation::AppInstrumentation,
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
@@ -442,9 +442,13 @@ impl AppSupervisor {
 
         let summary = self.dispatcher.flush();
         if let Some(recorder) = &self.metrics_recorder {
-            recorder.record_dispatcher_backlog_count(self.dispatcher.pending_backlog_count() as f64);
+            recorder
+                .record_dispatcher_backlog_count(self.dispatcher.pending_backlog_count() as f64);
         }
-        span.record(field_keys::PROCESSED_COUNT, summary.coalesced_versions.len());
+        span.record(
+            field_keys::PROCESSED_COUNT,
+            summary.coalesced_versions.len(),
+        );
 
         let state_version = summary
             .fullset_last_ready_state_version

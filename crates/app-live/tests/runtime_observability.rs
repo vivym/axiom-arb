@@ -45,10 +45,10 @@ fn instrumentation_maps_reconcile_attention_into_repo_owned_dimensions() {
         ReconcileReason::IdentifierMismatch,
     )]);
     assert_eq!(
-        observability
-            .registry()
-            .snapshot()
-            .counter_with_dimensions(observability.metrics().reconcile_attention_total.key(), &dims),
+        observability.registry().snapshot().counter_with_dimensions(
+            observability.metrics().reconcile_attention_total.key(),
+            &dims
+        ),
         Some(1)
     );
 
@@ -57,7 +57,9 @@ fn instrumentation_maps_reconcile_attention_into_repo_owned_dimensions() {
         .find(|span| span.name == span_names::APP_RUNTIME_RECONCILE)
         .expect("reconcile span missing");
     assert_eq!(
-        reconcile_span.field(field_keys::APP_MODE).map(String::as_str),
+        reconcile_span
+            .field(field_keys::APP_MODE)
+            .map(String::as_str),
         Some("\"live\"")
     );
     assert_eq!(
@@ -72,13 +74,13 @@ fn instrumentation_maps_reconcile_attention_into_repo_owned_dimensions() {
 fn run_live_instrumented_uses_the_supplied_instrumentation_recorder() {
     let observability = bootstrap_observability("app-live-test");
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
-    let source = StaticSnapshotSource::new(
-        RemoteSnapshot::empty().with_attention(ReconcileAttention::IdentifierMismatch {
+    let source = StaticSnapshotSource::new(RemoteSnapshot::empty().with_attention(
+        ReconcileAttention::IdentifierMismatch {
             token_id: TokenId::from("token-yes"),
             expected_condition_id: ConditionId::from("condition-a"),
             remote_condition_id: ConditionId::from("condition-b"),
-        }),
-    );
+        },
+    ));
 
     let result = run_live_instrumented(&source, instrumentation);
 
@@ -87,10 +89,10 @@ fn run_live_instrumented_uses_the_supplied_instrumentation_recorder() {
         ReconcileReason::IdentifierMismatch,
     )]);
     assert_eq!(
-        observability
-            .registry()
-            .snapshot()
-            .counter_with_dimensions(observability.metrics().reconcile_attention_total.key(), &dims),
+        observability.registry().snapshot().counter_with_dimensions(
+            observability.metrics().reconcile_attention_total.key(),
+            &dims
+        ),
         Some(1)
     );
 }
@@ -221,7 +223,10 @@ impl Subscriber for CaptureSubscriber {
         true
     }
 
-    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> tracing::subscriber::Interest {
+    fn register_callsite(
+        &self,
+        _metadata: &'static Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
         tracing::subscriber::Interest::always()
     }
 
@@ -229,7 +234,9 @@ impl Subscriber for CaptureSubscriber {
         let raw_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = Id::from_u64(raw_id);
         let mut fields = BTreeMap::new();
-        let mut visitor = FieldVisitor { fields: &mut fields };
+        let mut visitor = FieldVisitor {
+            fields: &mut fields,
+        };
         attrs.record(&mut visitor);
 
         self.spans.lock().expect("capture lock poisoned").insert(

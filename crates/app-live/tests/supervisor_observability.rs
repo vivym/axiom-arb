@@ -41,7 +41,9 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
         Some("\"live\"")
     );
     assert_eq!(
-        resume_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        resume_span
+            .field(field_keys::BACKLOG_COUNT)
+            .map(String::as_str),
         Some("0")
     );
     assert_eq!(
@@ -51,11 +53,15 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
         Some("41")
     );
     assert_eq!(
-        resume_span.field(field_keys::STATE_VERSION).map(String::as_str),
+        resume_span
+            .field(field_keys::STATE_VERSION)
+            .map(String::as_str),
         Some("7")
     );
     assert_eq!(
-        resume_span.field(field_keys::SNAPSHOT_ID).map(String::as_str),
+        resume_span
+            .field(field_keys::SNAPSHOT_ID)
+            .map(String::as_str),
         Some("\"snapshot-7\"")
     );
 
@@ -64,11 +70,15 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
         .find(|span| span.name == span_names::APP_DISPATCH_FLUSH)
         .expect("dispatch flush span missing");
     assert_eq!(
-        flush_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        flush_span
+            .field(field_keys::BACKLOG_COUNT)
+            .map(String::as_str),
         Some("0")
     );
     assert_eq!(
-        flush_span.field(field_keys::SNAPSHOT_ID).map(String::as_str),
+        flush_span
+            .field(field_keys::SNAPSHOT_ID)
+            .map(String::as_str),
         Some("\"snapshot-7\"")
     );
 
@@ -81,7 +91,12 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
         Some(0.0)
     );
     assert_eq!(
-        snapshot.gauge(observability.metrics().neg_risk_live_ready_family_count.key()),
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_live_ready_family_count
+                .key()
+        ),
         Some(0.0)
     );
     assert_eq!(
@@ -112,11 +127,15 @@ fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
         .find(|span| span.name == span_names::APP_DISPATCH_FLUSH)
         .expect("dispatch flush span missing");
     assert_eq!(
-        flush_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        flush_span
+            .field(field_keys::BACKLOG_COUNT)
+            .map(String::as_str),
         Some("1")
     );
     assert_eq!(
-        flush_span.field(field_keys::STATE_VERSION).map(String::as_str),
+        flush_span
+            .field(field_keys::STATE_VERSION)
+            .map(String::as_str),
         Some("5")
     );
 
@@ -134,24 +153,25 @@ fn run_once_resets_rollout_gauges_when_bootstrap_publication_fails() {
     recorder.record_neg_risk_live_ready_family_count(7.0);
     recorder.record_neg_risk_live_gate_block_count(11.0);
 
-    let failing_snapshot = RemoteSnapshot::empty().with_attention(
-        ReconcileAttention::IdentifierMismatch {
+    let failing_snapshot =
+        RemoteSnapshot::empty().with_attention(ReconcileAttention::IdentifierMismatch {
             token_id: TokenId::from("token-yes"),
             expected_condition_id: ConditionId::from("condition-a"),
             remote_condition_id: ConditionId::from("condition-b"),
-        },
-    );
-    let mut supervisor = AppSupervisor::new_instrumented(
-        AppRuntimeMode::Live,
-        failing_snapshot,
-        recorder,
-    );
+        });
+    let mut supervisor =
+        AppSupervisor::new_instrumented(AppRuntimeMode::Live, failing_snapshot, recorder);
     let summary = supervisor.run_once().unwrap();
     let snapshot = observability.registry().snapshot();
 
     assert!(summary.neg_risk_rollout_evidence.is_none());
     assert_eq!(
-        snapshot.gauge(observability.metrics().neg_risk_live_ready_family_count.key()),
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_live_ready_family_count
+                .key()
+        ),
         Some(0.0)
     );
     assert_eq!(

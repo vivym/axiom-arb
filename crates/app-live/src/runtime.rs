@@ -9,8 +9,8 @@ use state::{
 use tracing::field;
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
-use crate::instrumentation::AppInstrumentation;
 use crate::input_tasks::InputTaskEvent;
+use crate::instrumentation::AppInstrumentation;
 use crate::supervisor::{AppSupervisor, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,7 +213,10 @@ impl AppRuntime {
         );
         span.record(field_keys::SNAPSHOT_ID, snapshot.snapshot_id.as_str());
         span.record(field_keys::STATE_VERSION, snapshot.state_version);
-        span.record(field_keys::COMMITTED_JOURNAL_SEQ, snapshot.committed_journal_seq);
+        span.record(
+            field_keys::COMMITTED_JOURNAL_SEQ,
+            snapshot.committed_journal_seq,
+        );
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
     }
