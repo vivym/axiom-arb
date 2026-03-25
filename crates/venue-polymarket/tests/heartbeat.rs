@@ -82,7 +82,10 @@ fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
     };
 
     assert_eq!(state.freshness_seconds(ts(10, 0, 31)), 31.0);
-    assert_eq!(HeartbeatReconcileReason::MissedHeartbeat.as_status(), "missed");
+    assert_eq!(
+        HeartbeatReconcileReason::MissedHeartbeat.as_status(),
+        "missed"
+    );
     assert_eq!(
         HeartbeatReconcileReason::InvalidHeartbeat.as_status(),
         "invalid"

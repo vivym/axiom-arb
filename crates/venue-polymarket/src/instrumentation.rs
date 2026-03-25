@@ -58,11 +58,7 @@ impl VenueProducerInstrumentation {
         });
     }
 
-    pub fn record_heartbeat_success(
-        &self,
-        state: &OrderHeartbeatState,
-        freshness_seconds: f64,
-    ) {
+    pub fn record_heartbeat_success(&self, state: &OrderHeartbeatState, freshness_seconds: f64) {
         let Some(recorder) = &self.recorder else {
             return;
         };

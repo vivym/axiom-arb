@@ -101,9 +101,10 @@ fn heartbeat_success_records_freshness_and_structured_status() {
         capture_spans(|| instrumentation.record_heartbeat_success(&state, freshness));
 
     assert_eq!(
-        observability.registry().snapshot().gauge(
-            observability.metrics().heartbeat_freshness.key()
-        ),
+        observability
+            .registry()
+            .snapshot()
+            .gauge(observability.metrics().heartbeat_freshness.key()),
         Some(freshness)
     );
 
@@ -145,9 +146,10 @@ fn disabled_instrumentation_emits_no_heartbeat_span_or_freshness_metric() {
     });
 
     assert_eq!(
-        observability.registry().snapshot().gauge(
-            observability.metrics().heartbeat_freshness.key()
-        ),
+        observability
+            .registry()
+            .snapshot()
+            .gauge(observability.metrics().heartbeat_freshness.key()),
         None
     );
     assert!(
@@ -172,16 +174,19 @@ fn missed_heartbeat_records_freshness_and_structured_status() {
     };
 
     let (captured_spans, reason) = capture_spans(|| {
-        let reason = monitor.reconcile_trigger(&mut state, ts(10, 0, 31)).unwrap();
+        let reason = monitor
+            .reconcile_trigger(&mut state, ts(10, 0, 31))
+            .unwrap();
         instrumentation.record_heartbeat_attention(&state, reason, ts(10, 0, 31));
         reason
     });
 
     assert_eq!(reason, HeartbeatReconcileReason::MissedHeartbeat);
     assert_eq!(
-        observability.registry().snapshot().gauge(
-            observability.metrics().heartbeat_freshness.key()
-        ),
+        observability
+            .registry()
+            .snapshot()
+            .gauge(observability.metrics().heartbeat_freshness.key()),
         Some(31.0)
     );
 

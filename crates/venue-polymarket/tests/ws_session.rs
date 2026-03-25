@@ -27,7 +27,10 @@ fn reconnect_after_disconnect_increments_counter_and_updates_connection_id() {
     assert_eq!(disconnected.status, WsSessionStatus::Disconnected);
     assert_eq!(disconnected.reconnect_total, 0);
     assert_eq!(disconnected.observed_at, ts(10, 0, 5));
-    assert_eq!(disconnected.disconnect_reason.as_deref(), Some("network_gap"));
+    assert_eq!(
+        disconnected.disconnect_reason.as_deref(),
+        Some("network_gap")
+    );
     assert!(!state.connected);
     assert_eq!(state.connection_id.as_deref(), Some("conn-1"));
     assert_eq!(state.reconnect_total, 0);
