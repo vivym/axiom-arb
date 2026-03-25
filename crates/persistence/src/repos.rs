@@ -1369,16 +1369,22 @@ impl ExecutionAttemptRepo {
                 attempt_id,
                 plan_id,
                 snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
                 execution_mode,
                 attempt_no,
                 idempotency_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(&row.attempt_id)
         .bind(&row.plan_id)
         .bind(&row.snapshot_id)
+        .bind(&row.route)
+        .bind(&row.scope)
+        .bind(&row.matched_rule_id)
         .bind(execution_mode_to_str(row.execution_mode))
         .bind(row.attempt_no)
         .bind(&row.idempotency_key)
@@ -1403,6 +1409,9 @@ impl ExecutionAttemptRepo {
                 attempt_id,
                 plan_id,
                 snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
                 execution_mode,
                 attempt_no,
                 idempotency_key
@@ -1841,6 +1850,9 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         attempt_id: row.try_get("attempt_id")?,
         plan_id: row.try_get("plan_id")?,
         snapshot_id: row.try_get("snapshot_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        matched_rule_id: row.try_get("matched_rule_id")?,
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,

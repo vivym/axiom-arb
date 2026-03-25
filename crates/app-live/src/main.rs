@@ -63,6 +63,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         fullset_mode = ?result.summary.fullset_mode,
         negrisk_mode = ?result.summary.negrisk_mode,
         neg_risk_live_attempt_count = result.summary.neg_risk_live_attempt_count,
+        neg_risk_live_state_source = result.summary.neg_risk_live_state_source.as_str(),
         pending_reconcile_count = result.summary.pending_reconcile_count,
         published_snapshot_id = %result
             .summary

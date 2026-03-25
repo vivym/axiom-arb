@@ -285,6 +285,10 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         combined.contains("neg_risk_live_attempt_count=1"),
         "{combined}"
     );
+    assert!(
+        combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
+        "{combined}"
+    );
 }
 
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {

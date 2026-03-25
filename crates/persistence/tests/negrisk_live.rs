@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    borrow::Cow,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use domain::ExecutionMode;
 use persistence::{
@@ -6,6 +9,7 @@ use persistence::{
     run_migrations, ExecutionAttemptRepo, LiveArtifactRepo, PersistenceError,
 };
 use serde_json::json;
+use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
@@ -81,6 +85,9 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode, plan_id: &str) -> Execu
         attempt_id: attempt_id.to_owned(),
         plan_id: plan_id.to_owned(),
         snapshot_id: "snapshot-7".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family:family-a".to_owned(),
+        matched_rule_id: Some("rule-neg-risk-submit".to_owned()),
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
@@ -96,6 +103,65 @@ fn sample_live_artifact(attempt_id: &str) -> LiveExecutionArtifactRow {
             "kind": "planned_order",
         }),
     }
+}
+
+async fn create_legacy_live_schema(pool: &PgPool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE execution_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            execution_mode TEXT NOT NULL CHECK (
+                execution_mode IN ('disabled', 'shadow', 'live', 'reduce_only', 'recovery_only')
+            ),
+            attempt_no INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            outcome TEXT,
+            payload JSONB NOT NULL DEFAULT '{}'::JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        CREATE TABLE live_execution_artifacts (
+            attempt_id TEXT NOT NULL REFERENCES execution_attempts (attempt_id),
+            stream TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (attempt_id, stream)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn audit_anchor_migrator() -> Migrator {
+    Migrator {
+        migrations: Cow::Owned(vec![Migration::new(
+            8,
+            Cow::Borrowed("execution_attempt_audit_anchor"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0008_execution_attempt_audit_anchor.sql"
+            )),
+            false,
+        )]),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+async fn apply_audit_anchor_migration(pool: &PgPool) {
+    audit_anchor_migrator().run(pool).await.unwrap();
 }
 
 #[tokio::test]
@@ -125,6 +191,72 @@ async fn live_artifacts_round_trip_with_attempt_anchor() {
         .await
         .unwrap();
     assert_eq!(rows, vec![sample_live_artifact("attempt-live-1")]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn legacy_negrisk_live_attempts_are_backfilled_from_plan_id() {
+    let db = TestDatabase::new().await;
+    create_legacy_live_schema(&db.pool).await;
+
+    let attempt_id = "attempt-legacy-live-1";
+    let plan_id = "request-bound:5:req-1:negrisk-submit-family:family-a:member-1";
+
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(plan_id)
+    .bind("snapshot-7")
+    .bind("live")
+    .bind(1_i32)
+    .bind("idem-legacy-live-1")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    LiveArtifactRepo
+        .append(&db.pool, sample_live_artifact(attempt_id))
+        .await
+        .unwrap();
+
+    apply_audit_anchor_migration(&db.pool).await;
+
+    let rows = ExecutionAttemptRepo
+        .list_live_attempts(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![ExecutionAttemptRow {
+            attempt_id: attempt_id.to_owned(),
+            plan_id: plan_id.to_owned(),
+            snapshot_id: "snapshot-7".to_owned(),
+            route: "neg-risk".to_owned(),
+            scope: "family-a".to_owned(),
+            matched_rule_id: None,
+            execution_mode: ExecutionMode::Live,
+            attempt_no: 1,
+            idempotency_key: "idem-legacy-live-1".to_owned(),
+        }]
+    );
+
+    let artifacts = LiveArtifactRepo
+        .list_for_attempt(&db.pool, attempt_id)
+        .await
+        .unwrap();
+    assert_eq!(artifacts, vec![sample_live_artifact(attempt_id)]);
 
     db.cleanup().await;
 }

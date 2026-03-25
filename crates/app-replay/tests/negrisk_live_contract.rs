@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    borrow::Cow,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use domain::ExecutionMode;
 use persistence::{
@@ -6,6 +9,7 @@ use persistence::{
     run_migrations, ExecutionAttemptRepo, LiveArtifactRepo,
 };
 use serde_json::json;
+use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 use app_replay::{load_negrisk_live_attempt_artifacts, NegRiskLiveAttemptArtifacts};
@@ -78,11 +82,19 @@ impl TestDatabase {
     }
 }
 
-fn sample_attempt(attempt_id: &str, mode: ExecutionMode, plan_id: &str) -> ExecutionAttemptRow {
+fn sample_attempt(
+    attempt_id: &str,
+    mode: ExecutionMode,
+    plan_id: &str,
+    route: &str,
+) -> ExecutionAttemptRow {
     ExecutionAttemptRow {
         attempt_id: attempt_id.to_owned(),
         plan_id: plan_id.to_owned(),
         snapshot_id: "snapshot-7".to_owned(),
+        route: route.to_owned(),
+        scope: "family:family-a".to_owned(),
+        matched_rule_id: Some("rule-negrisk-live".to_owned()),
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
@@ -109,6 +121,65 @@ fn artifact(attempt_id: &str, stream: &str, kind: &str) -> LiveExecutionArtifact
     }
 }
 
+async fn create_legacy_live_schema(pool: &PgPool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE execution_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            snapshot_id TEXT NOT NULL,
+            execution_mode TEXT NOT NULL CHECK (
+                execution_mode IN ('disabled', 'shadow', 'live', 'reduce_only', 'recovery_only')
+            ),
+            attempt_no INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            outcome TEXT,
+            payload JSONB NOT NULL DEFAULT '{}'::JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        CREATE TABLE live_execution_artifacts (
+            attempt_id TEXT NOT NULL REFERENCES execution_attempts (attempt_id),
+            stream TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (attempt_id, stream)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn audit_anchor_migrator() -> Migrator {
+    Migrator {
+        migrations: Cow::Owned(vec![Migration::new(
+            8,
+            Cow::Borrowed("execution_attempt_audit_anchor"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0008_execution_attempt_audit_anchor.sql"
+            )),
+            false,
+        )]),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+async fn apply_audit_anchor_migration(pool: &PgPool) {
+    audit_anchor_migrator().run(pool).await.unwrap();
+}
+
 #[tokio::test]
 async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts() {
     let db = TestDatabase::new().await;
@@ -124,6 +195,7 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
                     "req-1",
                     "negrisk-submit-family:family-a:condition-1:token-1:0.4:5",
                 ),
+                "neg-risk",
             ),
         )
         .await
@@ -136,6 +208,36 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
                 "attempt-non-negrisk-live-1",
                 ExecutionMode::Live,
                 &request_bound_plan_id("req-2", "fullset-buy-merge:condition-1"),
+                "fullset",
+            ),
+        )
+        .await
+        .unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-negrisk-route-only-live-1",
+                ExecutionMode::Live,
+                &request_bound_plan_id("req-2b", "fullset-buy-merge:condition-9"),
+                "neg-risk",
+            ),
+        )
+        .await
+        .unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-negrisk-plan-only-live-1",
+                ExecutionMode::Live,
+                &request_bound_plan_id(
+                    "req-2c",
+                    "negrisk-submit-family:family-z:condition-9:token-9:0.4:5",
+                ),
+                "fullset",
             ),
         )
         .await
@@ -151,6 +253,7 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
                     "req-3",
                     "negrisk-submit-family:family-b:condition-2:token-2:0.4:5",
                 ),
+                "neg-risk",
             ),
         )
         .await
@@ -163,26 +266,53 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
         )
         .await
         .unwrap();
+    LiveArtifactRepo
+        .append(
+            &db.pool,
+            artifact(
+                "attempt-negrisk-route-only-live-1",
+                "negrisk.audit",
+                "audit_trail",
+            ),
+        )
+        .await
+        .unwrap();
 
     let rows = load_negrisk_live_attempt_artifacts(&db.pool).await.unwrap();
 
     assert_eq!(
         rows,
-        vec![NegRiskLiveAttemptArtifacts {
-            attempt: sample_attempt(
-                "attempt-negrisk-live-1",
-                ExecutionMode::Live,
-                &request_bound_plan_id(
-                    "req-1",
-                    "negrisk-submit-family:family-a:condition-1:token-1:0.4:5",
+        vec![
+            NegRiskLiveAttemptArtifacts {
+                attempt: sample_attempt(
+                    "attempt-negrisk-live-1",
+                    ExecutionMode::Live,
+                    &request_bound_plan_id(
+                        "req-1",
+                        "negrisk-submit-family:family-a:condition-1:token-1:0.4:5",
+                    ),
+                    "neg-risk",
                 ),
-            ),
-            artifacts: vec![artifact(
-                "attempt-negrisk-live-1",
-                "negrisk.live",
-                "planned_order"
-            )],
-        }]
+                artifacts: vec![artifact(
+                    "attempt-negrisk-live-1",
+                    "negrisk.live",
+                    "planned_order"
+                )],
+            },
+            NegRiskLiveAttemptArtifacts {
+                attempt: sample_attempt(
+                    "attempt-negrisk-route-only-live-1",
+                    ExecutionMode::Live,
+                    &request_bound_plan_id("req-2b", "fullset-buy-merge:condition-9"),
+                    "neg-risk",
+                ),
+                artifacts: vec![artifact(
+                    "attempt-negrisk-route-only-live-1",
+                    "negrisk.audit",
+                    "audit_trail"
+                )],
+            },
+        ]
     );
 
     db.cleanup().await;
@@ -197,7 +327,12 @@ async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_dupli
         "req-4",
         "negrisk-submit-family:family-c:condition-3:token-3:0.4:5",
     );
-    let attempt = sample_attempt("attempt-negrisk-live-dup-1", ExecutionMode::Live, &plan_id);
+    let attempt = sample_attempt(
+        "attempt-negrisk-live-dup-1",
+        ExecutionMode::Live,
+        &plan_id,
+        "neg-risk",
+    );
 
     ExecutionAttemptRepo
         .append(&db.pool, &attempt)
@@ -238,6 +373,78 @@ async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_dupli
                 "negrisk.live",
                 "planned_order",
             )],
+        }]
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn negrisk_live_contract_keeps_legacy_negrisk_attempts_replay_visible_after_backfill() {
+    let db = TestDatabase::new().await;
+    create_legacy_live_schema(&db.pool).await;
+
+    let attempt_id = "attempt-legacy-live-contract-1";
+    let plan_id = "negrisk-submit-family:family-c:condition-3:token-3:0.4:5";
+
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(plan_id)
+    .bind("snapshot-7")
+    .bind("live")
+    .bind(1_i32)
+    .bind("idem-legacy-live-contract-1")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind(attempt_id)
+    .bind("negrisk.live")
+    .bind(json!({
+        "attempt_id": attempt_id,
+        "kind": "planned_order",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    apply_audit_anchor_migration(&db.pool).await;
+
+    let rows = load_negrisk_live_attempt_artifacts(&db.pool).await.unwrap();
+
+    assert_eq!(
+        rows,
+        vec![NegRiskLiveAttemptArtifacts {
+            attempt: ExecutionAttemptRow {
+                attempt_id: attempt_id.to_owned(),
+                plan_id: plan_id.to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family-c".to_owned(),
+                matched_rule_id: None,
+                execution_mode: ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: "idem-legacy-live-contract-1".to_owned(),
+            },
+            artifacts: vec![artifact(attempt_id, "negrisk.live", "planned_order")],
         }]
     );
 

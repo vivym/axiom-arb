@@ -29,7 +29,7 @@ pub async fn load_negrisk_live_attempt_artifacts(
         .list_live_attempts(pool)
         .await?
         .into_iter()
-        .filter(|attempt| stable_plan_scope(&attempt.plan_id).starts_with("negrisk-"))
+        .filter(|attempt| attempt.route == "neg-risk")
         .collect::<Vec<_>>();
     let artifacts_by_attempt = LiveArtifactRepo
         .list_for_attempts(
@@ -329,20 +329,6 @@ fn parse_i64(flag: &'static str, value: &str) -> Result<i64, ReplayArgsError> {
             flag,
             value: value.to_owned(),
         })
-}
-
-fn stable_plan_scope(plan_id: &str) -> &str {
-    if let Some(remainder) = plan_id.strip_prefix("request-bound:") {
-        if let Some((request_len, trailing)) = remainder.split_once(':') {
-            if let Ok(request_len) = request_len.parse::<usize>() {
-                if trailing.len() > request_len && trailing.as_bytes()[request_len] == b':' {
-                    return &trailing[request_len + 1..];
-                }
-            }
-        }
-    }
-
-    plan_id
 }
 
 fn increment(counts: &mut BTreeMap<String, u64>, key: &str) {
