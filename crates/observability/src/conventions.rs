@@ -17,6 +17,7 @@ pub mod field_keys {
     pub const BOOTSTRAP_STATUS: &str = "bootstrap_status";
     pub const PROCESSED_COUNT: &str = "processed_count";
     pub const LAST_JOURNAL_SEQ: &str = "last_journal_seq";
+    pub const COMMITTED_JOURNAL_SEQ: &str = "committed_journal_seq";
     pub const STATE_VERSION: &str = "state_version";
     pub const JOURNAL_SEQ: &str = "journal_seq";
     pub const SNAPSHOT_ID: &str = "snapshot_id";

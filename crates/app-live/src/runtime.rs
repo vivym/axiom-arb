@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use domain::{ExecutionMode, RuntimeMode, RuntimeOverlay};
+use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
 use state::{
     ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
@@ -11,8 +11,7 @@ use tracing::field;
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 use crate::instrumentation::AppInstrumentation;
 use crate::input_tasks::InputTaskEvent;
-use crate::snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for};
-use crate::supervisor::SupervisorSummary;
+use crate::supervisor::{AppSupervisor, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -212,7 +211,7 @@ impl AppRuntime {
         );
         span.record(field_keys::SNAPSHOT_ID, snapshot.snapshot_id.as_str());
         span.record(field_keys::STATE_VERSION, &snapshot.state_version);
-        span.record("committed_journal_seq", &snapshot.committed_journal_seq);
+        span.record(field_keys::COMMITTED_JOURNAL_SEQ, &snapshot.committed_journal_seq);
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
     }
@@ -293,29 +292,12 @@ fn run_with_mode<S>(
 where
     S: BootstrapSource,
 {
-    let mut runtime = AppRuntime::new_instrumented(app_mode, instrumentation);
-    let report = runtime.bootstrap_once(source);
-    let published_snapshot = runtime.publish_snapshot(&snapshot_id_for(runtime.state_version()));
-    let summary = SupervisorSummary {
-        fullset_mode: ExecutionMode::Live,
-        negrisk_mode: ExecutionMode::Shadow,
-        bootstrap_status: runtime.bootstrap_status(),
-        runtime_mode: runtime.runtime_mode(),
-        pending_reconcile_count: runtime.pending_reconcile_count(),
-        last_journal_seq: runtime.last_journal_seq().unwrap_or_default(),
-        last_state_version: runtime.state_version(),
-        published_snapshot_id: runtime.published_snapshot_id().map(str::to_owned),
-        published_snapshot_committed_journal_seq: runtime.published_snapshot_committed_journal_seq(),
-        neg_risk_rollout_evidence: published_snapshot
-            .as_ref()
-            .map(rollout_evidence_from_snapshot),
+    let supervisor = match instrumentation.recorder() {
+        Some(recorder) => AppSupervisor::new_instrumented(app_mode, source.snapshot(), recorder),
+        None => AppSupervisor::new(app_mode, source.snapshot()),
     };
 
-    AppRunResult {
-        runtime,
-        report,
-        summary,
-    }
+    supervisor.run_bootstrap()
 }
 
 fn apply_result_label(result: &ApplyResult) -> &'static str {

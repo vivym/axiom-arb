@@ -96,6 +96,21 @@ fn run_live_instrumented_uses_the_supplied_instrumentation_recorder() {
 }
 
 #[test]
+fn run_live_instrumented_records_supervisor_backlog_gauge() {
+    let observability = bootstrap_observability("app-live-test");
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
+    let source = StaticSnapshotSource::empty();
+
+    let _ = run_live_instrumented(&source, instrumentation);
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
+        Some(0.0)
+    );
+}
+
+#[test]
 fn publish_snapshot_records_span_identity_and_anchor_fields() {
     let (captured_spans, snapshot) = capture_spans(|| {
         let mut runtime = AppRuntime::new(AppRuntimeMode::Paper);
@@ -128,7 +143,7 @@ fn publish_snapshot_records_span_identity_and_anchor_fields() {
     );
     assert_eq!(
         publish_span
-            .field("committed_journal_seq")
+            .field(field_keys::COMMITTED_JOURNAL_SEQ)
             .map(String::as_str),
         Some("0")
     );

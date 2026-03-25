@@ -17,6 +17,10 @@ impl AppInstrumentation {
         }
     }
 
+    pub fn recorder(&self) -> Option<RuntimeMetricsRecorder> {
+        self.recorder.clone()
+    }
+
     pub fn record_reconcile_attention(&self, attention: &ReconcileAttention) {
         let Some(recorder) = &self.recorder else {
             return;
