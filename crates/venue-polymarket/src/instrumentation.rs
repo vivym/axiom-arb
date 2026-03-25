@@ -5,7 +5,7 @@ use observability::{
 };
 
 use crate::{
-    summarize_recent_transactions, HeartbeatReconcileReason, OrderHeartbeatState,
+    relayer::summarize_recent_transactions, HeartbeatReconcileReason, OrderHeartbeatState,
     RelayerTransaction, WsChannelKind, WsSessionEvent, WsSessionStatus,
 };
 

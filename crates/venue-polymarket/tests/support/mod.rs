@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{
     collections::BTreeMap,
     io::{Read, Write},
@@ -21,18 +19,21 @@ use tracing::{
 };
 use venue_polymarket::{L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CapturedSpan {
     pub name: String,
     pub fields: BTreeMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl CapturedSpan {
     pub fn field(&self, key: &str) -> Option<&String> {
         self.fields.get(key)
     }
 }
 
+#[allow(dead_code)]
 pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
     let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
     let subscriber = CaptureSubscriber {
@@ -69,6 +70,7 @@ pub fn sample_builder_relayer_auth() -> RelayerAuth<'static> {
     }
 }
 
+#[allow(dead_code)]
 pub fn sample_relayer_api_auth() -> RelayerAuth<'static> {
     RelayerAuth::RelayerApiKey {
         api_key: "relayer-key-1",
@@ -76,10 +78,12 @@ pub fn sample_relayer_api_auth() -> RelayerAuth<'static> {
     }
 }
 
+#[allow(dead_code)]
 pub fn sample_auth() -> L2AuthHeaders<'static> {
     sample_auth_with_funder("0xfunder")
 }
 
+#[allow(dead_code)]
 pub fn sample_auth_with_funder(funder_address: &'static str) -> L2AuthHeaders<'static> {
     L2AuthHeaders {
         signer: SignerContext {
@@ -95,6 +99,7 @@ pub fn sample_auth_with_funder(funder_address: &'static str) -> L2AuthHeaders<'s
     }
 }
 
+#[allow(dead_code)]
 pub fn sample_proxy_auth() -> L2AuthHeaders<'static> {
     L2AuthHeaders {
         signer: SignerContext {
@@ -110,6 +115,7 @@ pub fn sample_proxy_auth() -> L2AuthHeaders<'static> {
     }
 }
 
+#[allow(dead_code)]
 pub fn sample_safe_auth() -> L2AuthHeaders<'static> {
     L2AuthHeaders {
         signer: SignerContext {
@@ -127,7 +133,9 @@ pub fn sample_safe_auth() -> L2AuthHeaders<'static> {
 
 pub struct MockServer {
     base_url: Url,
+    #[allow(dead_code)]
     request_rx: mpsc::Receiver<String>,
+    #[allow(dead_code)]
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -180,6 +188,7 @@ impl MockServer {
         self.base_url.clone()
     }
 
+    #[allow(dead_code)]
     pub fn finish(mut self) -> String {
         let request = self
             .request_rx
@@ -194,12 +203,14 @@ impl MockServer {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct CaptureSubscriber {
     spans: Arc<Mutex<BTreeMap<u64, CapturedSpan>>>,
     next_id: Arc<AtomicU64>,
 }
 
+#[allow(dead_code)]
 impl Subscriber for CaptureSubscriber {
     fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
         true
@@ -260,10 +271,12 @@ impl Subscriber for CaptureSubscriber {
     }
 }
 
+#[allow(dead_code)]
 struct FieldVisitor<'a> {
     fields: &'a mut BTreeMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         self.fields
