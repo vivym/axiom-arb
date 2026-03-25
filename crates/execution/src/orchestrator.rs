@@ -92,10 +92,11 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         input: &ExecutionPlanningInput,
     ) -> Result<ExecutionReceipt, ExecutionError> {
         let plan = self.plan(input)?;
-        let (_attempt, attempt_context) = self
-            .attempt_factory
-            .borrow_mut()
-            .next_for_plan(&plan, &input.request);
+        let (_attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
+            &plan,
+            &input.request,
+            input.execution_mode,
+        );
 
         self.sink
             .execute(&plan, &attempt_context)

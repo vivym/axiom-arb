@@ -141,6 +141,7 @@ impl CounterSample {
 pub enum MetricDimension {
     Channel(metric_dimensions::Channel),
     HaltScope(metric_dimensions::HaltScope),
+    ReconcileReason(metric_dimensions::ReconcileReason),
 }
 
 impl MetricDimension {
@@ -148,6 +149,7 @@ impl MetricDimension {
         match self {
             Self::Channel(channel) => channel.as_pair(),
             Self::HaltScope(scope) => scope.as_pair(),
+            Self::ReconcileReason(reason) => reason.as_pair(),
         }
     }
 

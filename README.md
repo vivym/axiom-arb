@@ -15,7 +15,7 @@
 - Live-mode bootstrap skeleton: `AXIOM_MODE=live cargo run -p app-live`
 - Replay summary from the beginning of an existing journal: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo run -p app-replay -- --from-seq 0`
 
-`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, `app-live` and `app-replay` both bootstrap observability through one repo-owned entrypoint and emit successful startup/replay summaries via local structured tracing output. `app-live` is still only a bootstrap skeleton, `app-replay` is summary-oriented, and the observability path is local-only and OTel-compatible rather than OTel-enabled. They do not yet connect to Polymarket feeds, order heartbeat, or Postgres from the binary entrypoint.
+`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, `app-live` bootstraps observability once, then uses runtime-local structured spans plus metric-backed signals from the instrumented runtime path beyond the entrypoint. The observability path is still local-only and OTel-compatible rather than OTel-enabled, and there is no OpenTelemetry exporter in the binary. This repository state does not claim websocket, heartbeat, or order execution loops are instrumented unless they are actually present in the binary.
 
 ## V1b Neg-Risk Scope Status
 

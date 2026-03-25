@@ -1,15 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use domain::{ExecutionMode, RuntimeMode};
+use observability::{field_keys, span_names, RuntimeMetricsRecorder};
 use state::{ApplyResult, PublishedSnapshot, RemoteSnapshot};
+use tracing::field;
 
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
     config::NegRiskFamilyLiveTarget,
     dispatch::{DispatchLoop, DispatchSummary},
     input_tasks::{InputTaskEvent, InputTaskQueue},
+    instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
+    snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +99,7 @@ struct RuntimeSeed {
 pub struct AppSupervisor {
     dispatcher: DispatchLoop,
     runtime: AppRuntime,
+    metrics_recorder: Option<RuntimeMetricsRecorder>,
     bootstrap_snapshot: RemoteSnapshot,
     committed_log: Vec<InputTaskEvent>,
     input_tasks: InputTaskQueue,
@@ -109,9 +114,29 @@ pub struct AppSupervisor {
 
 impl AppSupervisor {
     pub fn new(app_mode: AppRuntimeMode, bootstrap_snapshot: RemoteSnapshot) -> Self {
+        Self::new_with_metrics(app_mode, bootstrap_snapshot, None)
+    }
+
+    pub fn new_instrumented(
+        app_mode: AppRuntimeMode,
+        bootstrap_snapshot: RemoteSnapshot,
+        recorder: RuntimeMetricsRecorder,
+    ) -> Self {
+        Self::new_with_metrics(app_mode, bootstrap_snapshot, Some(recorder))
+    }
+
+    fn new_with_metrics(
+        app_mode: AppRuntimeMode,
+        bootstrap_snapshot: RemoteSnapshot,
+        metrics_recorder: Option<RuntimeMetricsRecorder>,
+    ) -> Self {
         Self {
             dispatcher: DispatchLoop::default(),
-            runtime: AppRuntime::new(app_mode),
+            runtime: AppRuntime::new_instrumented(
+                app_mode,
+                runtime_instrumentation(metrics_recorder.as_ref()),
+            ),
+            metrics_recorder,
             bootstrap_snapshot,
             committed_log: Vec::new(),
             input_tasks: InputTaskQueue::default(),
@@ -129,6 +154,10 @@ impl AppSupervisor {
         Self::new(AppRuntimeMode::Live, RemoteSnapshot::empty())
     }
 
+    pub fn for_tests_instrumented(recorder: RuntimeMetricsRecorder) -> Self {
+        Self::new_instrumented(AppRuntimeMode::Live, RemoteSnapshot::empty(), recorder)
+    }
+
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
         if self.runtime.bootstrap_status() != BootstrapStatus::Ready {
             let source = StaticSnapshotSource::new(self.bootstrap_snapshot.clone());
@@ -138,7 +167,7 @@ impl AppSupervisor {
         let allow_operator_synthesis = self.allow_operator_rollout_evidence_synthesis();
         self.publish_current_snapshot(allow_operator_synthesis);
         self.refresh_neg_risk_live_execution_records(allow_operator_synthesis)?;
-        let _ = self.dispatcher.flush();
+        let _ = self.flush_dispatch_instrumented();
 
         Ok(self.summary())
     }
@@ -152,7 +181,7 @@ impl AppSupervisor {
         supervisor
             .refresh_neg_risk_live_execution_records(allow_operator_synthesis)
             .expect("bootstrap should build neg-risk live execution records");
-        let _ = supervisor.dispatcher.flush();
+        let _ = supervisor.flush_dispatch_instrumented();
         let summary = supervisor.summary();
 
         AppRunResult {
@@ -173,7 +202,7 @@ impl AppSupervisor {
     }
 
     pub fn flush_dispatch(&mut self) -> DispatchSummary {
-        self.dispatcher.flush()
+        self.flush_dispatch_instrumented()
     }
 
     pub fn seed_runtime_progress(
@@ -239,10 +268,27 @@ impl AppSupervisor {
     }
 
     pub fn resume_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
-        self.runtime = AppRuntime::new(self.runtime.app_mode());
+        let span = tracing::info_span!(
+            span_names::APP_SUPERVISOR_RESUME,
+            app_mode = field::Empty,
+            backlog_count = field::Empty,
+            processed_count = field::Empty,
+            last_journal_seq = field::Empty,
+            state_version = field::Empty,
+            snapshot_id = field::Empty,
+            pending_reconcile_count = field::Empty
+        );
+        let _span_guard = span.enter();
+        span.record(field_keys::APP_MODE, self.runtime.app_mode().as_str());
+
+        self.runtime = AppRuntime::new_instrumented(
+            self.runtime.app_mode(),
+            runtime_instrumentation(self.metrics_recorder.as_ref()),
+        );
         self.neg_risk_rollout_evidence = None;
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
+        self.record_recovery_backlog(self.input_tasks.len());
 
         let committed_state_version = self
             .seed
@@ -305,6 +351,7 @@ impl AppSupervisor {
         self.retain_current_neg_risk_live_execution_records();
         self.validate_rollout_evidence_anchor()?;
 
+        let mut processed_count = 0usize;
         while let Some(input) = self.input_tasks.next_after(self.seed.last_journal_seq) {
             match self.runtime.apply_input(input.clone())? {
                 ApplyResult::Applied {
@@ -316,12 +363,16 @@ impl AppSupervisor {
                     self.record_committed_input(input.clone());
                     let _ = self.input_tasks.remove(&input);
                     self.publish_current_snapshot(false);
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
                 }
                 ApplyResult::Duplicate { .. }
                 | ApplyResult::Deferred { .. }
                 | ApplyResult::ReconcileRequired { .. } => {
                     self.record_committed_input(input.clone());
                     let _ = self.input_tasks.remove(&input);
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
                 }
             }
         }
@@ -331,13 +382,29 @@ impl AppSupervisor {
         }
 
         self.validate_neg_risk_live_execution_anchor()?;
-        let _ = self.dispatcher.flush();
+        span.record(field_keys::PROCESSED_COUNT, processed_count);
+        let _ = self.flush_dispatch_instrumented();
 
-        Ok(self.summary())
+        let summary = self.summary();
+        span.record(field_keys::BACKLOG_COUNT, self.input_tasks.len());
+        span.record(field_keys::LAST_JOURNAL_SEQ, summary.last_journal_seq);
+        span.record(field_keys::STATE_VERSION, summary.last_state_version);
+        span.record(
+            field_keys::PENDING_RECONCILE_COUNT,
+            summary.pending_reconcile_count,
+        );
+        if let Some(snapshot_id) = summary.published_snapshot_id.as_deref() {
+            span.record(field_keys::SNAPSHOT_ID, snapshot_id);
+        }
+
+        Ok(summary)
     }
 
     fn summary(&self) -> SupervisorSummary {
         let neg_risk_live_attempt_count = self.neg_risk_live_execution_records.len();
+        if let Some(evidence) = self.neg_risk_rollout_evidence.as_ref() {
+            self.record_rollout_evidence(evidence);
+        }
         SupervisorSummary {
             fullset_mode: ExecutionMode::Live,
             negrisk_mode: if neg_risk_live_attempt_count > 0 {
@@ -365,11 +432,13 @@ impl AppSupervisor {
             .runtime
             .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
         {
-            self.neg_risk_rollout_evidence =
-                Some(self.rollout_evidence_for_snapshot(&snapshot, allow_operator_synthesis));
+            let evidence = self.rollout_evidence_for_snapshot(&snapshot, allow_operator_synthesis);
+            self.record_rollout_evidence(&evidence);
+            self.neg_risk_rollout_evidence = Some(evidence);
             self.retain_current_neg_risk_live_execution_records();
             self.dispatcher.observe_snapshot(snapshot);
         } else {
+            self.record_zero_rollout_evidence();
             self.neg_risk_rollout_evidence = None;
             self.retain_current_neg_risk_live_execution_records();
         }
@@ -498,8 +567,8 @@ impl AppSupervisor {
         snapshot: &PublishedSnapshot,
         allow_operator_synthesis: bool,
     ) -> NegRiskRolloutEvidence {
-        if let Some(evidence) = rollout_evidence_from_snapshot(snapshot) {
-            return evidence;
+        if snapshot.negrisk.is_some() {
+            return rollout_evidence_from_snapshot(snapshot);
         }
 
         if !allow_operator_synthesis {
@@ -576,40 +645,80 @@ impl AppSupervisor {
             })
             .count()
     }
+
+    fn record_recovery_backlog(&self, backlog_count: usize) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_recovery_backlog_count(backlog_count as f64);
+    }
+
+    fn record_rollout_evidence(&self, evidence: &NegRiskRolloutEvidence) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
+        recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
+    }
+
+    fn record_zero_rollout_evidence(&self) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_live_ready_family_count(0.0);
+        recorder.record_neg_risk_live_gate_block_count(0.0);
+    }
+
+    fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {
+        let span = tracing::info_span!(
+            span_names::APP_DISPATCH_FLUSH,
+            backlog_count = field::Empty,
+            processed_count = field::Empty,
+            state_version = field::Empty,
+            snapshot_id = field::Empty
+        );
+        let _span_guard = span.enter();
+
+        let backlog_count = self.dispatcher.pending_backlog_count();
+        span.record(field_keys::BACKLOG_COUNT, backlog_count);
+
+        let summary = self.dispatcher.flush();
+        if let Some(recorder) = &self.metrics_recorder {
+            recorder
+                .record_dispatcher_backlog_count(self.dispatcher.pending_backlog_count() as f64);
+        }
+        span.record(
+            field_keys::PROCESSED_COUNT,
+            summary.coalesced_versions.len(),
+        );
+
+        let state_version = summary
+            .fullset_last_ready_state_version
+            .or(summary.negrisk_last_ready_state_version)
+            .or_else(|| summary.coalesced_versions.last().copied());
+        if let Some(state_version) = state_version {
+            span.record(field_keys::STATE_VERSION, state_version);
+        }
+
+        let snapshot_id = summary
+            .fullset_last_ready_snapshot_id
+            .as_deref()
+            .or(summary.negrisk_last_ready_snapshot_id.as_deref())
+            .or(summary.last_stable_snapshot_id.as_deref());
+        if let Some(snapshot_id) = snapshot_id {
+            span.record(field_keys::SNAPSHOT_ID, snapshot_id);
+        }
+
+        summary
+    }
 }
 
-fn snapshot_id_for(state_version: u64) -> String {
-    format!("snapshot-{state_version}")
-}
-
-fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> Option<NegRiskRolloutEvidence> {
-    let negrisk = snapshot.negrisk.as_ref()?;
-
-    let live_ready_family_count = negrisk
-        .families
-        .iter()
-        .filter(|family| {
-            family.shadow_parity_ready
-                && family.recovery_ready
-                && family.replay_drift_ready
-                && family.fault_injection_ready
-                && family.conversion_path_ready
-                && family.halt_semantics_ready
-        })
-        .count();
-    let parity_mismatch_count = negrisk
-        .families
-        .iter()
-        .filter(|family| !family.shadow_parity_ready)
-        .count() as u64;
-
-    Some(NegRiskRolloutEvidence {
-        snapshot_id: snapshot.snapshot_id.clone(),
-        live_ready_family_count,
-        blocked_family_count: negrisk
-            .families
-            .len()
-            .saturating_sub(live_ready_family_count),
-        parity_mismatch_count,
-    })
+fn runtime_instrumentation(recorder: Option<&RuntimeMetricsRecorder>) -> AppInstrumentation {
+    match recorder.cloned() {
+        Some(recorder) => AppInstrumentation::enabled(recorder),
+        None => AppInstrumentation::disabled(),
+    }
 }

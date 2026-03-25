@@ -5,8 +5,9 @@ use std::{
 };
 
 use app_live::{
-    load_neg_risk_live_targets, run_live_with_neg_risk_live_targets, run_paper, AppRuntimeMode,
-    NegRiskFamilyLiveTarget, StaticSnapshotSource,
+    load_neg_risk_live_targets, run_live_with_neg_risk_live_targets_instrumented,
+    run_paper_instrumented, AppInstrumentation, AppRuntimeMode, NegRiskFamilyLiveTarget,
+    StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
@@ -29,16 +30,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     let source = StaticSnapshotSource::empty();
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let result = match app_mode {
-        AppRuntimeMode::Paper => run_paper(&source),
+        AppRuntimeMode::Paper => run_paper_instrumented(&source, instrumentation.clone()),
         AppRuntimeMode::Live => {
             let neg_risk_live_targets = load_neg_risk_live_targets_env()?;
             let neg_risk_live_approved_families =
                 load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
             let neg_risk_live_ready_families =
                 load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
-            run_live_with_neg_risk_live_targets(
+            run_live_with_neg_risk_live_targets_instrumented(
                 &source,
+                instrumentation,
                 neg_risk_live_targets,
                 neg_risk_live_approved_families,
                 neg_risk_live_ready_families,

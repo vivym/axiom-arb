@@ -128,7 +128,8 @@ fn execute_live_family(
 
     let hook = Arc::new(RecordingSignedFamilyHook::default());
     let sink = LiveVenueSink::with_order_signer_and_hook(Arc::new(TestOrderSigner), hook.clone());
-    let (attempt, attempt_context) = ExecutionAttemptFactory::new().next_for_plan(&plan, &request);
+    let (attempt, attempt_context) =
+        ExecutionAttemptFactory::new().next_for_plan(&plan, &request, request.activation_mode);
     let receipt = sink
         .execute(&plan, &attempt_context)
         .map_err(|err| NegRiskLiveError::Sink(format!("neg-risk live sink failed: {err:?}")))?;
