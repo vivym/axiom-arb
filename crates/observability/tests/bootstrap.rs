@@ -36,11 +36,7 @@ fn bootstrap_surface_initializes_tracing_only_once() {
 #[test]
 fn bootstrap_surface_only_reports_bootstrap_when_it_installs_global_tracing() {
     if helper_mode().as_deref() == Some("preinstalled") {
-        let subscriber = tracing_subscriber::fmt()
-            .with_target(false)
-            .without_time()
-            .finish();
-        let _ = ::tracing::subscriber::set_global_default(subscriber);
+        install_test_subscriber("preinstall global subscriber");
 
         let _first = bootstrap_observability("app-live");
         let _second = bootstrap_observability("app-live");
@@ -54,6 +50,28 @@ fn bootstrap_surface_only_reports_bootstrap_when_it_installs_global_tracing() {
 
     assert_bootstrap_helper_succeeded(&output);
     assert_eq!(bootstrap_log_count(&output), 0);
+}
+
+#[test]
+fn bootstrap_preinstall_helper_fails_when_global_subscriber_install_fails() {
+    if helper_mode().as_deref() == Some("preinstalled-conflict") {
+        install_test_subscriber("preinstall global subscriber");
+        install_test_subscriber("preinstall conflicting global subscriber");
+
+        return;
+    }
+
+    let output = spawn_bootstrap_helper(
+        "bootstrap_preinstall_helper_fails_when_global_subscriber_install_fails",
+        "preinstalled-conflict",
+    );
+
+    assert!(
+        !output.status.success(),
+        "bootstrap helper unexpectedly succeeded: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn helper_mode() -> Option<String> {
@@ -87,4 +105,12 @@ fn bootstrap_log_count(output: &Output) -> usize {
     )
     .matches("tracing bootstrapped")
     .count()
+}
+
+fn install_test_subscriber(context: &str) {
+    let subscriber = tracing_subscriber::fmt()
+        .with_target(false)
+        .without_time()
+        .finish();
+    ::tracing::subscriber::set_global_default(subscriber).expect(context);
 }
