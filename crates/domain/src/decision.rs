@@ -2,6 +2,7 @@
 pub struct IntentCandidate {
     pub intent_id: String,
     pub source_snapshot_id: String,
+    pub route: String,
     pub scope: String,
 }
 
@@ -9,11 +10,13 @@ impl IntentCandidate {
     pub fn new(
         intent_id: impl Into<String>,
         source_snapshot_id: impl Into<String>,
+        route: impl Into<String>,
         scope: impl Into<String>,
     ) -> Self {
         Self {
             intent_id: intent_id.into(),
             source_snapshot_id: source_snapshot_id.into(),
+            route: route.into(),
             scope: scope.into(),
         }
     }

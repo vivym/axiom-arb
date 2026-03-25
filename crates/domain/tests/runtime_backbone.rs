@@ -7,8 +7,12 @@ use domain::{
 
 #[test]
 fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
-    let strategy =
-        DecisionInput::Strategy(IntentCandidate::new("intent-1", "snapshot-7", "full-set"));
+    let strategy = DecisionInput::Strategy(IntentCandidate::new(
+        "intent-1",
+        "snapshot-7",
+        "neg-risk",
+        "full-set",
+    ));
     let recovery = DecisionInput::Recovery(RecoveryIntent::new(
         "recovery-1",
         "snapshot-7",
@@ -26,10 +30,18 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
         request_id: "request-1".to_owned(),
         decision_input_id: strategy.decision_input_id().to_owned(),
         snapshot_id: "snapshot-7".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "full-set".to_owned(),
+        activation_mode: ExecutionMode::Shadow,
+        matched_rule_id: Some("family-a-shadow".to_owned()),
     };
     assert_eq!(request.request_id, "request-1");
     assert_eq!(request.decision_input_id, "intent-1");
     assert_eq!(request.snapshot_id, "snapshot-7");
+    assert_eq!(request.route, "neg-risk");
+    assert_eq!(request.scope, "full-set");
+    assert_eq!(request.activation_mode, ExecutionMode::Shadow);
+    assert_eq!(request.matched_rule_id.as_deref(), Some("family-a-shadow"));
 
     let plan_ref = ExecutionPlanRef {
         plan_id: "plan-1".to_owned(),
@@ -42,9 +54,15 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
         attempt_id: attempt.attempt_id.clone(),
         snapshot_id: attempt.snapshot_id.clone(),
         execution_mode: ExecutionMode::Shadow,
+        route: "neg-risk".to_owned(),
+        scope: "full-set".to_owned(),
+        matched_rule_id: Some("family-a-shadow".to_owned()),
     };
     assert_eq!(attempt_context.execution_mode, ExecutionMode::Shadow);
     assert_eq!(attempt_context.snapshot_id, "snapshot-7");
+    assert_eq!(attempt_context.route, "neg-risk");
+    assert_eq!(attempt_context.scope, "full-set");
+    assert_eq!(attempt_context.matched_rule_id.as_deref(), Some("family-a-shadow"));
 
     let state_confidence = StateConfidence::Certain;
     assert_eq!(state_confidence, StateConfidence::Certain);
@@ -64,6 +82,28 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
         shadow_receipt.outcome,
         ExecutionAttemptOutcome::ShadowRecorded
     );
+}
+
+#[test]
+fn execution_request_preserves_route_scope_and_activation_anchor() {
+    let intent = IntentCandidate::new("intent-1", "snapshot-7", "neg-risk", "family-a");
+    assert_eq!(intent.route, "neg-risk");
+    assert_eq!(intent.scope, "family-a");
+
+    let request = ExecutionRequest {
+        request_id: "request-1".to_owned(),
+        decision_input_id: intent.intent_id.clone(),
+        snapshot_id: "snapshot-7".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        activation_mode: ExecutionMode::Live,
+        matched_rule_id: Some("family-a-live".to_owned()),
+    };
+
+    assert_eq!(request.route, "neg-risk");
+    assert_eq!(request.scope, "family-a");
+    assert_eq!(request.activation_mode, ExecutionMode::Live);
+    assert_eq!(request.matched_rule_id.as_deref(), Some("family-a-live"));
 }
 
 #[test]
