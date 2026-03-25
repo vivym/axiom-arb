@@ -130,6 +130,107 @@ async fn live_artifacts_round_trip_with_attempt_anchor() {
 }
 
 #[tokio::test]
+async fn live_artifacts_append_is_idempotent_per_attempt_and_stream() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-idempotent-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let first = sample_live_artifact("attempt-live-idempotent-1");
+    let second = LiveExecutionArtifactRow {
+        attempt_id: "attempt-live-idempotent-1".to_owned(),
+        stream: "negrisk.live".to_owned(),
+        payload: json!({
+            "attempt_id": "attempt-live-idempotent-1",
+            "kind": "signed_order",
+        }),
+    };
+
+    LiveArtifactRepo.append(&db.pool, first).await.unwrap();
+    LiveArtifactRepo
+        .append(&db.pool, second.clone())
+        .await
+        .unwrap();
+
+    let rows = LiveArtifactRepo
+        .list_for_attempt(&db.pool, "attempt-live-idempotent-1")
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![second]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_artifacts_support_bulk_listing_for_replay() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let attempt_a = sample_attempt(
+        "attempt-live-bulk-a",
+        ExecutionMode::Live,
+        "negrisk-submit-family:family-a:member-1",
+    );
+    let attempt_b = sample_attempt(
+        "attempt-live-bulk-b",
+        ExecutionMode::Live,
+        "negrisk-submit-family:family-b:member-1",
+    );
+    ExecutionAttemptRepo
+        .append(&db.pool, &attempt_a)
+        .await
+        .unwrap();
+    ExecutionAttemptRepo
+        .append(&db.pool, &attempt_b)
+        .await
+        .unwrap();
+
+    let artifact_a = sample_live_artifact("attempt-live-bulk-a");
+    let artifact_b = LiveExecutionArtifactRow {
+        attempt_id: "attempt-live-bulk-b".to_owned(),
+        stream: "negrisk.audit".to_owned(),
+        payload: json!({
+            "attempt_id": "attempt-live-bulk-b",
+            "kind": "audit_trail",
+        }),
+    };
+    LiveArtifactRepo
+        .append(&db.pool, artifact_a.clone())
+        .await
+        .unwrap();
+    LiveArtifactRepo
+        .append(&db.pool, artifact_b.clone())
+        .await
+        .unwrap();
+
+    let rows = LiveArtifactRepo
+        .list_for_attempts(
+            &db.pool,
+            &[
+                "attempt-live-bulk-b".to_owned(),
+                "attempt-live-bulk-a".to_owned(),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows["attempt-live-bulk-a"], vec![artifact_a]);
+    assert_eq!(rows["attempt-live-bulk-b"], vec![artifact_b]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_artifacts_reject_shadow_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -159,4 +260,3 @@ async fn live_artifacts_reject_shadow_attempt_ids() {
 
     db.cleanup().await;
 }
-

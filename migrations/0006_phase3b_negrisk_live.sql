@@ -1,10 +1,13 @@
 CREATE TABLE live_execution_artifacts (
-  artifact_id BIGSERIAL PRIMARY KEY,
   attempt_id TEXT NOT NULL REFERENCES execution_attempts (attempt_id),
   stream TEXT NOT NULL,
   payload JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  PRIMARY KEY (attempt_id, stream)
 );
+
+CREATE INDEX execution_attempts_live_created_idx
+ON execution_attempts (created_at, attempt_id)
+WHERE execution_mode = 'live';
 
 CREATE OR REPLACE FUNCTION enforce_live_execution_artifact_attempt()
 RETURNS TRIGGER AS $$
@@ -52,4 +55,3 @@ CREATE TRIGGER execution_attempts_prevent_live_mode_drift
 BEFORE UPDATE ON execution_attempts
 FOR EACH ROW
 EXECUTE FUNCTION prevent_live_attempt_mode_drift();
-

@@ -90,7 +90,12 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode, plan_id: &str) -> Execu
 }
 
 fn request_bound_plan_id(request_id: &str, inner_plan_id: &str) -> String {
-    format!("request-bound:{}:{}:{}", request_id.len(), request_id, inner_plan_id)
+    format!(
+        "request-bound:{}:{}:{}",
+        request_id.len(),
+        request_id,
+        inner_plan_id
+    )
 }
 
 fn artifact(attempt_id: &str, stream: &str, kind: &str) -> LiveExecutionArtifactRow {
@@ -172,10 +177,65 @@ async fn negrisk_live_contract_lists_only_negrisk_live_attempts_with_artifacts()
                     "negrisk-submit-family:family-a:condition-1:token-1:0.4:5",
                 ),
             ),
-            artifacts: vec![artifact("attempt-negrisk-live-1", "negrisk.live", "planned_order")],
+            artifacts: vec![artifact(
+                "attempt-negrisk-live-1",
+                "negrisk.live",
+                "planned_order"
+            )],
         }]
     );
 
     db.cleanup().await;
 }
 
+#[tokio::test]
+async fn negrisk_live_contract_returns_single_row_per_attempt_stream_after_retries() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let plan_id = request_bound_plan_id(
+        "req-4",
+        "negrisk-submit-family:family-c:condition-3:token-3:0.4:5",
+    );
+    let attempt = sample_attempt("attempt-negrisk-live-dup-1", ExecutionMode::Live, &plan_id);
+
+    ExecutionAttemptRepo
+        .append(&db.pool, &attempt)
+        .await
+        .unwrap();
+
+    LiveArtifactRepo
+        .append(
+            &db.pool,
+            artifact(
+                "attempt-negrisk-live-dup-1",
+                "negrisk.live",
+                "planned_order",
+            ),
+        )
+        .await
+        .unwrap();
+    LiveArtifactRepo
+        .append(
+            &db.pool,
+            artifact("attempt-negrisk-live-dup-1", "negrisk.live", "signed_order"),
+        )
+        .await
+        .unwrap();
+
+    let rows = load_negrisk_live_attempt_artifacts(&db.pool).await.unwrap();
+
+    assert_eq!(
+        rows,
+        vec![NegRiskLiveAttemptArtifacts {
+            attempt,
+            artifacts: vec![artifact(
+                "attempt-negrisk-live-dup-1",
+                "negrisk.live",
+                "signed_order",
+            )],
+        }]
+    );
+
+    db.cleanup().await;
+}

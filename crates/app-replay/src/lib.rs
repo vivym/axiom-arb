@@ -25,19 +25,32 @@ pub struct NegRiskLiveAttemptArtifacts {
 pub async fn load_negrisk_live_attempt_artifacts(
     pool: &PgPool,
 ) -> Result<Vec<NegRiskLiveAttemptArtifacts>, PersistenceError> {
-    let attempts = ExecutionAttemptRepo.list_live_attempts(pool).await?;
-    let mut out = Vec::new();
+    let attempts = ExecutionAttemptRepo
+        .list_live_attempts(pool)
+        .await?
+        .into_iter()
+        .filter(|attempt| stable_plan_scope(&attempt.plan_id).starts_with("negrisk-"))
+        .collect::<Vec<_>>();
+    let artifacts_by_attempt = LiveArtifactRepo
+        .list_for_attempts(
+            pool,
+            &attempts
+                .iter()
+                .map(|attempt| attempt.attempt_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await?;
 
-    for attempt in attempts {
-        if stable_plan_scope(&attempt.plan_id).starts_with("negrisk-") {
-            let artifacts = LiveArtifactRepo
-                .list_for_attempt(pool, &attempt.attempt_id)
-                .await?;
-            out.push(NegRiskLiveAttemptArtifacts { attempt, artifacts });
-        }
-    }
-
-    Ok(out)
+    Ok(attempts
+        .into_iter()
+        .map(|attempt| NegRiskLiveAttemptArtifacts {
+            artifacts: artifacts_by_attempt
+                .get(&attempt.attempt_id)
+                .cloned()
+                .unwrap_or_default(),
+            attempt,
+        })
+        .collect())
 }
 
 pub trait ReplayConsumer {

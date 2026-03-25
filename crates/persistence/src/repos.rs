@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use domain::{
     ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
 };
@@ -1500,6 +1502,8 @@ impl LiveArtifactRepo {
             SELECT $1, $2, $3
             FROM execution_attempts
             WHERE attempt_id = $1 AND execution_mode = $4
+            ON CONFLICT (attempt_id, stream) DO UPDATE
+            SET payload = EXCLUDED.payload
             "#,
         )
         .bind(&row.attempt_id)
@@ -1528,7 +1532,7 @@ impl LiveArtifactRepo {
             SELECT attempt_id, stream, payload
             FROM live_execution_artifacts
             WHERE attempt_id = $1
-            ORDER BY created_at, artifact_id
+            ORDER BY stream
             "#,
         )
         .bind(attempt_id)
@@ -1538,6 +1542,39 @@ impl LiveArtifactRepo {
         rows.into_iter()
             .map(map_live_execution_artifact_row)
             .collect()
+    }
+
+    pub async fn list_for_attempts(
+        &self,
+        pool: &PgPool,
+        attempt_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<LiveExecutionArtifactRow>>> {
+        if attempt_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT attempt_id, stream, payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = ANY($1)
+            ORDER BY attempt_id, stream
+            "#,
+        )
+        .bind(attempt_ids)
+        .fetch_all(pool)
+        .await?;
+
+        let mut artifacts = BTreeMap::<String, Vec<LiveExecutionArtifactRow>>::new();
+        for row in rows {
+            let artifact = map_live_execution_artifact_row(row)?;
+            artifacts
+                .entry(artifact.attempt_id.clone())
+                .or_default()
+                .push(artifact);
+        }
+
+        Ok(artifacts)
     }
 }
 
