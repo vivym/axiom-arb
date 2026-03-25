@@ -14,4 +14,7 @@ pub use domain::{
 };
 pub use orchestrator::{ExecutionError, ExecutionOrchestrator, ExecutionPlanningInput};
 pub use signing::{OrderSigner, SignedFamilySubmission, SigningError, TestOrderSigner};
-pub use sink::{LiveVenueSink, ShadowVenueSink, VenueSink, VenueSinkError};
+pub use sink::{
+    LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink,
+    VenueSinkError,
+};

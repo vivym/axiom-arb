@@ -36,8 +36,10 @@ impl TestOrderSigner {
         // Deterministic fake identity for tests and plumbing. Not cryptographic signing.
         SignedOrderIdentity {
             signed_order_hash: format!("test-hash:{plan_id}:{index}"),
-            salt: format!("test-salt:{plan_id}:{index}"),
-            nonce: format!("test-nonce:{plan_id}:{index}"),
+            // Polymarket docs show numeric salt; keep the test artifact parseable.
+            salt: format!("{}", 123_u64 + index as u64),
+            // Polymarket docs show numeric nonce string.
+            nonce: format!("{index}"),
             signature: format!("test-sig:{plan_id}:{index}"),
         }
     }

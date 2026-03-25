@@ -6,7 +6,7 @@ use std::sync::Arc;
 use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode, ExecutionReceipt};
 
 use crate::plans::ExecutionPlan;
-use crate::signing::OrderSigner;
+use crate::signing::{OrderSigner, SignedFamilySubmission};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VenueSinkError {
@@ -28,15 +28,30 @@ pub trait VenueSink {
     ) -> Result<ExecutionReceipt, VenueSinkError>;
 }
 
+pub trait SignedFamilyHook: Send + Sync {
+    fn on_signed_family(
+        &self,
+        signed: &SignedFamilySubmission,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<(), SignedFamilyHookError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedFamilyHookError {
+    pub reason: String,
+}
+
 #[derive(Clone, Default)]
 pub struct LiveVenueSink {
     order_signer: Option<Arc<dyn OrderSigner>>,
+    signed_family_hook: Option<Arc<dyn SignedFamilyHook>>,
 }
 
 impl fmt::Debug for LiveVenueSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LiveVenueSink")
             .field("order_signer", &self.order_signer.is_some())
+            .field("signed_family_hook", &self.signed_family_hook.is_some())
             .finish()
     }
 }
@@ -49,6 +64,17 @@ impl LiveVenueSink {
     pub fn with_order_signer(order_signer: Arc<dyn OrderSigner>) -> Self {
         Self {
             order_signer: Some(order_signer),
+            signed_family_hook: None,
+        }
+    }
+
+    pub fn with_order_signer_and_hook(
+        order_signer: Arc<dyn OrderSigner>,
+        hook: Arc<dyn SignedFamilyHook>,
+    ) -> Self {
+        Self {
+            order_signer: Some(order_signer),
+            signed_family_hook: Some(hook),
         }
     }
 }
@@ -97,9 +123,16 @@ impl VenueSink for LiveVenueSink {
         {
             // Narrow plumbing hook for Phase 3b neg-risk live submit: sign the planned orders
             // deterministically. Non-neg-risk plans must remain unaffected by signer configuration.
-            signer.sign_family(plan).map_err(|err| VenueSinkError::Rejected {
+            let signed = signer.sign_family(plan).map_err(|err| VenueSinkError::Rejected {
                 reason: format!("signing error: {err:?}"),
             })?;
+
+            if let Some(hook) = &self.signed_family_hook {
+                hook.on_signed_family(&signed, attempt)
+                    .map_err(|err| VenueSinkError::Rejected {
+                        reason: format!("signed-family hook error: {err:?}"),
+                    })?;
+            }
         }
 
         Ok(ExecutionReceipt {

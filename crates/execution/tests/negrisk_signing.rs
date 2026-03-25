@@ -6,7 +6,7 @@ use std::sync::{
 use domain::{ConditionId, EventFamilyId, TokenId};
 use domain::{ExecutionAttemptContext, ExecutionMode};
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
-use execution::sink::{LiveVenueSink, VenueSink};
+use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
 use execution::signing::{OrderSigner, TestOrderSigner};
 use rust_decimal::Decimal;
 
@@ -37,11 +37,60 @@ fn live_sink_signs_negrisk_family_submit_plans_when_signer_is_configured() {
 }
 
 #[test]
+fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submits() {
+    let called = Arc::new(AtomicUsize::new(0));
+    let hook = Arc::new(SpySignedFamilyHook {
+        called: called.clone(),
+        last_plan_id: Arc::new(std::sync::Mutex::new(None)),
+        last_member_count: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let signer = Arc::new(TestOrderSigner::default());
+    let sink = LiveVenueSink::with_order_signer_and_hook(signer, hook.clone());
+
+    let plan = sample_family_plan();
+    let plan_id = plan.plan_id();
+    let receipt = sink.execute(&plan, &live_attempt()).unwrap();
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(called.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        hook.last_plan_id.lock().unwrap().clone(),
+        Some(plan_id)
+    );
+    assert_eq!(*hook.last_member_count.lock().unwrap(), Some(2));
+}
+
+#[test]
 fn live_sink_does_not_apply_signer_to_non_negrisk_plans() {
     let called = Arc::new(AtomicUsize::new(0));
     let sink = LiveVenueSink::with_order_signer(Arc::new(RejectingSigner {
         called: called.clone(),
     }));
+
+    let receipt = sink
+        .execute(
+            &ExecutionPlan::RedeemResolved {
+                condition_id: ConditionId::from("condition-x"),
+            },
+            &live_attempt(),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(called.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn live_sink_does_not_forward_signed_family_submission_for_non_negrisk_plans() {
+    let called = Arc::new(AtomicUsize::new(0));
+    let hook = Arc::new(SpySignedFamilyHook {
+        called: called.clone(),
+        last_plan_id: Arc::new(std::sync::Mutex::new(None)),
+        last_member_count: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let signer = Arc::new(RejectingSigner {
+        called: Arc::new(AtomicUsize::new(0)),
+    });
+    let sink = LiveVenueSink::with_order_signer_and_hook(signer, hook);
 
     let receipt = sink
         .execute(
@@ -132,5 +181,25 @@ impl OrderSigner for RejectingSigner {
         Err(execution::signing::SigningError::UnsupportedPlan {
             plan_id: plan.plan_id(),
         })
+    }
+}
+
+#[derive(Debug)]
+struct SpySignedFamilyHook {
+    called: Arc<AtomicUsize>,
+    last_plan_id: Arc<std::sync::Mutex<Option<String>>>,
+    last_member_count: Arc<std::sync::Mutex<Option<usize>>>,
+}
+
+impl SignedFamilyHook for SpySignedFamilyHook {
+    fn on_signed_family(
+        &self,
+        signed: &execution::signing::SignedFamilySubmission,
+        _attempt: &ExecutionAttemptContext,
+    ) -> Result<(), SignedFamilyHookError> {
+        self.called.fetch_add(1, Ordering::SeqCst);
+        *self.last_plan_id.lock().unwrap() = Some(signed.plan_id.clone());
+        *self.last_member_count.lock().unwrap() = Some(signed.members.len());
+        Ok(())
     }
 }
