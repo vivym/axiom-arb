@@ -2,7 +2,7 @@ use std::{env, process, str::FromStr};
 
 use app_live::{run_live, run_paper, AppRuntimeMode, StaticSnapshotSource};
 use domain::RuntimeMode;
-use observability::bootstrap_observability;
+use observability::{bootstrap_observability, span_names};
 
 fn main() {
     if let Err(error) = run() {
@@ -13,6 +13,8 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let observability = bootstrap_observability("app-live");
+    let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
+    let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     let source = StaticSnapshotSource::empty();
@@ -24,7 +26,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .recorder()
         .record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
 
-    tracing::info!(
+    let completion_span = tracing::info_span!(
+        span_names::APP_BOOTSTRAP_COMPLETE,
         app_mode = %result.runtime.app_mode().as_str(),
         bootstrap_status = ?result.runtime.bootstrap_status(),
         promoted_from_bootstrap = result.report.promoted_from_bootstrap,
@@ -35,9 +38,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .summary
             .published_snapshot_id
             .as_deref()
-            .unwrap_or("none"),
-        "app-live bootstrap completed"
+            .unwrap_or("none")
     );
+    let _completion_guard = completion_span.enter();
+    tracing::info!("app-live bootstrap complete");
 
     Ok(())
 }

@@ -1,3 +1,4 @@
+use observability::span_names;
 use std::{path::PathBuf, process::Command};
 
 #[test]
@@ -16,7 +17,11 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
             .any(|line| line.starts_with("app-live starting ")),
         "legacy success line should no longer be printed: {combined}"
     );
-    assert!(combined.contains("INFO app-live bootstrap completed"), "{combined}");
+    assert!(
+        combined.contains(span_names::APP_BOOTSTRAP_COMPLETE),
+        "{combined}"
+    );
+    assert!(combined.contains("app-live bootstrap complete"), "{combined}");
     assert!(combined.contains("app_mode=paper"), "{combined}");
     assert!(combined.contains("bootstrap_status=Ready"), "{combined}");
     assert!(combined.contains("promoted_from_bootstrap=true"), "{combined}");
