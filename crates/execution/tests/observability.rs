@@ -4,9 +4,7 @@ use execution::{
     sink::ShadowVenueSink, ExecutionInstrumentation, ExecutionMode, ExecutionOrchestrator,
 };
 use observability::{bootstrap_observability, field_keys, span_names};
-use support::{
-    capture_spans, sample_planning_input, FailingVenueSink, TruthfulShadowVenueSink,
-};
+use support::{capture_spans, sample_planning_input, FailingVenueSink, TruthfulShadowVenueSink};
 
 #[test]
 fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {

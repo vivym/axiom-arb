@@ -152,8 +152,7 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         if matches!(
             result.as_ref(),
             Ok(receipt) if receipt.outcome == domain::ExecutionAttemptOutcome::ShadowRecorded
-        )
-        {
+        ) {
             self.instrumentation.increment_shadow_attempt_count(1);
         }
 
