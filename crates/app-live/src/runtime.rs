@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use domain::{RuntimeMode, RuntimeOverlay};
+use domain::{ExecutionMode, RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
 use state::{
     ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
@@ -11,7 +11,7 @@ use tracing::field;
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 use crate::instrumentation::AppInstrumentation;
 use crate::input_tasks::InputTaskEvent;
-use crate::supervisor::SupervisorSummary;
+use crate::supervisor::{NegRiskRolloutEvidence, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -160,6 +160,11 @@ impl AppRuntime {
         S: BootstrapSource,
     {
         let report = bootstrap::bootstrap_once(&mut self.store, source);
+        if !report.attention.is_empty() {
+            for attention in &report.attention {
+                self.instrumentation.record_reconcile_attention(attention);
+            }
+        }
         self.anchor_baseline_if_ready(report.succeeded);
         report
     }
@@ -258,11 +263,11 @@ where
     run_paper_instrumented(source, AppInstrumentation::disabled())
 }
 
-pub fn run_paper_instrumented<S>(source: &S, _instrumentation: AppInstrumentation) -> AppRunResult
+pub fn run_paper_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    run_with_mode(AppRuntimeMode::Paper, source)
+    run_with_mode(AppRuntimeMode::Paper, source, instrumentation)
 }
 
 pub fn run_live<S>(source: &S) -> AppRunResult
@@ -272,18 +277,44 @@ where
     run_live_instrumented(source, AppInstrumentation::disabled())
 }
 
-pub fn run_live_instrumented<S>(source: &S, _instrumentation: AppInstrumentation) -> AppRunResult
+pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    run_with_mode(AppRuntimeMode::Live, source)
+    run_with_mode(AppRuntimeMode::Live, source, instrumentation)
 }
 
-fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult
+fn run_with_mode<S>(
+    app_mode: AppRuntimeMode,
+    source: &S,
+    instrumentation: AppInstrumentation,
+) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    crate::supervisor::AppSupervisor::new(app_mode, source.snapshot()).run_bootstrap()
+    let mut runtime = AppRuntime::new_instrumented(app_mode, instrumentation);
+    let report = runtime.bootstrap_once(source);
+    let published_snapshot = runtime.publish_snapshot(&snapshot_id_for(runtime.state_version()));
+    let summary = SupervisorSummary {
+        fullset_mode: ExecutionMode::Live,
+        negrisk_mode: ExecutionMode::Shadow,
+        bootstrap_status: runtime.bootstrap_status(),
+        runtime_mode: runtime.runtime_mode(),
+        pending_reconcile_count: runtime.pending_reconcile_count(),
+        last_journal_seq: runtime.last_journal_seq().unwrap_or_default(),
+        last_state_version: runtime.state_version(),
+        published_snapshot_id: runtime.published_snapshot_id().map(str::to_owned),
+        published_snapshot_committed_journal_seq: runtime.published_snapshot_committed_journal_seq(),
+        neg_risk_rollout_evidence: published_snapshot
+            .as_ref()
+            .map(rollout_evidence_from_snapshot),
+    };
+
+    AppRunResult {
+        runtime,
+        report,
+        summary,
+    }
 }
 
 fn apply_result_label(result: &ApplyResult) -> &'static str {
@@ -292,5 +323,46 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
         ApplyResult::Duplicate { .. } => "duplicate",
         ApplyResult::Deferred { .. } => "deferred",
         ApplyResult::ReconcileRequired { .. } => "reconcile_required",
+    }
+}
+
+fn snapshot_id_for(state_version: u64) -> String {
+    format!("snapshot-{state_version}")
+}
+
+fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> NegRiskRolloutEvidence {
+    let Some(negrisk) = snapshot.negrisk.as_ref() else {
+        return NegRiskRolloutEvidence {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            ..NegRiskRolloutEvidence::default()
+        };
+    };
+
+    let live_ready_family_count = negrisk
+        .families
+        .iter()
+        .filter(|family| {
+            family.shadow_parity_ready
+                && family.recovery_ready
+                && family.replay_drift_ready
+                && family.fault_injection_ready
+                && family.conversion_path_ready
+                && family.halt_semantics_ready
+        })
+        .count();
+    let parity_mismatch_count = negrisk
+        .families
+        .iter()
+        .filter(|family| !family.shadow_parity_ready)
+        .count() as u64;
+
+    NegRiskRolloutEvidence {
+        snapshot_id: snapshot.snapshot_id.clone(),
+        live_ready_family_count,
+        blocked_family_count: negrisk
+            .families
+            .len()
+            .saturating_sub(live_ready_family_count),
+        parity_mismatch_count,
     }
 }

@@ -6,7 +6,10 @@ use std::{
     },
 };
 
-use app_live::{AppInstrumentation, AppRuntime, AppRuntimeMode, InputTaskEvent};
+use app_live::{
+    runtime::run_live_instrumented, AppInstrumentation, AppRuntime, AppRuntimeMode, InputTaskEvent,
+    StaticSnapshotSource,
+};
 use chrono::Utc;
 use domain::{ConditionId, ExternalFactEvent, TokenId};
 use observability::{
@@ -62,6 +65,33 @@ fn instrumentation_maps_reconcile_attention_into_repo_owned_dimensions() {
             .field(field_keys::PENDING_RECONCILE_COUNT)
             .map(String::as_str),
         Some("0")
+    );
+}
+
+#[test]
+fn run_live_instrumented_uses_the_supplied_instrumentation_recorder() {
+    let observability = bootstrap_observability("app-live-test");
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
+    let source = StaticSnapshotSource::new(
+        RemoteSnapshot::empty().with_attention(ReconcileAttention::IdentifierMismatch {
+            token_id: TokenId::from("token-yes"),
+            expected_condition_id: ConditionId::from("condition-a"),
+            remote_condition_id: ConditionId::from("condition-b"),
+        }),
+    );
+
+    let result = run_live_instrumented(&source, instrumentation);
+
+    assert!(!result.report.succeeded);
+    let dims = MetricDimensions::new([MetricDimension::ReconcileReason(
+        ReconcileReason::IdentifierMismatch,
+    )]);
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter_with_dimensions(observability.metrics().reconcile_attention_total.key(), &dims),
+        Some(1)
     );
 }
 
