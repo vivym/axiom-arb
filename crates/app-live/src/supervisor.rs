@@ -240,12 +240,7 @@ impl AppSupervisor {
                     self.dispatcher.record_apply(state_version, dirty_set);
                     self.record_committed_input(input.clone());
                     let _ = self.input_tasks.remove(&input);
-                    if let Some(snapshot) = self
-                        .runtime
-                        .publish_snapshot(&snapshot_id_for(state_version))
-                    {
-                        self.dispatcher.observe_snapshot(snapshot);
-                    }
+                    self.publish_current_snapshot();
                 }
                 ApplyResult::Duplicate { .. }
                 | ApplyResult::Deferred { .. }

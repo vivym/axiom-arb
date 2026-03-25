@@ -61,6 +61,13 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
+    assert_eq!(
+        resumed
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.snapshot_id.as_str()),
+        Some("snapshot-7")
+    );
 }
 
 #[test]
