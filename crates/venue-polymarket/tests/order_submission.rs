@@ -70,6 +70,22 @@ fn submit_order_builder_rejects_non_numeric_salt_values() {
     ));
 }
 
+#[test]
+fn submit_order_builder_accepts_large_numeric_string_salt_without_loss() {
+    let signed = sample_signed_negrisk_family_submission();
+    let mut member = signed.members[0].clone();
+    let big_salt = "1844674407370955161600"; // > u64::MAX
+    member.identity.salt = big_salt.to_owned();
+
+    let submission =
+        build_post_order_request_from_signed_member(&member, &sample_post_order_transport())
+            .unwrap();
+
+    let body = serde_json::to_string(&submission).unwrap();
+    assert!(body.contains(&format!("\"salt\":{big_salt}")));
+    assert!(!body.contains(&format!("\"salt\":\"{big_salt}\"")));
+}
+
 fn sample_rest_client() -> PolymarketRestClient {
     let client = reqwest::Client::builder()
         .no_proxy()

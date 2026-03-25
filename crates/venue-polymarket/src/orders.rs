@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::value::RawValue;
 
 use execution::signing::SignedFamilyMember;
 
@@ -15,7 +16,7 @@ pub enum OrderSide {
     Sell,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PostOrder {
     pub maker: String,
     pub signer: String,
@@ -32,12 +33,14 @@ pub struct PostOrder {
     #[serde(rename = "feeRateBps")]
     pub fee_rate_bps: String,
     pub signature: String,
-    pub salt: u64,
+    // Polymarket L1 docs describe salt as a string; we serialize as a numeric JSON literal
+    // without narrowing to machine integer widths (to avoid rejecting large salts).
+    pub salt: Box<RawValue>,
     #[serde(rename = "signatureType")]
     pub signature_type: u8,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PostOrderRequest {
     pub order: PostOrder,
     pub owner: String,
@@ -64,13 +67,18 @@ pub fn build_post_order_request_from_signed_member(
     member: &SignedFamilyMember,
     transport: &PostOrderTransport,
 ) -> Result<PostOrderRequest, PostOrderBuildError> {
-    let salt = member
-        .identity
-        .salt
-        .parse::<u64>()
-        .map_err(|_| PostOrderBuildError::InvalidSalt {
+    let salt_str = member.identity.salt.trim();
+    let salt_is_numeric = !salt_str.is_empty() && salt_str.bytes().all(|b| b.is_ascii_digit());
+    if !salt_is_numeric {
+        return Err(PostOrderBuildError::InvalidSalt {
             salt: member.identity.salt.clone(),
-        })?;
+        });
+    }
+
+    // Keep the literal as-is (no u64 parsing). RawValue ensures it's valid JSON.
+    let salt = RawValue::from_string(salt_str.to_owned()).map_err(|_| PostOrderBuildError::InvalidSalt {
+        salt: member.identity.salt.clone(),
+    })?;
 
     let side = match member.side.as_str() {
         "BUY" => OrderSide::Buy,
