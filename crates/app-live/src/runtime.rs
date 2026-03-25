@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{collections::{BTreeMap, BTreeSet}, fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use state::{
@@ -224,12 +224,21 @@ where
 pub fn run_live_with_neg_risk_live_targets<S>(
     source: &S,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
 ) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    let mut supervisor = crate::supervisor::AppSupervisor::new(AppRuntimeMode::Live, source.snapshot());
+    let mut supervisor =
+        crate::supervisor::AppSupervisor::new(AppRuntimeMode::Live, source.snapshot());
     supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    for family_id in neg_risk_live_approved_families {
+        supervisor.seed_neg_risk_live_approval(&family_id);
+    }
+    for family_id in neg_risk_live_ready_families {
+        supervisor.seed_neg_risk_live_ready_family(&family_id);
+    }
     supervisor.run_bootstrap()
 }
 

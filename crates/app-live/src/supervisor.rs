@@ -110,7 +110,7 @@ impl AppSupervisor {
             self.runtime.bootstrap_once(&source);
         }
 
-        self.publish_current_snapshot();
+        self.publish_current_snapshot(self.allow_operator_rollout_evidence_synthesis());
         let _ = self.dispatcher.flush();
 
         Ok(self.summary())
@@ -120,7 +120,7 @@ impl AppSupervisor {
         let mut supervisor = self;
         let source = StaticSnapshotSource::new(supervisor.bootstrap_snapshot.clone());
         let report = supervisor.runtime.bootstrap_once(&source);
-        supervisor.publish_current_snapshot();
+        supervisor.publish_current_snapshot(supervisor.allow_operator_rollout_evidence_synthesis());
         let _ = supervisor.dispatcher.flush();
         let summary = supervisor.summary();
 
@@ -252,7 +252,7 @@ impl AppSupervisor {
             || self.seed.published_snapshot_id.is_some()
             || self.seed.last_state_version == 0
         {
-            self.publish_current_snapshot();
+            self.publish_current_snapshot(false);
         }
         self.validate_rollout_evidence_anchor()?;
 
@@ -266,7 +266,7 @@ impl AppSupervisor {
                     self.dispatcher.record_apply(state_version, dirty_set);
                     self.record_committed_input(input.clone());
                     let _ = self.input_tasks.remove(&input);
-                    self.publish_current_snapshot();
+                    self.publish_current_snapshot(false);
                 }
                 ApplyResult::Duplicate { .. }
                 | ApplyResult::Deferred { .. }
@@ -278,7 +278,7 @@ impl AppSupervisor {
         }
 
         if self.runtime.published_snapshot_id().is_none() && self.runtime.state_version() > 0 {
-            self.publish_current_snapshot();
+            self.publish_current_snapshot(false);
         }
 
         let _ = self.dispatcher.flush();
@@ -309,15 +309,13 @@ impl AppSupervisor {
         }
     }
 
-    fn publish_current_snapshot(&mut self) {
+    fn publish_current_snapshot(&mut self, allow_operator_synthesis: bool) {
         if let Some(snapshot) = self
             .runtime
             .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
         {
-            self.neg_risk_rollout_evidence = Some(rollout_evidence_from_snapshot(
-                &snapshot,
-                &self.neg_risk_live_ready_families,
-            ));
+            self.neg_risk_rollout_evidence =
+                Some(self.rollout_evidence_for_snapshot(&snapshot, allow_operator_synthesis));
             self.dispatcher.observe_snapshot(snapshot);
         } else {
             self.neg_risk_rollout_evidence = None;
@@ -377,6 +375,47 @@ impl AppSupervisor {
         self.committed_log.sort_by_key(|entry| entry.journal_seq);
     }
 
+    fn allow_operator_rollout_evidence_synthesis(&self) -> bool {
+        self.seed.last_journal_seq.is_none()
+            && self.seed.committed_state_version.is_none()
+            && self.seed.published_snapshot_id.is_none()
+            && self.committed_log.is_empty()
+            && self.runtime.last_journal_seq() == Some(0)
+            && self.runtime.state_version() == 0
+    }
+
+    fn rollout_evidence_for_snapshot(
+        &self,
+        snapshot: &PublishedSnapshot,
+        allow_operator_synthesis: bool,
+    ) -> NegRiskRolloutEvidence {
+        if let Some(evidence) = rollout_evidence_from_snapshot(snapshot) {
+            return evidence;
+        }
+
+        if allow_operator_synthesis {
+            let live_ready_family_count = self
+                .neg_risk_live_targets
+                .keys()
+                .filter(|family_id| self.neg_risk_live_ready_families.contains(*family_id))
+                .count();
+            return NegRiskRolloutEvidence {
+                snapshot_id: snapshot.snapshot_id.clone(),
+                live_ready_family_count,
+                blocked_family_count: self
+                    .neg_risk_live_targets
+                    .len()
+                    .saturating_sub(live_ready_family_count),
+                parity_mismatch_count: 0,
+            };
+        }
+
+        NegRiskRolloutEvidence {
+            snapshot_id: snapshot.snapshot_id.clone(),
+            ..NegRiskRolloutEvidence::default()
+        }
+    }
+
     fn neg_risk_live_attempt_count(&self) -> usize {
         if self.runtime.app_mode() != AppRuntimeMode::Live {
             return 0;
@@ -403,17 +442,9 @@ fn snapshot_id_for(state_version: u64) -> String {
     format!("snapshot-{state_version}")
 }
 
-fn rollout_evidence_from_snapshot(
-    snapshot: &PublishedSnapshot,
-    fallback_live_ready_families: &BTreeSet<String>,
-) -> NegRiskRolloutEvidence {
+fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> Option<NegRiskRolloutEvidence> {
     let Some(negrisk) = snapshot.negrisk.as_ref() else {
-        return NegRiskRolloutEvidence {
-            snapshot_id: snapshot.snapshot_id.clone(),
-            live_ready_family_count: fallback_live_ready_families.len(),
-            blocked_family_count: 0,
-            parity_mismatch_count: 0,
-        };
+        return None;
     };
 
     let live_ready_family_count = negrisk
@@ -434,7 +465,7 @@ fn rollout_evidence_from_snapshot(
         .filter(|family| !family.shadow_parity_ready)
         .count() as u64;
 
-    NegRiskRolloutEvidence {
+    Some(NegRiskRolloutEvidence {
         snapshot_id: snapshot.snapshot_id.clone(),
         live_ready_family_count,
         blocked_family_count: negrisk
@@ -442,5 +473,5 @@ fn rollout_evidence_from_snapshot(
             .len()
             .saturating_sub(live_ready_family_count),
         parity_mismatch_count,
-    }
+    })
 }

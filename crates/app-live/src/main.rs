@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, env, process, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env, process,
+    str::FromStr,
+};
 
 use app_live::{
     load_neg_risk_live_targets, run_live_with_neg_risk_live_targets, run_paper, AppRuntimeMode,
@@ -8,6 +12,8 @@ use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
 
 const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
+const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
+const NEG_RISK_LIVE_READY_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_READY_FAMILIES";
 
 fn main() {
     if let Err(error) = run() {
@@ -23,10 +29,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     let neg_risk_live_targets = load_neg_risk_live_targets_env(app_mode)?;
+    let neg_risk_live_approved_families =
+        load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV, app_mode)?;
+    let neg_risk_live_ready_families =
+        load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV, app_mode)?;
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
-        AppRuntimeMode::Live => run_live_with_neg_risk_live_targets(&source, neg_risk_live_targets),
+        AppRuntimeMode::Live => run_live_with_neg_risk_live_targets(
+            &source,
+            neg_risk_live_targets,
+            neg_risk_live_approved_families,
+            neg_risk_live_ready_families,
+        ),
     };
     let recorder = observability.recorder();
     recorder.record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
@@ -82,5 +97,23 @@ fn load_neg_risk_live_targets_env(
             "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
         )
         .into()),
+    }
+}
+
+fn load_family_scope_env(
+    var_name: &str,
+    app_mode: AppRuntimeMode,
+) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
+    match env::var(var_name) {
+        Ok(value) if matches!(app_mode, AppRuntimeMode::Live) => Ok(value
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()),
+        Ok(_) | Err(env::VarError::NotPresent) => Ok(BTreeSet::new()),
+        Err(env::VarError::NotUnicode(_)) => {
+            Err(format!("invalid value for {var_name}: value is not valid UTF-8").into())
+        }
     }
 }

@@ -20,7 +20,7 @@
 ## V1b Neg-Risk Scope Status
 
 - `v1b foundation` exists today as library and replay support.
-- `v1b live` is partially wired as a backbone surface, not a full binary-executed trading path.
+- `v1b live` has bootstrap-summary plumbing only for explicit operator inputs on fresh boot.
 - `app-live` still does not place `neg-risk` orders.
 - Family-halt precedence is `GlobalHalt > family halt > market-local halt > strategy-local filter`.
 - Foundation-phase family halt blocks new `neg-risk` activation only; it does not override bootstrap `CancelOnly` or global emergency controls.
@@ -31,8 +31,9 @@
 - Phase 2 on the unified runtime is `neg-risk Shadow`.
 - Phase 3a on the unified runtime is `neg-risk` rollout gates and readiness evidence only.
 - Phase 3a does not add a new `neg-risk` pricing surface or live planner.
-- Phase 3b wires config-backed/live-approved `neg-risk` live eligibility into `app-live` summary and metrics.
-- Phase 3b `neg-risk_live_attempt_count` reports eligible backbone surfaces only; it is not evidence of external execution.
+- Phase 3b can surface `neg-risk Live` in `app-live` bootstrap summary and metrics only when explicit operator inputs provide config-backed, live-approved, and live-ready families.
+- That fresh-boot bootstrap synthesis is not durable authority. Restart and resume still require durable rollout evidence and will not fabricate rebuilt readiness from env or in-memory sets.
+- `neg_risk_live_attempt_count` reports eligible backbone surfaces only; it is not evidence of external execution.
 - Families may remain in `Disabled`, `Shadow`, `ReduceOnly`, or `RecoveryOnly`.
 - Actual binary-driven family promotion still requires real feed, approval, and submit wiring beyond this bootstrap skeleton.
 - Phase 3 `neg-risk Live` is not fully enabled by this repository state.

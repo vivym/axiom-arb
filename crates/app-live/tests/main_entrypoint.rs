@@ -189,7 +189,12 @@ fn live_entrypoint_rejects_blank_neg_risk_target_config() {
 #[cfg(unix)]
 #[test]
 fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
-    let output = app_live_output_raw_env("live", Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])));
+    let output = app_live_output_raw_env(
+        "live",
+        Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+        Option::<OsString>::None,
+        Option::<OsString>::None,
+    );
 
     assert!(
         !output.status.success(),
@@ -216,19 +221,73 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
     );
 }
 
+#[test]
+fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
+    let output = app_live_output_with_operator_inputs(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+        Some("family-a"),
+        Some("family-a"),
+    );
+
+    assert!(output.status.success(), "live mode should boot with explicit operator inputs");
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("negrisk_mode=Live"), "{combined}");
+    assert!(combined.contains("neg_risk_live_attempt_count=1"), "{combined}");
+}
+
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {
-    app_live_output_raw_env(app_mode, neg_risk_live_targets.map(OsString::from))
+    app_live_output_with_operator_inputs(app_mode, neg_risk_live_targets, None, None)
+}
+
+fn app_live_output_with_operator_inputs(
+    app_mode: &str,
+    neg_risk_live_targets: Option<&str>,
+    approved_families: Option<&str>,
+    ready_families: Option<&str>,
+) -> std::process::Output {
+    app_live_output_raw_env(
+        app_mode,
+        neg_risk_live_targets.map(OsString::from),
+        approved_families.map(OsString::from),
+        ready_families.map(OsString::from),
+    )
 }
 
 fn app_live_output_raw_env(
     app_mode: &str,
     neg_risk_live_targets: Option<impl Into<OsString>>,
+    approved_families: Option<impl Into<OsString>>,
+    ready_families: Option<impl Into<OsString>>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
     if let Some(value) = neg_risk_live_targets {
         command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value.into());
+    }
+    if let Some(value) = approved_families {
+        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value.into());
+    }
+    if let Some(value) = ready_families {
+        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value.into());
     }
     command.output().expect("app-live should run")
 }
