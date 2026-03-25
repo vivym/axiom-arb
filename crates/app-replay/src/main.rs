@@ -22,7 +22,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             tracing::error!(error = %error, "app-replay replay failed");
             Box::<dyn std::error::Error>::from(error)
         })?;
-        run_span_for_record.record("after_seq", &range.after_seq);
+        run_span_for_record.record("after_seq", range.after_seq);
 
         let mut consumer = SummaryReplayConsumer::default();
         replay_event_journal_from_env(range, &mut consumer)

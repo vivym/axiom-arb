@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{path::PathBuf, sync::atomic::{AtomicU64, Ordering}};
 
 use domain::ExecutionMode;
 use persistence::{
@@ -376,6 +376,128 @@ async fn live_artifact_schema_matches_task5_primary_key() {
 }
 
 #[tokio::test]
+async fn followup_migration_upgrades_legacy_live_artifacts_to_composite_primary_key() {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-upgrade-1", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES
+            ($1, $2, $3),
+            ($1, $2, $4)
+        "#,
+    )
+    .bind("attempt-live-upgrade-1")
+    .bind("live.execution")
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap();
+
+    let primary_key_columns: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT att.attname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        JOIN unnest(con.conkey) WITH ORDINALITY AS cols(attnum, ordinality) ON TRUE
+        JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+        WHERE rel.relname = 'live_execution_artifacts'
+          AND nsp.nspname = current_schema()
+          AND con.contype = 'p'
+        ORDER BY cols.ordinality
+        "#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(primary_key_columns, vec!["attempt_id", "stream"]);
+
+    let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
+        r#"
+        SELECT payload
+        FROM live_execution_artifacts
+        WHERE attempt_id = $1 AND stream = $2
+        "#,
+    )
+    .bind("attempt-live-upgrade-1")
+    .bind("live.execution")
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(payloads, vec![json!({ "kind": "planned_order", "seq": 1 })]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn followup_migration_rejects_conflicting_payload_groups() {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-upgrade-conflict-1", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES
+            ($1, $2, $3),
+            ($1, $2, $4)
+        "#,
+    )
+    .bind("attempt-live-upgrade-conflict-1")
+    .bind("live.execution")
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .bind(json!({ "kind": "signed_order", "seq": 2 }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("conflicting payloads"),
+        "unexpected migration error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -426,4 +548,17 @@ async fn pending_reconcile_append_rejects_duplicate_refs() {
     ));
 
     db.cleanup().await;
+}
+
+fn migration_file(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../migrations")
+        .join(name)
+}
+
+async fn apply_migration_file(pool: &PgPool, file_name: &str) -> Result<(), sqlx::Error> {
+    let sql = std::fs::read_to_string(migration_file(file_name))
+        .expect("migration file should exist for runtime backbone tests");
+    sqlx::raw_sql(&sql).execute(pool).await?;
+    Ok(())
 }
