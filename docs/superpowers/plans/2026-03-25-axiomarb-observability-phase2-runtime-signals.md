@@ -17,6 +17,7 @@ This plan intentionally covers `observability phase 2` for the `app-live` runtim
 - In scope: additional span names and field keys, typed `reconcile_attention` dimensions, an `app-live` instrumentation adapter, runtime/supervisor/dispatch signal emission, entrypoint wiring to pass a recorder into the live runtime, focused runtime observability tests, and README alignment.
 - Out of scope: `tracing-opentelemetry`, OTLP exporters, collector config, vendor dashboards, `app-replay` feature changes, venue websocket/heartbeat wiring, execution/recovery crate instrumentation, and any live trading behavior change.
 - Do not fabricate signals for loops that do not exist yet. `websocket_reconnect_total`, `halt_activation_total`, and heartbeat freshness stay un-emitted until there are real producers.
+- Do not fabricate metrics that lack a stable runtime formula yet. `projection_publish_lag_count` and `neg_risk_rollout_parity_mismatch_count` stay un-emitted in this phase because current `app-live` runtime state has no monotonic, non-synthetic producer for them.
 - Known baseline caveat: if the execution branch still has the existing unrelated `app-live` fault-injection failure around durable rollout evidence, treat that as a separate pre-existing blocker. Do not weaken this plan’s tests to hide it.
 
 ## File Structure Map
@@ -25,10 +26,14 @@ This plan intentionally covers `observability phase 2` for the `app-live` runtim
 
 - Modify: `/Users/viv/projs/axiom-arb/crates/observability/src/conventions.rs`
   Responsibility: add runtime-phase span names, field keys, and typed `ReconcileReason` dimension vocabulary.
+- Modify: `/Users/viv/projs/axiom-arb/crates/observability/src/metrics.rs`
+  Responsibility: extend `MetricDimension`, recorder helpers, and registry round-trips so `reconcile_attention_total` can carry repo-owned `ReconcileReason` dimensions.
 - Modify: `/Users/viv/projs/axiom-arb/crates/observability/src/lib.rs`
   Responsibility: continue re-exporting repo-owned conventions if new items require root exposure.
 - Modify: `/Users/viv/projs/axiom-arb/crates/observability/tests/conventions.rs`
   Responsibility: lock the new runtime span names, field keys, and typed dimension pairs.
+- Modify: `/Users/viv/projs/axiom-arb/crates/observability/tests/metrics.rs`
+  Responsibility: lock `ReconcileReason` dimension support in the typed metrics surface and registry.
 
 ### App Live Runtime
 
@@ -38,6 +43,8 @@ This plan intentionally covers `observability phase 2` for the `app-live` runtim
   Responsibility: export the new instrumentation surface and any new instrumented run helpers.
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/runtime.rs`
   Responsibility: emit reconcile/apply/publish snapshot spans and delegate metric recording through the adapter.
+- Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/dispatch.rs`
+  Responsibility: expose the minimal pending-dispatch/backlog accessors needed to instrument dispatch without changing dispatch semantics.
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/supervisor.rs`
   Responsibility: emit resume/dispatch/rollout-evidence signals and backlog gauges.
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/main.rs`
@@ -63,7 +70,9 @@ This plan intentionally covers `observability phase 2` for the `app-live` runtim
 
 **Files:**
 - Modify: `crates/observability/src/conventions.rs`
+- Modify: `crates/observability/src/metrics.rs`
 - Modify: `crates/observability/tests/conventions.rs`
+- Modify: `crates/observability/tests/metrics.rs`
 
 - [ ] **Step 1: Write the failing conventions test**
 
@@ -91,11 +100,43 @@ fn runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_r
 }
 ```
 
+```rust
+use observability::{
+    metric_dimensions::ReconcileReason,
+    metrics::{MetricDimension, MetricDimensions},
+    Observability,
+};
+
+#[test]
+fn reconcile_reason_dimensions_round_trip_in_metric_registry() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let dims = MetricDimensions::new([MetricDimension::ReconcileReason(
+        ReconcileReason::IdentifierMismatch,
+    )]);
+
+    observability
+        .recorder()
+        .increment_reconcile_attention_total(1, dims.clone());
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.reconcile_attention_total.key(), &dims),
+        Some(1)
+    );
+}
+```
+
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cargo test -p observability runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_reasons -- --exact`
+Run:
 
-Expected: FAIL because the runtime span names, field keys, and `ReconcileReason` vocabulary do not exist yet.
+```bash
+cargo test -p observability runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_reasons -- --exact
+cargo test -p observability reconcile_reason_dimensions_round_trip_in_metric_registry -- --exact
+```
+
+Expected: FAIL because the runtime span names, field keys, `MetricDimension::ReconcileReason`, and typed registry support do not exist yet.
 
 - [ ] **Step 3: Implement the minimal vocabulary additions**
 
@@ -137,6 +178,7 @@ Implementation notes:
 - Keep this repo-owned and finite.
 - Use `("reason", "...")` pairs so the later OTel adapter can translate them without changing call sites.
 - Do not add raw backend attribute builders.
+- Update `metrics.rs` in the same task so `MetricDimension`, `MetricDimensions`, and the recorder/registry tests understand `ReconcileReason`. Do not defer that wiring to Task 2.
 
 - [ ] **Step 4: Run the conventions suite**
 
@@ -147,7 +189,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/observability/src/conventions.rs crates/observability/tests/conventions.rs
+git add crates/observability/src/conventions.rs crates/observability/src/metrics.rs crates/observability/tests/conventions.rs crates/observability/tests/metrics.rs
 git commit -m "feat: add runtime observability conventions"
 ```
 
@@ -234,6 +276,7 @@ Implementation notes:
 - Keep all conversion logic in `instrumentation.rs`; do not duplicate `ReconcileAttention -> ReconcileReason` matches in `runtime.rs` and `supervisor.rs`.
 - `tests/support/mod.rs` should expose a tiny helper for capturing `tracing` output with `tracing::subscriber::with_default(...)`. Reuse it in later tasks instead of repeating ad hoc subscriber setup.
 - Keep the adapter optional so unit/integration tests can still construct no-op runtimes cheaply.
+- Keep rollout-evidence metric recording separate from reconcile-attention recording so Task 4 can wire current zero-valued evidence without inventing future neg-risk snapshot behavior.
 
 - [ ] **Step 4: Run the focused test**
 
@@ -348,6 +391,7 @@ impl AppRuntime {
 
 Implementation notes:
 - Keep `run_live` / `run_paper` behavior stable by making them call the existing constructor with `AppInstrumentation::disabled()`.
+- Add `run_live_instrumented` / `run_paper_instrumented` helpers in this task, then keep the existing `run_live` / `run_paper` wrappers delegating to them with `AppInstrumentation::disabled()`.
 - Instrument `apply_input` with `span_names::APP_RUNTIME_APPLY_INPUT` and an `apply_result` field. Only record state/dirty-set outcomes that already exist; do not invent new business states.
 - Instrument `publish_snapshot` with `span_names::APP_RUNTIME_PUBLISH_SNAPSHOT`, `snapshot_id`, `state_version`, and `journal_seq`.
 
@@ -367,6 +411,7 @@ git commit -m "feat: instrument app-live runtime signals"
 ## Task 4: Instrument Supervisor Resume, Dispatch, And Rollout-Gate Metrics
 
 **Files:**
+- Modify: `crates/app-live/src/dispatch.rs`
 - Modify: `crates/app-live/src/supervisor.rs`
 - Create: `crates/app-live/tests/supervisor_observability.rs`
 
@@ -374,43 +419,62 @@ git commit -m "feat: instrument app-live runtime signals"
 
 ```rust
 use app_live::{AppInstrumentation, AppSupervisor, NegRiskRolloutEvidence};
-use observability::{bootstrap_observability, metric_dimensions, MetricDimension, MetricDimensions};
+use chrono::Utc;
+use domain::ExternalFactEvent;
+use observability::{bootstrap_observability, span_names};
 
 mod support;
 
 #[test]
-fn resume_records_recovery_backlog_and_rollout_gate_metrics() {
+fn resume_records_current_backlog_metrics_and_zero_rollout_evidence_without_changing_runtime_semantics() {
     let observability = bootstrap_observability("app-live-test");
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let mut supervisor = AppSupervisor::for_tests_instrumented(instrumentation);
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(InputTaskEvent::new(
+            journal_seq,
+            ExternalFactEvent::new("market_ws", "session-1", format!("evt-{journal_seq}"), "v1", Utc::now()),
+        ));
+    }
     supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
     supervisor.seed_committed_state_version(7);
     supervisor.seed_pending_reconcile_count(0);
     supervisor.seed_neg_risk_rollout_evidence(NegRiskRolloutEvidence {
         snapshot_id: "snapshot-7".to_owned(),
-        live_ready_family_count: 3,
-        blocked_family_count: 2,
-        parity_mismatch_count: 1,
+        live_ready_family_count: 0,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
     });
 
     let (captured, summary) = support::capture_tracing(|| supervisor.resume_once().unwrap());
     let snapshot = observability.registry().snapshot();
 
-    assert!(captured.contains("axiom.app.supervisor.resume"));
-    assert!(captured.contains("axiom.app.dispatch.flush"));
+    assert!(captured.contains(span_names::APP_SUPERVISOR_RESUME));
+    assert!(captured.contains(span_names::APP_DISPATCH_FLUSH));
+    assert_eq!(
+        snapshot.gauge(observability.metrics().recovery_backlog_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
+        Some(0.0)
+    );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_live_ready_family_count.key()),
-        Some(3.0)
+        Some(0.0)
     );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_live_gate_block_count.key()),
-        Some(2.0)
-    );
-    assert_eq!(
-        snapshot.counter(observability.metrics().neg_risk_rollout_parity_mismatch_count.key()),
-        Some(1)
+        Some(0.0)
     );
     assert_eq!(summary.pending_reconcile_count, 0);
+    assert_eq!(
+        summary
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.snapshot_id.as_str()),
+        Some("snapshot-7")
+    );
 }
 ```
 
@@ -418,7 +482,7 @@ fn resume_records_recovery_backlog_and_rollout_gate_metrics() {
 
 Run: `cargo test -p app-live --test supervisor_observability -- --nocapture`
 
-Expected: FAIL because there is no instrumented supervisor constructor and resume/dispatch paths do not emit these signals yet.
+Expected: FAIL because there is no instrumented supervisor constructor, no shared tracing-capture helper for this suite yet, and resume/dispatch paths do not emit these signals yet.
 
 - [ ] **Step 3: Add supervisor-level signal emission**
 
@@ -445,8 +509,10 @@ impl AppSupervisor {
 
 Implementation notes:
 - Record `recovery_backlog_count` from `input_tasks.len()` before and after replay/removal boundaries in `resume_once`.
-- Record `dispatcher_backlog_count` and `projection_publish_lag_count` from `DispatchSummary` after every flush.
-- Record rollout-gate gauges/counters from `NegRiskRolloutEvidence` whenever `publish_current_snapshot()` rebuilds evidence or `summary()` exposes it.
+- Add a minimal accessor in `dispatch.rs` for the current pending dispatch backlog so `dispatcher_backlog_count` has one stable meaning in this phase. Do not infer backlog from `DispatchSummary.coalesced_versions.len()` implicitly.
+- Do not emit `projection_publish_lag_count` in this phase. Current `DispatchSummary` has no single stable lag formula, and this plan must not fabricate one.
+- Record rollout-gate gauges from `NegRiskRolloutEvidence` whenever `publish_current_snapshot()` rebuilds evidence or `summary()` exposes it.
+- Do not increment `neg_risk_rollout_parity_mismatch_count` from `summary()`. Leave that counter un-emitted in this phase until `app-live` has a real monotonic producer for neg-risk parity mismatch events.
 - Emit `span_names::APP_SUPERVISOR_RESUME` and `span_names::APP_DISPATCH_FLUSH` using the field keys added in Task 1.
 - Do not change dispatch semantics or rollout-gate rules; instrumentation must be observational only.
 
@@ -459,7 +525,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/app-live/src/supervisor.rs crates/app-live/tests/supervisor_observability.rs
+git add crates/app-live/src/dispatch.rs crates/app-live/src/supervisor.rs crates/app-live/tests/supervisor_observability.rs
 git commit -m "feat: instrument supervisor and dispatch signals"
 ```
 
@@ -494,7 +560,9 @@ fn binary_entrypoint_keeps_structured_bootstrap_output_after_runtime_instrumenta
 
 Run: `cargo test -p app-live --test main_entrypoint -- --nocapture`
 
-Expected: FAIL once the runtime API requires recorder threading and `main.rs` has not been updated yet.
+Expected:
+- this may still PASS before the wiring change, because the assertion is a regression guard rather than a new behavior gate
+- if it already passes, record that baseline and proceed to Step 3 anyway; the real value of this task is threading `main.rs` onto the new instrumented runtime helpers without regressing structured bootstrap output
 
 - [ ] **Step 3: Thread the recorder into the instrumented runtime path and update README**
 
