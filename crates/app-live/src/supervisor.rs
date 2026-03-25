@@ -369,7 +369,10 @@ fn rollout_evidence_from_snapshot(snapshot: &PublishedSnapshot) -> NegRiskRollou
     NegRiskRolloutEvidence {
         snapshot_id: snapshot.snapshot_id.clone(),
         live_ready_family_count,
-        blocked_family_count: negrisk.families.len().saturating_sub(live_ready_family_count),
+        blocked_family_count: negrisk
+            .families
+            .len()
+            .saturating_sub(live_ready_family_count),
         parity_mismatch_count,
     }
 }

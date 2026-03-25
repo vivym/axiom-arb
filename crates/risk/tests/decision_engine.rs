@@ -50,8 +50,11 @@ fn reduce_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
 
 #[test]
 fn negrisk_entrypoint_rejects_live_mode_even_with_usable_projection() {
-    let verdict =
-        risk::negrisk::evaluate_negrisk_family(&sample_negrisk_view(), "family-a", ExecutionMode::Live);
+    let verdict = risk::negrisk::evaluate_negrisk_family(
+        &sample_negrisk_view(),
+        "family-a",
+        ExecutionMode::Live,
+    );
 
     assert!(matches!(verdict, DecisionVerdict::Rejected));
 }
@@ -116,7 +119,9 @@ fn sample_negrisk_view() -> NegRiskView {
     NegRiskView {
         snapshot_id: "snapshot-negrisk-1".to_owned(),
         state_version: 8,
-        families: vec![sample_family("family-a", false, false, false, false, false, false)],
+        families: vec![sample_family(
+            "family-a", false, false, false, false, false, false,
+        )],
     }
 }
 

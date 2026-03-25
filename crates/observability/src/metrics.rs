@@ -339,19 +339,13 @@ impl RuntimeMetricsRecorder {
     }
 
     pub fn record_neg_risk_live_ready_family_count(&self, count: f64) {
-        self.registry.record_gauge(
-            self.metrics
-                .neg_risk_live_ready_family_count
-                .sample(count),
-        );
+        self.registry
+            .record_gauge(self.metrics.neg_risk_live_ready_family_count.sample(count));
     }
 
     pub fn record_neg_risk_live_gate_block_count(&self, count: f64) {
-        self.registry.record_gauge(
-            self.metrics
-                .neg_risk_live_gate_block_count
-                .sample(count),
-        );
+        self.registry
+            .record_gauge(self.metrics.neg_risk_live_gate_block_count.sample(count));
     }
 
     pub fn increment_neg_risk_rollout_parity_mismatch_count(&self, amount: u64) {

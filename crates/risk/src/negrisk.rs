@@ -27,7 +27,11 @@ pub fn evaluate_negrisk_family(
         return DecisionVerdict::Rejected;
     }
 
-    let Some(family) = view.families.iter().find(|family| family.family_id == family_id) else {
+    let Some(family) = view
+        .families
+        .iter()
+        .find(|family| family.family_id == family_id)
+    else {
         return DecisionVerdict::Rejected;
     };
 

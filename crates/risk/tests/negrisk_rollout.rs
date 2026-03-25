@@ -3,15 +3,7 @@ use state::{NegRiskFamilyRolloutReadiness, NegRiskView};
 
 #[test]
 fn live_mode_requires_all_family_readiness_gates() {
-    let view = sample_negrisk_view_with_family(
-        "family-a",
-        true,
-        true,
-        false,
-        true,
-        true,
-        true,
-    );
+    let view = sample_negrisk_view_with_family("family-a", true, true, false, true, true, true);
 
     assert_eq!(
         risk::negrisk::evaluate_negrisk_family(&view, "family-a", ExecutionMode::Live),
@@ -21,15 +13,8 @@ fn live_mode_requires_all_family_readiness_gates() {
 
 #[test]
 fn shadow_mode_allows_any_published_family_record() {
-    let view = sample_negrisk_view_with_family(
-        "family-a",
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-    );
+    let view =
+        sample_negrisk_view_with_family("family-a", false, false, false, false, false, false);
 
     assert_eq!(
         risk::negrisk::evaluate_negrisk_family(&view, "family-a", ExecutionMode::Shadow),
@@ -39,9 +24,7 @@ fn shadow_mode_allows_any_published_family_record() {
 
 #[test]
 fn live_mode_approves_when_all_family_readiness_gates_are_true() {
-    let view = sample_negrisk_view_with_family(
-        "family-a", true, true, true, true, true, true,
-    );
+    let view = sample_negrisk_view_with_family("family-a", true, true, true, true, true, true);
 
     assert_eq!(
         risk::negrisk::evaluate_negrisk_family(&view, "family-a", ExecutionMode::Live),

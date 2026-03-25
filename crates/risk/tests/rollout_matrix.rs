@@ -18,6 +18,9 @@ fn activation_for_falls_back_to_default_scope_and_keeps_replay_anchors() {
     assert_eq!(activation.mode, ExecutionMode::Shadow);
     assert_eq!(activation.scope, "family-b");
     assert_eq!(activation.policy_version, "phase-three-rules");
-    assert_eq!(activation.matched_rule_id.as_deref(), Some("default-shadow"));
+    assert_eq!(
+        activation.matched_rule_id.as_deref(),
+        Some("default-shadow")
+    );
     assert!(activation.reason.contains("snapshot-22"));
 }

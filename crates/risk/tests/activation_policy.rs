@@ -66,7 +66,12 @@ fn family_specific_live_rule_overrides_default_shadow_rule() {
     let policy = ActivationPolicy::from_rules(
         "phase-three-rules",
         vec![
-            RolloutRule::new("neg-risk", "default", ExecutionMode::Shadow, "default-shadow"),
+            RolloutRule::new(
+                "neg-risk",
+                "default",
+                ExecutionMode::Shadow,
+                "default-shadow",
+            ),
             RolloutRule::new("neg-risk", "family-a", ExecutionMode::Live, "family-a-live"),
         ],
     );

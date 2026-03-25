@@ -29,13 +29,18 @@ impl RolloutRule {
 pub type RolloutRuleMap = BTreeMap<(String, String), RolloutRule>;
 
 pub fn index_rules(rules: Vec<RolloutRule>) -> RolloutRuleMap {
-    rules.into_iter()
+    rules
+        .into_iter()
         .map(|rule| ((rule.route.clone(), rule.scope.clone()), rule))
         .collect()
 }
 
-pub fn resolve_rule<'a>(rules: &'a RolloutRuleMap, route: &str, scope: &str) -> Option<&'a RolloutRule> {
-    rules.get(&(route.to_owned(), scope.to_owned())).or_else(|| {
-        rules.get(&(route.to_owned(), "default".to_owned()))
-    })
+pub fn resolve_rule<'a>(
+    rules: &'a RolloutRuleMap,
+    route: &str,
+    scope: &str,
+) -> Option<&'a RolloutRule> {
+    rules
+        .get(&(route.to_owned(), scope.to_owned()))
+        .or_else(|| rules.get(&(route.to_owned(), "default".to_owned())))
 }

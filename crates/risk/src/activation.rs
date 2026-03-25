@@ -64,8 +64,10 @@ impl ActivationPolicy {
         scope: &str,
         snapshot_id: &str,
     ) -> ActivationDecision {
-        let (mode, reason, matched_rule_id) = if let Some(mode) =
-            self.overlays.get(&(route.to_owned(), scope.to_owned())).copied()
+        let (mode, reason, matched_rule_id) = if let Some(mode) = self
+            .overlays
+            .get(&(route.to_owned(), scope.to_owned()))
+            .copied()
         {
             (
                 mode,
