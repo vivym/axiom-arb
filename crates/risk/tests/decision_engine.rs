@@ -2,7 +2,7 @@ use domain::{
     ActivationDecision, DecisionInput, DecisionVerdict, ExecutionMode, IntentCandidate,
     RecoveryIntent,
 };
-use state::NegRiskView;
+use state::{NegRiskFamilyRolloutReadiness, NegRiskView};
 
 #[test]
 fn recovery_only_rejects_strategy_inputs_but_allows_recovery_inputs() {
@@ -62,7 +62,7 @@ fn negrisk_entrypoint_rejects_unusable_projection() {
         &NegRiskView {
             snapshot_id: "snapshot-empty".to_owned(),
             state_version: 9,
-            family_ids: Vec::new(),
+            families: Vec::new(),
         },
         ExecutionMode::Shadow,
     );
@@ -106,6 +106,18 @@ fn sample_negrisk_view() -> NegRiskView {
     NegRiskView {
         snapshot_id: "snapshot-negrisk-1".to_owned(),
         state_version: 8,
-        family_ids: vec!["family-a".to_owned()],
+        families: vec![sample_family("family-a")],
+    }
+}
+
+fn sample_family(family_id: &str) -> NegRiskFamilyRolloutReadiness {
+    NegRiskFamilyRolloutReadiness {
+        family_id: family_id.to_owned(),
+        shadow_parity_ready: false,
+        recovery_ready: false,
+        replay_drift_ready: false,
+        fault_injection_ready: false,
+        conversion_path_ready: false,
+        halt_semantics_ready: false,
     }
 }

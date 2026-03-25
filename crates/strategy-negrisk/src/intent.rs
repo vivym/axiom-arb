@@ -2,11 +2,11 @@ use domain::{DecisionInput, IntentCandidate};
 use state::NegRiskView;
 
 pub fn build_intents(view: &NegRiskView) -> Vec<DecisionInput> {
-    if view.family_ids.is_empty() {
+    let mut family_ids = view.family_ids();
+    if family_ids.is_empty() {
         return Vec::new();
     }
 
-    let mut family_ids = view.family_ids.clone();
     family_ids.sort();
     family_ids.dedup();
 

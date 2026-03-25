@@ -70,8 +70,28 @@ pub struct FullSetView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskFamilyRolloutReadiness {
+    pub family_id: String,
+    pub shadow_parity_ready: bool,
+    pub recovery_ready: bool,
+    pub replay_drift_ready: bool,
+    pub fault_injection_ready: bool,
+    pub conversion_path_ready: bool,
+    pub halt_semantics_ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskView {
     pub snapshot_id: String,
     pub state_version: u64,
-    pub family_ids: Vec<String>,
+    pub families: Vec<NegRiskFamilyRolloutReadiness>,
+}
+
+impl NegRiskView {
+    pub fn family_ids(&self) -> Vec<String> {
+        self.families
+            .iter()
+            .map(|family| family.family_id.clone())
+            .collect()
+    }
 }

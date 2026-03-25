@@ -11,7 +11,7 @@ pub fn phase_one_effective_mode(mode: ExecutionMode) -> ExecutionMode {
 }
 
 pub fn evaluate_negrisk_intent(view: &NegRiskView, mode: ExecutionMode) -> DecisionVerdict {
-    if view.snapshot_id.is_empty() || view.family_ids.is_empty() {
+    if view.snapshot_id.is_empty() || view.family_ids().is_empty() {
         return DecisionVerdict::Rejected;
     }
 
