@@ -1,5 +1,66 @@
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExternalFactPayload(Option<ExternalFactPayloadKind>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExternalFactPayloadKind {
+    NegRiskLiveSubmitObserved {
+        attempt_id: String,
+        scope: String,
+        submission_ref: String,
+    },
+    NegRiskLiveReconcileObserved {
+        pending_ref: String,
+        scope: String,
+        terminal: bool,
+    },
+}
+
+impl ExternalFactPayload {
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    pub fn negrisk_live_submit_observed(
+        attempt_id: impl Into<String>,
+        scope: impl Into<String>,
+        submission_ref: impl Into<String>,
+    ) -> Self {
+        Self(Some(ExternalFactPayloadKind::NegRiskLiveSubmitObserved {
+            attempt_id: attempt_id.into(),
+            scope: scope.into(),
+            submission_ref: submission_ref.into(),
+        }))
+    }
+
+    pub fn negrisk_live_reconcile_observed(
+        pending_ref: impl Into<String>,
+        scope: impl Into<String>,
+        terminal: bool,
+    ) -> Self {
+        Self(Some(
+            ExternalFactPayloadKind::NegRiskLiveReconcileObserved {
+                pending_ref: pending_ref.into(),
+                scope: scope.into(),
+                terminal,
+            },
+        ))
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match &self.0 {
+            None => "none",
+            Some(ExternalFactPayloadKind::NegRiskLiveSubmitObserved { .. }) => {
+                "negrisk_live_submit_observed"
+            }
+            Some(ExternalFactPayloadKind::NegRiskLiveReconcileObserved { .. }) => {
+                "negrisk_live_reconcile_observed"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalFactEvent {
     pub source_kind: String,
@@ -8,6 +69,7 @@ pub struct ExternalFactEvent {
     pub normalizer_version: String,
     pub observed_at: DateTime<Utc>,
     pub raw_payload_hash: Option<String>,
+    pub payload: ExternalFactPayload,
 }
 
 impl ExternalFactEvent {
@@ -25,6 +87,51 @@ impl ExternalFactEvent {
             normalizer_version: normalizer_version.into(),
             observed_at,
             raw_payload_hash: None,
+            payload: ExternalFactPayload::none(),
+        }
+    }
+
+    pub fn negrisk_live_submit_observed(
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        attempt_id: impl Into<String>,
+        scope: impl Into<String>,
+        submission_ref: impl Into<String>,
+    ) -> Self {
+        Self {
+            source_kind: "negrisk_live_submit".to_owned(),
+            source_session_id: source_session_id.into(),
+            source_event_id: source_event_id.into(),
+            normalizer_version: "v1-negrisk-live-submit".to_owned(),
+            observed_at: Utc::now(),
+            raw_payload_hash: None,
+            payload: ExternalFactPayload::negrisk_live_submit_observed(
+                attempt_id,
+                scope,
+                submission_ref,
+            ),
+        }
+    }
+
+    pub fn negrisk_live_reconcile_observed(
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        pending_ref: impl Into<String>,
+        scope: impl Into<String>,
+        terminal: bool,
+    ) -> Self {
+        Self {
+            source_kind: "negrisk_live_reconcile".to_owned(),
+            source_session_id: source_session_id.into(),
+            source_event_id: source_event_id.into(),
+            normalizer_version: "v1-negrisk-live-reconcile".to_owned(),
+            observed_at: Utc::now(),
+            raw_payload_hash: None,
+            payload: ExternalFactPayload::negrisk_live_reconcile_observed(
+                pending_ref,
+                scope,
+                terminal,
+            ),
         }
     }
 }

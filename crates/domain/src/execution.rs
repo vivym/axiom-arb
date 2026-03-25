@@ -48,6 +48,75 @@ pub struct ExecutionReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSubmissionRecord {
+    pub submission_ref: String,
+    pub attempt_id: String,
+    pub route: String,
+    pub scope: String,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveSubmitOutcome {
+    Accepted {
+        submission_record: LiveSubmissionRecord,
+    },
+    RejectedDefinitive {
+        reason: String,
+    },
+    AcceptedButUnconfirmed {
+        submission_record: LiveSubmissionRecord,
+    },
+    Ambiguous {
+        pending_ref: String,
+        reason: String,
+    },
+}
+
+impl LiveSubmitOutcome {
+    pub fn is_accepted(&self) -> bool {
+        matches!(
+            self,
+            Self::Accepted { .. } | Self::AcceptedButUnconfirmed { .. }
+        )
+    }
+
+    pub fn is_ambiguous(&self) -> bool {
+        matches!(self, Self::Ambiguous { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingReconcileWork {
+    pub pending_ref: String,
+    pub route: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconcileOutcome {
+    ConfirmedAuthoritative { submission_ref: String },
+    StillPending,
+    NeedsRecovery { pending_ref: String, reason: String },
+    FailedAmbiguous { pending_ref: String, reason: String },
+    FailedDefinitive { reason: String },
+}
+
+impl ReconcileOutcome {
+    pub fn is_confirmed(&self) -> bool {
+        matches!(self, Self::ConfirmedAuthoritative { .. })
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, Self::StillPending)
+    }
+
+    pub fn needs_recovery(&self) -> bool {
+        matches!(self, Self::NeedsRecovery { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionAttempt {
     pub attempt_id: String,
     pub plan_id: String,

@@ -14,9 +14,10 @@ pub use decision::{
 };
 pub use execution::{
     ExecutionAttempt, ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionPlanRef,
-    ExecutionReceipt, ExecutionRequest, PublishedSnapshotRef,
+    ExecutionReceipt, ExecutionRequest, LiveSubmissionRecord, LiveSubmitOutcome,
+    PendingReconcileWork, PublishedSnapshotRef, ReconcileOutcome,
 };
-pub use facts::ExternalFactEvent;
+pub use facts::{ExternalFactEvent, ExternalFactPayload};
 pub use identifiers::{
     Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap,
     IdentifierMapError, IdentifierRecord, Market, MarketId, MarketRoute, Token, TokenId,

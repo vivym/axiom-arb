@@ -2,7 +2,7 @@ use chrono::Utc;
 use domain::{
     ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionAttemptContext,
     ExecutionAttemptOutcome, ExecutionMode, ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
-    ExternalFactEvent, IntentCandidate, RecoveryIntent, StateConfidence,
+    ExternalFactEvent, ExternalFactPayload, IntentCandidate, RecoveryIntent, StateConfidence,
 };
 
 #[test]
@@ -126,4 +126,32 @@ fn external_fact_event_carries_normalizer_anchor() {
         Utc::now(),
     );
     assert_eq!(event.normalizer_version, "v1-market-normalizer");
+}
+
+#[test]
+fn external_fact_event_can_carry_negrisk_live_submit_fact() {
+    let fact = ExternalFactEvent::negrisk_live_submit_observed(
+        "session-live",
+        "evt-1",
+        "attempt-family-a-1",
+        "family-a",
+        "submission-family-a-1",
+    );
+
+    assert_eq!(fact.source_kind, "negrisk_live_submit");
+    assert_eq!(fact.payload.kind(), "negrisk_live_submit_observed");
+}
+
+#[test]
+fn external_fact_event_defaults_to_no_payload_for_legacy_calls() {
+    let fact = ExternalFactEvent::new(
+        "market_ws",
+        "session-legacy",
+        "evt-legacy",
+        "v1",
+        Utc::now(),
+    );
+
+    assert_eq!(fact.payload.kind(), "none");
+    assert_eq!(fact.payload, ExternalFactPayload::default());
 }
