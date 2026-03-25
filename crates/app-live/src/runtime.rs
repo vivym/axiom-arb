@@ -182,9 +182,15 @@ impl AppRuntime {
             }
         }
 
-        self.store.restore_reconciled_policy();
         if reconcile_required {
+            self.store.restore_reconciled_policy();
             self.store.mark_reconcile_required();
+        } else if self.store.last_applied_journal_seq().is_none() {
+            // An empty committed history still needs a baseline anchor so restart can
+            // validate journal progress and re-publish the synthetic snapshot-0 boundary.
+            self.store.mark_reconciled_after_restore(0);
+        } else {
+            self.store.restore_reconciled_policy();
         }
         Ok(())
     }

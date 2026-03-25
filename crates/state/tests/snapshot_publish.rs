@@ -6,6 +6,33 @@ use domain::{
 use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore};
 
 #[test]
+fn successful_reconcile_reanchors_fullset_before_publication() {
+    let mut store = sample_store_with_anchored_fullset();
+    let report = store.reconcile(state::RemoteSnapshot {
+        open_orders: vec![sample_order("order-1", "hash-1")],
+        ..state::RemoteSnapshot::empty()
+    });
+    assert!(report.succeeded);
+
+    let snapshot = PublishedSnapshot::from_store(
+        &store,
+        ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-17"),
+    );
+
+    assert_eq!(snapshot.snapshot_id, "snapshot-17");
+    assert_eq!(snapshot.state_version, 1);
+    assert_eq!(snapshot.committed_journal_seq, 17);
+    assert!(snapshot.fullset_ready);
+    assert_eq!(
+        snapshot
+            .fullset
+            .as_ref()
+            .map(|view| view.open_orders.clone()),
+        Some(vec!["order-1".to_owned()])
+    );
+}
+
+#[test]
 fn fullset_snapshot_publish_does_not_wait_for_negrisk_projection() {
     let store = sample_store_with_anchored_fullset();
     let snapshot = PublishedSnapshot::from_store(
