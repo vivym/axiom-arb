@@ -24,21 +24,21 @@ fn metric_dimension_vocabularies_are_repo_owned_and_finite() {
 fn runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_reasons() {
     assert_eq!(
         span_names::APP_RUNTIME_RECONCILE,
-        "axiom.app_runtime.reconcile"
+        "axiom.app.runtime.reconcile"
     );
     assert_eq!(
         span_names::APP_RUNTIME_APPLY_INPUT,
-        "axiom.app_runtime.apply_input"
+        "axiom.app.runtime.apply_input"
     );
     assert_eq!(
         span_names::APP_RUNTIME_PUBLISH_SNAPSHOT,
-        "axiom.app_runtime.publish_snapshot"
+        "axiom.app.runtime.publish_snapshot"
     );
     assert_eq!(
         span_names::APP_SUPERVISOR_RESUME,
-        "axiom.app_supervisor.resume"
+        "axiom.app.supervisor.resume"
     );
-    assert_eq!(span_names::APP_DISPATCH_FLUSH, "axiom.app_dispatch.flush");
+    assert_eq!(span_names::APP_DISPATCH_FLUSH, "axiom.app.dispatch.flush");
 
     assert_eq!(field_keys::STATE_VERSION, "state_version");
     assert_eq!(field_keys::JOURNAL_SEQ, "journal_seq");

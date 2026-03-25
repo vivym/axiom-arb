@@ -1,11 +1,11 @@
 pub mod span_names {
     pub const APP_BOOTSTRAP: &str = "axiom.app.bootstrap";
     pub const APP_BOOTSTRAP_COMPLETE: &str = "axiom.app.bootstrap.complete";
-    pub const APP_RUNTIME_RECONCILE: &str = "axiom.app_runtime.reconcile";
-    pub const APP_RUNTIME_APPLY_INPUT: &str = "axiom.app_runtime.apply_input";
-    pub const APP_RUNTIME_PUBLISH_SNAPSHOT: &str = "axiom.app_runtime.publish_snapshot";
-    pub const APP_SUPERVISOR_RESUME: &str = "axiom.app_supervisor.resume";
-    pub const APP_DISPATCH_FLUSH: &str = "axiom.app_dispatch.flush";
+    pub const APP_RUNTIME_RECONCILE: &str = "axiom.app.runtime.reconcile";
+    pub const APP_RUNTIME_APPLY_INPUT: &str = "axiom.app.runtime.apply_input";
+    pub const APP_RUNTIME_PUBLISH_SNAPSHOT: &str = "axiom.app.runtime.publish_snapshot";
+    pub const APP_SUPERVISOR_RESUME: &str = "axiom.app.supervisor.resume";
+    pub const APP_DISPATCH_FLUSH: &str = "axiom.app.dispatch.flush";
     pub const REPLAY_RUN: &str = "axiom.app_replay.run";
     pub const REPLAY_SUMMARY: &str = "axiom.app_replay.summary";
 }
