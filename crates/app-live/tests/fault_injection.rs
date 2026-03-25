@@ -4,6 +4,20 @@ use app_live::{AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
 use domain::{ExternalFactEvent, RuntimeMode};
 
 #[test]
+fn restart_with_empty_durable_history_rebuilds_baseline_snapshot_anchor() {
+    let mut supervisor = AppSupervisor::for_tests();
+
+    let resumed = supervisor.resume_once().unwrap();
+
+    assert_eq!(resumed.last_journal_seq, 0);
+    assert_eq!(resumed.last_state_version, 0);
+    assert_eq!(resumed.runtime_mode, RuntimeMode::Healthy);
+    assert_eq!(resumed.pending_reconcile_count, 0);
+    assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-0"));
+    assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(0));
+}
+
+#[test]
 fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
     let mut supervisor = AppSupervisor::for_tests();
     for journal_seq in 35..=41 {
