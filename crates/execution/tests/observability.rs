@@ -4,7 +4,9 @@ use execution::{
     sink::ShadowVenueSink, ExecutionInstrumentation, ExecutionMode, ExecutionOrchestrator,
 };
 use observability::{bootstrap_observability, field_keys, span_names};
-use support::{capture_spans, sample_planning_input, FailingVenueSink};
+use support::{
+    capture_spans, sample_planning_input, FailingVenueSink, TruthfulShadowVenueSink,
+};
 
 #[test]
 fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {
@@ -49,6 +51,33 @@ fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {
             .field(field_keys::ATTEMPT_OUTCOME)
             .map(String::as_str),
         Some("\"shadow_recorded\"")
+    );
+}
+
+#[test]
+fn instrumented_execution_counts_shadow_records_even_when_sink_label_is_not_shadow() {
+    let observability = bootstrap_observability("execution-test");
+    let orchestrator = ExecutionOrchestrator::new_instrumented(
+        TruthfulShadowVenueSink,
+        ExecutionInstrumentation::enabled(observability.recorder()),
+    );
+
+    let (_captured_spans, receipt) = capture_spans(|| {
+        orchestrator
+            .execute(&sample_planning_input(ExecutionMode::Shadow))
+            .unwrap()
+    });
+
+    assert_eq!(
+        receipt.outcome,
+        domain::ExecutionAttemptOutcome::ShadowRecorded
+    );
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().shadow_attempt_count.key()),
+        Some(1)
     );
 }
 

@@ -88,6 +88,27 @@ impl VenueSink for FailingVenueSink {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub struct TruthfulShadowVenueSink;
+
+impl VenueSink for TruthfulShadowVenueSink {
+    fn sink_kind(&self) -> &'static str {
+        "custom-shadow"
+    }
+
+    fn execute(
+        &self,
+        _plan: &ExecutionPlan,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<domain::ExecutionReceipt, VenueSinkError> {
+        Ok(domain::ExecutionReceipt {
+            attempt_id: attempt.attempt_id.clone(),
+            outcome: domain::ExecutionAttemptOutcome::ShadowRecorded,
+        })
+    }
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 struct CaptureSubscriber {

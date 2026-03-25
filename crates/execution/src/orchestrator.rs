@@ -149,12 +149,10 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         if let Some(span) = &attempt_span {
             span.record(field_keys::ATTEMPT_OUTCOME, attempt_outcome_label(&result));
         }
-        if self.sink.sink_kind() == "shadow"
-            && matches!(
-                result.as_ref(),
-                Ok(receipt)
-                    if receipt.outcome == domain::ExecutionAttemptOutcome::ShadowRecorded
-            )
+        if matches!(
+            result.as_ref(),
+            Ok(receipt) if receipt.outcome == domain::ExecutionAttemptOutcome::ShadowRecorded
+        )
         {
             self.instrumentation.increment_shadow_attempt_count(1);
         }
