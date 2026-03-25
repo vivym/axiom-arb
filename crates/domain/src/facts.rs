@@ -109,13 +109,14 @@ impl ExternalFactEvent {
         attempt_id: impl Into<String>,
         scope: impl Into<String>,
         submission_ref: impl Into<String>,
+        observed_at: DateTime<Utc>,
     ) -> Self {
         Self {
             source_kind: "negrisk_live_submit".to_owned(),
             source_session_id: source_session_id.into(),
             source_event_id: source_event_id.into(),
             normalizer_version: "v1-negrisk-live-submit".to_owned(),
-            observed_at: Utc::now(),
+            observed_at,
             raw_payload_hash: None,
             payload: ExternalFactPayload::negrisk_live_submit_observed(
                 attempt_id,
@@ -131,13 +132,14 @@ impl ExternalFactEvent {
         pending_ref: impl Into<String>,
         scope: impl Into<String>,
         terminal: bool,
+        observed_at: DateTime<Utc>,
     ) -> Self {
         Self {
             source_kind: "negrisk_live_reconcile".to_owned(),
             source_session_id: source_session_id.into(),
             source_event_id: source_event_id.into(),
             normalizer_version: "v1-negrisk-live-reconcile".to_owned(),
-            observed_at: Utc::now(),
+            observed_at,
             raw_payload_hash: None,
             payload: ExternalFactPayload::negrisk_live_reconcile_observed(
                 pending_ref,

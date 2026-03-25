@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use domain::{
     ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionAttemptContext,
     ExecutionAttemptOutcome, ExecutionMode, ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
@@ -131,26 +131,31 @@ fn external_fact_event_carries_normalizer_anchor() {
 
 #[test]
 fn external_fact_event_can_carry_negrisk_live_submit_fact() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 34, 56).unwrap();
     let fact = ExternalFactEvent::negrisk_live_submit_observed(
         "session-live",
         "evt-1",
         "attempt-family-a-1",
         "family-a",
         "submission-family-a-1",
+        observed_at,
     );
 
     assert_eq!(fact.source_kind, "negrisk_live_submit");
     assert_eq!(fact.payload.kind(), "negrisk_live_submit_observed");
+    assert_eq!(fact.observed_at, observed_at);
 }
 
 #[test]
 fn external_fact_payload_exposes_live_submit_fields() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 35, 0).unwrap();
     let fact = ExternalFactEvent::negrisk_live_submit_observed(
         "session-live",
         "evt-1",
         "attempt-family-a-1",
         "family-a",
         "submission-family-a-1",
+        observed_at,
     );
 
     match fact.payload.as_ref() {
@@ -165,12 +170,14 @@ fn external_fact_payload_exposes_live_submit_fields() {
 
 #[test]
 fn external_fact_payload_exposes_live_reconcile_fields() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 36, 0).unwrap();
     let fact = ExternalFactEvent::negrisk_live_reconcile_observed(
         "session-live",
         "evt-2",
         "pending-family-a-1",
         "family-a",
         true,
+        observed_at,
     );
 
     match fact.payload.as_ref() {
@@ -181,6 +188,8 @@ fn external_fact_payload_exposes_live_reconcile_fields() {
         }
         other => panic!("unexpected payload: {other:?}"),
     }
+
+    assert_eq!(fact.observed_at, observed_at);
 }
 
 #[test]
