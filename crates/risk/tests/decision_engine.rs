@@ -108,7 +108,12 @@ fn negrisk_entrypoint_rejects_recovery_only_even_with_usable_projection() {
 }
 
 fn sample_strategy_input(scope: &str) -> DecisionInput {
-    DecisionInput::Strategy(IntentCandidate::new("intent-1", "snapshot-1", scope))
+    DecisionInput::Strategy(IntentCandidate::new(
+        "intent-1",
+        "snapshot-1",
+        "full-set",
+        scope,
+    ))
 }
 
 fn sample_recovery_input(scope: &str) -> DecisionInput {

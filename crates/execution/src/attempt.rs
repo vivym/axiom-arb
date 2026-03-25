@@ -53,6 +53,9 @@ impl ExecutionAttemptFactory {
             attempt_id,
             snapshot_id: request.snapshot_id.clone(),
             execution_mode,
+            route: request.route.clone(),
+            scope: request.scope.clone(),
+            matched_rule_id: request.matched_rule_id.clone(),
         };
 
         (attempt, context)
