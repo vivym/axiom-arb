@@ -10,6 +10,10 @@ pub struct ExecutionRequest {
     pub request_id: String,
     pub decision_input_id: String,
     pub snapshot_id: String,
+    pub route: String,
+    pub scope: String,
+    pub activation_mode: crate::ExecutionMode,
+    pub matched_rule_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +36,9 @@ pub struct ExecutionAttemptContext {
     pub attempt_id: String,
     pub snapshot_id: String,
     pub execution_mode: crate::ExecutionMode,
+    pub route: String,
+    pub scope: String,
+    pub matched_rule_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
