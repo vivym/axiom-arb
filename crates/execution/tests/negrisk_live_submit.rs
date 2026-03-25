@@ -1,10 +1,20 @@
-use execution::{
-    LiveSubmissionRecord, LiveSubmitOutcome, PendingReconcileWork, ReconcileOutcome,
-    SignedFamilySubmission,
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
 };
-use execution::providers::{LiveSubmitProvider, LiveSubmitRequest};
+
+use domain::{
+    ConditionId, EventFamilyId, ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode,
+    SignedOrderIdentity, TokenId,
+};
+use execution::providers::{SignerProvider, SubmitProviderError, VenueExecutionProvider};
 use execution::signing::SignedFamilyMember;
-use domain::{ExecutionAttemptContext, ExecutionMode, SignedOrderIdentity};
+use execution::sink::{LiveVenueSink, VenueSink};
+use execution::{
+    plans::{ExecutionPlan, NegRiskMemberOrderPlan},
+    LiveSubmissionRecord, LiveSubmitOutcome, PendingReconcileWork, ReconcileOutcome,
+    SignedFamilySubmission, TestOrderSigner,
+};
 use rust_decimal::Decimal;
 
 #[test]
@@ -63,11 +73,7 @@ fn live_submit_provider_receives_attempt_and_signed_submission_context() {
     };
     let signed = sample_signed_submission("plan-1");
 
-    let request = LiveSubmitRequest {
-        attempt: &attempt,
-        signed_submission: &signed,
-    };
-    let outcome = provider.submit_live(&request);
+    let outcome = provider.submit_family(&signed, &attempt).unwrap();
 
     assert_eq!(
         outcome,
@@ -85,24 +91,60 @@ fn live_submit_provider_receives_attempt_and_signed_submission_context() {
 
 struct InspectingSubmitProvider;
 
-impl LiveSubmitProvider for InspectingSubmitProvider {
-    fn submit_live(
+impl VenueExecutionProvider for InspectingSubmitProvider {
+    fn submit_family(
         &self,
-        request: &LiveSubmitRequest<'_>,
-    ) -> LiveSubmitOutcome {
-        assert_eq!(request.attempt.attempt_id, "attempt-1");
-        assert_eq!(request.signed_submission.plan_id, "plan-1");
+        signed: &SignedFamilySubmission,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        assert_eq!(attempt.attempt_id, "attempt-1");
+        assert_eq!(signed.plan_id, "plan-1");
 
-        LiveSubmitOutcome::Accepted {
+        Ok(LiveSubmitOutcome::Accepted {
             submission_record: LiveSubmissionRecord {
                 submission_ref: "submission-1".to_owned(),
-                attempt_id: request.attempt.attempt_id.clone(),
-                route: request.attempt.route.clone(),
-                scope: request.attempt.scope.clone(),
+                attempt_id: attempt.attempt_id.clone(),
+                route: attempt.route.clone(),
+                scope: attempt.scope.clone(),
                 provider: "inspecting-submit".to_owned(),
             },
-        }
+        })
     }
+}
+
+#[test]
+fn live_sink_anchors_submission_refs_from_submit_provider_acceptance() {
+    let signer: Arc<dyn SignerProvider> = Arc::new(TestOrderSigner);
+    let provider = Arc::new(RecordingSubmitProvider::accepted("submission-2"));
+    let sink = LiveVenueSink::with_submit_provider(signer, provider.clone());
+
+    let receipt = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap();
+
+    assert_eq!(receipt.outcome, ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(receipt.submission_ref.as_deref(), Some("submission-2"));
+    assert_eq!(receipt.pending_ref, None);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        provider.last_attempt_id.lock().unwrap().as_deref(),
+        Some("attempt-1")
+    );
+}
+
+#[test]
+fn live_sink_anchors_pending_refs_from_ambiguous_submit_provider_outcomes() {
+    let signer: Arc<dyn SignerProvider> = Arc::new(TestOrderSigner);
+    let provider = Arc::new(RecordingSubmitProvider::ambiguous("pending-2"));
+    let sink = LiveVenueSink::with_submit_provider(signer, provider);
+
+    let receipt = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap();
+
+    assert_eq!(receipt.outcome, ExecutionAttemptOutcome::FailedAmbiguous);
+    assert_eq!(receipt.submission_ref, None);
+    assert_eq!(receipt.pending_ref.as_deref(), Some("pending-2"));
 }
 
 fn sample_submission_record(attempt_id: &str) -> LiveSubmissionRecord {
@@ -139,5 +181,85 @@ fn sample_signed_submission(plan_id: &str) -> SignedFamilySubmission {
                 signature: "sig-1".to_owned(),
             },
         }],
+    }
+}
+
+fn sample_family_plan() -> ExecutionPlan {
+    ExecutionPlan::NegRiskSubmitFamily {
+        family_id: EventFamilyId::from("family-a"),
+        members: vec![
+            NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-1"),
+                token_id: TokenId::from("token-1"),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            },
+            NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-2"),
+                token_id: TokenId::from("token-2"),
+                price: Decimal::new(55, 2),
+                quantity: Decimal::new(8, 0),
+            },
+        ],
+    }
+}
+
+fn live_attempt() -> ExecutionAttemptContext {
+    ExecutionAttemptContext {
+        attempt_id: "attempt-1".to_owned(),
+        snapshot_id: "snapshot-1".to_owned(),
+        execution_mode: ExecutionMode::Live,
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        matched_rule_id: None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RecordingSubmitProvider {
+    calls: Arc<AtomicUsize>,
+    last_attempt_id: Arc<Mutex<Option<String>>>,
+    outcome: LiveSubmitOutcome,
+}
+
+impl RecordingSubmitProvider {
+    fn accepted(submission_ref: &str) -> Self {
+        Self {
+            calls: Arc::new(AtomicUsize::new(0)),
+            last_attempt_id: Arc::new(Mutex::new(None)),
+            outcome: LiveSubmitOutcome::Accepted {
+                submission_record: LiveSubmissionRecord {
+                    submission_ref: submission_ref.to_owned(),
+                    attempt_id: "attempt-1".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    provider: "recording-submit".to_owned(),
+                },
+            },
+        }
+    }
+
+    fn ambiguous(pending_ref: &str) -> Self {
+        Self {
+            calls: Arc::new(AtomicUsize::new(0)),
+            last_attempt_id: Arc::new(Mutex::new(None)),
+            outcome: LiveSubmitOutcome::Ambiguous {
+                pending_ref: pending_ref.to_owned(),
+                reason: "timeout".to_owned(),
+            },
+        }
+    }
+}
+
+impl VenueExecutionProvider for RecordingSubmitProvider {
+    fn submit_family(
+        &self,
+        signed: &SignedFamilySubmission,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        *self.last_attempt_id.lock().unwrap() = Some(attempt.attempt_id.clone());
+        assert_eq!(signed.plan_id, sample_family_plan().plan_id());
+        Ok(self.outcome.clone())
     }
 }

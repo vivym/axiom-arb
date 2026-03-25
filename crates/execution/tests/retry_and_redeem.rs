@@ -331,6 +331,19 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
 }
 
 #[test]
+fn execution_receipt_can_carry_live_submit_anchors_for_retry_flows() {
+    let receipt = domain::ExecutionReceipt {
+        attempt_id: "attempt-anchors".to_owned(),
+        outcome: domain::ExecutionAttemptOutcome::FailedAmbiguous,
+        submission_ref: None,
+        pending_ref: Some("pending-anchors".to_owned()),
+    };
+
+    assert_eq!(receipt.pending_ref.as_deref(), Some("pending-anchors"));
+    assert_eq!(receipt.submission_ref, None);
+}
+
+#[test]
 fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     let condition_id = ConditionId::from("condition-1");
     let mut tracker = CtfTracker::new();

@@ -6,6 +6,10 @@ use std::sync::Arc;
 use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode, ExecutionReceipt};
 
 use crate::plans::ExecutionPlan;
+use crate::providers::{
+    LiveSubmissionRecord, LiveSubmitOutcome, SignerProvider, SubmitProviderError,
+    VenueExecutionProvider,
+};
 use crate::signing::{OrderSigner, SignedFamilySubmission};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,15 +47,15 @@ pub struct SignedFamilyHookError {
 
 #[derive(Clone, Default)]
 pub struct LiveVenueSink {
-    order_signer: Option<Arc<dyn OrderSigner>>,
-    signed_family_hook: Option<Arc<dyn SignedFamilyHook>>,
+    signer: Option<Arc<dyn SignerProvider>>,
+    submit_provider: Option<Arc<dyn VenueExecutionProvider>>,
 }
 
 impl fmt::Debug for LiveVenueSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LiveVenueSink")
-            .field("order_signer", &self.order_signer.is_some())
-            .field("signed_family_hook", &self.signed_family_hook.is_some())
+            .field("signer", &self.signer.is_some())
+            .field("submit_provider", &self.submit_provider.is_some())
             .finish()
     }
 }
@@ -61,10 +65,22 @@ impl LiveVenueSink {
         Self::default()
     }
 
+    pub fn with_submit_provider(
+        signer: Arc<dyn SignerProvider>,
+        submit_provider: Arc<dyn VenueExecutionProvider>,
+    ) -> Self {
+        Self {
+            signer: Some(signer),
+            submit_provider: Some(submit_provider),
+        }
+    }
+
     pub fn with_order_signer(order_signer: Arc<dyn OrderSigner>) -> Self {
         Self {
-            order_signer: Some(order_signer),
-            signed_family_hook: None,
+            signer: Some(Arc::new(OrderSignerAdapter {
+                inner: order_signer,
+            })),
+            submit_provider: None,
         }
     }
 
@@ -72,10 +88,12 @@ impl LiveVenueSink {
         order_signer: Arc<dyn OrderSigner>,
         hook: Arc<dyn SignedFamilyHook>,
     ) -> Self {
-        Self {
-            order_signer: Some(order_signer),
-            signed_family_hook: Some(hook),
-        }
+        Self::with_submit_provider(
+            Arc::new(OrderSignerAdapter {
+                inner: order_signer,
+            }),
+            Arc::new(HookSubmitProvider { hook }),
+        )
     }
 }
 
@@ -119,39 +137,39 @@ impl VenueSink for LiveVenueSink {
         ensure_live_sink_mode(plan, attempt.execution_mode)?;
 
         if let ExecutionPlan::NegRiskSubmitFamily { .. } = plan {
-            // Fail-closed: neg-risk family submit plans must never reach "Succeeded" without both a
-            // signer and a downstream consumer hook.
             let signer = self
-                .order_signer
+                .signer
                 .as_ref()
                 .ok_or_else(|| VenueSinkError::Rejected {
-                    reason: "missing order signer for NegRiskSubmitFamily".to_owned(),
+                    reason: "missing signer provider for NegRiskSubmitFamily".to_owned(),
                 })?;
-            let hook =
-                self.signed_family_hook
+            let submit_provider =
+                self.submit_provider
                     .as_ref()
                     .ok_or_else(|| VenueSinkError::Rejected {
-                        reason: "missing signed family hook for NegRiskSubmitFamily".to_owned(),
+                        reason: "missing submit provider for NegRiskSubmitFamily".to_owned(),
                     })?;
 
-            // Narrow plumbing hook for Phase 3b neg-risk live submit: sign the planned orders
-            // deterministically. Non-neg-risk plans must remain unaffected by signer/hook configuration.
+            // Sign the planned orders before handing them to the venue provider.
             let signed = signer
                 .sign_family(plan)
                 .map_err(|err| VenueSinkError::Rejected {
                     reason: format!("signing error: {err:?}"),
                 })?;
 
-            hook.on_signed_family(&signed, attempt)
+            let live_outcome = submit_provider
+                .submit_family(&signed, attempt)
                 .map_err(|err| VenueSinkError::Rejected {
-                    reason: format!("signed-family hook error: {err:?}"),
+                    reason: format!("submit provider error: {err:?}"),
                 })?;
+
+            return Ok(receipt_from_live_submit_outcome(attempt, live_outcome));
         }
 
-        Ok(ExecutionReceipt {
-            attempt_id: attempt.attempt_id.clone(),
-            outcome: ExecutionAttemptOutcome::Succeeded,
-        })
+        Ok(ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::Succeeded,
+        ))
     }
 }
 
@@ -181,9 +199,73 @@ impl VenueSink for ShadowVenueSink {
             .borrow_mut()
             .push(attempt.attempt_id.clone());
 
-        Ok(ExecutionReceipt {
-            attempt_id: attempt.attempt_id.clone(),
-            outcome: ExecutionAttemptOutcome::ShadowRecorded,
+        Ok(ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::ShadowRecorded,
+        ))
+    }
+}
+
+#[derive(Clone)]
+struct OrderSignerAdapter {
+    inner: Arc<dyn OrderSigner>,
+}
+
+impl SignerProvider for OrderSignerAdapter {
+    fn sign_family(
+        &self,
+        plan: &ExecutionPlan,
+    ) -> Result<crate::signing::SignedFamilySubmission, crate::signing::SigningError> {
+        OrderSigner::sign_family(self.inner.as_ref(), plan)
+    }
+}
+
+#[derive(Clone)]
+struct HookSubmitProvider {
+    hook: Arc<dyn SignedFamilyHook>,
+}
+
+impl VenueExecutionProvider for HookSubmitProvider {
+    fn submit_family(
+        &self,
+        signed: &SignedFamilySubmission,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        self.hook.on_signed_family(signed, attempt).map_err(|err| {
+            SubmitProviderError::new(format!("signed-family hook error: {err:?}"))
+        })?;
+
+        Ok(LiveSubmitOutcome::Accepted {
+            submission_record: LiveSubmissionRecord {
+                submission_ref: format!("hook-submit:{}", attempt.attempt_id),
+                attempt_id: attempt.attempt_id.clone(),
+                route: attempt.route.clone(),
+                scope: attempt.scope.clone(),
+                provider: "signed-family-hook".to_owned(),
+            },
         })
+    }
+}
+
+fn receipt_from_live_submit_outcome(
+    attempt: &ExecutionAttemptContext,
+    outcome: LiveSubmitOutcome,
+) -> ExecutionReceipt {
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record }
+        | LiveSubmitOutcome::AcceptedButUnconfirmed { submission_record } => ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::Succeeded,
+        )
+        .with_submission_ref(submission_record.submission_ref),
+        LiveSubmitOutcome::RejectedDefinitive { .. } => ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::FailedDefinitive,
+        ),
+        LiveSubmitOutcome::Ambiguous { pending_ref, .. } => ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::FailedAmbiguous,
+        )
+        .with_pending_ref(pending_ref),
     }
 }

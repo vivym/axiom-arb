@@ -7,8 +7,9 @@ use execution::{
     attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     plans::ExecutionPlan,
+    providers::{SubmitProviderError, VenueExecutionProvider},
     sink::{LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError},
-    TestOrderSigner,
+    LiveSubmissionRecord, LiveSubmitOutcome, TestOrderSigner,
 };
 use rust_decimal::Decimal;
 
@@ -136,6 +137,25 @@ fn recovery_only_mode_allows_neg_risk_family_submission_once_it_reaches_executio
         .unwrap();
 
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+}
+
+#[test]
+fn live_orchestrator_anchors_provider_submissions_on_the_receipt() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::with_submit_provider(
+        Arc::new(TestOrderSigner),
+        Arc::new(RecordingSubmitProvider::accepted("submission-orchestrator")),
+    ));
+
+    let receipt = orchestrator
+        .execute(&sample_negrisk_planning_input(ExecutionMode::Live))
+        .unwrap();
+
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(
+        receipt.submission_ref.as_deref(),
+        Some("submission-orchestrator")
+    );
+    assert_eq!(receipt.pending_ref, None);
 }
 
 #[derive(Debug)]
@@ -342,6 +362,41 @@ impl execution::sink::VenueSink for FailingVenueSink {
     ) -> Result<domain::ExecutionReceipt, execution::sink::VenueSinkError> {
         Err(execution::sink::VenueSinkError::Rejected {
             reason: "planned sink failure".to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RecordingSubmitProvider {
+    submission_ref: String,
+}
+
+impl RecordingSubmitProvider {
+    fn accepted(submission_ref: &str) -> Self {
+        Self {
+            submission_ref: submission_ref.to_owned(),
+        }
+    }
+}
+
+impl VenueExecutionProvider for RecordingSubmitProvider {
+    fn submit_family(
+        &self,
+        signed: &execution::signing::SignedFamilySubmission,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        assert_eq!(attempt.route, "neg-risk");
+        assert_eq!(attempt.scope, "family-a");
+        assert_eq!(signed.members.len(), 2);
+
+        Ok(LiveSubmitOutcome::Accepted {
+            submission_record: LiveSubmissionRecord {
+                submission_ref: self.submission_ref.clone(),
+                attempt_id: attempt.attempt_id.clone(),
+                route: attempt.route.clone(),
+                scope: attempt.scope.clone(),
+                provider: "recording-submit".to_owned(),
+            },
         })
     }
 }

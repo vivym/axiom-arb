@@ -45,6 +45,29 @@ pub struct ExecutionAttemptContext {
 pub struct ExecutionReceipt {
     pub attempt_id: String,
     pub outcome: ExecutionAttemptOutcome,
+    pub submission_ref: Option<String>,
+    pub pending_ref: Option<String>,
+}
+
+impl ExecutionReceipt {
+    pub fn new(attempt_id: impl Into<String>, outcome: ExecutionAttemptOutcome) -> Self {
+        Self {
+            attempt_id: attempt_id.into(),
+            outcome,
+            submission_ref: None,
+            pending_ref: None,
+        }
+    }
+
+    pub fn with_submission_ref(mut self, submission_ref: impl Into<String>) -> Self {
+        self.submission_ref = Some(submission_ref.into());
+        self
+    }
+
+    pub fn with_pending_ref(mut self, pending_ref: impl Into<String>) -> Self {
+        self.pending_ref = Some(pending_ref.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

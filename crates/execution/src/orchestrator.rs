@@ -98,6 +98,7 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
             input.execution_mode,
         );
 
+        // The sink now owns provider-backed submit semantics and receipt anchoring.
         self.sink
             .execute(&plan, &attempt_context)
             .map_err(|error| ExecutionError::Sink { error })
