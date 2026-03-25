@@ -1,5 +1,6 @@
 mod auth;
 mod heartbeat;
+mod instrumentation;
 mod metadata;
 mod relayer;
 mod rest;
@@ -15,6 +16,7 @@ pub use auth::{
 };
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
+pub use instrumentation::VenueProducerInstrumentation;
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
