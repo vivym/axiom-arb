@@ -116,6 +116,12 @@ The target architecture has four layers:
 4. `Operations Layer`
    - dashboards, alerting, runbooks, incident workflows
 
+The `OpenTelemetry` backend adapter itself must remain owned by the `observability` crate.
+
+- exporter setup must not be distributed across business crates or ad hoc process entrypoints
+- collector/export enablement must be opt-in and safe to disable
+- local-only operation must remain a supported runtime mode even after the backend exists
+
 ### 5.3 Migration Rule
 
 Moving from one process to many must change deployment topology and resource metadata, but must not rewrite the trading-domain observability contract.
@@ -203,6 +209,12 @@ The following values are resource-level or process-level identity and should be 
 - worker or job identity where applicable
 
 These identifiers should be configured once per process or run context, not redundantly emitted as ad hoc business-event fields unless there is a specific correlation need.
+
+Cardinality rules:
+
+- `service.name`, `service.instance.id`, and `run_id` are primarily for resource identity, trace correlation, and structured logs
+- they must not automatically become high-cardinality metric labels in Prometheus-facing paths
+- any use of these identifiers in metrics must be explicit, justified, and bounded so that series growth remains operationally safe
 
 ### 6.4 Trace And Event Correlation Fields
 
@@ -343,6 +355,8 @@ Progression gates:
 
 Deliverables:
 
+- an optional OTel backend adapter implemented inside the `observability` crate
+- explicit enable/disable semantics for collector-backed export so local-only operation remains supported
 - OpenTelemetry Collector configuration
 - trace export to Tempo
 - metric export to Prometheus
