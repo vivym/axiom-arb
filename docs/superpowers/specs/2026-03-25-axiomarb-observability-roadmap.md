@@ -120,6 +120,16 @@ The target architecture has four layers:
 
 Moving from one process to many must change deployment topology and resource metadata, but must not rewrite the trading-domain observability contract.
 
+### 5.4 Local Testability Preservation
+
+Collector-backed observability must extend the local model, not replace it.
+
+Even after OTel export is introduced:
+
+- local structured tracing must remain usable without any collector
+- the in-process metric registry must remain available for local tests and fault injection
+- repository tests must not require a live collector in order to validate signal semantics
+
 ## 6. Signal Taxonomy
 
 Observability signals are divided into two mandatory groups: `platform signals` and `trading signals`.
@@ -182,13 +192,22 @@ Observability signals are divided into two mandatory groups: `platform signals` 
 - summary counters
 - decision evidence for blocks, halts, and exclusions
 
-### 6.3 Correlation Fields
+### 6.3 Resource And Process Identity
 
-The following IDs must become stable cross-signal correlation keys:
+The following values are resource-level or process-level identity and should be treated as such by future OTel adaptation:
 
-- `run_id`
 - `service.name`
 - `service.instance.id`
+- `run_id`
+- deployment environment
+- worker or job identity where applicable
+
+These identifiers should be configured once per process or run context, not redundantly emitted as ad hoc business-event fields unless there is a specific correlation need.
+
+### 6.4 Trace And Event Correlation Fields
+
+The following IDs must become stable business-level correlation keys where available:
+
 - `runtime_mode`
 - `event_family_id`
 - `condition_id`
@@ -201,7 +220,7 @@ The following IDs must become stable cross-signal correlation keys:
 - `discovery_revision`
 - `metadata_snapshot_hash`
 
-### 6.4 Observability vs Journal
+### 6.5 Observability vs Journal
 
 `event_journal` remains the authoritative trading fact store. Observability does not replace it.
 
@@ -245,10 +264,11 @@ Purpose:
 
 Requirements:
 
-- mandatory collector-backed ingestion
-- cross-process trace correlation
-- sampling, retention, batching, and backpressure behavior validation
-- dashboards, alert paths, and runbooks tested against realistic drills
+- in `Wave 2`, staging may be used in a pre-collector mode to validate multi-process topology, resource metadata, and cross-process correlation contracts
+- from `Wave 3` onward, staging must use mandatory collector-backed ingestion
+- cross-process trace correlation must be validated before production rollout
+- sampling, retention, batching, and backpressure behavior are validated once collector-backed staging exists
+- dashboards, alert paths, and runbooks are exercised in staging once the corresponding Wave 3 and Wave 4 capabilities exist
 
 ### 7.4 Prod
 
@@ -294,12 +314,14 @@ Deliverables:
 - relayer pending and stale transaction signals
 - neg-risk discovery, refresh, and halt producers
 - real emitters for trading-specific metrics that already exist as handles
+- completion of missing repo-owned metric contracts for first-class trading-safety signals that later dashboards and alerts depend on, including `unknown-order`, `broken-leg inventory`, and `stale relayer transaction` signals, but only when those contracts can be backed by real producers rather than synthetic state
 
 Progression gates:
 
 - no synthetic or read-path-only emitters for core trading signals
 - signal semantics are reproducible in `local + dev`
 - at least one execution or recovery incident can be explained end-to-end via spans, logs, and metrics
+- trading-safety dashboards and alerts do not depend on undefined metric contracts
 
 ### 8.3 Wave 2: Multi-Process Contracts
 
@@ -315,7 +337,7 @@ Progression gates:
 
 - service decomposition does not change the business-level signal vocabulary
 - a single execution or recovery incident can be followed across multiple processes
-- staging can run a multi-process topology with consistent observability semantics
+- `dev` and pre-collector `staging` can run a multi-process topology with consistent observability semantics
 
 ### 8.4 Wave 3: Collector And OSS Stack
 
@@ -328,12 +350,14 @@ Deliverables:
 - Grafana integration
 - environment-specific sampling and retention policy
 - exporter retry, batching, and backpressure policy
+- preservation of local in-process testability alongside collector-backed export
 
 Progression gates:
 
 - collector failure degrades observability only, not trading correctness
 - traces, metrics, and logs are stable in staging
 - failure drills cover websocket churn, relayer lag, broken-leg recovery, and collector outage
+- local and CI tests still validate signal semantics without requiring a live collector
 
 ### 8.5 Wave 4: Production Operations
 
