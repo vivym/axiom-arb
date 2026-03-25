@@ -1,5 +1,6 @@
 pub mod attempt;
 pub mod ctf;
+pub mod negrisk;
 pub mod orchestrator;
 pub mod orders;
 pub mod plans;

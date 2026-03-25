@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
-use domain::{ExecutionMode, ExecutionRequest};
+use domain::{ConditionId, EventFamilyId, ExecutionMode, ExecutionRequest, TokenId};
 use execution::{
     attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
+    plans::ExecutionPlan,
     sink::{LiveVenueSink, ShadowVenueSink},
 };
+use rust_decimal::Decimal;
 
 #[test]
 fn live_and_shadow_share_the_same_plan_before_sink_dispatch() {
@@ -100,6 +102,54 @@ fn reduce_only_mode_refuses_plans_that_expand_risk() {
         .unwrap_err();
 
     assert!(err.is_mode_violation());
+}
+
+#[test]
+fn reduce_only_mode_refuses_neg_risk_family_submission_plans() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let err = orchestrator
+        .plan(&sample_negrisk_planning_input(ExecutionMode::ReduceOnly))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        execution::ExecutionError::ModeViolation {
+            execution_mode: ExecutionMode::ReduceOnly,
+            plan: ExecutionPlan::NegRiskSubmitFamily { .. },
+        }
+    ));
+}
+
+#[test]
+fn recovery_only_mode_refuses_strategy_originated_neg_risk_family_submission_plans() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let err = orchestrator
+        .plan(&sample_negrisk_planning_input(ExecutionMode::RecoveryOnly))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        execution::ExecutionError::ModeViolation {
+            execution_mode: ExecutionMode::RecoveryOnly,
+            plan: ExecutionPlan::NegRiskSubmitFamily { .. },
+        }
+    ));
+}
+
+#[test]
+fn live_and_shadow_share_the_same_neg_risk_family_plan_before_sink_dispatch() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let live_plan = orchestrator
+        .plan(&sample_negrisk_planning_input(ExecutionMode::Live))
+        .unwrap();
+    let shadow_plan = orchestrator
+        .plan(&sample_negrisk_planning_input(ExecutionMode::Shadow))
+        .unwrap();
+
+    assert_eq!(live_plan, shadow_plan);
 }
 
 #[test]
@@ -226,10 +276,46 @@ fn execution_plan() -> execution::plans::ExecutionPlan {
     }
 }
 
+fn neg_risk_plan() -> execution::plans::ExecutionPlan {
+    execution::plans::ExecutionPlan::NegRiskSubmitFamily {
+        family_id: EventFamilyId::from("family-a"),
+        members: vec![
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-1"),
+                token_id: TokenId::from("token-1"),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            },
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-2"),
+                token_id: TokenId::from("token-2"),
+                price: Decimal::new(55, 2),
+                quantity: Decimal::new(8, 0),
+            },
+        ],
+    }
+}
+
 fn non_risk_expanding_plan() -> execution::plans::ExecutionPlan {
     execution::plans::ExecutionPlan::CancelStale {
         order_id: domain::OrderId::from("order-non-risk"),
     }
+}
+
+fn sample_negrisk_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
+    ExecutionPlanningInput::new(
+        ExecutionRequest {
+            request_id: format!("request-negrisk-{execution_mode:?}"),
+            decision_input_id: "intent-negrisk-1".to_owned(),
+            snapshot_id: "snapshot-negrisk-1".to_owned(),
+            route: "neg-risk".to_owned(),
+            scope: "family-a".to_owned(),
+            activation_mode: execution_mode,
+            matched_rule_id: Some("rule-negrisk-family-a".to_owned()),
+        },
+        execution_mode,
+        neg_risk_plan(),
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

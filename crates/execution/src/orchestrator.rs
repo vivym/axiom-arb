@@ -84,6 +84,15 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
             });
         }
 
+        if input.request.activation_mode == ExecutionMode::RecoveryOnly
+            && matches!(input.plan, ExecutionPlan::NegRiskSubmitFamily { .. })
+        {
+            return Err(ExecutionError::ModeViolation {
+                execution_mode: input.request.activation_mode,
+                plan: input.plan.clone(),
+            });
+        }
+
         Ok(input.plan.clone())
     }
 

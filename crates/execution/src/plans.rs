@@ -1,4 +1,13 @@
-use domain::{ConditionId, OrderId};
+use domain::{ConditionId, EventFamilyId, OrderId, TokenId};
+use rust_decimal::Decimal;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskMemberOrderPlan {
+    pub condition_id: ConditionId,
+    pub token_id: TokenId,
+    pub price: Decimal,
+    pub quantity: Decimal,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionPlan {
@@ -6,6 +15,10 @@ pub enum ExecutionPlan {
     FullSetSplitThenSell { condition_id: ConditionId },
     CancelStale { order_id: OrderId },
     RedeemResolved { condition_id: ConditionId },
+    NegRiskSubmitFamily {
+        family_id: EventFamilyId,
+        members: Vec<NegRiskMemberOrderPlan>,
+    },
 }
 
 impl ExecutionPlan {
@@ -21,6 +34,21 @@ impl ExecutionPlan {
             Self::RedeemResolved { condition_id } => {
                 format!("redeem-resolved:{}", condition_id.as_str())
             }
+            Self::NegRiskSubmitFamily { family_id, members } => format!(
+                "negrisk-submit-family:{}:{}",
+                family_id.as_str(),
+                members
+                    .iter()
+                    .map(|member| format!(
+                        "{}:{}:{}:{}",
+                        member.condition_id.as_str(),
+                        member.token_id.as_str(),
+                        member.price,
+                        member.quantity
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
         }
     }
 
@@ -29,7 +57,7 @@ impl ExecutionPlan {
             Self::FullSetBuyThenMerge { condition_id }
             | Self::FullSetSplitThenSell { condition_id }
             | Self::RedeemResolved { condition_id } => Some(condition_id),
-            Self::CancelStale { .. } => None,
+            Self::CancelStale { .. } | Self::NegRiskSubmitFamily { .. } => None,
         }
     }
 
@@ -47,7 +75,9 @@ impl ExecutionPlan {
     pub fn is_risk_expanding(&self) -> bool {
         matches!(
             self,
-            Self::FullSetBuyThenMerge { .. } | Self::FullSetSplitThenSell { .. }
+            Self::FullSetBuyThenMerge { .. }
+                | Self::FullSetSplitThenSell { .. }
+                | Self::NegRiskSubmitFamily { .. }
         )
     }
 }
