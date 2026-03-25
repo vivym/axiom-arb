@@ -62,7 +62,9 @@ impl WsSessionMonitor {
     ) -> WsSessionEvent {
         debug_assert_eq!(state.channel, self.channel);
 
-        let status = if state.connected || state.last_connected_at.is_some() {
+        let status = if state.connected {
+            WsSessionStatus::Connected
+        } else if state.last_disconnected_at.is_some() {
             state.reconnect_total = state.reconnect_total.saturating_add(1);
             WsSessionStatus::Reconnected
         } else {

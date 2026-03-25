@@ -52,6 +52,77 @@ fn reconnect_event_emits_repo_owned_span_and_channel_counter() {
 }
 
 #[test]
+fn connected_event_emits_repo_owned_span_without_reconnect_counter() {
+    let observability = bootstrap_observability("venue-polymarket-test");
+    let instrumentation = VenueProducerInstrumentation::enabled(observability.recorder());
+    let monitor = WsSessionMonitor::new(WsChannelKind::Market);
+    let mut state = WsSessionState::new(WsChannelKind::Market);
+
+    let connected = monitor.record_connected(&mut state, "conn-1", ts(10, 0, 0));
+
+    let (captured_spans, ()) =
+        capture_spans(|| instrumentation.record_ws_session_event(&connected));
+
+    let dims = MetricDimensions::new([MetricDimension::Channel(Channel::Market)]);
+    assert_eq!(
+        observability.registry().snapshot().counter_with_dimensions(
+            observability.metrics().websocket_reconnect_total.key(),
+            &dims
+        ),
+        None
+    );
+    let span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::VENUE_WS_SESSION)
+        .expect("venue websocket span missing");
+    assert_eq!(
+        span.field(field_keys::CHANNEL).map(String::as_str),
+        Some("\"market\"")
+    );
+    assert_eq!(
+        span.field(field_keys::SESSION_STATUS).map(String::as_str),
+        Some("\"connected\"")
+    );
+}
+
+#[test]
+fn disconnected_event_emits_repo_owned_span_without_reconnect_counter() {
+    let observability = bootstrap_observability("venue-polymarket-test");
+    let instrumentation = VenueProducerInstrumentation::enabled(observability.recorder());
+    let monitor = WsSessionMonitor::new(WsChannelKind::Market);
+    let mut state = WsSessionState::new(WsChannelKind::Market);
+
+    monitor.record_connected(&mut state, "conn-1", ts(10, 0, 0));
+    let disconnected = monitor
+        .record_disconnected(&mut state, "network_gap", ts(10, 0, 5))
+        .unwrap();
+
+    let (captured_spans, ()) =
+        capture_spans(|| instrumentation.record_ws_session_event(&disconnected));
+
+    let dims = MetricDimensions::new([MetricDimension::Channel(Channel::Market)]);
+    assert_eq!(
+        observability.registry().snapshot().counter_with_dimensions(
+            observability.metrics().websocket_reconnect_total.key(),
+            &dims
+        ),
+        None
+    );
+    let span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::VENUE_WS_SESSION)
+        .expect("venue websocket span missing");
+    assert_eq!(
+        span.field(field_keys::CHANNEL).map(String::as_str),
+        Some("\"market\"")
+    );
+    assert_eq!(
+        span.field(field_keys::SESSION_STATUS).map(String::as_str),
+        Some("\"disconnected\"")
+    );
+}
+
+#[test]
 fn disabled_instrumentation_emits_no_ws_session_span_or_reconnect_counter() {
     let observability = bootstrap_observability("venue-polymarket-test");
     let instrumentation = VenueProducerInstrumentation::disabled();

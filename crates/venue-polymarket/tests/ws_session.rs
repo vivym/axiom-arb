@@ -54,6 +54,33 @@ fn reconnect_after_disconnect_increments_counter_and_updates_connection_id() {
 }
 
 #[test]
+fn duplicate_connected_record_keeps_connected_status_without_incrementing_reconnect_total() {
+    let monitor = WsSessionMonitor::new(WsChannelKind::Market);
+    let mut state = WsSessionState::new(WsChannelKind::Market);
+
+    let first = monitor.record_connected(&mut state, "conn-1", ts(10, 0, 0));
+    assert_eq!(first.status, WsSessionStatus::Connected);
+    assert_eq!(first.reconnect_total, 0);
+    assert_eq!(state.connection_id.as_deref(), Some("conn-1"));
+    assert!(state.connected);
+    assert_eq!(state.reconnect_total, 0);
+
+    let duplicate = monitor.record_connected(&mut state, "conn-1", ts(10, 0, 3));
+    assert_eq!(duplicate.channel, WsChannelKind::Market);
+    assert_eq!(duplicate.connection_id, "conn-1");
+    assert_eq!(duplicate.status, WsSessionStatus::Connected);
+    assert_eq!(duplicate.reconnect_total, 0);
+    assert_eq!(duplicate.observed_at, ts(10, 0, 3));
+    assert_eq!(duplicate.disconnect_reason, None);
+    assert_eq!(state.connection_id.as_deref(), Some("conn-1"));
+    assert!(state.connected);
+    assert_eq!(state.reconnect_total, 0);
+    assert_eq!(state.last_connected_at, Some(ts(10, 0, 3)));
+    assert_eq!(state.last_disconnected_at, None);
+    assert_eq!(state.last_disconnect_reason, None);
+}
+
+#[test]
 fn duplicate_disconnect_without_active_connection_is_ignored() {
     let monitor = WsSessionMonitor::new(WsChannelKind::User);
     let mut state = WsSessionState::new(WsChannelKind::User);
