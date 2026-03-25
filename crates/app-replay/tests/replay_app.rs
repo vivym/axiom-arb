@@ -13,8 +13,9 @@ use persistence::{models::JournalEntryInput, run_migrations, JournalRepo};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 use app_replay::{
-    parse_args, replay_event_journal_from_pool, replay_from_source, replay_journal, ReplayConsumer,
-    ReplayRange, ReplaySource, SummaryReplayConsumer,
+    load_negrisk_live_attempt_artifacts, parse_args, replay_event_journal_from_pool,
+    replay_from_source, replay_journal, ReplayConsumer, ReplayRange, ReplaySource,
+    SummaryReplayConsumer,
 };
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
@@ -134,6 +135,22 @@ async fn replay_event_journal_from_pool_materializes_summary_from_db_rows() {
         assert_eq!(summary.per_source_kind.get("internal"), Some(&1));
         assert_eq!(summary.per_event_type.get("trade"), Some(&1));
         assert_eq!(summary.per_event_type.get("heartbeat"), Some(&1));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_attempt_artifact_loader_returns_empty_when_no_live_attempts_exist() {
+    if database_url().is_none() {
+        return;
+    }
+
+    with_test_database(|db| async move {
+        run_migrations(&db.pool).await.unwrap();
+        seed_journal(&db.pool).await;
+
+        let rows = load_negrisk_live_attempt_artifacts(&db.pool).await.unwrap();
+        assert!(rows.is_empty());
     })
     .await;
 }
