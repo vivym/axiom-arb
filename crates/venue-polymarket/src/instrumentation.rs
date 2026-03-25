@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use observability::{
-    metric_dimensions, span_names, MetricDimension, MetricDimensions, RuntimeMetricsRecorder,
+    field_keys, metric_dimensions, span_names, MetricDimension, MetricDimensions,
+    RuntimeMetricsRecorder,
 };
 
 use crate::{
@@ -64,12 +65,16 @@ impl VenueProducerInstrumentation {
 
         recorder.record_heartbeat_freshness(state.freshness_seconds(at));
 
-        tracing::info_span!(
+        let span = tracing::info_span!(
             span_names::VENUE_HEARTBEAT,
-            heartbeat_id = ?state.heartbeat_id,
+            heartbeat_id = tracing::field::Empty,
             heartbeat_status = "success",
-        )
-        .in_scope(|| {});
+        );
+        if let Some(heartbeat_id) = state.heartbeat_id.as_deref() {
+            span.record(field_keys::HEARTBEAT_ID, heartbeat_id);
+        }
+
+        span.in_scope(|| {});
     }
 
     pub fn record_heartbeat_attention(
@@ -84,11 +89,15 @@ impl VenueProducerInstrumentation {
 
         recorder.record_heartbeat_freshness(state.freshness_seconds(at));
 
-        tracing::warn_span!(
+        let span = tracing::warn_span!(
             span_names::VENUE_HEARTBEAT,
-            heartbeat_id = ?state.heartbeat_id,
+            heartbeat_id = tracing::field::Empty,
             heartbeat_status = reason.as_status(),
-        )
-        .in_scope(|| {});
+        );
+        if let Some(heartbeat_id) = state.heartbeat_id.as_deref() {
+            span.record(field_keys::HEARTBEAT_ID, heartbeat_id);
+        }
+
+        span.in_scope(|| {});
     }
 }

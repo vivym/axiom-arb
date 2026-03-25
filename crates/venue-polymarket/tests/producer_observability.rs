@@ -113,6 +113,10 @@ fn heartbeat_success_records_freshness_and_structured_status() {
         span.field(field_keys::HEARTBEAT_STATUS).map(String::as_str),
         Some("\"success\"")
     );
+    assert_eq!(
+        span.field(field_keys::HEARTBEAT_ID).map(String::as_str),
+        Some("\"hb-1\"")
+    );
 }
 
 #[test]
@@ -184,6 +188,10 @@ fn missed_heartbeat_records_freshness_and_structured_status() {
     assert_eq!(
         span.field(field_keys::HEARTBEAT_STATUS).map(String::as_str),
         Some("\"missed\"")
+    );
+    assert_eq!(
+        span.field(field_keys::HEARTBEAT_ID).map(String::as_str),
+        Some("\"hb-1\"")
     );
 }
 
