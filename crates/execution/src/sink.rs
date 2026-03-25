@@ -1,9 +1,12 @@
 use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode, ExecutionReceipt};
 
 use crate::plans::ExecutionPlan;
+use crate::signing::OrderSigner;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VenueSinkError {
@@ -25,12 +28,28 @@ pub trait VenueSink {
     ) -> Result<ExecutionReceipt, VenueSinkError>;
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct LiveVenueSink;
+#[derive(Clone, Default)]
+pub struct LiveVenueSink {
+    order_signer: Option<Arc<dyn OrderSigner>>,
+}
+
+impl fmt::Debug for LiveVenueSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LiveVenueSink")
+            .field("order_signer", &self.order_signer.is_some())
+            .finish()
+    }
+}
 
 impl LiveVenueSink {
     pub fn noop() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_order_signer(order_signer: Arc<dyn OrderSigner>) -> Self {
+        Self {
+            order_signer: Some(order_signer),
+        }
     }
 }
 
@@ -72,6 +91,15 @@ impl VenueSink for LiveVenueSink {
         attempt: &ExecutionAttemptContext,
     ) -> Result<ExecutionReceipt, VenueSinkError> {
         ensure_live_sink_mode(plan, attempt.execution_mode)?;
+
+        if let Some(signer) = &self.order_signer {
+            // Plumbing hook for upcoming live submit work: sign the planned orders deterministically.
+            // This sink still behaves as a no-op executor for now.
+            signer.sign_family(plan).map_err(|err| VenueSinkError::Rejected {
+                reason: format!("signing error: {err:?}"),
+            })?;
+        }
+
         Ok(ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
             outcome: ExecutionAttemptOutcome::Succeeded,
