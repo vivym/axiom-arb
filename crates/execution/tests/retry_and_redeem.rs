@@ -30,6 +30,10 @@ fn order_envelope_carries_the_attempt_context_used_to_create_it() {
         request_id: "request-12".to_owned(),
         decision_input_id: "decision-12".to_owned(),
         snapshot_id: "snapshot-12".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Shadow,
+        matched_rule_id: None,
     };
     let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
 
@@ -203,6 +207,10 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
         request_id: "request-4".to_owned(),
         decision_input_id: "decision-4".to_owned(),
         snapshot_id: "snapshot-4".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
 
     let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
@@ -223,11 +231,19 @@ fn execution_attempt_factory_resets_attempt_numbers_per_request_bound_plan_ident
         request_id: "request-a".to_owned(),
         decision_input_id: "decision-a".to_owned(),
         snapshot_id: "snapshot-a".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
     let request_b = domain::ExecutionRequest {
         request_id: "request-b".to_owned(),
         decision_input_id: "decision-b".to_owned(),
         snapshot_id: "snapshot-b".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
     let plan_a = ExecutionPlan::RedeemResolved {
         condition_id: ConditionId::from("condition-a"),
@@ -259,11 +275,19 @@ fn execution_attempt_factory_keeps_same_business_plan_independent_across_request
         request_id: "request-cross-a".to_owned(),
         decision_input_id: "decision-cross-a".to_owned(),
         snapshot_id: "snapshot-cross-a".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
     let request_b = domain::ExecutionRequest {
         request_id: "request-cross-b".to_owned(),
         decision_input_id: "decision-cross-b".to_owned(),
         snapshot_id: "snapshot-cross-b".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
 
     let (attempt_a, _) = factory.next_for_plan(&plan, &request_a, domain::ExecutionMode::Live);
@@ -284,6 +308,10 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
         request_id: "request-seeded".to_owned(),
         decision_input_id: "decision-seeded".to_owned(),
         snapshot_id: "snapshot-seeded".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Shadow,
+        matched_rule_id: None,
     };
     let plan_key = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
     let mut factory =
@@ -346,6 +374,10 @@ fn ctf_operation_carries_the_attempt_context_used_to_create_it() {
         request_id: "request-13".to_owned(),
         decision_input_id: "decision-13".to_owned(),
         snapshot_id: "snapshot-13".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: domain::ExecutionMode::Live,
+        matched_rule_id: None,
     };
     let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Live);
 

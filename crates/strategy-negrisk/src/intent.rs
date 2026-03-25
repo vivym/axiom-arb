@@ -21,6 +21,7 @@ pub fn build_intents(view: &NegRiskView) -> Vec<DecisionInput> {
                     view.state_version,
                 ),
                 &view.snapshot_id,
+                "neg-risk",
                 family_id,
             ))
         })

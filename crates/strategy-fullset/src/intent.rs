@@ -7,6 +7,7 @@ pub fn build_intents(view: &FullSetView) -> Vec<DecisionInput> {
     vec![DecisionInput::Strategy(IntentCandidate::new(
         stable_intent_id("full-set", scope, &view.snapshot_id, view.state_version),
         &view.snapshot_id,
+        "full-set",
         scope,
     ))]
 }
