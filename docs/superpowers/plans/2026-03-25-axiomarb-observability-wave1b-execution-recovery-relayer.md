@@ -53,15 +53,24 @@ This document covers `Wave 1B` only. It must produce working, testable software 
   Responsibility: expose a stable sink identity for instrumentation and record truthful shadow-attempt metrics only when the shadow sink actually accepts an attempt.
 - Create: `/Users/viv/projs/axiom-arb/crates/execution/tests/support/mod.rs`
   Responsibility: share span capture plus minimal sample planning-input / failing-sink helpers across execution integration tests.
+- Modify: `/Users/viv/projs/axiom-arb/crates/execution/tests/orchestrator.rs`
+  Responsibility: keep the existing orchestrator test sink compiling after the `VenueSink` instrumentation contract grows a stable sink identity method.
 - Create: `/Users/viv/projs/axiom-arb/crates/execution/tests/observability.rs`
   Responsibility: verify execution-attempt spans and `shadow_attempt_count` emission.
 
-### App Live Recovery
+### App Live Execution And Recovery
+
+- Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/negrisk_live.rs`
+  Responsibility: route the current bootstrap-time neg-risk live submission path through the instrumented execution surface instead of bypassing the orchestrator directly.
+- Modify: `/Users/viv/projs/axiom-arb/crates/app-live/tests/support/mod.rs`
+  Responsibility: add reusable span-capture helpers for app-level observability tests.
+- Modify: `/Users/viv/projs/axiom-arb/crates/app-live/tests/negrisk_live_rollout.rs`
+  Responsibility: lock that the current bootstrap-time neg-risk live path still produces the same artifacts while also emitting an execution-attempt span.
 
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/instrumentation.rs`
   Responsibility: add focused helpers for recovery divergence signals without pushing conversion logic into supervisor code.
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/src/supervisor.rs`
-  Responsibility: emit divergence spans and increment `divergence_count` on real resume/rebuild mismatches.
+  Responsibility: pass optional execution instrumentation into the bootstrap-time neg-risk live path, and emit divergence spans plus `divergence_count` on real resume/rebuild mismatches.
 - Modify: `/Users/viv/projs/axiom-arb/crates/app-live/tests/supervisor_observability.rs`
   Responsibility: lock divergence span fields and divergence counter behavior on resume failures.
 
@@ -177,19 +186,28 @@ git commit -m "feat: add wave1b observability conventions"
 - Modify: `crates/execution/src/orchestrator.rs`
 - Modify: `crates/execution/src/sink.rs`
 - Create: `crates/execution/tests/support/mod.rs`
+- Modify: `crates/execution/tests/orchestrator.rs`
 - Create: `crates/execution/tests/observability.rs`
+- Modify: `crates/app-live/src/negrisk_live.rs`
+- Modify: `crates/app-live/src/supervisor.rs`
+- Modify: `crates/app-live/tests/support/mod.rs`
+- Modify: `crates/app-live/tests/negrisk_live_rollout.rs`
 
 - [ ] **Step 1: Write the failing execution observability tests**
 
 ```rust
 mod support;
 
+use app_live::{AppRuntimeMode, AppSupervisor, NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+use chrono::Utc;
 use execution::{
     sink::ShadowVenueSink, ExecutionInstrumentation, ExecutionMode, ExecutionOrchestrator,
     ExecutionPlanningInput,
 };
 use observability::{bootstrap_observability, field_keys, span_names};
+use rust_decimal::Decimal;
 use support::{capture_spans, sample_planning_input, FailingVenueSink};
+use state::RemoteSnapshot;
 
 #[test]
 fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {
@@ -258,6 +276,43 @@ fn instrumented_execution_failure_records_sink_error_without_shadow_counter_grow
         Some("\"sink_error\"")
     );
 }
+
+#[test]
+fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_artifacts() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor =
+        AppSupervisor::new_instrumented(AppRuntimeMode::Live, RemoteSnapshot::empty(), observability.recorder());
+    supervisor.seed_neg_risk_live_targets(std::collections::BTreeMap::from([(
+        "family-a".to_owned(),
+        NegRiskFamilyLiveTarget {
+            family_id: "family-a".to_owned(),
+            members: vec![NegRiskMemberLiveTarget {
+                condition_id: "condition-1".to_owned(),
+                token_id: "token-1".to_owned(),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            }],
+        },
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.run_once().unwrap());
+
+    assert_eq!(summary.neg_risk_live_attempt_count, 1);
+    let attempt_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .expect("execution attempt span missing");
+    assert_eq!(
+        attempt_span.field(field_keys::EXECUTION_MODE).map(String::as_str),
+        Some("\"live\"")
+    );
+    assert_eq!(
+        attempt_span.field(field_keys::SCOPE).map(String::as_str),
+        Some("\"family-a\"")
+    );
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify failure**
@@ -316,8 +371,10 @@ Implementation notes:
 - add `new_instrumented` and `with_attempt_factory_instrumented` instead of forcing instrumentation on all callers
 - make `sink_kind` an explicit `VenueSink` contract so generic orchestrator code can emit a stable repo-owned sink label
 - extract the minimal span-capture and sample-input helpers into `crates/execution/tests/support/mod.rs`; do not try to import private helpers from `crates/execution/tests/orchestrator.rs`
+- update the existing `FailingVenueSink` impl in `crates/execution/tests/orchestrator.rs` to satisfy the new `sink_kind` contract
 - emit the execution span once around the actual sink call; do not duplicate the span inside both orchestrator and sink
 - increment `shadow_attempt_count` only when `ShadowVenueSink` actually records the attempt
+- route `app-live/src/negrisk_live.rs` through `ExecutionOrchestrator::new_instrumented(...)` so the current bootstrap-time live family submission path does not bypass execution producer observability
 - do not invent new execution metrics in this task
 
 - [ ] **Step 4: Run the execution crate tests**
@@ -327,6 +384,7 @@ Run:
 ```bash
 cargo test -p execution observability -- --nocapture
 cargo test -p execution orchestrator -- --nocapture
+cargo test -p app-live negrisk_live_rollout -- --nocapture
 ```
 
 Expected: PASS.
@@ -334,7 +392,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/execution/Cargo.toml crates/execution/src/instrumentation.rs crates/execution/src/lib.rs crates/execution/src/orchestrator.rs crates/execution/src/sink.rs crates/execution/tests/support/mod.rs crates/execution/tests/observability.rs
+git add crates/execution/Cargo.toml crates/execution/src/instrumentation.rs crates/execution/src/lib.rs crates/execution/src/orchestrator.rs crates/execution/src/sink.rs crates/execution/tests/support/mod.rs crates/execution/tests/orchestrator.rs crates/execution/tests/observability.rs crates/app-live/src/negrisk_live.rs crates/app-live/src/supervisor.rs crates/app-live/tests/support/mod.rs crates/app-live/tests/negrisk_live_rollout.rs
 git commit -m "feat: instrument execution producers"
 ```
 
@@ -570,7 +628,8 @@ impl PolymarketRestClient {
 
 Implementation notes:
 
-- keep the pending-age rule explicit and narrow: treat `STATE_CONFIRMED` as non-pending; any other transaction with a parseable `created_at` contributes to pending age
+- keep the pending-age rule explicit and conservative: only rows whose relayer state is explicitly classified as pending by a helper such as `is_pending_relayer_state(...)` contribute to age
+- in this phase, initialize that helper with a narrow allowlist headed by `STATE_PENDING`; terminal, unknown, and unclassified states must not inflate `relayer_pending_age`
 - if there are no pending transactions, record `0.0`
 - move the local-listener mock and sample relayer auth/client helpers into `crates/venue-polymarket/tests/support/mod.rs`; do not depend on private helpers from `status_and_retry.rs`
 - do not invent stale/unknown relayer classifications in this task; that contract remains for a later phase with a real authoritative producer
