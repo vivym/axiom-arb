@@ -13,6 +13,9 @@ fn startup_remains_cancel_only_until_first_reconcile_succeeds() {
 
     assert_eq!(store.mode(), RuntimeMode::Bootstrapping);
     assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert_eq!(store.state_version(), 0);
+    assert_eq!(store.last_applied_journal_seq(), None);
+    assert_eq!(store.last_consumed_journal_seq(), None);
     assert!(!store.first_reconcile_succeeded());
     assert!(!store.allows_automatic_repair());
 }
@@ -41,6 +44,9 @@ fn first_reconcile_successfully_leaves_bootstrap_cancel_only() {
     assert!(report.succeeded);
     assert!(report.attention.is_empty());
     assert!(report.promoted_from_bootstrap);
+    assert_eq!(store.state_version(), 0);
+    assert_eq!(store.last_applied_journal_seq(), None);
+    assert_eq!(store.last_consumed_journal_seq(), None);
     assert!(store.first_reconcile_succeeded());
     assert!(store.allows_automatic_repair());
     assert_eq!(store.mode(), RuntimeMode::Healthy);
@@ -213,6 +219,8 @@ fn duplicate_signed_order_detection_forces_reconcile_attention() {
     assert!(!report.succeeded);
     assert_eq!(store.mode(), RuntimeMode::Reconciling);
     assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert_eq!(store.state_version(), 0);
+    assert_eq!(store.last_applied_journal_seq(), None);
     assert_eq!(
         report.attention,
         vec![ReconcileAttention::DuplicateSignedOrder {
@@ -239,6 +247,8 @@ fn duplicate_signed_order_in_remote_snapshot_forces_attention_without_upstream_s
     assert!(!report.succeeded);
     assert_eq!(store.mode(), RuntimeMode::Reconciling);
     assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert_eq!(store.state_version(), 0);
+    assert_eq!(store.last_applied_journal_seq(), None);
     assert!(!store.first_reconcile_succeeded());
     assert!(report.attention.iter().any(|attention| {
         matches!(

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use domain::{
-    ApprovalKey, ApprovalState, ApprovalStatus, DisputeState, ResolutionState, RuntimeMode,
+    ApprovalKey, ApprovalState, ApprovalStatus, DisputeState, ExecutionMode, ResolutionState,
+    RuntimeMode,
 };
 use rust_decimal::Decimal;
 
@@ -105,6 +106,17 @@ pub fn evaluate_fullset_trade(context: &FullSetRiskContext) -> RiskDecision {
     }
 
     RiskDecision::Accept
+}
+
+pub fn evaluate_fullset_trade_in_mode(
+    mode: ExecutionMode,
+    context: &FullSetRiskContext,
+) -> RiskDecision {
+    if !matches!(mode, ExecutionMode::Live | ExecutionMode::Shadow) {
+        return RiskDecision::Reject(RejectReason::ModeNotHealthy);
+    }
+
+    evaluate_fullset_trade(context)
 }
 
 fn approval_key(approval: &ApprovalState) -> ApprovalKey {

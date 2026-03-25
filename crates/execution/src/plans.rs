@@ -9,6 +9,21 @@ pub enum ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    pub fn plan_id(&self) -> String {
+        match self {
+            Self::FullSetBuyThenMerge { condition_id } => {
+                format!("fullset-buy-merge:{}", condition_id.as_str())
+            }
+            Self::FullSetSplitThenSell { condition_id } => {
+                format!("fullset-split-sell:{}", condition_id.as_str())
+            }
+            Self::CancelStale { order_id } => format!("cancel-stale:{}", order_id.as_str()),
+            Self::RedeemResolved { condition_id } => {
+                format!("redeem-resolved:{}", condition_id.as_str())
+            }
+        }
+    }
+
     pub fn condition_id(&self) -> Option<&ConditionId> {
         match self {
             Self::FullSetBuyThenMerge { condition_id }
@@ -27,5 +42,12 @@ impl ExecutionPlan {
 
     pub fn is_amountless(&self) -> bool {
         matches!(self, Self::RedeemResolved { .. })
+    }
+
+    pub fn is_risk_expanding(&self) -> bool {
+        matches!(
+            self,
+            Self::FullSetBuyThenMerge { .. } | Self::FullSetSplitThenSell { .. }
+        )
     }
 }

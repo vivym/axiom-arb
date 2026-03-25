@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use domain::{ConditionId, OrderId, SignedOrderIdentity};
 use execution::{
+    attempt::ExecutionAttemptFactory,
     ctf::{CtfOperation, CtfOperationKind, CtfOperationStatus, CtfTracker, CtfTrackerError},
     orders::{BusinessRetryError, RetryKind, SignedOrderEnvelope},
     plans::ExecutionPlan,
@@ -15,6 +18,29 @@ fn transport_retry_reuses_the_same_signed_order_identity() {
     assert_eq!(retry.order_id, order.order_id);
     assert_eq!(retry.identity, order.identity);
     assert_eq!(retry.retry_of_order_id, None);
+}
+
+#[test]
+fn order_envelope_carries_the_attempt_context_used_to_create_it() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-12"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+    let request = domain::ExecutionRequest {
+        request_id: "request-12".to_owned(),
+        decision_input_id: "decision-12".to_owned(),
+        snapshot_id: "snapshot-12".to_owned(),
+    };
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+
+    let order = SignedOrderEnvelope::new(OrderId::from("order-12"), sample_identity("attempt"))
+        .with_attempt_context(&context);
+
+    assert_eq!(order.attempt_id(), Some(attempt.attempt_id.as_str()));
+    assert_eq!(
+        order.transport_retry().attempt_id(),
+        Some(attempt.attempt_id.as_str())
+    );
 }
 
 #[test]
@@ -168,6 +194,112 @@ fn redeem_resolved_is_condition_scoped_and_amountless() {
 }
 
 #[test]
+fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-4"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+    let request = domain::ExecutionRequest {
+        request_id: "request-4".to_owned(),
+        decision_input_id: "decision-4".to_owned(),
+        snapshot_id: "snapshot-4".to_owned(),
+    };
+
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+
+    assert_eq!(
+        attempt.plan_id,
+        ExecutionAttemptFactory::request_bound_plan_id(&plan, &request)
+    );
+    assert_eq!(attempt.snapshot_id, "snapshot-4");
+    assert_eq!(context.attempt_id, attempt.attempt_id);
+    assert_eq!(context.execution_mode, domain::ExecutionMode::Shadow);
+}
+
+#[test]
+fn execution_attempt_factory_resets_attempt_numbers_per_request_bound_plan_identity() {
+    let mut factory = ExecutionAttemptFactory::default();
+    let request_a = domain::ExecutionRequest {
+        request_id: "request-a".to_owned(),
+        decision_input_id: "decision-a".to_owned(),
+        snapshot_id: "snapshot-a".to_owned(),
+    };
+    let request_b = domain::ExecutionRequest {
+        request_id: "request-b".to_owned(),
+        decision_input_id: "decision-b".to_owned(),
+        snapshot_id: "snapshot-b".to_owned(),
+    };
+    let plan_a = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-a"),
+    };
+    let plan_b = ExecutionPlan::CancelStale {
+        order_id: OrderId::from("order-b"),
+    };
+
+    let (attempt_a1, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
+    let (attempt_a2, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
+    let (attempt_request_b1, _) =
+        factory.next_for_plan(&plan_a, &request_b, domain::ExecutionMode::Live);
+    let (attempt_plan_b1, _) =
+        factory.next_for_plan(&plan_b, &request_b, domain::ExecutionMode::Live);
+
+    assert_eq!(attempt_a1.attempt_no, 1);
+    assert_eq!(attempt_a2.attempt_no, 2);
+    assert_eq!(attempt_request_b1.attempt_no, 1);
+    assert_eq!(attempt_plan_b1.attempt_no, 1);
+}
+
+#[test]
+fn execution_attempt_factory_keeps_same_business_plan_independent_across_requests() {
+    let mut factory = ExecutionAttemptFactory::default();
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-cross-request"),
+    };
+    let request_a = domain::ExecutionRequest {
+        request_id: "request-cross-a".to_owned(),
+        decision_input_id: "decision-cross-a".to_owned(),
+        snapshot_id: "snapshot-cross-a".to_owned(),
+    };
+    let request_b = domain::ExecutionRequest {
+        request_id: "request-cross-b".to_owned(),
+        decision_input_id: "decision-cross-b".to_owned(),
+        snapshot_id: "snapshot-cross-b".to_owned(),
+    };
+
+    let (attempt_a, _) = factory.next_for_plan(&plan, &request_a, domain::ExecutionMode::Live);
+    let (attempt_b, _) = factory.next_for_plan(&plan, &request_b, domain::ExecutionMode::Live);
+
+    assert_eq!(attempt_a.attempt_no, 1);
+    assert_eq!(attempt_b.attempt_no, 1);
+    assert_ne!(attempt_a.plan_id, attempt_b.plan_id);
+    assert_ne!(attempt_a.attempt_id, attempt_b.attempt_id);
+}
+
+#[test]
+fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-seeded"),
+    };
+    let request = domain::ExecutionRequest {
+        request_id: "request-seeded".to_owned(),
+        decision_input_id: "decision-seeded".to_owned(),
+        snapshot_id: "snapshot-seeded".to_owned(),
+    };
+    let plan_key = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
+    let mut factory =
+        ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 4)]));
+
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+
+    assert_eq!(attempt.attempt_no, 5);
+    assert_eq!(
+        attempt.attempt_id,
+        "request-bound:14:request-seeded:redeem-resolved:condition-seeded:attempt-5"
+    );
+    assert_eq!(context.attempt_id, attempt.attempt_id);
+}
+
+#[test]
 fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     let condition_id = ConditionId::from("condition-1");
     let mut tracker = CtfTracker::new();
@@ -202,6 +334,31 @@ fn ctf_tracker_preserves_relayer_nonce_and_status_semantics() {
     assert_eq!(tracked.nonce.as_deref(), Some("7"));
     assert_eq!(tracked.tx_hash.as_deref(), Some("0xabc123"));
     assert_eq!(tracked.status, CtfOperationStatus::Confirmed);
+}
+
+#[test]
+fn ctf_operation_carries_the_attempt_context_used_to_create_it() {
+    let plan = ExecutionPlan::RedeemResolved {
+        condition_id: ConditionId::from("condition-13"),
+    };
+    let mut factory = ExecutionAttemptFactory::default();
+    let request = domain::ExecutionRequest {
+        request_id: "request-13".to_owned(),
+        decision_input_id: "decision-13".to_owned(),
+        snapshot_id: "snapshot-13".to_owned(),
+    };
+    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Live);
+
+    let operation = CtfOperation::new(
+        CtfOperationKind::Merge,
+        ConditionId::from("condition-13"),
+        None,
+        None,
+        CtfOperationStatus::Planned,
+    )
+    .with_attempt_context(&context);
+
+    assert_eq!(operation.attempt_id(), Some(attempt.attempt_id.as_str()));
 }
 
 #[test]

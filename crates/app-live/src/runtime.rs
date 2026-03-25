@@ -1,9 +1,14 @@
 use std::{fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
-use state::{ReconcileReport, RemoteSnapshot, StateStore};
+use state::{
+    ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
+    StateStore,
+};
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
+use crate::input_tasks::InputTaskEvent;
+use crate::supervisor::SupervisorSummary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -61,12 +66,14 @@ impl std::error::Error for ParseAppRuntimeModeError {}
 pub struct AppRuntime {
     store: StateStore,
     app_mode: AppRuntimeMode,
+    published_snapshot: Option<PublishedSnapshot>,
 }
 
 #[derive(Debug)]
 pub struct AppRunResult {
     pub runtime: AppRuntime,
     pub report: ReconcileReport,
+    pub summary: SupervisorSummary,
 }
 
 impl AppRuntime {
@@ -74,6 +81,7 @@ impl AppRuntime {
         Self {
             store: StateStore::new(),
             app_mode,
+            published_snapshot: None,
         }
     }
 
@@ -89,19 +97,106 @@ impl AppRuntime {
         self.store.mode()
     }
 
+    pub fn state_version(&self) -> u64 {
+        self.store.state_version()
+    }
+
+    pub fn last_journal_seq(&self) -> Option<i64> {
+        self.store.last_consumed_journal_seq()
+    }
+
+    pub fn published_snapshot_id(&self) -> Option<&str> {
+        self.published_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.snapshot_id.as_str())
+    }
+
+    pub fn published_snapshot_committed_journal_seq(&self) -> Option<i64> {
+        self.published_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.committed_journal_seq)
+    }
+
     pub fn runtime_overlay(&self) -> Option<RuntimeOverlay> {
         self.store.mode_overlay()
     }
 
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.store.pending_reconcile_count()
+    }
+
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
-        bootstrap::reconcile(&mut self.store, snapshot)
+        let report = bootstrap::reconcile(&mut self.store, snapshot);
+        self.anchor_baseline_if_ready(report.succeeded);
+        report
     }
 
     pub fn bootstrap_once<S>(&mut self, source: &S) -> ReconcileReport
     where
         S: BootstrapSource,
     {
-        bootstrap::bootstrap_once(&mut self.store, source)
+        let report = bootstrap::bootstrap_once(&mut self.store, source);
+        self.anchor_baseline_if_ready(report.succeeded);
+        report
+    }
+
+    pub fn apply_input(&mut self, input: InputTaskEvent) -> Result<ApplyResult, ApplyError> {
+        let journal_seq = input.journal_seq;
+        let result =
+            StateApplier::new(&mut self.store).apply(journal_seq, input.into_state_fact_input())?;
+        match &result {
+            ApplyResult::Applied { .. } => {
+                self.published_snapshot = None;
+            }
+            ApplyResult::ReconcileRequired { .. } => {
+                self.store.mark_reconcile_required();
+            }
+            ApplyResult::Duplicate { .. } | ApplyResult::Deferred { .. } => {}
+        }
+        Ok(result)
+    }
+
+    pub fn publish_snapshot(&mut self, snapshot_id: &str) -> Option<PublishedSnapshot> {
+        self.store.last_applied_journal_seq()?;
+        let snapshot = PublishedSnapshot::from_store(
+            &self.store,
+            state::ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id),
+        );
+        self.published_snapshot = Some(snapshot.clone());
+        Some(snapshot)
+    }
+
+    pub fn replay_committed_history(
+        &mut self,
+        history: &[InputTaskEvent],
+    ) -> Result<(), ApplyError> {
+        self.store = StateStore::new();
+        self.published_snapshot = None;
+        let mut reconcile_required = false;
+
+        for input in history.iter().cloned() {
+            let result = StateApplier::new(&mut self.store)
+                .apply(input.journal_seq, input.into_state_fact_input())?;
+            if matches!(result, ApplyResult::ReconcileRequired { .. }) {
+                reconcile_required = true;
+            }
+        }
+
+        self.store.restore_reconciled_policy();
+        if reconcile_required {
+            self.store.mark_reconcile_required();
+        }
+        Ok(())
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.store.clear_pending_reconcile_after_restore();
+    }
+
+    fn anchor_baseline_if_ready(&mut self, reconcile_succeeded: bool) {
+        if reconcile_succeeded && self.store.last_applied_journal_seq().is_none() {
+            self.store.mark_reconciled_after_restore(0);
+        }
     }
 }
 
@@ -123,8 +218,5 @@ fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    let mut runtime = AppRuntime::new(app_mode);
-    let report = runtime.bootstrap_once(source);
-
-    AppRunResult { runtime, report }
+    crate::supervisor::AppSupervisor::new(app_mode, source.snapshot()).run_bootstrap()
 }

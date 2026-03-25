@@ -9,6 +9,7 @@ observability = { path = "../observability" }
 state = { path = "../state" }
 
 [dev-dependencies]
+chrono = "0.4"
 domain = { path = "../domain" }
 rust_decimal = "1.40.0"
 state = { path = "../state" }

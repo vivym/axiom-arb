@@ -1,5 +1,7 @@
 use state::{ReconcileReport, RemoteSnapshot, StateStore};
 
+use crate::{runtime::AppRuntimeMode, supervisor::AppSupervisor};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootstrapStatus {
     CancelOnly,
@@ -29,6 +31,13 @@ impl BootstrapSource for StaticSnapshotSource {
     fn snapshot(&self) -> RemoteSnapshot {
         self.snapshot.clone()
     }
+}
+
+pub fn supervisor_with_source<S>(app_mode: AppRuntimeMode, source: &S) -> AppSupervisor
+where
+    S: BootstrapSource,
+{
+    AppSupervisor::new(app_mode, source.snapshot())
 }
 
 pub fn bootstrap_status(store: &StateStore) -> BootstrapStatus {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use domain::{
     ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
@@ -10,6 +10,7 @@ use crate::{
     bootstrap::{
         allows_automatic_repair, bootstrap_policy, reconcile_attention_policy, reconciled_policy,
     },
+    facts::{FactKey, PendingRef},
     reconcile::{reconcile_store, ReconcileReport, RemoteSnapshot},
 };
 
@@ -33,11 +34,25 @@ pub struct RelayerTxSummary {
     pub status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FullSetAnchor {
+    pub state_version: u64,
+    pub committed_journal_seq: i64,
+    pub open_orders: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StateStore {
+    state_version: u64,
+    last_consumed_journal_seq: Option<i64>,
+    last_applied_journal_seq: Option<i64>,
+    fullset_anchor: Option<FullSetAnchor>,
     runtime_mode: RuntimeMode,
     overlay: Option<RuntimeOverlay>,
     first_reconcile_succeeded: bool,
+    applied_fact_journal: BTreeMap<FactKey, i64>,
+    consumed_journal: BTreeMap<i64, FactKey>,
+    pending_refs: BTreeSet<String>,
     open_orders: HashMap<OrderId, Order>,
     approvals: HashMap<ApprovalKey, ApprovalState>,
     inventory: HashMap<InventoryEntry, Decimal>,
@@ -50,9 +65,16 @@ impl StateStore {
         let policy = bootstrap_policy();
 
         Self {
+            state_version: 0,
+            last_consumed_journal_seq: None,
+            last_applied_journal_seq: None,
+            fullset_anchor: None,
             runtime_mode: policy.mode,
             overlay: policy.overlay,
             first_reconcile_succeeded: false,
+            applied_fact_journal: BTreeMap::new(),
+            consumed_journal: BTreeMap::new(),
+            pending_refs: BTreeSet::new(),
             open_orders: HashMap::new(),
             approvals: HashMap::new(),
             inventory: HashMap::new(),
@@ -73,8 +95,71 @@ impl StateStore {
         reconcile_store(self, snapshot)
     }
 
+    pub fn restore_committed_anchor(
+        &mut self,
+        committed_state_version: u64,
+        committed_journal_seq: i64,
+    ) {
+        self.state_version = committed_state_version;
+        self.last_consumed_journal_seq = Some(committed_journal_seq);
+        self.last_applied_journal_seq = Some(committed_journal_seq);
+        self.fullset_anchor = Some(FullSetAnchor {
+            state_version: committed_state_version,
+            committed_journal_seq,
+            open_orders: self.current_open_order_ids(),
+        });
+        self.pending_refs.clear();
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
+    pub fn mark_reconciled_after_restore(&mut self, baseline_journal_seq: i64) {
+        if self.last_applied_journal_seq.is_none() {
+            self.last_consumed_journal_seq = Some(baseline_journal_seq);
+            self.last_applied_journal_seq = Some(baseline_journal_seq);
+            self.fullset_anchor = Some(FullSetAnchor {
+                state_version: self.state_version,
+                committed_journal_seq: baseline_journal_seq,
+                open_orders: self.current_open_order_ids(),
+            });
+        }
+
+        self.pending_refs.clear();
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
+    pub fn restore_reconciled_policy(&mut self) {
+        self.first_reconcile_succeeded = true;
+        self.apply_policy(reconciled_policy());
+    }
+
+    pub fn mark_reconcile_required(&mut self) {
+        self.first_reconcile_succeeded = true;
+        self.enter_reconciling();
+    }
+
+    pub fn clear_pending_reconcile_after_restore(&mut self) {
+        self.pending_refs.clear();
+        if self.first_reconcile_succeeded {
+            self.apply_policy(reconciled_policy());
+        }
+    }
+
     pub fn mode(&self) -> RuntimeMode {
         self.runtime_mode
+    }
+
+    pub fn state_version(&self) -> u64 {
+        self.state_version
+    }
+
+    pub fn last_applied_journal_seq(&self) -> Option<i64> {
+        self.last_applied_journal_seq
+    }
+
+    pub fn last_consumed_journal_seq(&self) -> Option<i64> {
+        self.last_consumed_journal_seq
     }
 
     pub fn overlay(&self) -> Option<RuntimeOverlay> {
@@ -100,8 +185,31 @@ impl StateStore {
         allows_automatic_repair(self.first_reconcile_succeeded, self.runtime_mode)
     }
 
+    pub fn pending_reconcile_count(&self) -> usize {
+        self.pending_refs.len()
+    }
+
     pub fn open_orders(&self) -> &HashMap<OrderId, Order> {
         &self.open_orders
+    }
+
+    fn current_open_order_ids(&self) -> Vec<String> {
+        let mut open_orders = self
+            .open_orders
+            .keys()
+            .map(|order_id| order_id.as_str().to_owned())
+            .collect::<Vec<_>>();
+        open_orders.sort();
+        open_orders
+    }
+
+    pub(crate) fn anchored_fullset(&self) -> Option<&FullSetAnchor> {
+        let committed_journal_seq = self.last_applied_journal_seq?;
+        let anchor = self.fullset_anchor.as_ref()?;
+
+        (anchor.state_version == self.state_version
+            && anchor.committed_journal_seq == committed_journal_seq)
+            .then_some(anchor)
     }
 
     pub fn approvals(&self) -> &HashMap<ApprovalKey, ApprovalState> {
@@ -138,6 +246,7 @@ impl StateStore {
     }
 
     pub fn record_local_order(&mut self, order: Order) {
+        self.fullset_anchor = None;
         self.open_orders.insert(order.order_id.clone(), order);
     }
 
@@ -169,6 +278,7 @@ impl StateStore {
     }
 
     pub(crate) fn complete_reconcile(&mut self, snapshot: &RemoteSnapshot) -> bool {
+        self.fullset_anchor = None;
         self.open_orders = snapshot
             .open_orders
             .iter()
@@ -199,6 +309,7 @@ impl StateStore {
             .cloned()
             .map(|tx| (tx.tx_id.clone(), tx))
             .collect();
+        self.pending_refs.clear();
 
         let promoted_from_bootstrap = !self.first_reconcile_succeeded;
 
@@ -218,6 +329,60 @@ impl StateStore {
         self.runtime_mode = policy.mode;
         self.overlay = policy.overlay;
     }
+
+    pub(crate) fn duplicate_journal_seq(&self, fact_key: &FactKey) -> Option<i64> {
+        self.applied_fact_journal.get(fact_key).copied()
+    }
+
+    pub(crate) fn consume_journal_seq(
+        &mut self,
+        journal_seq: i64,
+        fact_key: &FactKey,
+    ) -> JournalConsumption {
+        if let Some(existing_fact) = self.consumed_journal.get(&journal_seq) {
+            return if existing_fact == fact_key {
+                JournalConsumption::AlreadyBoundToSameFact
+            } else {
+                JournalConsumption::AlreadyBoundToDifferentFact
+            };
+        }
+
+        if self
+            .last_consumed_journal_seq
+            .is_some_and(|last_consumed_journal_seq| journal_seq <= last_consumed_journal_seq)
+        {
+            return JournalConsumption::OutOfOrder;
+        }
+
+        self.last_consumed_journal_seq = Some(journal_seq);
+        self.consumed_journal.insert(journal_seq, fact_key.clone());
+
+        JournalConsumption::Consumed
+    }
+
+    pub(crate) fn record_applied_fact(&mut self, journal_seq: i64, fact_key: FactKey) -> u64 {
+        self.state_version += 1;
+        self.last_applied_journal_seq = Some(journal_seq);
+        self.applied_fact_journal.insert(fact_key, journal_seq);
+        self.fullset_anchor = Some(FullSetAnchor {
+            state_version: self.state_version,
+            committed_journal_seq: journal_seq,
+            open_orders: self.current_open_order_ids(),
+        });
+        self.state_version
+    }
+
+    pub(crate) fn record_pending_ref(&mut self, pending_ref: PendingRef) {
+        self.pending_refs.insert(pending_ref.0);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JournalConsumption {
+    Consumed,
+    AlreadyBoundToSameFact,
+    AlreadyBoundToDifferentFact,
+    OutOfOrder,
 }
 
 impl Default for StateStore {

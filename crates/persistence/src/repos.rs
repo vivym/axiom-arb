@@ -6,9 +6,11 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 
 use crate::{
     models::{
-        ApprovalStateRow, FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow,
-        JournalEntryInput, JournalEntryRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
-        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, ResolutionStateRow, StoredOrder,
+        execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
+        FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
+        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
+        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
+        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1259,6 +1261,234 @@ impl JournalRepo {
     }
 }
 
+const RUNTIME_PROGRESS_KEY: &str = "default";
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RuntimeProgressRepo;
+
+impl RuntimeProgressRepo {
+    pub async fn record_progress(
+        &self,
+        pool: &PgPool,
+        last_journal_seq: i64,
+        last_state_version: i64,
+        last_snapshot_id: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO runtime_apply_progress (
+                progress_key,
+                last_journal_seq,
+                last_state_version,
+                last_snapshot_id
+            )
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (progress_key) DO UPDATE
+            SET last_journal_seq = EXCLUDED.last_journal_seq,
+                last_state_version = EXCLUDED.last_state_version,
+                last_snapshot_id = EXCLUDED.last_snapshot_id,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .bind(last_journal_seq)
+        .bind(last_state_version)
+        .bind(last_snapshot_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn current(&self, pool: &PgPool) -> Result<Option<RuntimeProgressRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT last_journal_seq, last_state_version, last_snapshot_id
+            FROM runtime_apply_progress
+            WHERE progress_key = $1
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_runtime_progress_row).transpose()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SnapshotPublicationRepo;
+
+impl SnapshotPublicationRepo {
+    pub async fn upsert(&self, pool: &PgPool, row: &SnapshotPublicationRow) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO snapshot_publications (
+                snapshot_id,
+                state_version,
+                committed_journal_seq,
+                fullset_ready,
+                negrisk_ready,
+                metadata,
+                published_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (snapshot_id) DO UPDATE
+            SET state_version = EXCLUDED.state_version,
+                committed_journal_seq = EXCLUDED.committed_journal_seq,
+                fullset_ready = EXCLUDED.fullset_ready,
+                negrisk_ready = EXCLUDED.negrisk_ready,
+                metadata = EXCLUDED.metadata,
+                published_at = EXCLUDED.published_at
+            "#,
+        )
+        .bind(&row.snapshot_id)
+        .bind(row.state_version)
+        .bind(row.committed_journal_seq)
+        .bind(row.fullset_ready)
+        .bind(row.negrisk_ready)
+        .bind(&row.metadata)
+        .bind(row.published_at)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ExecutionAttemptRepo;
+
+impl ExecutionAttemptRepo {
+    pub async fn append(&self, pool: &PgPool, row: &ExecutionAttemptRow) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO execution_attempts (
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.plan_id)
+        .bind(&row.snapshot_id)
+        .bind(execution_mode_to_str(row.execution_mode))
+        .bind(row.attempt_no)
+        .bind(&row.idempotency_key)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("execution_attempts_pkey") => {
+                Err(PersistenceError::DuplicateExecutionAttempt {
+                    attempt_id: row.attempt_id.clone(),
+                })
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn list_live_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key
+            FROM execution_attempts
+            WHERE execution_mode = $1
+            ORDER BY created_at, attempt_id
+            "#,
+        )
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(map_execution_attempt_row).collect()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PendingReconcileRepo;
+
+impl PendingReconcileRepo {
+    pub async fn append(
+        &self,
+        pool: &PgPool,
+        row: &PendingReconcileRow,
+        payload: &Value,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO pending_reconcile_items (
+                pending_ref,
+                scope_kind,
+                scope_id,
+                reason,
+                payload
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+        )
+        .bind(&row.pending_ref)
+        .bind(&row.scope_kind)
+        .bind(&row.scope_id)
+        .bind(&row.reason)
+        .bind(payload)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("pending_reconcile_items_pkey") => {
+                Err(PersistenceError::DuplicatePendingReconcile {
+                    pending_ref: row.pending_ref.clone(),
+                })
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ShadowArtifactRepo;
+
+impl ShadowArtifactRepo {
+    pub async fn append(&self, pool: &PgPool, row: ShadowExecutionArtifactRow) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO shadow_execution_artifacts (attempt_id, stream, payload)
+            SELECT $1, $2, $3
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $4
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.stream)
+        .bind(&row.payload)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Shadow))
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(PersistenceError::ShadowArtifactRequiresShadowAttempt {
+                attempt_id: row.attempt_id,
+            })
+        }
+    }
+}
+
 fn same_validation_state(
     existing: &NegRiskFamilyValidationRow,
     candidate: &NegRiskFamilyValidationRow,
@@ -1488,6 +1718,25 @@ fn map_resolution_state_row(row: PgRow) -> Result<ResolutionStateRow> {
         dispute_state: row.try_get("dispute_state")?,
         redeemable_at: row.try_get("redeemable_at")?,
         updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
+    Ok(RuntimeProgressRow {
+        last_journal_seq: row.try_get("last_journal_seq")?,
+        last_state_version: row.try_get("last_state_version")?,
+        last_snapshot_id: row.try_get("last_snapshot_id")?,
+    })
+}
+
+fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
+    Ok(ExecutionAttemptRow {
+        attempt_id: row.try_get("attempt_id")?,
+        plan_id: row.try_get("plan_id")?,
+        snapshot_id: row.try_get("snapshot_id")?,
+        execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
+        attempt_no: row.try_get("attempt_no")?,
+        idempotency_key: row.try_get("idempotency_key")?,
     })
 }
 
