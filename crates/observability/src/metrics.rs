@@ -285,6 +285,7 @@ pub struct RuntimeMetrics {
     pub neg_risk_family_halt_count: GaugeHandle,
     pub neg_risk_metadata_refresh_count: CounterHandle,
     pub neg_risk_live_ready_family_count: GaugeHandle,
+    pub neg_risk_live_attempt_count: GaugeHandle,
     pub neg_risk_live_gate_block_count: GaugeHandle,
     pub neg_risk_rollout_parity_mismatch_count: CounterHandle,
 }
@@ -323,6 +324,7 @@ impl Default for RuntimeMetrics {
             neg_risk_live_ready_family_count: GaugeHandle::new(
                 "axiom_neg_risk_live_ready_family_count",
             ),
+            neg_risk_live_attempt_count: GaugeHandle::new("axiom_neg_risk_live_attempt_count"),
             neg_risk_live_gate_block_count: GaugeHandle::new(
                 "axiom_neg_risk_live_gate_block_count",
             ),
@@ -531,6 +533,11 @@ impl RuntimeMetricsRecorder {
     pub fn record_neg_risk_live_ready_family_count(&self, count: f64) {
         self.registry
             .record_gauge(self.metrics.neg_risk_live_ready_family_count.sample(count));
+    }
+
+    pub fn record_neg_risk_live_attempt_count(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.neg_risk_live_attempt_count.sample(count));
     }
 
     pub fn record_neg_risk_live_gate_block_count(&self, count: f64) {

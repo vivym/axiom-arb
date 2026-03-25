@@ -68,9 +68,18 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
     }
 
     pub fn plan(&self, input: &ExecutionPlanningInput) -> Result<ExecutionPlan, ExecutionError> {
-        if input.execution_mode == ExecutionMode::ReduceOnly && input.plan.is_risk_expanding() {
+        if input.execution_mode != input.request.activation_mode {
             return Err(ExecutionError::ModeViolation {
-                execution_mode: input.execution_mode,
+                execution_mode: input.request.activation_mode,
+                plan: input.plan.clone(),
+            });
+        }
+
+        if input.request.activation_mode == ExecutionMode::ReduceOnly
+            && input.plan.is_risk_expanding()
+        {
+            return Err(ExecutionError::ModeViolation {
+                execution_mode: input.request.activation_mode,
                 plan: input.plan.clone(),
             });
         }

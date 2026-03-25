@@ -11,6 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
+use crate::orders::PostOrderRequest;
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
 };
@@ -162,6 +163,22 @@ impl PolymarketRestClient {
     ) -> Result<BalanceAllowanceResponse, RestError> {
         let request = self.build_balance_allowance_request(auth, asset_id)?;
         self.execute_json(request).await
+    }
+
+    pub fn build_submit_order_request(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+        submission: &PostOrderRequest,
+    ) -> Result<reqwest::Request, RestError> {
+        let headers = build_l2_auth_headers(auth)?;
+        let url = join_url(&self.clob_host, "order", &[])?;
+
+        Ok(self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(submission)
+            .build()?)
     }
 
     async fn get_clob<T>(&self, path: &str, query: &[(&str, &str)]) -> Result<T, RestError>

@@ -1,9 +1,12 @@
 use observability::span_names;
-use std::{path::PathBuf, process::Command};
+use std::{ffi::OsString, path::PathBuf, process::Command};
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 #[test]
 fn binary_entrypoint_emits_structured_bootstrap_log() {
-    let output = app_live_output("paper");
+    let output = app_live_output("paper", None);
 
     assert!(output.status.success());
 
@@ -18,31 +21,32 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
         "legacy success line should no longer be printed: {combined}"
     );
     assert!(
-        !combined
-            .lines()
-            .any(|line| line.trim() == "app-live bootstrap complete"),
-        "legacy completion line should no longer be printed: {combined}"
+        combined.contains(span_names::APP_BOOTSTRAP_COMPLETE),
+        "{combined}"
     );
     assert!(
-        combined.lines().any(|line| {
-            line.contains(span_names::APP_BOOTSTRAP_COMPLETE)
-                && line.contains("app-live bootstrap complete")
-                && line.contains("app_mode=paper")
-                && line.contains("bootstrap_status=Ready")
-                && line.contains("promoted_from_bootstrap=true")
-                && line.contains("runtime_mode=Healthy")
-                && line.contains("fullset_mode=Live")
-                && line.contains("negrisk_mode=Shadow")
-                && line.contains("pending_reconcile_count=0")
-                && line.contains("published_snapshot_id=snapshot-0")
-        }),
+        combined.contains("app-live bootstrap complete"),
+        "{combined}"
+    );
+    assert!(combined.contains("app_mode=paper"), "{combined}");
+    assert!(combined.contains("bootstrap_status=Ready"), "{combined}");
+    assert!(
+        combined.contains("promoted_from_bootstrap=true"),
+        "{combined}"
+    );
+    assert!(combined.contains("runtime_mode=Healthy"), "{combined}");
+    assert!(combined.contains("fullset_mode=Live"), "{combined}");
+    assert!(combined.contains("negrisk_mode=Shadow"), "{combined}");
+    assert!(combined.contains("pending_reconcile_count=0"), "{combined}");
+    assert!(
+        combined.contains("published_snapshot_id=snapshot-0"),
         "{combined}"
     );
 }
 
 #[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
-    let output = app_live_output("invalid-mode");
+    let output = app_live_output("invalid-mode", None);
 
     assert!(
         !output.status.success(),
@@ -63,11 +67,269 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
     );
 }
 
-fn app_live_output(app_mode: &str) -> std::process::Output {
-    Command::new(app_live_binary())
-        .env("AXIOM_MODE", app_mode)
-        .output()
-        .expect("app-live should run")
+#[test]
+fn paper_entrypoint_ignores_invalid_neg_risk_target_config() {
+    let output = app_live_output(
+        "paper",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              },
+            ]
+            "#,
+        ),
+    );
+
+    assert!(
+        output.status.success(),
+        "paper mode should ignore live config"
+    );
+}
+
+#[test]
+fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
+    let output = app_live_output(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              },
+            ]
+            "#,
+        ),
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for invalid neg-risk live target config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("ERROR app-live bootstrap failed"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("invalid neg-risk live target config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_rejects_duplicate_neg_risk_target_config() {
+    let output = app_live_output(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              },
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for duplicate neg-risk family ids"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("duplicate neg-risk family_id in live target config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_rejects_blank_neg_risk_target_config() {
+    let output = app_live_output("live", Some(""));
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for blank neg-risk live target config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid neg-risk live target config"),
+        "{combined}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
+    let output = app_live_output_raw_env(
+        "live",
+        Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+        Option::<OsString>::None,
+        Option::<OsString>::None,
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for non-UTF-8 neg-risk live target config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid value for AXIOM_NEG_RISK_LIVE_TARGETS"),
+        "{combined}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn paper_entrypoint_ignores_non_utf8_live_only_env_vars() {
+    let cases = [
+        (
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+            Option::<OsString>::None,
+            Option::<OsString>::None,
+        ),
+        (
+            Option::<OsString>::None,
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+            Option::<OsString>::None,
+        ),
+        (
+            Option::<OsString>::None,
+            Option::<OsString>::None,
+            Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+        ),
+    ];
+
+    for (targets, approved, ready) in cases {
+        let output = app_live_output_raw_env("paper", targets, approved, ready);
+        assert!(
+            output.status.success(),
+            "paper mode should ignore live-only env vars"
+        );
+    }
+}
+
+#[test]
+fn live_entrypoint_boots_without_neg_risk_target_config() {
+    let output = app_live_output("live", None);
+
+    assert!(
+        output.status.success(),
+        "live mode should boot without config"
+    );
+}
+
+#[test]
+fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
+    let output = app_live_output_with_operator_inputs(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+        Some("family-a"),
+        Some("family-a"),
+    );
+
+    assert!(
+        output.status.success(),
+        "live mode should boot with explicit operator inputs"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("negrisk_mode=Live"), "{combined}");
+    assert!(
+        combined.contains("neg_risk_live_attempt_count=1"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
+        "{combined}"
+    );
+}
+
+fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {
+    app_live_output_with_operator_inputs(app_mode, neg_risk_live_targets, None, None)
+}
+
+fn app_live_output_with_operator_inputs(
+    app_mode: &str,
+    neg_risk_live_targets: Option<&str>,
+    approved_families: Option<&str>,
+    ready_families: Option<&str>,
+) -> std::process::Output {
+    app_live_output_raw_env(
+        app_mode,
+        neg_risk_live_targets.map(OsString::from),
+        approved_families.map(OsString::from),
+        ready_families.map(OsString::from),
+    )
+}
+
+fn app_live_output_raw_env(
+    app_mode: &str,
+    neg_risk_live_targets: Option<impl Into<OsString>>,
+    approved_families: Option<impl Into<OsString>>,
+    ready_families: Option<impl Into<OsString>>,
+) -> std::process::Output {
+    let mut command = Command::new(app_live_binary());
+    command.env("AXIOM_MODE", app_mode);
+    command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
+    if let Some(value) = neg_risk_live_targets {
+        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value.into());
+    }
+    if let Some(value) = approved_families {
+        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value.into());
+    }
+    if let Some(value) = ready_families {
+        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value.into());
+    }
+    command.output().expect("app-live should run")
 }
 
 fn app_live_binary() -> PathBuf {
