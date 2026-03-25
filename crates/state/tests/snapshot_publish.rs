@@ -3,7 +3,10 @@ use domain::{
     ConditionId, ExternalFactEvent, MarketId, Order, OrderId, SettlementState, SignedOrderIdentity,
     SubmissionState, TokenId, VenueOrderState,
 };
-use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore};
+use state::{
+    NegRiskFamilyRolloutReadiness, NegRiskView, ProjectionReadiness, PublishedSnapshot,
+    StateApplier, StateStore,
+};
 
 #[test]
 fn fullset_snapshot_publish_does_not_wait_for_negrisk_projection() {
@@ -74,6 +77,33 @@ fn unsupported_negrisk_readiness_is_downgraded_before_publication() {
     assert!(snapshot.fullset.is_some());
     assert!(!snapshot.negrisk_ready);
     assert!(snapshot.negrisk.is_none());
+}
+
+#[test]
+fn published_snapshot_exposes_family_level_rollout_readiness() {
+    let snapshot = PublishedSnapshot {
+        snapshot_id: "snapshot-12".to_owned(),
+        state_version: 12,
+        committed_journal_seq: 44,
+        fullset_ready: true,
+        negrisk_ready: true,
+        fullset: None,
+        negrisk: Some(NegRiskView {
+            snapshot_id: "snapshot-12".to_owned(),
+            state_version: 12,
+            families: vec![NegRiskFamilyRolloutReadiness {
+                family_id: "family-a".to_owned(),
+                shadow_parity_ready: true,
+                recovery_ready: true,
+                replay_drift_ready: false,
+                fault_injection_ready: true,
+                conversion_path_ready: true,
+                halt_semantics_ready: true,
+            }],
+        }),
+    };
+
+    assert!(!snapshot.negrisk.as_ref().unwrap().families[0].replay_drift_ready);
 }
 
 fn sample_snapshot(snapshot_id: &str) -> PublishedSnapshot {

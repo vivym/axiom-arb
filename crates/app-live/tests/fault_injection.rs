@@ -1,6 +1,6 @@
 use chrono::Utc;
 
-use app_live::{AppSupervisor, InputTaskEvent};
+use app_live::{AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
 use domain::{ExternalFactEvent, RuntimeMode};
 
 #[test]
@@ -11,6 +11,7 @@ fn restart_resumes_from_durable_journal_state_snapshot_anchors() {
     }
     supervisor.seed_runtime_progress(41, 7, None);
     supervisor.seed_committed_state_version(7);
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-7"));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -30,6 +31,7 @@ fn restart_republishes_stale_snapshot_anchor_before_dispatch_resumes() {
     }
     supervisor.seed_runtime_progress(41, 7, Some("snapshot-6"));
     supervisor.seed_committed_state_version(7);
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-7"));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -49,6 +51,7 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     }
     supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
     supervisor.seed_unapplied_journal_entry(42, sample_input_task_event(42));
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-6"));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -58,6 +61,13 @@ fn restart_replays_unapplied_journal_entries_before_dispatch_resumes() {
     assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(42));
+    assert_eq!(
+        resumed
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.snapshot_id.as_str()),
+        Some("snapshot-7")
+    );
 }
 
 #[test]
@@ -68,6 +78,7 @@ fn restart_replays_out_of_order_user_trade_from_durable_log() {
     }
     supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
     supervisor.seed_unapplied_journal_entry(42, sample_out_of_order_user_trade(42));
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-6"));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -85,6 +96,12 @@ fn restart_replays_out_of_order_user_trade_from_durable_log() {
     );
     supervisor.seed_committed_state_version(resumed.last_state_version);
     supervisor.seed_pending_reconcile_count(resumed.pending_reconcile_count);
+    supervisor.seed_neg_risk_rollout_evidence(
+        resumed
+            .neg_risk_rollout_evidence
+            .clone()
+            .expect("resumed supervisor should rebuild rollout evidence"),
+    );
 
     let replayed = supervisor.resume_once().unwrap();
 
@@ -108,6 +125,7 @@ fn restart_retains_failed_backlog_entries_for_retry() {
     supervisor.seed_runtime_progress(41, 6, Some("snapshot-6"));
     supervisor.seed_unapplied_journal_entry(42, sample_input_task_event(42));
     supervisor.seed_unapplied_journal_entry(42, conflicting_input_task_event(42));
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-6"));
 
     let first_err = supervisor.resume_once().unwrap_err();
     assert!(first_err
@@ -126,6 +144,7 @@ fn restart_preserves_cleared_pending_reconcile_count_after_successful_reconcile(
     supervisor.seed_runtime_progress(42, 6, Some("snapshot-6"));
     supervisor.seed_committed_state_version(6);
     supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-6"));
 
     let resumed = supervisor.resume_once().unwrap();
 
@@ -191,4 +210,13 @@ fn conflicting_input_task_event(journal_seq: i64) -> InputTaskEvent {
             Utc::now(),
         ),
     )
+}
+
+fn sample_rollout_evidence(snapshot_id: &str) -> NegRiskRolloutEvidence {
+    NegRiskRolloutEvidence {
+        snapshot_id: snapshot_id.to_owned(),
+        live_ready_family_count: 0,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    }
 }

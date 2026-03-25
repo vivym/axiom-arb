@@ -106,7 +106,7 @@ impl DispatchLoop {
             negrisk: negrisk_ready.then(|| NegRiskView {
                 snapshot_id: format!("snapshot-{state_version}"),
                 state_version,
-                family_ids: Vec::new(),
+                families: Vec::new(),
             }),
         });
     }

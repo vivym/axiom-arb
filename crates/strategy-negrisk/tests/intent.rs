@@ -1,5 +1,5 @@
 use domain::DecisionInput;
-use state::NegRiskView;
+use state::{NegRiskFamilyRolloutReadiness, NegRiskView};
 
 #[test]
 fn negrisk_strategy_is_silent_when_projection_is_not_ready() {
@@ -38,7 +38,7 @@ fn sample_unready_negrisk_view() -> NegRiskView {
     NegRiskView {
         snapshot_id: "snapshot-negrisk-1".to_owned(),
         state_version: 11,
-        family_ids: Vec::new(),
+        families: Vec::new(),
     }
 }
 
@@ -46,10 +46,22 @@ fn sample_ready_negrisk_view() -> NegRiskView {
     NegRiskView {
         snapshot_id: "snapshot-negrisk-2".to_owned(),
         state_version: 12,
-        family_ids: vec![
-            "family-b".to_owned(),
-            "family-a".to_owned(),
-            "family-b".to_owned(),
+        families: vec![
+            sample_family("family-b"),
+            sample_family("family-a"),
+            sample_family("family-b"),
         ],
+    }
+}
+
+fn sample_family(family_id: &str) -> NegRiskFamilyRolloutReadiness {
+    NegRiskFamilyRolloutReadiness {
+        family_id: family_id.to_owned(),
+        shadow_parity_ready: false,
+        recovery_ready: false,
+        replay_drift_ready: false,
+        fault_injection_ready: false,
+        conversion_path_ready: false,
+        halt_semantics_ready: false,
     }
 }

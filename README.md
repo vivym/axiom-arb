@@ -29,7 +29,11 @@
 
 - Phase 1 on the unified runtime is `full-set Live`.
 - Phase 2 on the unified runtime is `neg-risk Shadow`.
-- Phase 3 `neg-risk Live` is not enabled by this Phase 1/2 plan.
+- Phase 3a on the unified runtime is `neg-risk` rollout gates and readiness evidence only.
+- Phase 3a does not add a new `neg-risk` pricing surface or live planner.
+- Families may remain in `Disabled`, `Shadow`, `ReduceOnly`, or `RecoveryOnly`.
+- Actual family promotion to `Live` requires Phase 3a plus a later route-planner plan.
+- Phase 3 `neg-risk Live` is not enabled by this repository state.
 - Shadow artifacts stay on isolated storage and stream paths; they do not share authoritative live sinks.
 
 ## Verification

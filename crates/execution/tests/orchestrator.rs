@@ -18,6 +18,10 @@ fn live_and_shadow_share_the_same_plan_before_sink_dispatch() {
     let shadow_plan = shadow.plan(&shadow_input).unwrap();
 
     assert_eq!(live_plan, shadow_plan);
+    assert_eq!(
+        ExecutionAttemptFactory::request_bound_plan_id(&live_plan, &live_input.request),
+        ExecutionAttemptFactory::request_bound_plan_id(&shadow_plan, &shadow_input.request),
+    );
 }
 
 #[test]
