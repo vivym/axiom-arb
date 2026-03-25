@@ -18,18 +18,26 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
         "legacy success line should no longer be printed: {combined}"
     );
     assert!(
-        combined.contains(span_names::APP_BOOTSTRAP_COMPLETE),
+        !combined
+            .lines()
+            .any(|line| line.trim() == "app-live bootstrap complete"),
+        "legacy completion line should no longer be printed: {combined}"
+    );
+    assert!(
+        combined.lines().any(|line| {
+            line.contains(span_names::APP_BOOTSTRAP_COMPLETE)
+                && line.contains("app-live bootstrap complete")
+                && line.contains("app_mode=paper")
+                && line.contains("bootstrap_status=Ready")
+                && line.contains("promoted_from_bootstrap=true")
+                && line.contains("runtime_mode=Healthy")
+                && line.contains("fullset_mode=Live")
+                && line.contains("negrisk_mode=Shadow")
+                && line.contains("pending_reconcile_count=0")
+                && line.contains("published_snapshot_id=snapshot-0")
+        }),
         "{combined}"
     );
-    assert!(combined.contains("app-live bootstrap complete"), "{combined}");
-    assert!(combined.contains("app_mode=paper"), "{combined}");
-    assert!(combined.contains("bootstrap_status=Ready"), "{combined}");
-    assert!(combined.contains("promoted_from_bootstrap=true"), "{combined}");
-    assert!(combined.contains("runtime_mode=Healthy"), "{combined}");
-    assert!(combined.contains("fullset_mode=Live"), "{combined}");
-    assert!(combined.contains("negrisk_mode=Shadow"), "{combined}");
-    assert!(combined.contains("pending_reconcile_count=0"), "{combined}");
-    assert!(combined.contains("published_snapshot_id=snapshot-0"), "{combined}");
 }
 
 #[test]
