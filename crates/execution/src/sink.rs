@@ -92,9 +92,11 @@ impl VenueSink for LiveVenueSink {
     ) -> Result<ExecutionReceipt, VenueSinkError> {
         ensure_live_sink_mode(plan, attempt.execution_mode)?;
 
-        if let Some(signer) = &self.order_signer {
-            // Plumbing hook for upcoming live submit work: sign the planned orders deterministically.
-            // This sink still behaves as a no-op executor for now.
+        if let (Some(signer), ExecutionPlan::NegRiskSubmitFamily { .. }) =
+            (&self.order_signer, plan)
+        {
+            // Narrow plumbing hook for Phase 3b neg-risk live submit: sign the planned orders
+            // deterministically. Non-neg-risk plans must remain unaffected by signer configuration.
             signer.sign_family(plan).map_err(|err| VenueSinkError::Rejected {
                 reason: format!("signing error: {err:?}"),
             })?;
