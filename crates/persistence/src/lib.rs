@@ -11,6 +11,7 @@ pub use repos::{
     persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,
     IdentifierRepo, InventoryRepo, JournalRepo, NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo,
     ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
+    LiveArtifactRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -51,6 +52,9 @@ pub enum PersistenceError {
         pending_ref: String,
     },
     ShadowArtifactRequiresShadowAttempt {
+        attempt_id: String,
+    },
+    LiveArtifactRequiresLiveAttempt {
         attempt_id: String,
     },
 }
@@ -112,6 +116,10 @@ impl fmt::Display for PersistenceError {
             Self::ShadowArtifactRequiresShadowAttempt { attempt_id } => write!(
                 f,
                 "shadow artifact attempt {attempt_id} must reference an existing shadow execution attempt"
+            ),
+            Self::LiveArtifactRequiresLiveAttempt { attempt_id } => write!(
+                f,
+                "live artifact attempt {attempt_id} must reference an existing live execution attempt"
             ),
         }
     }

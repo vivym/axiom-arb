@@ -310,6 +310,13 @@ pub struct ShadowExecutionArtifactRow {
     pub payload: Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveExecutionArtifactRow {
+    pub attempt_id: String,
+    pub stream: String,
+    pub payload: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskFamilyMemberRow {
     pub condition_id: String,

@@ -267,6 +267,88 @@ async fn execution_attempt_table_rejects_mode_change_when_shadow_artifacts_exist
 }
 
 #[tokio::test]
+async fn live_artifact_table_rejects_shadow_attempt_ids_via_direct_sql() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-shadow-live-sql", ExecutionMode::Shadow),
+        )
+        .await
+        .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-shadow-live-sql")
+    .bind("live.execution")
+    .bind(json!({ "attempt_id": "attempt-shadow-live-sql", "kind": "planned_order" }))
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("live_execution_artifacts requires a live execution attempt"),
+        "unexpected database error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_table_rejects_mode_change_when_live_artifacts_exist() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-sql", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-live-sql")
+    .bind("live.execution")
+    .bind(json!({ "attempt_id": "attempt-live-sql", "kind": "planned_order" }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        UPDATE execution_attempts
+        SET execution_mode = 'shadow'
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-sql")
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("execution_attempts with live artifacts cannot change away from live"),
+        "unexpected database error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

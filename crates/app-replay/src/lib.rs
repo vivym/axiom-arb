@@ -1,7 +1,11 @@
 use std::{collections::BTreeMap, error::Error as StdError, fmt};
 
 use journal::{replay_entries, JournalEntry, SourceKind};
-use persistence::{connect_pool_from_env, models::JournalEntryRow, JournalRepo, PersistenceError};
+use persistence::{
+    connect_pool_from_env,
+    models::{ExecutionAttemptRow, JournalEntryRow, LiveExecutionArtifactRow},
+    ExecutionAttemptRepo, JournalRepo, LiveArtifactRepo, PersistenceError,
+};
 use sqlx::PgPool;
 
 mod negrisk_summary;
@@ -11,6 +15,30 @@ pub use negrisk_summary::{
     NegRiskFoundationFamilySummary, NegRiskFoundationSummary, NegRiskMemberVectorPath,
     NegRiskSummaryError,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NegRiskLiveAttemptArtifacts {
+    pub attempt: ExecutionAttemptRow,
+    pub artifacts: Vec<LiveExecutionArtifactRow>,
+}
+
+pub async fn load_negrisk_live_attempt_artifacts(
+    pool: &PgPool,
+) -> Result<Vec<NegRiskLiveAttemptArtifacts>, PersistenceError> {
+    let attempts = ExecutionAttemptRepo.list_live_attempts(pool).await?;
+    let mut out = Vec::new();
+
+    for attempt in attempts {
+        if stable_plan_scope(&attempt.plan_id).starts_with("negrisk-") {
+            let artifacts = LiveArtifactRepo
+                .list_for_attempt(pool, &attempt.attempt_id)
+                .await?;
+            out.push(NegRiskLiveAttemptArtifacts { attempt, artifacts });
+        }
+    }
+
+    Ok(out)
+}
 
 pub trait ReplayConsumer {
     type Error;
@@ -288,6 +316,20 @@ fn parse_i64(flag: &'static str, value: &str) -> Result<i64, ReplayArgsError> {
             flag,
             value: value.to_owned(),
         })
+}
+
+fn stable_plan_scope(plan_id: &str) -> &str {
+    if let Some(remainder) = plan_id.strip_prefix("request-bound:") {
+        if let Some((request_len, trailing)) = remainder.split_once(':') {
+            if let Ok(request_len) = request_len.parse::<usize>() {
+                if trailing.len() > request_len && trailing.as_bytes()[request_len] == b':' {
+                    return &trailing[request_len + 1..];
+                }
+            }
+        }
+    }
+
+    plan_id
 }
 
 fn increment(counts: &mut BTreeMap<String, u64>, key: &str) {

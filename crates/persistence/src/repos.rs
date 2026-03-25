@@ -8,9 +8,9 @@ use crate::{
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
-        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
-        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
-        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        LiveExecutionArtifactRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow,
+        RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1489,6 +1489,58 @@ impl ShadowArtifactRepo {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LiveArtifactRepo;
+
+impl LiveArtifactRepo {
+    pub async fn append(&self, pool: &PgPool, row: LiveExecutionArtifactRow) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+            SELECT $1, $2, $3
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $4
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.stream)
+        .bind(&row.payload)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(PersistenceError::LiveArtifactRequiresLiveAttempt {
+                attempt_id: row.attempt_id,
+            })
+        }
+    }
+
+    pub async fn list_for_attempt(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Vec<LiveExecutionArtifactRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT attempt_id, stream, payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = $1
+            ORDER BY created_at, artifact_id
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_live_execution_artifact_row)
+            .collect()
+    }
+}
+
 fn same_validation_state(
     existing: &NegRiskFamilyValidationRow,
     candidate: &NegRiskFamilyValidationRow,
@@ -1737,6 +1789,14 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
+    })
+}
+
+fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRow> {
+    Ok(LiveExecutionArtifactRow {
+        attempt_id: row.try_get("attempt_id")?,
+        stream: row.try_get("stream")?,
+        payload: row.try_get("payload")?,
     })
 }
 
