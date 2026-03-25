@@ -144,6 +144,34 @@ fn sink_failure_is_reported_separately_from_mode_violations() {
     assert!(matches!(err, execution::ExecutionError::Sink { .. }));
 }
 
+#[test]
+fn plan_rejects_activation_mode_mismatch_between_request_and_input() {
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+    let err = orchestrator
+        .plan(&ExecutionPlanningInput::new(
+            ExecutionRequest {
+                request_id: "request-mismatch".to_owned(),
+                decision_input_id: "intent-mismatch".to_owned(),
+                snapshot_id: "snapshot-mismatch".to_owned(),
+                route: "full-set".to_owned(),
+                scope: "default".to_owned(),
+                activation_mode: ExecutionMode::Live,
+                matched_rule_id: None,
+            },
+            ExecutionMode::Shadow,
+            execution_plan(),
+        ))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        execution::ExecutionError::ModeViolation {
+            execution_mode: ExecutionMode::Live,
+            ..
+        }
+    ));
+}
+
 fn sample_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
     ExecutionPlanningInput::new(
         ExecutionRequest {

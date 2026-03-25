@@ -68,9 +68,18 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
     }
 
     pub fn plan(&self, input: &ExecutionPlanningInput) -> Result<ExecutionPlan, ExecutionError> {
-        if input.execution_mode == ExecutionMode::ReduceOnly && input.plan.is_risk_expanding() {
+        if input.execution_mode != input.request.activation_mode {
             return Err(ExecutionError::ModeViolation {
-                execution_mode: input.execution_mode,
+                execution_mode: input.request.activation_mode,
+                plan: input.plan.clone(),
+            });
+        }
+
+        if input.request.activation_mode == ExecutionMode::ReduceOnly
+            && input.plan.is_risk_expanding()
+        {
+            return Err(ExecutionError::ModeViolation {
+                execution_mode: input.request.activation_mode,
                 plan: input.plan.clone(),
             });
         }
@@ -83,11 +92,10 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         input: &ExecutionPlanningInput,
     ) -> Result<ExecutionReceipt, ExecutionError> {
         let plan = self.plan(input)?;
-        let (_attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
-            &plan,
-            &input.request,
-            input.execution_mode,
-        );
+        let (_attempt, attempt_context) = self
+            .attempt_factory
+            .borrow_mut()
+            .next_for_plan(&plan, &input.request);
 
         self.sink
             .execute(&plan, &attempt_context)

@@ -10,6 +10,7 @@ fn fullset_strategy_emits_stable_default_scoped_intent_from_fullset_view() {
         panic!("expected strategy intent");
     };
 
+    assert_eq!(intent.route, "full-set");
     assert_eq!(intent.scope, "default");
     assert_eq!(intent.source_snapshot_id, "snapshot-fullset-1");
     assert_eq!(intent.intent_id, "full-set:default:snapshot-fullset-1:7");

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use domain::{ExecutionAttempt, ExecutionAttemptContext, ExecutionMode, ExecutionRequest};
+use domain::{ExecutionAttempt, ExecutionAttemptContext, ExecutionRequest};
 
 use crate::plans::ExecutionPlan;
 
@@ -33,7 +33,6 @@ impl ExecutionAttemptFactory {
         &mut self,
         plan: &ExecutionPlan,
         request: &ExecutionRequest,
-        execution_mode: ExecutionMode,
     ) -> (ExecutionAttempt, ExecutionAttemptContext) {
         let plan_id = Self::request_bound_plan_id(plan, request);
         let next_attempt_no = self
@@ -52,7 +51,7 @@ impl ExecutionAttemptFactory {
         let context = ExecutionAttemptContext {
             attempt_id,
             snapshot_id: request.snapshot_id.clone(),
-            execution_mode,
+            execution_mode: request.activation_mode,
             route: request.route.clone(),
             scope: request.scope.clone(),
             matched_rule_id: request.matched_rule_id.clone(),

@@ -35,7 +35,7 @@ fn order_envelope_carries_the_attempt_context_used_to_create_it() {
         activation_mode: domain::ExecutionMode::Shadow,
         matched_rule_id: None,
     };
-    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+    let (attempt, context) = factory.next_for_plan(&plan, &request);
 
     let order = SignedOrderEnvelope::new(OrderId::from("order-12"), sample_identity("attempt"))
         .with_attempt_context(&context);
@@ -210,10 +210,10 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
         route: "full-set".to_owned(),
         scope: "default".to_owned(),
         activation_mode: domain::ExecutionMode::Live,
-        matched_rule_id: None,
+        matched_rule_id: Some("rule-4".to_owned()),
     };
 
-    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+    let (attempt, context) = factory.next_for_plan(&plan, &request);
 
     assert_eq!(
         attempt.plan_id,
@@ -221,7 +221,10 @@ fn execution_attempt_factory_binds_attempt_identity_to_the_plan_and_context() {
     );
     assert_eq!(attempt.snapshot_id, "snapshot-4");
     assert_eq!(context.attempt_id, attempt.attempt_id);
-    assert_eq!(context.execution_mode, domain::ExecutionMode::Shadow);
+    assert_eq!(context.execution_mode, request.activation_mode);
+    assert_eq!(context.route, request.route);
+    assert_eq!(context.scope, request.scope);
+    assert_eq!(context.matched_rule_id, request.matched_rule_id);
 }
 
 #[test]
@@ -252,12 +255,10 @@ fn execution_attempt_factory_resets_attempt_numbers_per_request_bound_plan_ident
         order_id: OrderId::from("order-b"),
     };
 
-    let (attempt_a1, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
-    let (attempt_a2, _) = factory.next_for_plan(&plan_a, &request_a, domain::ExecutionMode::Live);
-    let (attempt_request_b1, _) =
-        factory.next_for_plan(&plan_a, &request_b, domain::ExecutionMode::Live);
-    let (attempt_plan_b1, _) =
-        factory.next_for_plan(&plan_b, &request_b, domain::ExecutionMode::Live);
+    let (attempt_a1, _) = factory.next_for_plan(&plan_a, &request_a);
+    let (attempt_a2, _) = factory.next_for_plan(&plan_a, &request_a);
+    let (attempt_request_b1, _) = factory.next_for_plan(&plan_a, &request_b);
+    let (attempt_plan_b1, _) = factory.next_for_plan(&plan_b, &request_b);
 
     assert_eq!(attempt_a1.attempt_no, 1);
     assert_eq!(attempt_a2.attempt_no, 2);
@@ -290,8 +291,8 @@ fn execution_attempt_factory_keeps_same_business_plan_independent_across_request
         matched_rule_id: None,
     };
 
-    let (attempt_a, _) = factory.next_for_plan(&plan, &request_a, domain::ExecutionMode::Live);
-    let (attempt_b, _) = factory.next_for_plan(&plan, &request_b, domain::ExecutionMode::Live);
+    let (attempt_a, _) = factory.next_for_plan(&plan, &request_a);
+    let (attempt_b, _) = factory.next_for_plan(&plan, &request_b);
 
     assert_eq!(attempt_a.attempt_no, 1);
     assert_eq!(attempt_b.attempt_no, 1);
@@ -317,7 +318,7 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
     let mut factory =
         ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 4)]));
 
-    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Shadow);
+    let (attempt, context) = factory.next_for_plan(&plan, &request);
 
     assert_eq!(attempt.attempt_no, 5);
     assert_eq!(
@@ -379,7 +380,7 @@ fn ctf_operation_carries_the_attempt_context_used_to_create_it() {
         activation_mode: domain::ExecutionMode::Live,
         matched_rule_id: None,
     };
-    let (attempt, context) = factory.next_for_plan(&plan, &request, domain::ExecutionMode::Live);
+    let (attempt, context) = factory.next_for_plan(&plan, &request);
 
     let operation = CtfOperation::new(
         CtfOperationKind::Merge,
