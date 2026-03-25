@@ -1,6 +1,18 @@
 use observability::{field_keys, metric_dimensions, span_names};
 
 #[test]
+fn venue_producer_conventions_define_ws_and_heartbeat_fields() {
+    assert_eq!(span_names::VENUE_WS_SESSION, "axiom.venue.ws.session");
+    assert_eq!(span_names::VENUE_HEARTBEAT, "axiom.venue.heartbeat");
+
+    assert_eq!(field_keys::CHANNEL, "channel");
+    assert_eq!(field_keys::CONNECTION_ID, "connection_id");
+    assert_eq!(field_keys::SESSION_STATUS, "session_status");
+    assert_eq!(field_keys::HEARTBEAT_ID, "heartbeat_id");
+    assert_eq!(field_keys::HEARTBEAT_STATUS, "heartbeat_status");
+}
+
+#[test]
 fn observability_conventions_define_stable_span_names_and_field_keys() {
     assert_eq!(span_names::APP_BOOTSTRAP, "axiom.app.bootstrap");
     assert_eq!(span_names::REPLAY_RUN, "axiom.app_replay.run");

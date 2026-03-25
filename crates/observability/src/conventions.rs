@@ -8,6 +8,8 @@ pub mod span_names {
     pub const APP_DISPATCH_FLUSH: &str = "axiom.app.dispatch.flush";
     pub const REPLAY_RUN: &str = "axiom.app_replay.run";
     pub const REPLAY_SUMMARY: &str = "axiom.app_replay.summary";
+    pub const VENUE_WS_SESSION: &str = "axiom.venue.ws.session";
+    pub const VENUE_HEARTBEAT: &str = "axiom.venue.heartbeat";
 }
 
 pub mod field_keys {
@@ -25,6 +27,11 @@ pub mod field_keys {
     pub const ATTENTION_REASON: &str = "attention_reason";
     pub const BACKLOG_COUNT: &str = "backlog_count";
     pub const APPLY_RESULT: &str = "apply_result";
+    pub const CHANNEL: &str = "channel";
+    pub const CONNECTION_ID: &str = "connection_id";
+    pub const SESSION_STATUS: &str = "session_status";
+    pub const HEARTBEAT_ID: &str = "heartbeat_id";
+    pub const HEARTBEAT_STATUS: &str = "heartbeat_status";
 }
 
 pub mod metric_dimensions {
@@ -39,8 +46,8 @@ pub mod metric_dimensions {
     impl Channel {
         pub const fn as_pair(self) -> (&'static str, &'static str) {
             match self {
-                Self::Market => ("channel", "market"),
-                Self::User => ("channel", "user"),
+                Self::Market => (field_keys::CHANNEL, "market"),
+                Self::User => (field_keys::CHANNEL, "user"),
             }
         }
     }
