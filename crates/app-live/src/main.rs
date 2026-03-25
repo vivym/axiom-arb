@@ -6,15 +6,15 @@ use observability::bootstrap_observability;
 
 fn main() {
     if let Err(error) = run() {
-        tracing::error!(error = %error, "app-live failed");
+        tracing::error!(error = %error, "app-live bootstrap failed");
         process::exit(1);
     }
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let observability = bootstrap_observability("app-live");
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    let observability = bootstrap_observability("app-live");
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
@@ -36,7 +36,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .published_snapshot_id
             .as_deref()
             .unwrap_or("none"),
-        "app-live starting"
+        "app-live bootstrap completed"
     );
 
     Ok(())
