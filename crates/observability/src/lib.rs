@@ -1,12 +1,19 @@
+mod bootstrap;
+mod conventions;
 pub mod metrics;
 mod tracing_bootstrap;
 
+pub use bootstrap::{bootstrap_observability, BootstrappedObservability};
+pub use conventions::{field_keys, metric_dimensions, span_names};
 pub use metrics::{
-    CounterHandle, GaugeHandle, MetricKey, MetricRegistry, MetricRegistrySnapshot, ModeHandle,
-    RuntimeMetrics, RuntimeMetricsRecorder,
+    CounterHandle, CounterSampleWithDimensions, DimensionedCounterHandle, GaugeHandle,
+    MetricDimension, MetricDimensions, MetricKey, MetricRegistry, MetricRegistrySnapshot,
+    ModeHandle, RuntimeMetrics, RuntimeMetricsRecorder,
 };
+#[doc(hidden)]
 pub use tracing_bootstrap::{bootstrap_tracing, TracingBootstrap};
 
+/// Shared observability state owned by [`bootstrap_observability`].
 #[derive(Debug, Clone)]
 pub struct Observability {
     service_name: String,
@@ -15,6 +22,7 @@ pub struct Observability {
 }
 
 impl Observability {
+    #[doc(hidden)]
     pub fn new(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),

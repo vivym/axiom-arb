@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
+    hash::{Hash, Hasher},
     sync::{Arc, Mutex},
 };
+
+use crate::metric_dimensions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MetricKey(&'static str);
@@ -14,6 +17,15 @@ impl MetricKey {
     pub const fn as_str(self) -> &'static str {
         self.0
     }
+}
+
+fn is_dimensioned_counter_key(key: MetricKey) -> bool {
+    matches!(
+        key.as_str(),
+        "axiom_websocket_reconnect_total"
+            | "axiom_halt_activation_total"
+            | "axiom_reconcile_attention_total"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +93,35 @@ impl CounterHandle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DimensionedCounterHandle {
+    key: MetricKey,
+}
+
+impl DimensionedCounterHandle {
+    pub(crate) const fn new(key: &'static str) -> Self {
+        Self {
+            key: MetricKey::new(key),
+        }
+    }
+
+    pub const fn key(self) -> MetricKey {
+        self.key
+    }
+
+    pub fn increment_with_dimensions(
+        self,
+        amount: u64,
+        dimensions: MetricDimensions,
+    ) -> CounterSampleWithDimensions {
+        CounterSampleWithDimensions {
+            key: self.key,
+            amount,
+            dimensions: dimensions.canonicalized(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CounterSample {
     key: MetricKey,
     amount: u64,
@@ -93,6 +134,93 @@ impl CounterSample {
 
     pub const fn amount(self) -> u64 {
         self.amount
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetricDimension {
+    Channel(metric_dimensions::Channel),
+    HaltScope(metric_dimensions::HaltScope),
+}
+
+impl MetricDimension {
+    fn as_pair(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Channel(channel) => channel.as_pair(),
+            Self::HaltScope(scope) => scope.as_pair(),
+        }
+    }
+
+    fn key_name(&self) -> &'static str {
+        self.as_pair().0
+    }
+
+    fn canonical_key(&self) -> (&'static str, &'static str) {
+        self.as_pair()
+    }
+}
+
+impl Hash for MetricDimension {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_pair().hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct MetricDimensions(Vec<MetricDimension>);
+
+impl MetricDimensions {
+    pub fn new<I>(dimensions: I) -> Self
+    where
+        I: IntoIterator<Item = MetricDimension>,
+    {
+        Self(dimensions.into_iter().collect()).canonicalized()
+    }
+
+    fn canonicalized(&self) -> Self {
+        let mut dimensions = self.0.clone();
+        dimensions.sort_by_key(MetricDimension::canonical_key);
+        let mut canonical: Vec<MetricDimension> = Vec::with_capacity(dimensions.len());
+
+        for dimension in dimensions {
+            if let Some(previous) = canonical.last() {
+                if previous.key_name() == dimension.key_name() {
+                    if previous == &dimension {
+                        continue;
+                    }
+
+                    panic!(
+                        "conflicting metric dimension values for key {}",
+                        dimension.key_name()
+                    );
+                }
+            }
+
+            canonical.push(dimension);
+        }
+
+        Self(canonical)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterSampleWithDimensions {
+    key: MetricKey,
+    amount: u64,
+    dimensions: MetricDimensions,
+}
+
+impl CounterSampleWithDimensions {
+    pub const fn key(&self) -> MetricKey {
+        self.key
+    }
+
+    pub const fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    pub fn dimensions(&self) -> &MetricDimensions {
+        &self.dimensions
     }
 }
 
@@ -142,6 +270,9 @@ pub struct RuntimeMetrics {
     pub runtime_mode: ModeHandle,
     pub relayer_pending_age: GaugeHandle,
     pub divergence_count: CounterHandle,
+    pub websocket_reconnect_total: DimensionedCounterHandle,
+    pub halt_activation_total: DimensionedCounterHandle,
+    pub reconcile_attention_total: DimensionedCounterHandle,
     pub dispatcher_backlog_count: GaugeHandle,
     pub projection_publish_lag_count: GaugeHandle,
     pub recovery_backlog_count: GaugeHandle,
@@ -163,6 +294,13 @@ impl Default for RuntimeMetrics {
             runtime_mode: ModeHandle::new("axiom_runtime_mode"),
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
+            websocket_reconnect_total: DimensionedCounterHandle::new(
+                "axiom_websocket_reconnect_total",
+            ),
+            halt_activation_total: DimensionedCounterHandle::new("axiom_halt_activation_total"),
+            reconcile_attention_total: DimensionedCounterHandle::new(
+                "axiom_reconcile_attention_total",
+            ),
             dispatcher_backlog_count: GaugeHandle::new("axiom_dispatcher_backlog_count"),
             projection_publish_lag_count: GaugeHandle::new("axiom_projection_publish_lag_count"),
             recovery_backlog_count: GaugeHandle::new("axiom_recovery_backlog_count"),
@@ -202,6 +340,7 @@ pub struct MetricRegistry {
 struct MetricRegistryState {
     gauges: HashMap<MetricKey, f64>,
     counters: HashMap<MetricKey, u64>,
+    counters_with_dimensions: HashMap<(MetricKey, MetricDimensions), u64>,
     modes: HashMap<MetricKey, String>,
 }
 
@@ -215,8 +354,21 @@ impl MetricRegistry {
     }
 
     pub fn record_counter(&self, sample: CounterSample) {
+        assert!(
+            !is_dimensioned_counter_key(sample.key()),
+            "dimensioned counters must not be recorded through the scalar path"
+        );
         let mut state = self.inner.lock().expect("metric registry lock");
         let entry = state.counters.entry(sample.key()).or_default();
+        *entry += sample.amount();
+    }
+
+    pub fn record_counter_with_dimensions(&self, sample: CounterSampleWithDimensions) {
+        let mut state = self.inner.lock().expect("metric registry lock");
+        let entry = state
+            .counters_with_dimensions
+            .entry((sample.key(), sample.dimensions().canonicalized()))
+            .or_default();
         *entry += sample.amount();
     }
 
@@ -233,6 +385,7 @@ impl MetricRegistry {
         MetricRegistrySnapshot {
             gauges: state.gauges.clone(),
             counters: state.counters.clone(),
+            counters_with_dimensions: state.counters_with_dimensions.clone(),
             modes: state.modes.clone(),
         }
     }
@@ -242,6 +395,7 @@ impl MetricRegistry {
 pub struct MetricRegistrySnapshot {
     gauges: HashMap<MetricKey, f64>,
     counters: HashMap<MetricKey, u64>,
+    counters_with_dimensions: HashMap<(MetricKey, MetricDimensions), u64>,
     modes: HashMap<MetricKey, String>,
 }
 
@@ -252,6 +406,16 @@ impl MetricRegistrySnapshot {
 
     pub fn counter(&self, key: MetricKey) -> Option<u64> {
         self.counters.get(&key).copied()
+    }
+
+    pub fn counter_with_dimensions(
+        &self,
+        key: MetricKey,
+        dimensions: &MetricDimensions,
+    ) -> Option<u64> {
+        self.counters_with_dimensions
+            .get(&(key, dimensions.canonicalized()))
+            .copied()
     }
 
     pub fn mode(&self, key: MetricKey) -> Option<&str> {
@@ -288,6 +452,30 @@ impl RuntimeMetricsRecorder {
     pub fn increment_divergence_count(&self, amount: u64) {
         self.registry
             .record_counter(self.metrics.divergence_count.increment(amount));
+    }
+
+    pub fn increment_websocket_reconnect_total(&self, amount: u64, dimensions: MetricDimensions) {
+        self.registry.record_counter_with_dimensions(
+            self.metrics
+                .websocket_reconnect_total
+                .increment_with_dimensions(amount, dimensions),
+        );
+    }
+
+    pub fn increment_halt_activation_total(&self, amount: u64, dimensions: MetricDimensions) {
+        self.registry.record_counter_with_dimensions(
+            self.metrics
+                .halt_activation_total
+                .increment_with_dimensions(amount, dimensions),
+        );
+    }
+
+    pub fn increment_reconcile_attention_total(&self, amount: u64, dimensions: MetricDimensions) {
+        self.registry.record_counter_with_dimensions(
+            self.metrics
+                .reconcile_attention_total
+                .increment_with_dimensions(amount, dimensions),
+        );
     }
 
     pub fn record_dispatcher_backlog_count(&self, count: f64) {

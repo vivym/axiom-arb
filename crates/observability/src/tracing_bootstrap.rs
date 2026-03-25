@@ -20,10 +20,10 @@ pub fn bootstrap_tracing(service_name: impl Into<String>) -> TracingBootstrap {
             .with_target(false)
             .without_time()
             .finish();
-        let _ = ::tracing::subscriber::set_global_default(subscriber);
+        if ::tracing::subscriber::set_global_default(subscriber).is_ok() {
+            ::tracing::info!(service_name = %service_name, "tracing bootstrapped");
+        }
     });
-
-    ::tracing::info!(service_name = %service_name, "tracing bootstrapped");
 
     TracingBootstrap { service_name }
 }

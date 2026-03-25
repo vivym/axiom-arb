@@ -1,4 +1,9 @@
-use observability::{bootstrap_tracing, metrics::MetricKey, Observability, RuntimeMetrics};
+use observability::{
+    bootstrap_tracing,
+    metric_dimensions::{Channel, HaltScope},
+    metrics::{MetricDimension, MetricDimensions, MetricKey},
+    CounterHandle, Observability, RuntimeMetrics,
+};
 
 #[test]
 fn observability_exposes_required_runtime_metric_keys() {
@@ -88,6 +93,18 @@ fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
         metrics.shadow_attempt_count.key(),
         MetricKey::new("axiom_shadow_attempt_total")
     );
+    assert_eq!(
+        metrics.websocket_reconnect_total.key(),
+        MetricKey::new("axiom_websocket_reconnect_total")
+    );
+    assert_eq!(
+        metrics.halt_activation_total.key(),
+        MetricKey::new("axiom_halt_activation_total")
+    );
+    assert_eq!(
+        metrics.reconcile_attention_total.key(),
+        MetricKey::new("axiom_reconcile_attention_total")
+    );
 }
 
 #[test]
@@ -176,4 +193,80 @@ fn runtime_metrics_recorder_updates_registry() {
         snapshot.counter(metrics.neg_risk_rollout_parity_mismatch_count.key()),
         Some(2)
     );
+}
+
+#[test]
+fn registry_round_trips_dimensioned_counter_samples() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let dims = MetricDimensions::new([MetricDimension::Channel(Channel::User)]);
+
+    observability
+        .recorder()
+        .increment_websocket_reconnect_total(2, dims.clone());
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter(metrics.websocket_reconnect_total.key()),
+        None
+    );
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.websocket_reconnect_total.key(), &dims),
+        Some(2)
+    );
+}
+
+#[test]
+#[should_panic(expected = "dimensioned counters must not be recorded through the scalar path")]
+fn registry_rejects_scalar_samples_for_dimensioned_counter_keys() {
+    let observability = Observability::new("app-live");
+
+    observability.registry().record_counter(
+        CounterHandle::new("axiom_websocket_reconnect_total").increment(1),
+    );
+}
+
+#[test]
+fn counter_dimension_order_is_canonicalized() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let recorded_dims = MetricDimensions::new([
+        MetricDimension::HaltScope(HaltScope::Market),
+        MetricDimension::Channel(Channel::User),
+    ]);
+    let lookup_dims = MetricDimensions::new([
+        MetricDimension::Channel(Channel::User),
+        MetricDimension::HaltScope(HaltScope::Market),
+    ]);
+
+    observability
+        .recorder()
+        .increment_halt_activation_total(1, recorded_dims);
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.halt_activation_total.key(), &lookup_dims),
+        Some(1)
+    );
+}
+
+#[test]
+fn mode_samples_remain_queryable_without_forcing_numeric_encoding() {
+    let observability = Observability::new("app-live");
+    observability.recorder().record_runtime_mode("healthy");
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.mode(observability.metrics().runtime_mode.key()),
+        Some("healthy")
+    );
+}
+
+#[test]
+#[should_panic(expected = "conflicting metric dimension values for key channel")]
+fn metric_dimensions_reject_conflicting_values_for_the_same_key() {
+    let _ = MetricDimensions::new([
+        MetricDimension::Channel(Channel::User),
+        MetricDimension::Channel(Channel::Market),
+    ]);
 }

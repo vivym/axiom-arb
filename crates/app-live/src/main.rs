@@ -2,20 +2,21 @@ use std::{env, process, str::FromStr};
 
 use app_live::{run_live, run_paper, AppRuntimeMode, StaticSnapshotSource};
 use domain::RuntimeMode;
-use observability::{bootstrap_tracing, Observability};
+use observability::{bootstrap_observability, span_names};
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("{error}");
+        tracing::error!(error = %error, "app-live bootstrap failed");
         process::exit(1);
     }
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let observability = bootstrap_observability("app-live");
+    let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
+    let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    let _tracing = bootstrap_tracing("app-live");
-    let observability = Observability::new("app-live");
     let source = StaticSnapshotSource::empty();
     let result = match app_mode {
         AppRuntimeMode::Paper => run_paper(&source),
@@ -25,21 +26,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .recorder()
         .record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
 
-    println!(
-        "app-live starting app_mode={} bootstrap_status={:?} promoted_from_bootstrap={} runtime_mode={:?} fullset_mode={:?} negrisk_mode={:?} pending_reconcile_count={} published_snapshot_id={}",
-        result.runtime.app_mode().as_str(),
-        result.runtime.bootstrap_status(),
-        result.report.promoted_from_bootstrap,
-        result.runtime.runtime_mode(),
-        result.summary.fullset_mode,
-        result.summary.negrisk_mode,
-        result.summary.pending_reconcile_count,
-        result
+    let completion_span = tracing::info_span!(
+        span_names::APP_BOOTSTRAP_COMPLETE,
+        app_mode = %result.runtime.app_mode().as_str(),
+        bootstrap_status = ?result.runtime.bootstrap_status(),
+        promoted_from_bootstrap = result.report.promoted_from_bootstrap,
+        runtime_mode = ?result.runtime.runtime_mode(),
+        fullset_mode = ?result.summary.fullset_mode,
+        negrisk_mode = ?result.summary.negrisk_mode,
+        pending_reconcile_count = result.summary.pending_reconcile_count,
+        published_snapshot_id = %result
             .summary
             .published_snapshot_id
             .as_deref()
             .unwrap_or("none")
     );
+    let _completion_guard = completion_span.enter();
+    tracing::info!("app-live bootstrap complete");
 
     Ok(())
 }
