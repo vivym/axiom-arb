@@ -27,6 +27,13 @@ fn missing_neg_risk_live_target_config_returns_empty_map() {
 }
 
 #[test]
+fn blank_neg_risk_live_target_config_is_invalid() {
+    let error = load_neg_risk_live_targets(Some("")).unwrap_err();
+
+    assert!(matches!(error, ConfigError::InvalidJson { .. }));
+}
+
+#[test]
 fn rejects_invalid_neg_risk_live_target_config_json() {
     let error = load_neg_risk_live_targets(Some("{")).unwrap_err();
 

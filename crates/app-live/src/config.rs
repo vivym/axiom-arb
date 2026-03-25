@@ -44,7 +44,7 @@ impl std::error::Error for ConfigError {}
 pub fn load_neg_risk_live_targets(
     json: Option<&str>,
 ) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, ConfigError> {
-    let Some(json) = json.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(json) = json else {
         return Ok(BTreeMap::new());
     };
 

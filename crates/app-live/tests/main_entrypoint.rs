@@ -128,6 +128,25 @@ fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     );
 }
 
+#[test]
+fn live_entrypoint_rejects_blank_neg_risk_target_config() {
+    let output = app_live_output("live", Some(""));
+
+    assert!(
+        !output.status.success(),
+        "binary should fail for blank neg-risk live target config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid neg-risk live target config"),
+        "{combined}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
@@ -145,6 +164,16 @@ fn live_entrypoint_rejects_non_utf8_neg_risk_target_config() {
     assert!(
         combined.contains("invalid value for AXIOM_NEG_RISK_LIVE_TARGETS"),
         "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_boots_without_neg_risk_target_config() {
+    let output = app_live_output("live", None);
+
+    assert!(
+        output.status.success(),
+        "live mode should boot without config"
     );
 }
 
