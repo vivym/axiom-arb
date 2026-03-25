@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 
-use domain::{ExecutionMode, ExecutionReceipt, ExecutionRequest};
+use domain::{
+    ExecutionAttempt, ExecutionAttemptContext, ExecutionMode, ExecutionReceipt, ExecutionRequest,
+};
 use observability::field_keys;
 
 use crate::{
@@ -40,6 +42,13 @@ pub enum ExecutionError {
     Sink {
         error: VenueSinkError,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionAttemptRecord {
+    pub attempt: ExecutionAttempt,
+    pub attempt_context: ExecutionAttemptContext,
+    pub receipt: ExecutionReceipt,
 }
 
 impl ExecutionError {
@@ -116,6 +125,14 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         &self,
         input: &ExecutionPlanningInput,
     ) -> Result<ExecutionReceipt, ExecutionError> {
+        self.execute_with_attempt(input)
+            .map(|record| record.receipt)
+    }
+
+    pub fn execute_with_attempt(
+        &self,
+        input: &ExecutionPlanningInput,
+    ) -> Result<ExecutionAttemptRecord, ExecutionError> {
         let plan = self.plan(input)?;
         let (attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
             &plan,
@@ -142,7 +159,13 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
             self.instrumentation.increment_shadow_attempt_count(1);
         }
 
-        result.map_err(|error| ExecutionError::Sink { error })
+        let receipt = result.map_err(|error| ExecutionError::Sink { error })?;
+
+        Ok(ExecutionAttemptRecord {
+            attempt,
+            attempt_context,
+            receipt,
+        })
     }
 }
 

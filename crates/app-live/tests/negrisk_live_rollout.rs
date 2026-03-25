@@ -41,10 +41,12 @@ fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_ar
     let (captured_spans, summary) = capture_spans(|| supervisor.run_once().unwrap());
 
     assert_eq!(summary.neg_risk_live_attempt_count, 1);
-    let attempt_span = captured_spans
+    let execution_attempt_spans = captured_spans
         .iter()
-        .find(|span| span.name == span_names::EXECUTION_ATTEMPT)
-        .expect("execution attempt span missing");
+        .filter(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(execution_attempt_spans.len(), 1);
+    let attempt_span = execution_attempt_spans[0];
     assert_eq!(
         attempt_span
             .field(field_keys::EXECUTION_MODE)
@@ -55,6 +57,29 @@ fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_ar
         attempt_span.field(field_keys::SCOPE).map(String::as_str),
         Some("\"family-a\"")
     );
+    let records = supervisor.neg_risk_live_execution_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].execution_mode, ExecutionMode::Live);
+    assert_eq!(records[0].route, "neg-risk");
+    assert_eq!(records[0].scope, "family-a");
+    assert_eq!(records[0].matched_rule_id.as_deref(), Some("family-a-live"));
+    assert_eq!(records[0].attempt_no, 1);
+    assert!(records[0]
+        .plan_id
+        .contains("negrisk-submit-family:family-a"));
+    assert!(records[0].attempt_id.ends_with(":attempt-1"));
+    assert_eq!(
+        records[0].idempotency_key,
+        format!("idem-{}", records[0].attempt_id)
+    );
+    assert_eq!(records[0].artifacts.len(), 1);
+    assert_eq!(records[0].artifacts[0].stream, "neg-risk-live-orders");
+    assert_eq!(
+        records[0].artifacts[0].payload["requests"][0]["order"]["tokenId"],
+        "token-1"
+    );
+    assert_eq!(records[0].order_requests.len(), 1);
+    assert_eq!(records[0].order_requests[0]["order"]["tokenId"], "token-1");
 }
 
 #[test]

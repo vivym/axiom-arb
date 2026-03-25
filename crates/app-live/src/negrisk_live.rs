@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 
 use domain::{DecisionInput, ExecutionMode, ExecutionReceipt, IntentCandidate};
 use execution::{
-    attempt::ExecutionAttemptFactory,
     negrisk::{plan_family_submission, NegRiskFamilyTarget, NegRiskMemberTarget, ROUTE},
     signing::{SignedFamilySubmission, TestOrderSigner},
     sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError},
@@ -136,43 +135,27 @@ fn execute_live_family(
 
     let hook = Arc::new(RecordingSignedFamilyHook::default());
     let sink = LiveVenueSink::with_order_signer_and_hook(Arc::new(TestOrderSigner), hook.clone());
-    let plan_id = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
-    let receipt = ExecutionOrchestrator::new_instrumented(sink, instrumentation)
-        .execute(&ExecutionPlanningInput::new(
+    let execution_record = ExecutionOrchestrator::new_instrumented(sink, instrumentation)
+        .execute_with_attempt(&ExecutionPlanningInput::new(
             request.clone(),
             request.activation_mode,
             plan.clone(),
         ))
         .map_err(|err| NegRiskLiveError::Sink(format!("neg-risk live sink failed: {err:?}")))?;
-    ensure_success(&receipt)?;
-    let attempt_no = attempt_no_from_attempt_id(&receipt.attempt_id)?;
+    ensure_success(&execution_record.receipt)?;
 
     Ok(NegRiskLiveExecutionRecord {
-        idempotency_key: format!("idem-{}", receipt.attempt_id),
-        attempt_id: receipt.attempt_id,
-        plan_id,
-        snapshot_id: request.snapshot_id.clone(),
-        execution_mode: request.activation_mode,
-        attempt_no,
-        route: request.route.clone(),
-        scope: request.scope.clone(),
-        matched_rule_id: request.matched_rule_id.clone(),
+        idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
+        attempt_id: execution_record.receipt.attempt_id,
+        plan_id: execution_record.attempt.plan_id,
+        snapshot_id: execution_record.attempt.snapshot_id,
+        execution_mode: execution_record.attempt_context.execution_mode,
+        attempt_no: execution_record.attempt.attempt_no,
+        route: execution_record.attempt_context.route,
+        scope: execution_record.attempt_context.scope,
+        matched_rule_id: execution_record.attempt_context.matched_rule_id,
         artifacts: hook.artifacts(),
         order_requests: hook.order_requests(),
-    })
-}
-
-fn attempt_no_from_attempt_id(attempt_id: &str) -> Result<u32, NegRiskLiveError> {
-    let Some(attempt_no) = attempt_id.rsplit("attempt-").next() else {
-        return Err(NegRiskLiveError::Sink(format!(
-            "attempt id missing attempt suffix: {attempt_id}"
-        )));
-    };
-
-    attempt_no.parse::<u32>().map_err(|err| {
-        NegRiskLiveError::Sink(format!(
-            "attempt id contains invalid attempt number {attempt_id}: {err}"
-        ))
     })
 }
 

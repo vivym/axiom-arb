@@ -14,7 +14,9 @@ pub use domain::{
     ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
 };
 pub use instrumentation::ExecutionInstrumentation;
-pub use orchestrator::{ExecutionError, ExecutionOrchestrator, ExecutionPlanningInput};
+pub use orchestrator::{
+    ExecutionAttemptRecord, ExecutionError, ExecutionOrchestrator, ExecutionPlanningInput,
+};
 pub use signing::{OrderSigner, SignedFamilySubmission, SigningError, TestOrderSigner};
 pub use sink::{
     LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink,

@@ -32,10 +32,12 @@ fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {
         Some(1)
     );
 
-    let attempt_span = captured_spans
+    let execution_attempt_spans = captured_spans
         .iter()
-        .find(|span| span.name == span_names::EXECUTION_ATTEMPT)
-        .expect("execution attempt span missing");
+        .filter(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(execution_attempt_spans.len(), 1);
+    let attempt_span = execution_attempt_spans[0];
     assert_eq!(
         attempt_span
             .field(field_keys::EXECUTION_MODE)
@@ -73,10 +75,12 @@ fn instrumented_execution_failure_records_sink_error_without_shadow_counter_grow
         None
     );
 
-    let attempt_span = captured_spans
+    let execution_attempt_spans = captured_spans
         .iter()
-        .find(|span| span.name == span_names::EXECUTION_ATTEMPT)
-        .expect("execution attempt span missing");
+        .filter(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(execution_attempt_spans.len(), 1);
+    let attempt_span = execution_attempt_spans[0];
     assert_eq!(
         attempt_span
             .field(field_keys::ATTEMPT_OUTCOME)
