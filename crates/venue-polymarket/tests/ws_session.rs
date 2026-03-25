@@ -24,8 +24,17 @@ fn duplicate_disconnect_without_active_connection_is_ignored() {
     let monitor = WsSessionMonitor::new(WsChannelKind::User);
     let mut state = WsSessionState::new(WsChannelKind::User);
 
+    let connected = monitor.record_connected(&mut state, "conn-1", ts(10, 1, 0));
+    assert_eq!(connected.status, WsSessionStatus::Connected);
+
+    let first_disconnect = monitor.record_disconnected(&mut state, "network_gap", ts(10, 1, 5));
+    assert_eq!(
+        first_disconnect.unwrap().status,
+        WsSessionStatus::Disconnected
+    );
+
     assert!(monitor
-        .record_disconnected(&mut state, "not_connected", ts(10, 1, 0))
+        .record_disconnected(&mut state, "duplicate_disconnect", ts(10, 1, 6))
         .is_none());
 }
 
