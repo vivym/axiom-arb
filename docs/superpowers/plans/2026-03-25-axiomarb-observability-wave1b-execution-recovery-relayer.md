@@ -198,16 +198,11 @@ git commit -m "feat: add wave1b observability conventions"
 ```rust
 mod support;
 
-use app_live::{AppRuntimeMode, AppSupervisor, NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
-use chrono::Utc;
 use execution::{
     sink::ShadowVenueSink, ExecutionInstrumentation, ExecutionMode, ExecutionOrchestrator,
-    ExecutionPlanningInput,
 };
 use observability::{bootstrap_observability, field_keys, span_names};
-use rust_decimal::Decimal;
 use support::{capture_spans, sample_planning_input, FailingVenueSink};
-use state::RemoteSnapshot;
 
 #[test]
 fn instrumented_shadow_execution_records_span_fields_and_shadow_counter() {
@@ -276,6 +271,18 @@ fn instrumented_execution_failure_records_sink_error_without_shadow_counter_grow
         Some("\"sink_error\"")
     );
 }
+```
+
+```rust
+mod support;
+
+use std::collections::BTreeMap;
+
+use app_live::{AppRuntimeMode, AppSupervisor, NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+use observability::{bootstrap_observability, field_keys, span_names};
+use rust_decimal::Decimal;
+use state::RemoteSnapshot;
+use support::capture_spans;
 
 #[test]
 fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_artifacts() {
@@ -322,9 +329,10 @@ Run:
 ```bash
 cargo test -p execution instrumented_shadow_execution_records_span_fields_and_shadow_counter -- --exact
 cargo test -p execution instrumented_execution_failure_records_sink_error_without_shadow_counter_growth -- --exact
+cargo test -p app-live bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_artifacts -- --exact
 ```
 
-Expected: FAIL because `ExecutionInstrumentation` and the instrumented orchestrator path do not exist yet.
+Expected: FAIL because `ExecutionInstrumentation`, the instrumented orchestrator path, and the bootstrap-time neg-risk execution wiring do not exist yet.
 
 - [ ] **Step 3: Implement the focused execution instrumentation surface**
 
