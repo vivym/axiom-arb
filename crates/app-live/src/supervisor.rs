@@ -294,6 +294,18 @@ impl AppSupervisor {
             return Ok(());
         }
 
+        let restoring_empty_history = self.seed.last_journal_seq.is_none()
+            && self
+                .seed
+                .committed_state_version
+                .unwrap_or(self.seed.last_state_version)
+                == 0
+            && self.runtime.last_journal_seq() == Some(0)
+            && self.runtime.state_version() == 0;
+        if restoring_empty_history && self.seed.neg_risk_rollout_evidence.is_none() {
+            return Ok(());
+        }
+
         if self.runtime.state_version() == 0
             && self.seed.published_snapshot_id.is_none()
             && self.neg_risk_rollout_evidence.is_none()
