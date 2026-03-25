@@ -21,11 +21,6 @@ const DIVERGENCE_STATE_VERSION_MISMATCH: &str = "state_version_mismatch";
 const DIVERGENCE_LAST_JOURNAL_SEQ_MISMATCH: &str = "last_journal_seq_mismatch";
 const DIVERGENCE_ROLLOUT_EVIDENCE_MISMATCH: &str = "rollout_evidence_mismatch";
 const DIVERGENCE_ROLLOUT_EVIDENCE_MISSING: &str = "rollout_evidence_missing";
-const DIVERGENCE_ROLLOUT_EVIDENCE_UNEXPECTED: &str = "rollout_evidence_unexpected";
-const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_ANCHORS_MISSING: &str =
-    "neg_risk_live_execution_anchors_missing";
-const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISSING: &str =
-    "neg_risk_live_execution_snapshot_missing";
 const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISMATCH: &str =
     "neg_risk_live_execution_snapshot_mismatch";
 
@@ -509,8 +504,7 @@ impl AppSupervisor {
                     expected
                 ),
             )),
-            (None, Some(_)) => Err(self.divergence_error(
-                DIVERGENCE_ROLLOUT_EVIDENCE_UNEXPECTED,
+            (None, Some(_)) => Err(SupervisorError::new(
                 "durable rollout gate evidence is required to resume live state",
             )),
             (None, None) => Ok(()),
@@ -643,15 +637,13 @@ impl AppSupervisor {
         }
 
         if self.neg_risk_live_execution_records.is_empty() {
-            return Err(self.divergence_error(
-                DIVERGENCE_NEG_RISK_LIVE_EXECUTION_ANCHORS_MISSING,
+            return Err(SupervisorError::new(
                 "durable neg-risk live attempt anchors are required to resume live state",
             ));
         }
 
         let Some(snapshot_id) = self.runtime.published_snapshot_id() else {
-            return Err(self.divergence_error(
-                DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISSING,
+            return Err(SupervisorError::new(
                 "durable neg-risk live attempt anchors require a published snapshot",
             ));
         };

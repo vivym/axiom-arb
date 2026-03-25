@@ -214,6 +214,34 @@ fn resume_pending_reconcile_mismatch_records_divergence_span_and_counter() {
     );
 }
 
+#[test]
+fn resume_missing_durable_rollout_evidence_does_not_record_divergence_signal() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+
+    let (captured_spans, err) = capture_spans(|| supervisor.resume_once().unwrap_err());
+
+    assert!(err.to_string().contains("rollout gate evidence"));
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().divergence_count.key()),
+        None
+    );
+    assert!(
+        captured_spans
+            .iter()
+            .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE)
+    );
+}
+
 #[derive(Debug, Clone)]
 struct CapturedSpan {
     name: String,
