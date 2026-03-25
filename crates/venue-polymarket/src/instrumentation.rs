@@ -58,9 +58,11 @@ impl VenueProducerInstrumentation {
     }
 
     pub fn record_heartbeat_success(&self, state: &OrderHeartbeatState, at: DateTime<Utc>) {
-        if let Some(recorder) = &self.recorder {
-            recorder.record_heartbeat_freshness(state.freshness_seconds(at));
-        }
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_heartbeat_freshness(state.freshness_seconds(at));
 
         tracing::info_span!(
             span_names::VENUE_HEARTBEAT,
@@ -76,9 +78,11 @@ impl VenueProducerInstrumentation {
         reason: HeartbeatReconcileReason,
         at: DateTime<Utc>,
     ) {
-        if let Some(recorder) = &self.recorder {
-            recorder.record_heartbeat_freshness(state.freshness_seconds(at));
-        }
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_heartbeat_freshness(state.freshness_seconds(at));
 
         tracing::warn_span!(
             span_names::VENUE_HEARTBEAT,
