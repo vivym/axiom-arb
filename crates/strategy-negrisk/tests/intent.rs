@@ -20,8 +20,10 @@ fn negrisk_strategy_emits_one_stable_intent_per_family_scope() {
         panic!("expected strategy intent");
     };
 
+    assert_eq!(first.route, "neg-risk");
     assert_eq!(first.scope, "family-a");
     assert_eq!(first.intent_id, "neg-risk:family-a:snapshot-negrisk-2:12");
+    assert_eq!(second.route, "neg-risk");
     assert_eq!(second.scope, "family-b");
     assert_eq!(second.intent_id, "neg-risk:family-b:snapshot-negrisk-2:12");
 }

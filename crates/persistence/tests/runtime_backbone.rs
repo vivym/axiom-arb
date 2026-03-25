@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use domain::ExecutionMode;
 use persistence::{
@@ -93,6 +96,13 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode) -> ExecutionAttemptRow 
         attempt_id: attempt_id.to_owned(),
         plan_id: format!("plan-{attempt_id}"),
         snapshot_id: "snapshot-7".to_owned(),
+        route: if mode == ExecutionMode::Live {
+            "neg-risk".to_owned()
+        } else {
+            "shadow".to_owned()
+        },
+        scope: "family:family-1".to_owned(),
+        matched_rule_id: Some("rule-family-anchor".to_owned()),
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
@@ -267,6 +277,243 @@ async fn execution_attempt_table_rejects_mode_change_when_shadow_artifacts_exist
 }
 
 #[tokio::test]
+async fn live_artifact_table_rejects_shadow_attempt_ids_via_direct_sql() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-shadow-live-sql", ExecutionMode::Shadow),
+        )
+        .await
+        .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-shadow-live-sql")
+    .bind("live.execution")
+    .bind(json!({ "attempt_id": "attempt-shadow-live-sql", "kind": "planned_order" }))
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("live_execution_artifacts requires a live execution attempt"),
+        "unexpected database error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_table_rejects_mode_change_when_live_artifacts_exist() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt("attempt-live-sql", ExecutionMode::Live),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-live-sql")
+    .bind("live.execution")
+    .bind(json!({ "attempt_id": "attempt-live-sql", "kind": "planned_order" }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        UPDATE execution_attempts
+        SET execution_mode = 'shadow'
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-sql")
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("execution_attempts with live artifacts cannot change away from live"),
+        "unexpected database error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_artifact_schema_matches_task5_primary_key() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let primary_key_columns: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT att.attname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        JOIN unnest(con.conkey) WITH ORDINALITY AS cols(attnum, ordinality) ON TRUE
+        JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+        WHERE rel.relname = 'live_execution_artifacts'
+          AND nsp.nspname = current_schema()
+          AND con.contype = 'p'
+        ORDER BY cols.ordinality
+        "#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(primary_key_columns, vec!["attempt_id", "stream"]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn followup_migration_upgrades_legacy_live_artifacts_to_composite_primary_key() {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+
+    insert_legacy_execution_attempt(
+        &db.pool,
+        "attempt-live-upgrade-1",
+        "plan-attempt-live-upgrade-1",
+        "snapshot-7",
+        "live",
+        1,
+        "idem-attempt-live-upgrade-1",
+    )
+    .await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES
+            ($1, $2, $3),
+            ($1, $2, $4)
+        "#,
+    )
+    .bind("attempt-live-upgrade-1")
+    .bind("live.execution")
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap();
+
+    let primary_key_columns: Vec<String> = sqlx::query_scalar(
+        r#"
+        SELECT att.attname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        JOIN unnest(con.conkey) WITH ORDINALITY AS cols(attnum, ordinality) ON TRUE
+        JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+        WHERE rel.relname = 'live_execution_artifacts'
+          AND nsp.nspname = current_schema()
+          AND con.contype = 'p'
+        ORDER BY cols.ordinality
+        "#,
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(primary_key_columns, vec!["attempt_id", "stream"]);
+
+    let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
+        r#"
+        SELECT payload
+        FROM live_execution_artifacts
+        WHERE attempt_id = $1 AND stream = $2
+        "#,
+    )
+    .bind("attempt-live-upgrade-1")
+    .bind("live.execution")
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(payloads, vec![json!({ "kind": "planned_order", "seq": 1 })]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn followup_migration_rejects_conflicting_payload_groups() {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+
+    insert_legacy_execution_attempt(
+        &db.pool,
+        "attempt-live-upgrade-conflict-1",
+        "plan-attempt-live-upgrade-conflict-1",
+        "snapshot-7",
+        "live",
+        1,
+        "idem-attempt-live-upgrade-conflict-1",
+    )
+    .await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES
+            ($1, $2, $3),
+            ($1, $2, $4)
+        "#,
+    )
+    .bind("attempt-live-upgrade-conflict-1")
+    .bind("live.execution")
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .bind(json!({ "kind": "signed_order", "seq": 2 }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("conflicting payloads"),
+        "unexpected migration error: {message}"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -285,6 +532,116 @@ async fn execution_attempt_append_rejects_duplicate_attempt_ids() {
     ));
 
     db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_round_trips_durable_audit_anchor_fields() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_attempt("attempt-live-anchor-1", ExecutionMode::Live);
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let rows = ExecutionAttemptRepo
+        .list_live_attempts(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![row]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_anchor_migration_backfills_existing_rows_safely() {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind("attempt-pre-anchor-1")
+    .bind("request-bound:5:req-1:negrisk-submit-family:family-a")
+    .bind("snapshot-legacy")
+    .bind("live")
+    .bind(1_i32)
+    .bind("idem-legacy")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    apply_migration_file(&db.pool, "0008_execution_attempt_audit_anchor.sql")
+        .await
+        .unwrap();
+
+    let row = sqlx::query_as::<_, (String, String, Option<String>)>(
+        r#"
+        SELECT route, scope, matched_rule_id
+        FROM execution_attempts
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-pre-anchor-1")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(row.0, "neg-risk");
+    assert_eq!(row.1, "family-a");
+    assert_eq!(row.2, None);
+
+    db.cleanup().await;
+}
+
+async fn insert_legacy_execution_attempt(
+    pool: &PgPool,
+    attempt_id: &str,
+    plan_id: &str,
+    snapshot_id: &str,
+    execution_mode: &str,
+    attempt_no: i32,
+    idempotency_key: &str,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(plan_id)
+    .bind(snapshot_id)
+    .bind(execution_mode)
+    .bind(attempt_no)
+    .bind(idempotency_key)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -317,4 +674,17 @@ async fn pending_reconcile_append_rejects_duplicate_refs() {
     ));
 
     db.cleanup().await;
+}
+
+fn migration_file(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../migrations")
+        .join(name)
+}
+
+async fn apply_migration_file(pool: &PgPool, file_name: &str) -> Result<(), sqlx::Error> {
+    let sql = std::fs::read_to_string(migration_file(file_name))
+        .expect("migration file should exist for runtime backbone tests");
+    sqlx::raw_sql(&sql).execute(pool).await?;
+    Ok(())
 }

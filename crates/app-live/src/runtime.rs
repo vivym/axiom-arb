@@ -1,4 +1,8 @@
-use std::{fmt, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    str::FromStr,
+};
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
@@ -9,6 +13,7 @@ use state::{
 use tracing::field;
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
+use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
 use crate::supervisor::{AppSupervisor, SupervisorSummary};
@@ -280,6 +285,50 @@ where
     S: BootstrapSource,
 {
     run_live_instrumented(source, AppInstrumentation::disabled())
+}
+
+pub fn run_live_with_neg_risk_live_targets<S>(
+    source: &S,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    run_live_with_neg_risk_live_targets_instrumented(
+        source,
+        AppInstrumentation::disabled(),
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+    )
+}
+
+pub fn run_live_with_neg_risk_live_targets_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    let mut supervisor = match instrumentation.recorder() {
+        Some(recorder) => {
+            AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
+        }
+        None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
+    };
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    for family_id in neg_risk_live_approved_families {
+        supervisor.seed_neg_risk_live_approval(&family_id);
+    }
+    for family_id in neg_risk_live_ready_families {
+        supervisor.seed_neg_risk_live_ready_family(&family_id);
+    }
+    supervisor.run_bootstrap()
 }
 
 pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult

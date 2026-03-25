@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use domain::{
     ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
 };
@@ -8,9 +10,9 @@ use crate::{
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
-        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
-        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
-        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        LiveExecutionArtifactRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow,
+        RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1367,16 +1369,22 @@ impl ExecutionAttemptRepo {
                 attempt_id,
                 plan_id,
                 snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
                 execution_mode,
                 attempt_no,
                 idempotency_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(&row.attempt_id)
         .bind(&row.plan_id)
         .bind(&row.snapshot_id)
+        .bind(&row.route)
+        .bind(&row.scope)
+        .bind(&row.matched_rule_id)
         .bind(execution_mode_to_str(row.execution_mode))
         .bind(row.attempt_no)
         .bind(&row.idempotency_key)
@@ -1401,6 +1409,9 @@ impl ExecutionAttemptRepo {
                 attempt_id,
                 plan_id,
                 snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
                 execution_mode,
                 attempt_no,
                 idempotency_key
@@ -1486,6 +1497,111 @@ impl ShadowArtifactRepo {
                 attempt_id: row.attempt_id,
             })
         }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LiveArtifactRepo;
+
+impl LiveArtifactRepo {
+    pub async fn append(&self, pool: &PgPool, row: LiveExecutionArtifactRow) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+            SELECT $1, $2, $3
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $4
+            ON CONFLICT (attempt_id, stream) DO NOTHING
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.stream)
+        .bind(&row.payload)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+
+        let existing_payload = sqlx::query_scalar::<_, Value>(
+            r#"
+            SELECT payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = $1 AND stream = $2
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(&row.stream)
+        .fetch_optional(pool)
+        .await?;
+
+        match existing_payload {
+            Some(payload) if payload == row.payload => Ok(()),
+            Some(_) => Err(PersistenceError::ConflictingLiveArtifactPayload {
+                attempt_id: row.attempt_id,
+                stream: row.stream,
+            }),
+            None => Err(PersistenceError::LiveArtifactRequiresLiveAttempt {
+                attempt_id: row.attempt_id,
+            }),
+        }
+    }
+
+    pub async fn list_for_attempt(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Vec<LiveExecutionArtifactRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT attempt_id, stream, payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = $1
+            ORDER BY stream
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_live_execution_artifact_row)
+            .collect()
+    }
+
+    pub async fn list_for_attempts(
+        &self,
+        pool: &PgPool,
+        attempt_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<LiveExecutionArtifactRow>>> {
+        if attempt_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT attempt_id, stream, payload
+            FROM live_execution_artifacts
+            WHERE attempt_id = ANY($1)
+            ORDER BY attempt_id, stream
+            "#,
+        )
+        .bind(attempt_ids)
+        .fetch_all(pool)
+        .await?;
+
+        let mut artifacts = BTreeMap::<String, Vec<LiveExecutionArtifactRow>>::new();
+        for row in rows {
+            let artifact = map_live_execution_artifact_row(row)?;
+            artifacts
+                .entry(artifact.attempt_id.clone())
+                .or_default()
+                .push(artifact);
+        }
+
+        Ok(artifacts)
     }
 }
 
@@ -1734,9 +1850,20 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         attempt_id: row.try_get("attempt_id")?,
         plan_id: row.try_get("plan_id")?,
         snapshot_id: row.try_get("snapshot_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        matched_rule_id: row.try_get("matched_rule_id")?,
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
+    })
+}
+
+fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRow> {
+    Ok(LiveExecutionArtifactRow {
+        attempt_id: row.try_get("attempt_id")?,
+        stream: row.try_get("stream")?,
+        payload: row.try_get("payload")?,
     })
 }
 

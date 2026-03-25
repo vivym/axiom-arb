@@ -1,6 +1,7 @@
 mod auth;
 mod heartbeat;
 mod metadata;
+mod orders;
 mod relayer;
 mod rest;
 mod retry;
@@ -15,6 +16,10 @@ pub use auth::{
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
+pub use orders::{
+    build_post_order_request_from_signed_member, OrderSide, OrderType, PostOrder,
+    PostOrderBuildError, PostOrderRequest, PostOrderTransport,
+};
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
     BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestError,

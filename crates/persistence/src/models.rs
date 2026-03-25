@@ -290,6 +290,9 @@ pub struct ExecutionAttemptRow {
     pub attempt_id: String,
     pub plan_id: String,
     pub snapshot_id: String,
+    pub route: String,
+    pub scope: String,
+    pub matched_rule_id: Option<String>,
     pub execution_mode: ExecutionMode,
     pub attempt_no: i32,
     pub idempotency_key: String,
@@ -305,6 +308,13 @@ pub struct PendingReconcileRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShadowExecutionArtifactRow {
+    pub attempt_id: String,
+    pub stream: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveExecutionArtifactRow {
     pub attempt_id: String,
     pub stream: String,
     pub payload: Value,

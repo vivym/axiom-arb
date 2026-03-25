@@ -6,15 +6,17 @@ edition = "2021"
 [dependencies]
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
 domain = { path = "../domain" }
+execution = { path = "../execution" }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = { version = "1.0.145", features = ["raw_value"] }
 sha2 = "0.10.9"
 tokio = { version = "1.50.0", features = ["sync"] }
 url = "2.5.7"
 
 [dev-dependencies]
 tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
+rust_decimal = "1.40.0"
 
 [lib]
 path = "src/lib.rs"
