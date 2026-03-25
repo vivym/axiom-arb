@@ -58,12 +58,16 @@ impl VenueProducerInstrumentation {
         });
     }
 
-    pub fn record_heartbeat_success(&self, state: &OrderHeartbeatState, at: DateTime<Utc>) {
+    pub fn record_heartbeat_success(
+        &self,
+        state: &OrderHeartbeatState,
+        freshness_seconds: f64,
+    ) {
         let Some(recorder) = &self.recorder else {
             return;
         };
 
-        recorder.record_heartbeat_freshness(state.freshness_seconds(at));
+        recorder.record_heartbeat_freshness(freshness_seconds);
 
         let span = tracing::info_span!(
             span_names::VENUE_HEARTBEAT,

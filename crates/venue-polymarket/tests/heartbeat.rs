@@ -60,8 +60,9 @@ fn heartbeat_success_updates_latest_id_and_freshness() {
         requires_reconcile_attention: true,
     };
 
-    monitor.record_success(&mut state, "hb-2", ts(10, 0, 5));
+    let freshness = monitor.record_success(&mut state, "hb-2", ts(10, 0, 5));
 
+    assert_eq!(freshness, 5.0);
     assert_eq!(state.heartbeat_id.as_deref(), Some("hb-2"));
     assert_eq!(state.last_success_at, ts(10, 0, 5));
     assert!(!state.requires_reconcile_attention);

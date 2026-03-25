@@ -45,12 +45,14 @@ impl OrderHeartbeatMonitor {
         state: &mut OrderHeartbeatState,
         heartbeat_id: impl Into<String>,
         at: DateTime<Utc>,
-    ) {
+    ) -> f64 {
+        let freshness_seconds = state.freshness_seconds(at);
         state.heartbeat_id = Some(heartbeat_id.into());
         state.last_success_at = at;
         state.reconcile_attention_since = None;
         state.reconcile_reason = None;
         state.requires_reconcile_attention = false;
+        freshness_seconds
     }
 
     pub fn record_invalid(

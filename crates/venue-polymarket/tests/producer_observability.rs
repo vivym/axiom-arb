@@ -87,22 +87,24 @@ fn disabled_instrumentation_emits_no_ws_session_span_or_reconnect_counter() {
 fn heartbeat_success_records_freshness_and_structured_status() {
     let observability = bootstrap_observability("venue-polymarket-test");
     let instrumentation = VenueProducerInstrumentation::enabled(observability.recorder());
-    let state = OrderHeartbeatState {
+    let monitor = OrderHeartbeatMonitor::new(Duration::seconds(30));
+    let mut state = OrderHeartbeatState {
         heartbeat_id: Some("hb-1".to_owned()),
         last_success_at: ts(10, 0, 0),
         reconcile_attention_since: None,
         reconcile_reason: None,
         requires_reconcile_attention: false,
     };
+    let freshness = monitor.record_success(&mut state, "hb-2", ts(10, 0, 12));
 
     let (captured_spans, ()) =
-        capture_spans(|| instrumentation.record_heartbeat_success(&state, ts(10, 0, 12)));
+        capture_spans(|| instrumentation.record_heartbeat_success(&state, freshness));
 
     assert_eq!(
         observability.registry().snapshot().gauge(
             observability.metrics().heartbeat_freshness.key()
         ),
-        Some(12.0)
+        Some(freshness)
     );
 
     let span = captured_spans
@@ -115,24 +117,26 @@ fn heartbeat_success_records_freshness_and_structured_status() {
     );
     assert_eq!(
         span.field(field_keys::HEARTBEAT_ID).map(String::as_str),
-        Some("\"hb-1\"")
+        Some("\"hb-2\"")
     );
 }
 
 #[test]
 fn disabled_instrumentation_emits_no_heartbeat_span_or_freshness_metric() {
     let observability = bootstrap_observability("venue-polymarket-test");
+    let monitor = OrderHeartbeatMonitor::new(Duration::seconds(30));
     let instrumentation = VenueProducerInstrumentation::disabled();
-    let state = OrderHeartbeatState {
+    let mut state = OrderHeartbeatState {
         heartbeat_id: Some("hb-1".to_owned()),
         last_success_at: ts(10, 0, 0),
         reconcile_attention_since: None,
         reconcile_reason: None,
         requires_reconcile_attention: false,
     };
+    let freshness = monitor.record_success(&mut state, "hb-2", ts(10, 0, 12));
 
     let (captured_spans, ()) = capture_spans(|| {
-        instrumentation.record_heartbeat_success(&state, ts(10, 0, 12));
+        instrumentation.record_heartbeat_success(&state, freshness);
         instrumentation.record_heartbeat_attention(
             &state,
             HeartbeatReconcileReason::MissedHeartbeat,
