@@ -5,6 +5,7 @@ mod relayer;
 mod rest;
 mod retry;
 mod ws_market;
+mod ws_session;
 mod ws_user;
 
 pub use auth::{
@@ -26,4 +27,5 @@ pub use ws_market::{
     MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent, WsChannelKind,
     WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
 };
+pub use ws_session::{WsSessionEvent, WsSessionMonitor, WsSessionState, WsSessionStatus};
 pub use ws_user::{parse_user_message, UserOrderUpdate, UserTradeUpdate, UserWsEvent};
