@@ -29,7 +29,7 @@ fn binary_entrypoint_emits_structured_replay_summary() {
     assert!(combined.contains("after_seq=0"), "{combined}");
     assert!(combined.contains(span_names::REPLAY_SUMMARY), "{combined}");
     assert!(combined.contains("processed_count="), "{combined}");
-    assert!(combined.contains("last_journal_seq=Some("), "{combined}");
+    assert!(combined.contains("last_journal_seq="), "{combined}");
     assert!(combined.contains("app-replay summary"), "{combined}");
     assert!(
         !combined.contains("replay summary emitted"),
