@@ -47,17 +47,25 @@ pub fn plan_family_submission(
         });
     }
 
+    let mut members: Vec<_> = config
+        .members
+        .iter()
+        .map(|member| NegRiskMemberOrderPlan {
+            condition_id: member.condition_id.clone(),
+            token_id: member.token_id.clone(),
+            price: member.price,
+            quantity: member.quantity,
+        })
+        .collect();
+    members.sort_by(|left, right| {
+        left.condition_id
+            .as_str()
+            .cmp(right.condition_id.as_str())
+            .then_with(|| left.token_id.as_str().cmp(right.token_id.as_str()))
+    });
+
     Ok(ExecutionPlan::NegRiskSubmitFamily {
         family_id: config.family_id.clone(),
-        members: config
-            .members
-            .iter()
-            .map(|member| NegRiskMemberOrderPlan {
-                condition_id: member.condition_id.clone(),
-                token_id: member.token_id.clone(),
-                price: member.price,
-                quantity: member.quantity,
-            })
-            .collect(),
+        members,
     })
 }

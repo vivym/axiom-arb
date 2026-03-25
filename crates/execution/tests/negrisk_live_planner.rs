@@ -36,6 +36,77 @@ fn planner_builds_the_same_family_submission_plan_for_shadow_mode() {
     ));
 }
 
+#[test]
+fn planner_rejects_non_negrisk_route() {
+    let mut request = sample_negrisk_request(ExecutionMode::Live, "family-a");
+    request.route = "full-set".to_owned();
+
+    let err =
+        execution::negrisk::plan_family_submission(&request, &sample_family_target("family-a"))
+            .expect_err("planner should reject non-neg-risk routes");
+
+    assert!(matches!(
+        err,
+        execution::negrisk::NegRiskPlanningError::RouteMismatch { route }
+            if route == "full-set"
+    ));
+}
+
+#[test]
+fn planner_rejects_scope_mismatch() {
+    let request = sample_negrisk_request(ExecutionMode::Live, "family-b");
+
+    let err =
+        execution::negrisk::plan_family_submission(&request, &sample_family_target("family-a"))
+            .expect_err("planner should reject mismatched family scope");
+
+    assert!(matches!(
+        err,
+        execution::negrisk::NegRiskPlanningError::ScopeMismatch { request_scope, family_id }
+            if request_scope == "family-b" && family_id == EventFamilyId::from("family-a")
+    ));
+}
+
+#[test]
+fn neg_risk_family_plan_id_is_canonical_across_member_order_and_decimal_scale() {
+    let canonical = ExecutionPlan::NegRiskSubmitFamily {
+        family_id: EventFamilyId::from("family-a"),
+        members: vec![
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-1"),
+                token_id: TokenId::from("token-1"),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            },
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-2"),
+                token_id: TokenId::from("token-2"),
+                price: Decimal::new(55, 2),
+                quantity: Decimal::new(8, 0),
+            },
+        ],
+    };
+    let reordered_and_scaled = ExecutionPlan::NegRiskSubmitFamily {
+        family_id: EventFamilyId::from("family-a"),
+        members: vec![
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-2"),
+                token_id: TokenId::from("token-2"),
+                price: Decimal::new(5500, 4),
+                quantity: Decimal::new(800, 2),
+            },
+            execution::plans::NegRiskMemberOrderPlan {
+                condition_id: ConditionId::from("condition-1"),
+                token_id: TokenId::from("token-1"),
+                price: Decimal::new(4500, 4),
+                quantity: Decimal::new(1000, 2),
+            },
+        ],
+    };
+
+    assert_eq!(canonical.plan_id(), reordered_and_scaled.plan_id());
+}
+
 fn sample_negrisk_request(execution_mode: ExecutionMode, scope: &str) -> ExecutionRequest {
     ExecutionRequest {
         request_id: format!("request-{scope}-{execution_mode:?}"),
