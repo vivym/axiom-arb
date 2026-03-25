@@ -62,7 +62,10 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
     assert_eq!(attempt_context.snapshot_id, "snapshot-7");
     assert_eq!(attempt_context.route, "neg-risk");
     assert_eq!(attempt_context.scope, "full-set");
-    assert_eq!(attempt_context.matched_rule_id.as_deref(), Some("family-a-shadow"));
+    assert_eq!(
+        attempt_context.matched_rule_id.as_deref(),
+        Some("family-a-shadow")
+    );
 
     let state_confidence = StateConfidence::Certain;
     assert_eq!(state_confidence, StateConfidence::Certain);

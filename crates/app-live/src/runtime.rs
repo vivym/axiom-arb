@@ -1,14 +1,17 @@
 use std::{fmt, str::FromStr};
 
 use domain::{RuntimeMode, RuntimeOverlay};
+use observability::{field_keys, span_names};
 use state::{
     ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
     StateStore,
 };
+use tracing::field;
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 use crate::input_tasks::InputTaskEvent;
-use crate::supervisor::SupervisorSummary;
+use crate::instrumentation::AppInstrumentation;
+use crate::supervisor::{AppSupervisor, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -66,6 +69,7 @@ impl std::error::Error for ParseAppRuntimeModeError {}
 pub struct AppRuntime {
     store: StateStore,
     app_mode: AppRuntimeMode,
+    instrumentation: AppInstrumentation,
     published_snapshot: Option<PublishedSnapshot>,
 }
 
@@ -78,9 +82,14 @@ pub struct AppRunResult {
 
 impl AppRuntime {
     pub fn new(app_mode: AppRuntimeMode) -> Self {
+        Self::new_instrumented(app_mode, AppInstrumentation::disabled())
+    }
+
+    pub fn new_instrumented(app_mode: AppRuntimeMode, instrumentation: AppInstrumentation) -> Self {
         Self {
             store: StateStore::new(),
             app_mode,
+            instrumentation,
             published_snapshot: None,
         }
     }
@@ -126,8 +135,23 @@ impl AppRuntime {
     }
 
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
+        let span = tracing::info_span!(
+            span_names::APP_RUNTIME_RECONCILE,
+            app_mode = field::Empty,
+            pending_reconcile_count = field::Empty
+        );
+        let _span_guard = span.enter();
+        span.record(field_keys::APP_MODE, self.app_mode.as_str());
+
         let report = bootstrap::reconcile(&mut self.store, snapshot);
+        if !report.attention.is_empty() {
+            for attention in &report.attention {
+                self.instrumentation.record_reconcile_attention(attention);
+            }
+        }
         self.anchor_baseline_if_ready(report.succeeded);
+        let pending_reconcile_count = self.store.pending_reconcile_count();
+        span.record(field_keys::PENDING_RECONCILE_COUNT, pending_reconcile_count);
         report
     }
 
@@ -136,14 +160,32 @@ impl AppRuntime {
         S: BootstrapSource,
     {
         let report = bootstrap::bootstrap_once(&mut self.store, source);
+        if !report.attention.is_empty() {
+            for attention in &report.attention {
+                self.instrumentation.record_reconcile_attention(attention);
+            }
+        }
         self.anchor_baseline_if_ready(report.succeeded);
         report
     }
 
     pub fn apply_input(&mut self, input: InputTaskEvent) -> Result<ApplyResult, ApplyError> {
+        let span = tracing::info_span!(
+            span_names::APP_RUNTIME_APPLY_INPUT,
+            apply_result = field::Empty
+        );
+        let _span_guard = span.enter();
         let journal_seq = input.journal_seq;
-        let result =
-            StateApplier::new(&mut self.store).apply(journal_seq, input.into_state_fact_input())?;
+        let result = match StateApplier::new(&mut self.store)
+            .apply(journal_seq, input.into_state_fact_input())
+        {
+            Ok(result) => result,
+            Err(error) => {
+                span.record(field_keys::APPLY_RESULT, "error");
+                return Err(error);
+            }
+        };
+        span.record(field_keys::APPLY_RESULT, apply_result_label(&result));
         match &result {
             ApplyResult::Applied { .. } => {
                 self.published_snapshot = None;
@@ -157,10 +199,23 @@ impl AppRuntime {
     }
 
     pub fn publish_snapshot(&mut self, snapshot_id: &str) -> Option<PublishedSnapshot> {
+        let span = tracing::info_span!(
+            span_names::APP_RUNTIME_PUBLISH_SNAPSHOT,
+            snapshot_id = field::Empty,
+            state_version = field::Empty,
+            committed_journal_seq = field::Empty
+        );
+        let _span_guard = span.enter();
         self.store.last_applied_journal_seq()?;
         let snapshot = PublishedSnapshot::from_store(
             &self.store,
             state::ProjectionReadiness::ready_fullset_pending_negrisk(snapshot_id),
+        );
+        span.record(field_keys::SNAPSHOT_ID, snapshot.snapshot_id.as_str());
+        span.record(field_keys::STATE_VERSION, snapshot.state_version);
+        span.record(
+            field_keys::COMMITTED_JOURNAL_SEQ,
+            snapshot.committed_journal_seq,
         );
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
@@ -210,19 +265,51 @@ pub fn run_paper<S>(source: &S) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    run_with_mode(AppRuntimeMode::Paper, source)
+    run_paper_instrumented(source, AppInstrumentation::disabled())
+}
+
+pub fn run_paper_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    run_with_mode(AppRuntimeMode::Paper, source, instrumentation)
 }
 
 pub fn run_live<S>(source: &S) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    run_with_mode(AppRuntimeMode::Live, source)
+    run_live_instrumented(source, AppInstrumentation::disabled())
 }
 
-fn run_with_mode<S>(app_mode: AppRuntimeMode, source: &S) -> AppRunResult
+pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
 where
     S: BootstrapSource,
 {
-    crate::supervisor::AppSupervisor::new(app_mode, source.snapshot()).run_bootstrap()
+    run_with_mode(AppRuntimeMode::Live, source, instrumentation)
+}
+
+fn run_with_mode<S>(
+    app_mode: AppRuntimeMode,
+    source: &S,
+    instrumentation: AppInstrumentation,
+) -> AppRunResult
+where
+    S: BootstrapSource,
+{
+    let supervisor = match instrumentation.recorder() {
+        Some(recorder) => AppSupervisor::new_instrumented(app_mode, source.snapshot(), recorder),
+        None => AppSupervisor::new(app_mode, source.snapshot()),
+    };
+
+    supervisor.run_bootstrap()
+}
+
+fn apply_result_label(result: &ApplyResult) -> &'static str {
+    match result {
+        ApplyResult::Applied { .. } => "applied",
+        ApplyResult::Duplicate { .. } => "duplicate",
+        ApplyResult::Deferred { .. } => "deferred",
+        ApplyResult::ReconcileRequired { .. } => "reconcile_required",
+    }
 }

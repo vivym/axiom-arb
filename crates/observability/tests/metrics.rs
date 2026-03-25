@@ -1,6 +1,6 @@
 use observability::{
     bootstrap_tracing,
-    metric_dimensions::{Channel, HaltScope},
+    metric_dimensions::{Channel, HaltScope, ReconcileReason},
     metrics::{MetricDimension, MetricDimensions, MetricKey},
     CounterHandle, Observability, RuntimeMetrics,
 };
@@ -221,9 +221,9 @@ fn registry_round_trips_dimensioned_counter_samples() {
 fn registry_rejects_scalar_samples_for_dimensioned_counter_keys() {
     let observability = Observability::new("app-live");
 
-    observability.registry().record_counter(
-        CounterHandle::new("axiom_websocket_reconnect_total").increment(1),
-    );
+    observability
+        .registry()
+        .record_counter(CounterHandle::new("axiom_websocket_reconnect_total").increment(1));
 }
 
 #[test]
@@ -269,4 +269,27 @@ fn metric_dimensions_reject_conflicting_values_for_the_same_key() {
         MetricDimension::Channel(Channel::User),
         MetricDimension::Channel(Channel::Market),
     ]);
+}
+
+#[test]
+fn reconcile_reason_dimensions_round_trip_in_metric_registry() {
+    let observability = Observability::new("app-live");
+    let metrics = observability.metrics();
+    let dims = MetricDimensions::new([MetricDimension::ReconcileReason(
+        ReconcileReason::InventoryMismatch,
+    )]);
+
+    observability
+        .recorder()
+        .increment_reconcile_attention_total(4, dims.clone());
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.counter(metrics.reconcile_attention_total.key()),
+        None
+    );
+    assert_eq!(
+        snapshot.counter_with_dimensions(metrics.reconcile_attention_total.key(), &dims),
+        Some(4)
+    );
 }

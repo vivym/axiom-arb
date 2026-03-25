@@ -1,6 +1,9 @@
 use std::{env, process, str::FromStr};
 
-use app_live::{run_live, run_paper, AppRuntimeMode, StaticSnapshotSource};
+use app_live::{
+    runtime::{run_live_instrumented, run_paper_instrumented},
+    AppInstrumentation, AppRuntimeMode, StaticSnapshotSource,
+};
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
 
@@ -18,9 +21,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     let source = StaticSnapshotSource::empty();
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let result = match app_mode {
-        AppRuntimeMode::Paper => run_paper(&source),
-        AppRuntimeMode::Live => run_live(&source),
+        AppRuntimeMode::Paper => run_paper_instrumented(&source, instrumentation.clone()),
+        AppRuntimeMode::Live => run_live_instrumented(&source, instrumentation),
     };
     observability
         .recorder()
