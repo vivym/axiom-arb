@@ -1,20 +1,26 @@
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ExternalFactPayload(Option<ExternalFactPayloadKind>);
+pub struct ExternalFactPayload(Option<ExternalFactPayloadData>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ExternalFactPayloadKind {
-    NegRiskLiveSubmitObserved {
-        attempt_id: String,
-        scope: String,
-        submission_ref: String,
-    },
-    NegRiskLiveReconcileObserved {
-        pending_ref: String,
-        scope: String,
-        terminal: bool,
-    },
+pub enum ExternalFactPayloadData {
+    NegRiskLiveSubmitObserved(NegRiskLiveSubmitObservedPayload),
+    NegRiskLiveReconcileObserved(NegRiskLiveReconcileObservedPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskLiveSubmitObservedPayload {
+    pub attempt_id: String,
+    pub scope: String,
+    pub submission_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskLiveReconcileObservedPayload {
+    pub pending_ref: String,
+    pub scope: String,
+    pub terminal: bool,
 }
 
 impl ExternalFactPayload {
@@ -27,11 +33,13 @@ impl ExternalFactPayload {
         scope: impl Into<String>,
         submission_ref: impl Into<String>,
     ) -> Self {
-        Self(Some(ExternalFactPayloadKind::NegRiskLiveSubmitObserved {
-            attempt_id: attempt_id.into(),
-            scope: scope.into(),
-            submission_ref: submission_ref.into(),
-        }))
+        Self(Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(
+            NegRiskLiveSubmitObservedPayload {
+                attempt_id: attempt_id.into(),
+                scope: scope.into(),
+                submission_ref: submission_ref.into(),
+            },
+        )))
     }
 
     pub fn negrisk_live_reconcile_observed(
@@ -39,22 +47,26 @@ impl ExternalFactPayload {
         scope: impl Into<String>,
         terminal: bool,
     ) -> Self {
-        Self(Some(
-            ExternalFactPayloadKind::NegRiskLiveReconcileObserved {
+        Self(Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(
+            NegRiskLiveReconcileObservedPayload {
                 pending_ref: pending_ref.into(),
                 scope: scope.into(),
                 terminal,
             },
-        ))
+        )))
+    }
+
+    pub fn as_ref(&self) -> Option<&ExternalFactPayloadData> {
+        self.0.as_ref()
     }
 
     pub fn kind(&self) -> &'static str {
         match &self.0 {
             None => "none",
-            Some(ExternalFactPayloadKind::NegRiskLiveSubmitObserved { .. }) => {
+            Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(_)) => {
                 "negrisk_live_submit_observed"
             }
-            Some(ExternalFactPayloadKind::NegRiskLiveReconcileObserved { .. }) => {
+            Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(_)) => {
                 "negrisk_live_reconcile_observed"
             }
         }

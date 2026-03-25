@@ -2,7 +2,8 @@ use chrono::Utc;
 use domain::{
     ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionAttemptContext,
     ExecutionAttemptOutcome, ExecutionMode, ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
-    ExternalFactEvent, ExternalFactPayload, IntentCandidate, RecoveryIntent, StateConfidence,
+    ExternalFactEvent, ExternalFactPayload, ExternalFactPayloadData, IntentCandidate,
+    RecoveryIntent, StateConfidence,
 };
 
 #[test]
@@ -143,6 +144,46 @@ fn external_fact_event_can_carry_negrisk_live_submit_fact() {
 }
 
 #[test]
+fn external_fact_payload_exposes_live_submit_fields() {
+    let fact = ExternalFactEvent::negrisk_live_submit_observed(
+        "session-live",
+        "evt-1",
+        "attempt-family-a-1",
+        "family-a",
+        "submission-family-a-1",
+    );
+
+    match fact.payload.as_ref() {
+        Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(payload)) => {
+            assert_eq!(payload.attempt_id, "attempt-family-a-1");
+            assert_eq!(payload.scope, "family-a");
+            assert_eq!(payload.submission_ref, "submission-family-a-1");
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn external_fact_payload_exposes_live_reconcile_fields() {
+    let fact = ExternalFactEvent::negrisk_live_reconcile_observed(
+        "session-live",
+        "evt-2",
+        "pending-family-a-1",
+        "family-a",
+        true,
+    );
+
+    match fact.payload.as_ref() {
+        Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(payload)) => {
+            assert_eq!(payload.pending_ref, "pending-family-a-1");
+            assert_eq!(payload.scope, "family-a");
+            assert!(payload.terminal);
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
 fn external_fact_event_defaults_to_no_payload_for_legacy_calls() {
     let fact = ExternalFactEvent::new(
         "market_ws",
@@ -153,5 +194,6 @@ fn external_fact_event_defaults_to_no_payload_for_legacy_calls() {
     );
 
     assert_eq!(fact.payload.kind(), "none");
+    assert!(fact.payload.as_ref().is_none());
     assert_eq!(fact.payload, ExternalFactPayload::default());
 }
