@@ -1,0 +1,258 @@
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
+
+use app_live::{AppInstrumentation, AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
+use chrono::Utc;
+use domain::ExternalFactEvent;
+use observability::{bootstrap_observability, field_keys, span_names};
+use tracing::{
+    field::{Field, Visit},
+    span::{Attributes, Id, Record},
+    Event, Metadata, Subscriber,
+};
+
+#[test]
+fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
+    let observability = bootstrap_observability("app-live-test");
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
+    let mut supervisor = AppSupervisor::for_tests_instrumented(instrumentation);
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(sample_rollout_evidence("snapshot-7"));
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.resume_once().unwrap());
+    let snapshot = observability.registry().snapshot();
+
+    let resume_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_SUPERVISOR_RESUME)
+        .expect("resume span missing");
+    assert_eq!(
+        resume_span.field(field_keys::APP_MODE).map(String::as_str),
+        Some("\"live\"")
+    );
+    assert_eq!(
+        resume_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        resume_span
+            .field(field_keys::LAST_JOURNAL_SEQ)
+            .map(String::as_str),
+        Some("41")
+    );
+    assert_eq!(
+        resume_span.field(field_keys::STATE_VERSION).map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(
+        resume_span.field(field_keys::SNAPSHOT_ID).map(String::as_str),
+        Some("\"snapshot-7\"")
+    );
+
+    let flush_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_DISPATCH_FLUSH)
+        .expect("dispatch flush span missing");
+    assert_eq!(
+        flush_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        flush_span.field(field_keys::SNAPSHOT_ID).map(String::as_str),
+        Some("\"snapshot-7\"")
+    );
+
+    assert_eq!(
+        snapshot.gauge(observability.metrics().recovery_backlog_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_ready_family_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_gate_block_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        summary
+            .neg_risk_rollout_evidence
+            .as_ref()
+            .map(|evidence| evidence.snapshot_id.as_str()),
+        Some("snapshot-7")
+    );
+    assert_eq!(summary.pending_reconcile_count, 0);
+}
+
+#[test]
+fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
+    let observability = bootstrap_observability("app-live-test");
+    let instrumentation = AppInstrumentation::enabled(observability.recorder());
+    let mut supervisor = AppSupervisor::for_tests_instrumented(instrumentation);
+    supervisor.push_dirty_snapshot(5, false, false);
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.flush_dispatch());
+    let snapshot = observability.registry().snapshot();
+
+    let flush_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_DISPATCH_FLUSH)
+        .expect("dispatch flush span missing");
+    assert_eq!(
+        flush_span.field(field_keys::BACKLOG_COUNT).map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        flush_span.field(field_keys::STATE_VERSION).map(String::as_str),
+        Some("5")
+    );
+
+    assert_eq!(summary.coalesced_versions, vec![5]);
+    assert_eq!(
+        snapshot.gauge(observability.metrics().dispatcher_backlog_count.key()),
+        Some(1.0)
+    );
+}
+
+#[derive(Debug, Clone)]
+struct CapturedSpan {
+    name: String,
+    fields: BTreeMap<String, String>,
+}
+
+impl CapturedSpan {
+    fn field(&self, key: &str) -> Option<&String> {
+        self.fields.get(key)
+    }
+}
+
+fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
+    let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
+    let subscriber = CaptureSubscriber {
+        spans: Arc::clone(&spans),
+        next_id: Arc::new(AtomicU64::new(1)),
+    };
+
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let captured = spans
+        .lock()
+        .expect("capture lock poisoned")
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    (captured, result)
+}
+
+#[derive(Clone)]
+struct CaptureSubscriber {
+    spans: Arc<Mutex<BTreeMap<u64, CapturedSpan>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+impl Subscriber for CaptureSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn register_callsite(
+        &self,
+        _metadata: &'static Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::always()
+    }
+
+    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
+        let raw_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = Id::from_u64(raw_id);
+        let mut fields = BTreeMap::new();
+        let mut visitor = FieldVisitor {
+            fields: &mut fields,
+        };
+        attrs.record(&mut visitor);
+
+        self.spans.lock().expect("capture lock poisoned").insert(
+            raw_id,
+            CapturedSpan {
+                name: attrs.metadata().name().to_owned(),
+                fields,
+            },
+        );
+
+        id
+    }
+
+    fn record(&self, span: &Id, values: &Record<'_>) {
+        let span_id = span.clone().into_u64();
+        let mut spans = self.spans.lock().expect("capture lock poisoned");
+        if let Some(captured) = spans.get_mut(&span_id) {
+            let mut visitor = FieldVisitor {
+                fields: &mut captured.fields,
+            };
+            values.record(&mut visitor);
+        }
+    }
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+
+    fn clone_span(&self, id: &Id) -> Id {
+        id.clone()
+    }
+
+    fn try_close(&self, _id: Id) -> bool {
+        true
+    }
+}
+
+struct FieldVisitor<'a> {
+    fields: &'a mut BTreeMap<String, String>,
+}
+
+impl Visit for FieldVisitor<'_> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_owned(), format!("{value:?}"));
+    }
+}
+
+fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
+    InputTaskEvent::new(
+        journal_seq,
+        ExternalFactEvent::new(
+            "market_ws",
+            "session-1",
+            format!("evt-{journal_seq}"),
+            "v1",
+            Utc::now(),
+        ),
+    )
+}
+
+fn sample_rollout_evidence(snapshot_id: &str) -> NegRiskRolloutEvidence {
+    NegRiskRolloutEvidence {
+        snapshot_id: snapshot_id.to_owned(),
+        live_ready_family_count: 0,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    }
+}

@@ -3,6 +3,7 @@ pub mod dispatch;
 pub mod instrumentation;
 pub mod input_tasks;
 pub mod runtime;
+mod snapshot_meta;
 pub mod supervisor;
 
 pub use bootstrap::{BootstrapSource, StaticSnapshotSource};

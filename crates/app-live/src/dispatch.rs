@@ -111,6 +111,10 @@ impl DispatchLoop {
         });
     }
 
+    pub fn pending_backlog_count(&self) -> usize {
+        self.coalesced_dirty_records().len()
+    }
+
     fn clear_dirty_domains(
         &mut self,
         up_to_state_version: u64,
@@ -128,6 +132,10 @@ impl DispatchLoop {
     }
 
     fn coalesce_dirty_records(&mut self) {
+        self.dirty_records = self.coalesced_dirty_records();
+    }
+
+    fn coalesced_dirty_records(&self) -> Vec<DirtyRecord> {
         let latest_fullset_dirty = self
             .dirty_records
             .iter()
@@ -160,13 +168,13 @@ impl DispatchLoop {
                 .insert(DirtyDomain::NegRiskFamilies);
         }
 
-        self.dirty_records = coalesced
+        coalesced
             .into_iter()
             .map(|(state_version, domains)| DirtyRecord {
                 state_version,
                 domains,
             })
-            .collect();
+            .collect()
     }
 }
 

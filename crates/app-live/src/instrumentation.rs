@@ -1,6 +1,8 @@
 use observability::{metric_dimensions, MetricDimension, MetricDimensions, RuntimeMetricsRecorder};
 use state::ReconcileAttention;
 
+use crate::supervisor::NegRiskRolloutEvidence;
+
 #[derive(Debug, Clone, Default)]
 pub struct AppInstrumentation {
     recorder: Option<RuntimeMetricsRecorder>,
@@ -15,6 +17,31 @@ impl AppInstrumentation {
         Self {
             recorder: Some(recorder),
         }
+    }
+
+    pub fn record_dispatcher_backlog_count(&self, count: usize) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_dispatcher_backlog_count(count as f64);
+    }
+
+    pub fn record_recovery_backlog_count(&self, count: usize) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_recovery_backlog_count(count as f64);
+    }
+
+    pub fn record_rollout_evidence(&self, evidence: &NegRiskRolloutEvidence) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
+        recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
     }
 
     pub fn record_reconcile_attention(&self, attention: &ReconcileAttention) {
