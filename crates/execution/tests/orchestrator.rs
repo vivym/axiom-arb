@@ -1,3 +1,5 @@
+mod support;
+
 use std::collections::HashMap;
 
 use std::sync::Arc;
@@ -11,6 +13,7 @@ use execution::{
     TestOrderSigner,
 };
 use rust_decimal::Decimal;
+use support::{sample_planning_input, FailingVenueSink};
 
 #[test]
 fn live_and_shadow_share_the_same_plan_before_sink_dispatch() {
@@ -235,22 +238,6 @@ fn plan_rejects_activation_mode_mismatch_between_request_and_input() {
     ));
 }
 
-fn sample_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
-    ExecutionPlanningInput::new(
-        ExecutionRequest {
-            request_id: "request-1".to_owned(),
-            decision_input_id: "intent-1".to_owned(),
-            snapshot_id: "snapshot-1".to_owned(),
-            route: "full-set".to_owned(),
-            scope: "default".to_owned(),
-            activation_mode: execution_mode,
-            matched_rule_id: None,
-        },
-        execution_mode,
-        execution_plan(),
-    )
-}
-
 fn sample_non_risk_expanding_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
     ExecutionPlanningInput::new(
         ExecutionRequest {
@@ -329,19 +316,4 @@ fn sample_negrisk_planning_input(execution_mode: ExecutionMode) -> ExecutionPlan
         execution_mode,
         neg_risk_plan(),
     )
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FailingVenueSink;
-
-impl execution::sink::VenueSink for FailingVenueSink {
-    fn execute(
-        &self,
-        _plan: &execution::plans::ExecutionPlan,
-        _attempt: &domain::ExecutionAttemptContext,
-    ) -> Result<domain::ExecutionReceipt, execution::sink::VenueSinkError> {
-        Err(execution::sink::VenueSinkError::Rejected {
-            reason: "planned sink failure".to_owned(),
-        })
-    }
 }

@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 
 use domain::{ExecutionMode, ExecutionReceipt, ExecutionRequest};
+use observability::field_keys;
 
 use crate::{
     attempt::ExecutionAttemptFactory,
+    instrumentation::ExecutionInstrumentation,
     plans::ExecutionPlan,
     sink::{VenueSink, VenueSinkError},
 };
@@ -50,20 +52,43 @@ impl ExecutionError {
 pub struct ExecutionOrchestrator<S> {
     sink: S,
     attempt_factory: RefCell<ExecutionAttemptFactory>,
+    instrumentation: ExecutionInstrumentation,
 }
 
 impl<S: VenueSink> ExecutionOrchestrator<S> {
     pub fn new(sink: S) -> Self {
-        Self {
+        Self::with_attempt_factory_instrumented(
             sink,
-            attempt_factory: RefCell::new(ExecutionAttemptFactory::new()),
-        }
+            ExecutionAttemptFactory::new(),
+            ExecutionInstrumentation::disabled(),
+        )
+    }
+
+    pub fn new_instrumented(sink: S, instrumentation: ExecutionInstrumentation) -> Self {
+        Self::with_attempt_factory_instrumented(
+            sink,
+            ExecutionAttemptFactory::new(),
+            instrumentation,
+        )
     }
 
     pub fn with_attempt_factory(sink: S, attempt_factory: ExecutionAttemptFactory) -> Self {
+        Self::with_attempt_factory_instrumented(
+            sink,
+            attempt_factory,
+            ExecutionInstrumentation::disabled(),
+        )
+    }
+
+    pub fn with_attempt_factory_instrumented(
+        sink: S,
+        attempt_factory: ExecutionAttemptFactory,
+        instrumentation: ExecutionInstrumentation,
+    ) -> Self {
         Self {
             sink,
             attempt_factory: RefCell::new(attempt_factory),
+            instrumentation,
         }
     }
 
@@ -92,14 +117,44 @@ impl<S: VenueSink> ExecutionOrchestrator<S> {
         input: &ExecutionPlanningInput,
     ) -> Result<ExecutionReceipt, ExecutionError> {
         let plan = self.plan(input)?;
-        let (_attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
+        let (attempt, attempt_context) = self.attempt_factory.borrow_mut().next_for_plan(
             &plan,
             &input.request,
             input.execution_mode,
         );
+        let attempt_span =
+            self.instrumentation
+                .attempt_span(self.sink.sink_kind(), &attempt, &attempt_context);
+        let _attempt_span_guard = attempt_span.as_ref().map(|span| span.enter());
 
-        self.sink
-            .execute(&plan, &attempt_context)
-            .map_err(|error| ExecutionError::Sink { error })
+        let result = self.sink.execute(&plan, &attempt_context);
+
+        if let Some(span) = &attempt_span {
+            span.record(field_keys::ATTEMPT_OUTCOME, attempt_outcome_label(&result));
+        }
+        if self.sink.sink_kind() == "shadow"
+            && matches!(
+                result.as_ref(),
+                Ok(receipt)
+                    if receipt.outcome == domain::ExecutionAttemptOutcome::ShadowRecorded
+            )
+        {
+            self.instrumentation.increment_shadow_attempt_count(1);
+        }
+
+        result.map_err(|error| ExecutionError::Sink { error })
+    }
+}
+
+fn attempt_outcome_label(result: &Result<ExecutionReceipt, VenueSinkError>) -> &'static str {
+    match result {
+        Ok(receipt) => match receipt.outcome {
+            domain::ExecutionAttemptOutcome::Succeeded => "succeeded",
+            domain::ExecutionAttemptOutcome::ShadowRecorded => "shadow_recorded",
+            domain::ExecutionAttemptOutcome::FailedDefinitive => "failed_definitive",
+            domain::ExecutionAttemptOutcome::FailedAmbiguous => "failed_ambiguous",
+            domain::ExecutionAttemptOutcome::RetryExhausted => "retry_exhausted",
+        },
+        Err(_) => "sink_error",
     }
 }

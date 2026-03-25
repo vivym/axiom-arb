@@ -6,6 +6,12 @@ use std::{
     },
 };
 
+use domain::{ExecutionMode, ExecutionRequest};
+use execution::{
+    orchestrator::ExecutionPlanningInput,
+    plans::ExecutionPlan,
+    sink::{VenueSink, VenueSinkError},
+};
 use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
@@ -13,33 +19,23 @@ use tracing::{
 };
 
 #[allow(dead_code)]
-pub fn capture_tracing<T>(f: impl FnOnce() -> T) -> (String, T) {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CaptureSubscriber {
-        events: Arc::clone(&events),
-    };
-
-    let result = tracing::subscriber::with_default(subscriber, f);
-    let captured = events.lock().expect("capture lock poisoned").join("\n");
-
-    (captured, result)
-}
-
 #[derive(Debug, Clone)]
 pub struct CapturedSpan {
     pub name: String,
     pub fields: BTreeMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl CapturedSpan {
     pub fn field(&self, key: &str) -> Option<&String> {
         self.fields.get(key)
     }
 }
 
+#[allow(dead_code)]
 pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
     let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
-    let subscriber = SpanCaptureSubscriber {
+    let subscriber = CaptureSubscriber {
         spans: Arc::clone(&spans),
         next_id: Arc::new(AtomicU64::new(1)),
     };
@@ -55,68 +51,51 @@ pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
     (captured, result)
 }
 
+pub fn sample_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
+    ExecutionPlanningInput::new(
+        ExecutionRequest {
+            request_id: "request-1".to_owned(),
+            decision_input_id: "intent-1".to_owned(),
+            snapshot_id: "snapshot-1".to_owned(),
+            route: "full-set".to_owned(),
+            scope: "default".to_owned(),
+            activation_mode: execution_mode,
+            matched_rule_id: None,
+        },
+        execution_mode,
+        ExecutionPlan::FullSetBuyThenMerge {
+            condition_id: domain::ConditionId::from("condition-1"),
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FailingVenueSink;
+
+impl VenueSink for FailingVenueSink {
+    fn sink_kind(&self) -> &'static str {
+        "test_failing"
+    }
+
+    fn execute(
+        &self,
+        _plan: &ExecutionPlan,
+        _attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<domain::ExecutionReceipt, VenueSinkError> {
+        Err(VenueSinkError::Rejected {
+            reason: "planned sink failure".to_owned(),
+        })
+    }
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 struct CaptureSubscriber {
-    events: Arc<Mutex<Vec<String>>>,
-}
-
-impl Subscriber for CaptureSubscriber {
-    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn register_callsite(
-        &self,
-        _metadata: &'static Metadata<'static>,
-    ) -> tracing::subscriber::Interest {
-        tracing::subscriber::Interest::always()
-    }
-
-    fn new_span(&self, _attrs: &Attributes<'_>) -> Id {
-        Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &Id, _values: &Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
-    fn event(&self, event: &Event<'_>) {
-        let mut visitor = EventVisitor::default();
-        event.record(&mut visitor);
-
-        let mut parts = vec![format!(
-            "{} target={}",
-            event.metadata().level(),
-            event.metadata().target()
-        )];
-        parts.extend(visitor.fields);
-        self.events
-            .lock()
-            .expect("capture lock poisoned")
-            .push(parts.join(" "));
-    }
-
-    fn enter(&self, _span: &Id) {}
-
-    fn exit(&self, _span: &Id) {}
-
-    fn clone_span(&self, id: &Id) -> Id {
-        id.clone()
-    }
-
-    fn try_close(&self, _id: Id) -> bool {
-        true
-    }
-}
-
-#[derive(Clone)]
-struct SpanCaptureSubscriber {
     spans: Arc<Mutex<BTreeMap<u64, CapturedSpan>>>,
     next_id: Arc<AtomicU64>,
 }
 
-impl Subscriber for SpanCaptureSubscriber {
+impl Subscriber for CaptureSubscriber {
     fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
         true
     }
@@ -132,7 +111,7 @@ impl Subscriber for SpanCaptureSubscriber {
         let raw_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let id = Id::from_u64(raw_id);
         let mut fields = BTreeMap::new();
-        let mut visitor = FieldMapVisitor {
+        let mut visitor = FieldVisitor {
             fields: &mut fields,
         };
         attrs.record(&mut visitor);
@@ -152,7 +131,7 @@ impl Subscriber for SpanCaptureSubscriber {
         let span_id = span.clone().into_u64();
         let mut spans = self.spans.lock().expect("capture lock poisoned");
         if let Some(captured) = spans.get_mut(&span_id) {
-            let mut visitor = FieldMapVisitor {
+            let mut visitor = FieldVisitor {
                 fields: &mut captured.fields,
             };
             values.record(&mut visitor);
@@ -177,22 +156,11 @@ impl Subscriber for SpanCaptureSubscriber {
 }
 
 #[allow(dead_code)]
-#[derive(Default)]
-struct EventVisitor {
-    fields: Vec<String>,
-}
-
-impl Visit for EventVisitor {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.fields.push(format!("{}={value:?}", field.name()));
-    }
-}
-
-struct FieldMapVisitor<'a> {
+struct FieldVisitor<'a> {
     fields: &'a mut BTreeMap<String, String>,
 }
 
-impl Visit for FieldMapVisitor<'_> {
+impl Visit for FieldVisitor<'_> {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         self.fields
             .insert(field.name().to_owned(), format!("{value:?}"));

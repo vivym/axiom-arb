@@ -1,13 +1,61 @@
+mod support;
+
 use std::collections::BTreeMap;
 
 use app_live::{
-    AppSupervisor, NegRiskFamilyLiveTarget, NegRiskLiveArtifact, NegRiskLiveExecutionRecord,
-    NegRiskLiveStateSource, NegRiskMemberLiveTarget, NegRiskRolloutEvidence,
+    AppRuntimeMode, AppSupervisor, NegRiskFamilyLiveTarget, NegRiskLiveArtifact,
+    NegRiskLiveExecutionRecord, NegRiskLiveStateSource, NegRiskMemberLiveTarget,
+    NegRiskRolloutEvidence,
 };
 use chrono::Utc;
 use domain::{ExecutionMode, ExternalFactEvent};
+use observability::{bootstrap_observability, field_keys, span_names};
 use rust_decimal::Decimal;
 use serde_json::json;
+use state::RemoteSnapshot;
+use support::capture_spans;
+
+#[test]
+fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_artifacts() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::new_instrumented(
+        AppRuntimeMode::Live,
+        RemoteSnapshot::empty(),
+        observability.recorder(),
+    );
+    supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        NegRiskFamilyLiveTarget {
+            family_id: "family-a".to_owned(),
+            members: vec![NegRiskMemberLiveTarget {
+                condition_id: "condition-1".to_owned(),
+                token_id: "token-1".to_owned(),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            }],
+        },
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.run_once().unwrap());
+
+    assert_eq!(summary.neg_risk_live_attempt_count, 1);
+    let attempt_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .expect("execution attempt span missing");
+    assert_eq!(
+        attempt_span
+            .field(field_keys::EXECUTION_MODE)
+            .map(String::as_str),
+        Some("\"live\"")
+    );
+    assert_eq!(
+        attempt_span.field(field_keys::SCOPE).map(String::as_str),
+        Some("\"family-a\"")
+    );
+}
 
 #[test]
 fn live_ready_family_with_config_and_live_approval_records_real_attempt_artifacts_and_requests() {

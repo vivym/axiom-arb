@@ -532,6 +532,7 @@ impl AppSupervisor {
             &self.neg_risk_live_targets,
             &self.neg_risk_live_approved_families,
             &self.neg_risk_live_ready_families,
+            self.metrics_recorder.clone(),
         )
         .map_err(|err| SupervisorError::new(err.to_string()))?;
         self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {
