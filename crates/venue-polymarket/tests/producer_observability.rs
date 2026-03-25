@@ -1,12 +1,13 @@
 mod support;
 
-use chrono::{TimeZone, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use observability::{
     bootstrap_observability, field_keys, metric_dimensions::Channel, span_names, MetricDimension,
     MetricDimensions,
 };
 use support::capture_spans;
 use venue_polymarket::{
+    HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
     VenueProducerInstrumentation, WsChannelKind, WsSessionMonitor, WsSessionState,
 };
 
@@ -79,6 +80,43 @@ fn disabled_instrumentation_emits_no_ws_session_span_or_reconnect_counter() {
             .iter()
             .all(|span| span.name != span_names::VENUE_WS_SESSION),
         "disabled instrumentation should not emit venue websocket spans"
+    );
+}
+
+#[test]
+fn missed_heartbeat_records_freshness_and_structured_status() {
+    let observability = bootstrap_observability("venue-polymarket-test");
+    let instrumentation = VenueProducerInstrumentation::enabled(observability.recorder());
+    let monitor = OrderHeartbeatMonitor::new(Duration::seconds(30));
+    let mut state = OrderHeartbeatState {
+        heartbeat_id: Some("hb-1".to_owned()),
+        last_success_at: ts(10, 0, 0),
+        reconcile_attention_since: None,
+        reconcile_reason: None,
+        requires_reconcile_attention: false,
+    };
+
+    let (captured_spans, reason) = capture_spans(|| {
+        let reason = monitor.reconcile_trigger(&mut state, ts(10, 0, 31)).unwrap();
+        instrumentation.record_heartbeat_attention(&state, reason, ts(10, 0, 31));
+        reason
+    });
+
+    assert_eq!(reason, HeartbeatReconcileReason::MissedHeartbeat);
+    assert_eq!(
+        observability.registry().snapshot().gauge(
+            observability.metrics().heartbeat_freshness.key()
+        ),
+        Some(31.0)
+    );
+
+    let span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::VENUE_HEARTBEAT)
+        .expect("heartbeat span missing");
+    assert_eq!(
+        span.field(field_keys::HEARTBEAT_STATUS).map(String::as_str),
+        Some("\"missed\"")
     );
 }
 

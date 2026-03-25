@@ -70,6 +70,24 @@ fn heartbeat_success_updates_latest_id_and_freshness() {
     assert_eq!(monitor.reconcile_trigger(&mut state, ts(10, 0, 30)), None);
 }
 
+#[test]
+fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
+    let state = OrderHeartbeatState {
+        heartbeat_id: Some("hb-1".to_owned()),
+        last_success_at: ts(10, 0, 0),
+        reconcile_attention_since: None,
+        reconcile_reason: None,
+        requires_reconcile_attention: false,
+    };
+
+    assert_eq!(state.freshness_seconds(ts(10, 0, 31)), 31.0);
+    assert_eq!(HeartbeatReconcileReason::MissedHeartbeat.as_status(), "missed");
+    assert_eq!(
+        HeartbeatReconcileReason::InvalidHeartbeat.as_status(),
+        "invalid"
+    );
+}
+
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 3, 24, hour, minute, second)
         .single()

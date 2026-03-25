@@ -1,8 +1,11 @@
+use chrono::{DateTime, Utc};
 use observability::{
     metric_dimensions, span_names, MetricDimension, MetricDimensions, RuntimeMetricsRecorder,
 };
 
-use crate::{WsChannelKind, WsSessionEvent, WsSessionStatus};
+use crate::{
+    HeartbeatReconcileReason, OrderHeartbeatState, WsChannelKind, WsSessionEvent, WsSessionStatus,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct VenueProducerInstrumentation {
@@ -52,5 +55,36 @@ impl VenueProducerInstrumentation {
                 );
             }
         });
+    }
+
+    pub fn record_heartbeat_success(&self, state: &OrderHeartbeatState, at: DateTime<Utc>) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record_heartbeat_freshness(state.freshness_seconds(at));
+        }
+
+        tracing::info_span!(
+            span_names::VENUE_HEARTBEAT,
+            heartbeat_id = ?state.heartbeat_id,
+            heartbeat_status = "success",
+        )
+        .in_scope(|| {});
+    }
+
+    pub fn record_heartbeat_attention(
+        &self,
+        state: &OrderHeartbeatState,
+        reason: HeartbeatReconcileReason,
+        at: DateTime<Utc>,
+    ) {
+        if let Some(recorder) = &self.recorder {
+            recorder.record_heartbeat_freshness(state.freshness_seconds(at));
+        }
+
+        tracing::warn_span!(
+            span_names::VENUE_HEARTBEAT,
+            heartbeat_id = ?state.heartbeat_id,
+            heartbeat_status = reason.as_status(),
+        )
+        .in_scope(|| {});
     }
 }
