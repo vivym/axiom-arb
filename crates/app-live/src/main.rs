@@ -5,9 +5,10 @@ use std::{
 };
 
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, run_live_from_durable_store_instrumented,
-    run_live_with_neg_risk_live_targets_instrumented, run_paper_instrumented, AppInstrumentation,
-    AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget, StaticSnapshotSource,
+    load_local_signer_config, load_neg_risk_live_targets,
+    run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_paper_instrumented,
+    AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget,
+    StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
@@ -47,17 +48,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &neg_risk_live_ready_families,
             ) {
                 let _local_signer_config = load_local_signer_config_env()?;
-                run_live_with_neg_risk_live_targets_instrumented(
-                    &source,
-                    instrumentation,
-                    neg_risk_live_targets,
-                    neg_risk_live_approved_families,
-                    neg_risk_live_ready_families,
-                )
-            } else {
-                require_database_url_env()?;
-                run_live_from_durable_store_instrumented(&source, instrumentation)?
             }
+            require_database_url_env()?;
+            run_live_from_durable_store_with_neg_risk_live_targets_instrumented(
+                &source,
+                instrumentation,
+                neg_risk_live_targets,
+                neg_risk_live_approved_families,
+                neg_risk_live_ready_families,
+            )?
         }
     };
     let recorder = observability.recorder();

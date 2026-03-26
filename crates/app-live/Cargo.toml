@@ -21,6 +21,7 @@ venue-polymarket = { path = "../venue-polymarket" }
 [dev-dependencies]
 chrono = "0.4"
 domain = { path = "../domain" }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls"] }
 state = { path = "../state" }
 
 [lib]

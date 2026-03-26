@@ -259,7 +259,10 @@ fn state_confidence_reports_scope_uncertainty_from_live_submit_anchor() {
         )
         .unwrap();
 
-    assert_eq!(store.state_confidence("family-a"), StateConfidence::Uncertain);
+    assert_eq!(
+        store.state_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
     assert_eq!(store.state_confidence("family-b"), StateConfidence::Certain);
 }
 

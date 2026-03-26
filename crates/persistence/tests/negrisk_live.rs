@@ -934,11 +934,14 @@ async fn live_submission_records_list_for_attempt_rejects_attempt_scope_mismatch
         .await
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.scope"
-    ), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            PersistenceError::InvalidValue { ref kind, .. }
+            if *kind == "live_submission_records.scope"
+        ),
+        "{err:?}"
+    );
 
     db.cleanup().await;
 }

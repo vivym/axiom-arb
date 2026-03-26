@@ -1,8 +1,8 @@
 use chrono::Utc;
 use domain::{ExternalFactEvent, RuntimeMode};
 use state::{
-    PendingReconcileAnchor, ProjectionReadiness, PublishedSnapshot, StateApplier,
-    StateConfidence, StateStore,
+    PendingReconcileAnchor, ProjectionReadiness, PublishedSnapshot, StateApplier, StateConfidence,
+    StateStore,
 };
 
 #[test]
@@ -111,7 +111,10 @@ fn restore_pending_reconcile_anchor_rehydrates_exact_anchor_fields_and_state_con
         store.mode_overlay(),
         Some(domain::RuntimeOverlay::CancelOnly)
     );
-    assert_eq!(store.state_confidence("family-a"), StateConfidence::Uncertain);
+    assert_eq!(
+        store.state_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
     assert_eq!(store.state_confidence("family-b"), StateConfidence::Certain);
     assert!(!store.allows_automatic_repair());
 }

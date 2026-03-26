@@ -8,7 +8,9 @@ use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
 use persistence::{
     connect_pool_from_env,
-    models::{ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow},
+    models::{
+        ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow, RuntimeProgressRow,
+    },
     ExecutionAttemptRepo, LiveSubmissionRepo, PendingReconcileRepo, RuntimeProgressRepo,
 };
 use state::{
@@ -369,6 +371,25 @@ pub fn run_live_from_durable_store_instrumented<S>(
 where
     S: BootstrapSource,
 {
+    run_live_from_durable_store_with_neg_risk_live_targets_instrumented(
+        source,
+        instrumentation,
+        BTreeMap::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+    )
+}
+
+pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
     let durable_state = load_durable_live_startup_state()?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
@@ -388,6 +409,13 @@ where
     }
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
+    }
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    for family_id in neg_risk_live_approved_families {
+        supervisor.seed_neg_risk_live_approval(&family_id);
+    }
+    for family_id in neg_risk_live_ready_families {
+        supervisor.seed_neg_risk_live_ready_family(&family_id);
     }
 
     supervisor.run_startup().map_err(Into::into)
@@ -450,20 +478,11 @@ fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn 
             .collect::<Result<Vec<_>, _>>()?;
         let live_execution_records =
             durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
-
-        let (last_journal_seq, last_state_version, published_snapshot_id) = match progress {
-            Some(progress) => (
-                progress.last_journal_seq,
-                u64::try_from(progress.last_state_version).map_err(|_| {
-                    boxed_error(format!(
-                        "durable runtime progress state version {} is negative",
-                        progress.last_state_version
-                    ))
-                })?,
-                progress.last_snapshot_id,
-            ),
-            None => (0, 0, Some("snapshot-0".to_owned())),
-        };
+        let (last_journal_seq, last_state_version, published_snapshot_id) =
+            durable_progress_anchor(
+                progress,
+                !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty(),
+            )?;
 
         Ok(DurableLiveStartupState {
             last_journal_seq,
@@ -502,6 +521,12 @@ fn durable_live_execution_records(
                 .get(&attempt.attempt_id)
                 .cloned()
                 .unwrap_or_default();
+            if submissions.is_empty() {
+                return Err(boxed_error(format!(
+                    "missing durable live submission record for attempt {}",
+                    attempt.attempt_id
+                )));
+            }
             let submission_ref = submissions.first().map(|row| row.submission_ref.clone());
             let pending_ref = submission_ref
                 .as_deref()
@@ -525,6 +550,28 @@ fn durable_live_execution_records(
             })
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()
+}
+
+fn durable_progress_anchor(
+    progress: Option<RuntimeProgressRow>,
+    has_follow_up_work: bool,
+) -> Result<(i64, u64, Option<String>), Box<dyn std::error::Error>> {
+    match progress {
+        Some(progress) => Ok((
+            progress.last_journal_seq,
+            u64::try_from(progress.last_state_version).map_err(|_| {
+                boxed_error(format!(
+                    "durable runtime progress state version {} is negative",
+                    progress.last_state_version
+                ))
+            })?,
+            progress.last_snapshot_id,
+        )),
+        None if has_follow_up_work => Err(boxed_error(
+            "durable runtime progress is required when live follow-up work exists",
+        )),
+        None => Ok((0, 0, Some("snapshot-0".to_owned()))),
+    }
 }
 
 fn pending_reconcile_anchor_from_row(
@@ -551,4 +598,78 @@ fn payload_string(payload: &serde_json::Value, key: &str) -> Result<String, Stri
 
 fn boxed_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use domain::ExecutionMode;
+    use persistence::models::{ExecutionAttemptRow, RuntimeProgressRow};
+
+    use super::{durable_live_execution_records, durable_progress_anchor};
+
+    #[test]
+    fn durable_live_attempt_requires_submission_record() {
+        let err = durable_live_execution_records(
+            vec![ExecutionAttemptRow {
+                attempt_id: "attempt-live-1".to_owned(),
+                plan_id: "negrisk-submit-family:family-a".to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family-a".to_owned(),
+                matched_rule_id: Some("family-a-live".to_owned()),
+                execution_mode: ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: "idem-attempt-live-1".to_owned(),
+            }],
+            BTreeMap::new(),
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("missing durable live submission record"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn durable_follow_up_work_requires_runtime_progress_anchor() {
+        let err = durable_progress_anchor(None, true).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("durable runtime progress is required"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn durable_progress_anchor_allows_empty_baseline_without_follow_up_work() {
+        let (last_journal_seq, last_state_version, snapshot_id) =
+            durable_progress_anchor(None, false).unwrap();
+
+        assert_eq!(last_journal_seq, 0);
+        assert_eq!(last_state_version, 0);
+        assert_eq!(snapshot_id.as_deref(), Some("snapshot-0"));
+    }
+
+    #[test]
+    fn durable_progress_anchor_converts_persisted_runtime_progress() {
+        let (last_journal_seq, last_state_version, snapshot_id) = durable_progress_anchor(
+            Some(RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+            }),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(last_journal_seq, 41);
+        assert_eq!(last_state_version, 7);
+        assert_eq!(snapshot_id.as_deref(), Some("snapshot-7"));
+    }
 }

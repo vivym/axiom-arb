@@ -1,8 +1,17 @@
 use observability::span_names;
-use std::{ffi::OsString, path::PathBuf, process::Command};
+use persistence::run_migrations;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::{
+    ffi::OsString,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
+
+static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn binary_entrypoint_emits_structured_bootstrap_log() {
@@ -93,8 +102,14 @@ fn paper_entrypoint_ignores_invalid_neg_risk_target_config() {
 
 #[test]
 fn paper_entrypoint_ignores_invalid_local_signer_config() {
-    let output =
-        app_live_output_raw_env_with_signer("paper", None, None, None, Some(OsString::from("{")));
+    let output = app_live_output_raw_env_with_signer(
+        "paper",
+        None,
+        None,
+        None,
+        Some(OsString::from("{")),
+        None,
+    );
 
     assert!(
         output.status.success(),
@@ -270,7 +285,8 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
 
 #[test]
 fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
-    let output = app_live_output_with_operator_inputs_and_signer(
+    let database = TestDatabase::new();
+    let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
         Some(
             r#"
@@ -287,7 +303,9 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         Some("family-a"),
         Some("family-a"),
         Some(valid_local_signer_config_json()),
+        Some(database.database_url()),
     );
+    database.cleanup();
 
     assert!(
         output.status.success(),
@@ -307,6 +325,41 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
         "{combined}"
     );
+}
+
+#[test]
+fn live_entrypoint_requires_database_url_even_when_operator_inputs_request_live_work() {
+    let output = app_live_output_raw_env_with_signer_and_database_url(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#
+            .into(),
+        ),
+        Some("family-a".into()),
+        Some("family-a".into()),
+        Some(valid_local_signer_config_json().into()),
+        None,
+    );
+
+    assert!(
+        !output.status.success(),
+        "live mode should fail closed without durable store access even when operator inputs request live work"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("DATABASE_URL"), "{combined}");
 }
 
 #[test]
@@ -364,6 +417,7 @@ fn live_entrypoint_rejects_invalid_local_signer_config_when_live_work_is_request
         Some("family-a".into()),
         Some("family-a".into()),
         Some(OsString::from("{")),
+        None,
     );
 
     assert!(
@@ -397,6 +451,7 @@ fn app_live_output_with_operator_inputs(
         approved_families.map(OsString::from),
         ready_families.map(OsString::from),
         None,
+        None,
     )
 }
 
@@ -412,15 +467,17 @@ fn app_live_output_raw_env(
         approved_families,
         ready_families,
         None,
+        None,
     )
 }
 
-fn app_live_output_with_operator_inputs_and_signer(
+fn app_live_output_with_operator_inputs_and_signer_and_database_url(
     app_mode: &str,
     neg_risk_live_targets: Option<&str>,
     approved_families: Option<&str>,
     ready_families: Option<&str>,
     local_signer_config: Option<&str>,
+    database_url: Option<&str>,
 ) -> std::process::Output {
     app_live_output_raw_env_with_signer(
         app_mode,
@@ -428,6 +485,7 @@ fn app_live_output_with_operator_inputs_and_signer(
         approved_families.map(OsString::from),
         ready_families.map(OsString::from),
         local_signer_config.map(OsString::from),
+        database_url,
     )
 }
 
@@ -437,13 +495,32 @@ fn app_live_output_raw_env_with_signer(
     approved_families: Option<OsString>,
     ready_families: Option<OsString>,
     local_signer_config: Option<OsString>,
+    database_url: Option<&str>,
 ) -> std::process::Output {
-    let mut command = Command::new(app_live_binary());
     let needs_database_url = app_mode == "live"
         && (neg_risk_live_targets.is_some()
             || approved_families.is_some()
             || ready_families.is_some()
             || local_signer_config.is_some());
+    app_live_output_raw_env_with_signer_and_database_url(
+        app_mode,
+        neg_risk_live_targets,
+        approved_families,
+        ready_families,
+        local_signer_config,
+        database_url.or_else(|| needs_database_url.then_some(default_test_database_url())),
+    )
+}
+
+fn app_live_output_raw_env_with_signer_and_database_url(
+    app_mode: &str,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+    local_signer_config: Option<OsString>,
+    database_url: Option<&str>,
+) -> std::process::Output {
+    let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
@@ -462,13 +539,95 @@ fn app_live_output_raw_env_with_signer(
     if let Some(value) = local_signer_config {
         command.env("AXIOM_LOCAL_SIGNER_CONFIG", value);
     }
-    if needs_database_url {
-        command.env(
-            "DATABASE_URL",
-            "postgres://axiom:axiom@localhost:5432/axiom_arb",
-        );
+    if let Some(database_url) = database_url {
+        command.env("DATABASE_URL", database_url);
     }
     command.output().expect("app-live should run")
+}
+
+fn default_test_database_url() -> &'static str {
+    "postgres://axiom:axiom@localhost:5432/axiom_arb"
+}
+
+struct TestDatabase {
+    admin_pool: PgPool,
+    pool: PgPool,
+    schema: String,
+    database_url: String,
+}
+
+impl TestDatabase {
+    fn new() -> Self {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                let admin_database_url = std::env::var("DATABASE_URL")
+                    .unwrap_or_else(|_| default_test_database_url().to_owned());
+                let admin_pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&admin_database_url)
+                    .await
+                    .expect("test database should connect");
+                let schema = format!(
+                    "app_live_main_entrypoint_{}_{}",
+                    std::process::id(),
+                    NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
+                );
+                let create_schema = format!(r#"CREATE SCHEMA "{schema}""#);
+                sqlx::query(&create_schema)
+                    .execute(&admin_pool)
+                    .await
+                    .expect("test schema should create");
+
+                let database_url = schema_scoped_database_url(&admin_database_url, &schema);
+                let pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&database_url)
+                    .await
+                    .expect("schema-scoped test pool should connect");
+                run_migrations(&pool)
+                    .await
+                    .expect("test migrations should run");
+
+                Self {
+                    admin_pool,
+                    pool,
+                    schema,
+                    database_url,
+                }
+            })
+    }
+
+    fn database_url(&self) -> &str {
+        &self.database_url
+    }
+
+    fn cleanup(self) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                self.pool.close().await;
+                let drop_schema = format!(
+                    r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#,
+                    schema = self.schema
+                );
+                let _ = sqlx::query(&drop_schema).execute(&self.admin_pool).await;
+                self.admin_pool.close().await;
+            });
+    }
+}
+
+fn schema_scoped_database_url(base: &str, schema: &str) -> String {
+    let options = format!("options=-csearch_path%3D{schema}");
+    if base.contains('?') {
+        format!("{base}&{options}")
+    } else {
+        format!("{base}?{options}")
+    }
 }
 
 fn valid_local_signer_config_json() -> &'static str {

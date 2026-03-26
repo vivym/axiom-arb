@@ -161,9 +161,9 @@ impl AppSupervisor {
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
-        if self.runtime.bootstrap_status() != BootstrapStatus::Ready
-            && self.has_seeded_startup_state()
-        {
+        let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
+            && self.has_seeded_startup_state();
+        if restoring_seeded_startup {
             self.restore_seeded_startup_state()?;
         } else if self.runtime.bootstrap_status() != BootstrapStatus::Ready {
             let source = StaticSnapshotSource::new(self.bootstrap_snapshot.clone());
@@ -173,6 +173,9 @@ impl AppSupervisor {
         let allow_operator_synthesis = self.allow_operator_rollout_evidence_synthesis();
         self.publish_current_snapshot(allow_operator_synthesis);
         self.refresh_neg_risk_live_execution_records(allow_operator_synthesis)?;
+        if restoring_seeded_startup {
+            self.validate_seeded_startup_restore()?;
+        }
         let _ = self.flush_dispatch_instrumented();
 
         Ok(self.summary())
@@ -524,14 +527,25 @@ impl AppSupervisor {
     }
 
     fn allow_operator_rollout_evidence_synthesis(&self) -> bool {
-        self.seed.last_journal_seq.is_none()
+        let pristine_bootstrap = self.seed.last_journal_seq.is_none()
             && self.seed.committed_state_version.is_none()
             && self.seed.published_snapshot_id.is_none()
+            && self.seed.pending_reconcile_count.is_none()
             && self.seed.pending_reconcile_anchors.is_empty()
+            && self.seed.neg_risk_rollout_evidence.is_none()
             && self.seed.neg_risk_live_execution_records.is_empty()
             && self.committed_log.is_empty()
             && self.runtime.last_journal_seq() == Some(0)
-            && self.runtime.state_version() == 0
+            && self.runtime.state_version() == 0;
+        if pristine_bootstrap {
+            return true;
+        }
+
+        self.has_seeded_startup_state()
+            && self.runtime.pending_reconcile_count() == 0
+            && self.neg_risk_live_execution_records.is_empty()
+            && self.seed.pending_reconcile_anchors.is_empty()
+            && self.seed.neg_risk_rollout_evidence.is_none()
     }
 
     fn refresh_neg_risk_live_execution_records(
@@ -735,6 +749,18 @@ impl AppSupervisor {
             || self.seed.pending_reconcile_count.is_some()
             || !self.seed.pending_reconcile_anchors.is_empty()
             || !self.seed.neg_risk_live_execution_records.is_empty()
+    }
+
+    fn validate_seeded_startup_restore(&self) -> Result<(), SupervisorError> {
+        if self.seed.neg_risk_rollout_evidence.is_some() {
+            self.validate_rollout_evidence_anchor()?;
+        }
+
+        if !self.seed.neg_risk_live_execution_records.is_empty() {
+            self.validate_neg_risk_live_execution_anchor()?;
+        }
+
+        Ok(())
     }
 
     fn restore_seeded_startup_state(&mut self) -> Result<(), SupervisorError> {

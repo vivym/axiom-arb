@@ -19,7 +19,8 @@ pub use input_tasks::InputTaskEvent;
 pub use instrumentation::AppInstrumentation;
 pub use negrisk_live::{NegRiskLiveArtifact, NegRiskLiveExecutionRecord};
 pub use runtime::{
-    run_live, run_live_from_durable_store_instrumented, run_live_instrumented,
+    run_live, run_live_from_durable_store_instrumented,
+    run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_live_instrumented,
     run_live_with_neg_risk_live_targets, run_live_with_neg_risk_live_targets_instrumented,
     run_paper, run_paper_instrumented, AppRunResult, AppRuntime, AppRuntimeMode,
     ParseAppRuntimeModeError,
