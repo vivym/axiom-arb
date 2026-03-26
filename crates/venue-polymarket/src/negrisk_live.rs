@@ -25,7 +25,8 @@ pub struct PolymarketNegRiskSubmitProvider<'a> {
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskReconcileProvider<'a> {
     rest: PolymarketRestClient,
-    auth: RelayerAuth<'a>,
+    l2_auth: L2AuthHeaders<'a>,
+    relayer_auth: RelayerAuth<'a>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,8 +35,15 @@ struct SubmitOrderResponse {
     #[serde(alias = "orderID", alias = "orderId")]
     order_id: String,
     status: String,
+    #[serde(default, rename = "transactionsHashes")]
+    transaction_hashes: Vec<String>,
     #[serde(default, alias = "errorMsg")]
     error_msg: String,
+}
+
+enum PendingRefTarget<'a> {
+    Tx(&'a str),
+    Order(&'a str),
 }
 
 impl<'a> PolymarketNegRiskSubmitProvider<'a> {
@@ -56,67 +64,68 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
-        let mut accepted_record: Option<LiveSubmissionRecord> = None;
-        let mut pending_ref: Option<String> = None;
+        if signed.members.len() != 1 {
+            return Err(SubmitProviderError::new(
+                "polymarket live submit currently supports exactly one signed family member",
+            ));
+        }
 
-        for member in &signed.members {
-            let submission = build_post_order_request_from_signed_member(member, &self.transport)
-                .map_err(|err| {
-                SubmitProviderError::new(format!("order build error: {err:?}"))
-            })?;
-            let request = self
-                .rest
-                .build_submit_order_request(&self.auth, &submission)
-                .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
-            let response = self
-                .rest
-                .execute_json::<SubmitOrderResponse>(request)
-                .await
-                .map_err(|err| {
-                    SubmitProviderError::new(format!("submit transport error: {err}"))
-                })?;
+        let member = signed
+            .members
+            .first()
+            .expect("validated single-member family submission");
+        let submission = build_post_order_request_from_signed_member(member, &self.transport)
+            .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
+        let request = self
+            .rest
+            .build_submit_order_request(&self.auth, &submission)
+            .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
+        let response = self
+            .rest
+            .execute_json::<SubmitOrderResponse>(request)
+            .await
+            .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?;
 
-            let record = LiveSubmissionRecord {
-                submission_ref: response.order_id.clone(),
-                attempt_id: attempt.attempt_id.clone(),
-                route: attempt.route.clone(),
-                scope: attempt.scope.clone(),
-                provider: PROVIDER_NAME.to_owned(),
-            };
-
-            if accepted_record.is_none() {
-                accepted_record = Some(record.clone());
-            }
-
-            if response.success && is_submit_status_confirmed(&response.status) {
-                continue;
-            }
-
-            if response.success && is_submit_status_ambiguous(&response.status) {
-                pending_ref = Some(response.order_id);
-                accepted_record = Some(record);
-                continue;
-            }
-
-            if response.success {
-                pending_ref = Some(response.order_id);
-                accepted_record = Some(record);
-                continue;
-            }
-
+        if !response.success {
             return Ok(LiveSubmitOutcome::RejectedDefinitive {
                 reason: submit_rejection_reason(&response),
             });
         }
 
-        match pending_ref {
-            Some(pending_ref) => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: accepted_record,
-                pending_ref,
+        let submission_record = LiveSubmissionRecord {
+            submission_ref: response.order_id.clone(),
+            attempt_id: attempt.attempt_id.clone(),
+            route: attempt.route.clone(),
+            scope: attempt.scope.clone(),
+            provider: PROVIDER_NAME.to_owned(),
+        };
+
+        match response.status.trim().to_ascii_lowercase().as_str() {
+            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted { submission_record }),
+            "delayed" => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                submission_record: Some(submission_record),
+                pending_ref: order_pending_ref(&response.order_id),
             }),
-            None => Ok(LiveSubmitOutcome::Accepted {
-                submission_record: accepted_record
-                    .expect("family submission should produce a record"),
+            "matched" => {
+                let pending_tx = response
+                    .transaction_hashes
+                    .iter()
+                    .map(|hash| hash.trim())
+                    .find(|hash| !hash.is_empty())
+                    .ok_or_else(|| {
+                        SubmitProviderError::new(
+                            "matched polymarket response missing transactionsHashes",
+                        )
+                    })?;
+
+                Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                    submission_record: Some(submission_record),
+                    pending_ref: tx_pending_ref(pending_tx),
+                })
+            }
+            _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                submission_record: Some(submission_record),
+                pending_ref: order_pending_ref(&response.order_id),
             }),
         }
     }
@@ -133,42 +142,49 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
 }
 
 impl<'a> PolymarketNegRiskReconcileProvider<'a> {
-    pub fn new(rest: PolymarketRestClient, auth: RelayerAuth<'a>) -> Self {
-        Self { rest, auth }
+    pub fn new(
+        rest: PolymarketRestClient,
+        l2_auth: L2AuthHeaders<'a>,
+        relayer_auth: RelayerAuth<'a>,
+    ) -> Self {
+        Self {
+            rest,
+            l2_auth,
+            relayer_auth,
+        }
     }
 
     async fn reconcile_live_async(
         &self,
         work: &PendingReconcileWork,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        match parse_pending_ref(&work.pending_ref)? {
+            PendingRefTarget::Tx(tx_ref) => self.reconcile_tx_ref(work, tx_ref).await,
+            PendingRefTarget::Order(order_id) => self.reconcile_order_ref(order_id).await,
+        }
+    }
+
+    async fn reconcile_tx_ref(
+        &self,
+        work: &PendingReconcileWork,
+        tx_ref: &str,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
         let transactions = self
             .rest
-            .fetch_recent_transactions(&self.auth)
+            .fetch_recent_transactions(&self.relayer_auth)
             .await
             .map_err(map_relayer_error)?;
         let matching_transactions: Vec<_> = transactions
             .iter()
-            .filter(|transaction| transaction.matches_pending_ref(&work.pending_ref))
+            .filter(|transaction| transaction.matches_pending_ref(tx_ref))
             .collect();
 
-        if matching_transactions.is_empty() {
-            return Ok(ReconcileOutcome::StillPending);
-        }
-
-        if matching_transactions
-            .iter()
-            .any(|transaction| transaction.state_is_pending_or_unknown())
+        if matching_transactions.is_empty()
+            || matching_transactions
+                .iter()
+                .any(|transaction| transaction.state_is_pending_or_unknown())
         {
             return Ok(ReconcileOutcome::StillPending);
-        }
-
-        if matching_transactions
-            .iter()
-            .any(|transaction| transaction.state_is_confirmed())
-        {
-            return Ok(ReconcileOutcome::ConfirmedAuthoritative {
-                submission_ref: work.pending_ref.clone(),
-            });
         }
 
         if matching_transactions
@@ -178,6 +194,27 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
             return Ok(ReconcileOutcome::NeedsRecovery {
                 pending_ref: work.pending_ref.clone(),
                 reason: "relayer transaction reached a terminal state".to_owned(),
+            });
+        }
+
+        // Recent-transactions rows expose transaction ids and hashes, not order ids, so a
+        // confirmed tx alone cannot safely produce the authoritative submission_ref here.
+        Ok(ReconcileOutcome::StillPending)
+    }
+
+    async fn reconcile_order_ref(
+        &self,
+        order_id: &str,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        let open_orders = self
+            .rest
+            .fetch_open_orders(&self.l2_auth)
+            .await
+            .map_err(map_open_orders_error)?;
+
+        if open_orders.iter().any(|order| order.order_id == order_id) {
+            return Ok(ReconcileOutcome::ConfirmedAuthoritative {
+                submission_ref: order_id.to_owned(),
             });
         }
 
@@ -207,15 +244,35 @@ fn run_blocking<T: Send>(future: impl Future<Output = T> + Send) -> T {
     })
 }
 
-fn is_submit_status_confirmed(status: &str) -> bool {
-    matches!(status.to_ascii_lowercase().as_str(), "live" | "matched")
+fn parse_pending_ref(pending_ref: &str) -> Result<PendingRefTarget<'_>, ReconcileProviderError> {
+    let (namespace, value) = pending_ref.split_once(':').ok_or_else(|| {
+        ReconcileProviderError::new(format!(
+            "unsupported pending_ref without namespace: {pending_ref}"
+        ))
+    })?;
+    let value = value.trim();
+
+    if value.is_empty() {
+        return Err(ReconcileProviderError::new(format!(
+            "pending_ref missing value: {pending_ref}"
+        )));
+    }
+
+    match namespace {
+        "tx" => Ok(PendingRefTarget::Tx(value)),
+        "order" => Ok(PendingRefTarget::Order(value)),
+        other => Err(ReconcileProviderError::new(format!(
+            "unsupported pending_ref namespace {other}"
+        ))),
+    }
 }
 
-fn is_submit_status_ambiguous(status: &str) -> bool {
-    matches!(
-        status.to_ascii_lowercase().as_str(),
-        "delayed" | "unmatched"
-    )
+fn tx_pending_ref(tx_ref: &str) -> String {
+    format!("tx:{tx_ref}")
+}
+
+fn order_pending_ref(order_id: &str) -> String {
+    format!("order:{order_id}")
 }
 
 fn submit_rejection_reason(response: &SubmitOrderResponse) -> String {
@@ -239,4 +296,8 @@ fn submit_rejection_reason(response: &SubmitOrderResponse) -> String {
 
 fn map_relayer_error(error: RestError) -> ReconcileProviderError {
     ReconcileProviderError::new(format!("relayer status error: {error}"))
+}
+
+fn map_open_orders_error(error: RestError) -> ReconcileProviderError {
+    ReconcileProviderError::new(format!("open orders status error: {error}"))
 }
