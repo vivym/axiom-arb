@@ -168,6 +168,8 @@ It should consume:
 
 It should continue to drive the same execution chain already used today.
 
+`RecoveryTaskGroup` remains a child scheduling responsibility of `DecisionSupervisor`, not a parallel authority path.
+
 ## 7. Daemon Data Flow
 
 ### 7.1 Authoritative Runtime Flow
@@ -216,8 +218,6 @@ The top-level runtime should aggregate child-supervisor health into explicit pos
 - `Healthy`
 - `DegradedIngress`
 - `DegradedDispatch`
-- `ReconcilingOnly`
-- `RecoveryOnly`
 - `GlobalHalt`
 
 This posture is not a replacement for `ActivationPolicy`.
@@ -227,7 +227,30 @@ Instead:
 - supervisor posture becomes one input into activation and scheduling
 - `ActivationPolicy` remains the only execution-mode authority
 
-### 8.2 Fail-Closed Rules
+`ReconcilingOnly` and `RecoveryOnly` are not top-level posture states in this design.
+
+They are per-scope runtime restriction inputs derived from durable truth, follow-up backlog, and recovery state.
+
+### 8.2 Scope Restriction Inputs
+
+The daemon may maintain per-scope restriction inputs such as:
+
+- `ReconcilingOnly`
+- `RecoveryOnly`
+
+These restrictions:
+
+- are derived from authoritative facts, pending reconcile work, and recovery state
+- are consumed by `ActivationPolicy` and scheduling
+- do not create a second execution-mode authority outside the unified chain
+
+Hard rule:
+
+- `AppSupervisor` owns only global posture
+- scope restriction inputs feed `ActivationPolicy`
+- `ActivationPolicy` remains the only component that turns those inputs into execution-mode decisions
+
+### 8.3 Fail-Closed Rules
 
 The daemon should conservatively degrade under these conditions:
 
@@ -242,7 +265,7 @@ The daemon should conservatively degrade under these conditions:
 - metadata freshness expiration
   - block new `neg-risk` live expansion until freshness is restored
 
-### 8.3 Recovery Priority
+### 8.4 Recovery Priority
 
 The daemon must preserve the existing recovery-first contract:
 
@@ -280,7 +303,24 @@ Non-responsibilities:
 - no direct repair behavior
 - no direct runtime-mode authority
 
-### 9.3 RelayerTaskGroup
+### 9.3 HeartbeatTaskGroup
+
+In this phase, `heartbeat` means the existing order-heartbeat truth path, not generic daemon process liveness.
+
+Responsibilities:
+
+- monitor order-heartbeat freshness and validity
+- normalize heartbeat success and attention facts into the authoritative fact path
+- detect missed, stale, or invalid heartbeat thresholds
+- emit facts that force reconcile follow-up or more conservative scope restrictions when heartbeat truth cannot be proven
+
+Non-responsibilities:
+
+- no generic process-liveness health checks
+- no direct provider side effects
+- no direct live promotion authority
+
+### 9.4 RelayerTaskGroup
 
 Responsibilities:
 
@@ -293,7 +333,7 @@ Non-responsibilities:
 - no direct clearing of pending reconcile work
 - no direct declaration that recovery is complete
 
-### 9.4 MetadataTaskGroup
+### 9.5 MetadataTaskGroup
 
 Responsibilities:
 
@@ -306,7 +346,7 @@ Non-responsibilities:
 - no autonomous live target generation
 - no independent promotion to `Live`
 
-### 9.5 DecisionTaskGroup
+### 9.6 DecisionTaskGroup
 
 Responsibilities:
 
@@ -320,7 +360,7 @@ Non-responsibilities:
 - no raw external fact production
 - no mutable-state shortcuts around `StateSupervisor`
 
-### 9.6 RecoveryTaskGroup
+### 9.7 RecoveryTaskGroup
 
 Responsibilities:
 
@@ -364,7 +404,27 @@ They should be represented through a repo-owned runtime input/config surface wit
 - why a family was considered eligible at that moment
 - which restart resumed against which operator-supplied target set
 
+For `Phase 3d`, this input surface is startup-scoped and restart-scoped only.
+
+It is explicitly not an in-process hot-reload surface in this phase.
+
+That means:
+
+- operator target revisions are loaded during startup or controlled restart
+- the active revision must be recorded through durable runtime metadata or startup anchors sufficient for restart, summary, and postmortem inspection
+- resume must be able to prove which operator-target revision it resumed against
+- changing live targets mid-process requires a later phase rather than ad hoc mutation in `Phase 3d`
+
 This does not require full operator tooling in `Phase 3d`, but it does require the daemon to stop treating operator input as invisible ambient state.
+
+### 10.4 Validation Contract
+
+`Phase 3d` should test this boundary explicitly:
+
+- startup reports the operator-target revision it loaded
+- restart resumes against that same revision unless a controlled restart loads a new revision
+- the daemon does not support arbitrary in-process target mutation
+- postmortem/runtime summary can explain which revision made a family eligible
 
 ## 11. Restart And Resume
 
@@ -385,6 +445,7 @@ Resume must remain truth-first:
 
 - restore committed progress anchors
 - restore pending reconcile and live submission anchors
+- restore the active operator-target revision anchor
 - rebuild published snapshot state
 - re-establish recovery posture
 - only then resume continuous loops
@@ -415,6 +476,7 @@ Test:
 Test:
 
 - every feed task re-enters the same `ExternalFactEvent -> journal -> apply` path
+- heartbeat facts re-enter that same authoritative path rather than bypassing it
 - queue backpressure does not violate authoritative ordering
 - snapshot coalescing does not lose the latest stable publication
 - projection lag blocks dependent scheduling rather than permitting stale execution
@@ -424,6 +486,7 @@ Test:
 Test:
 
 - market/user feed gaps
+- missed or invalid order heartbeat facts
 - relayer uncertainty
 - metadata staleness
 - apply/publish failures
@@ -435,10 +498,19 @@ Test:
 
 - reconcile and recovery priority over fresh live expansion
 - `RecoveryScopeLock` behavior under continuous scheduling
-- suppression of live targets while posture or overlays remain restrictive
+- suppression of live targets while global posture or scope restriction inputs remain restrictive
 - recovery convergence releasing scopes back to eligible promotion
 
-### 12.5 End-To-End Daemon Tests
+### 12.5 Operator Input Lifecycle Tests
+
+Test:
+
+- startup records and reports the active operator-target revision
+- restart resumes against the same revision unless a controlled restart provides a new one
+- missing or inconsistent operator-target revision anchors fail closed
+- in-process live-target mutation is not supported in this phase
+
+### 12.6 End-To-End Daemon Tests
 
 Test at least:
 
@@ -452,9 +524,12 @@ Test at least:
 
 - `app-live` operates as a long-running single-process daemon with layered supervisors
 - market websocket, user websocket, heartbeat, relayer poll, and metadata refresh are continuously wired through the authoritative fact chain
+- missed or invalid order heartbeat truth causes reconcile-required work or more conservative runtime posture for affected scopes
 - reconcile, recovery, and dispatch are continuously scheduled rather than manually stepped
 - `operator-supplied live targets` remain the only live decision input in this phase
-- critical runtime uncertainty causes conservative fail-closed posture transitions
+- `operator-supplied live targets` are represented by a startup/restart-scoped repo-owned revisioned input surface rather than invisible ambient config
+- runtime summary and restart behavior can identify which operator-target revision was active
+- critical runtime uncertainty causes conservative fail-closed posture transitions or per-scope restriction inputs
 - restart restores truth before resuming loops and does not duplicate live promotion
 - `Phase 3e` can be added later by changing the live target source rather than redesigning the daemon core
 
