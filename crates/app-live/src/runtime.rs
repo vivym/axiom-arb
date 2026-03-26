@@ -425,7 +425,8 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
     }
 }
 
-fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
+fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn std::error::Error>>
+{
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

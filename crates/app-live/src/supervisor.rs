@@ -161,7 +161,8 @@ impl AppSupervisor {
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
-        if self.runtime.bootstrap_status() != BootstrapStatus::Ready && self.has_seeded_startup_state()
+        if self.runtime.bootstrap_status() != BootstrapStatus::Ready
+            && self.has_seeded_startup_state()
         {
             self.restore_seeded_startup_state()?;
         } else if self.runtime.bootstrap_status() != BootstrapStatus::Ready {

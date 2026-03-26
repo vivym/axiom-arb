@@ -257,9 +257,15 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
     let output = app_live_output("live", None);
 
     assert!(
-        output.status.success(),
-        "live mode should boot without config"
+        !output.status.success(),
+        "live mode should fail fast without durable store inputs"
     );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("DATABASE_URL"), "{combined}");
 }
 
 #[test]
@@ -433,11 +439,17 @@ fn app_live_output_raw_env_with_signer(
     local_signer_config: Option<OsString>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
+    let needs_database_url = app_mode == "live"
+        && (neg_risk_live_targets.is_some()
+            || approved_families.is_some()
+            || ready_families.is_some()
+            || local_signer_config.is_some());
     command.env("AXIOM_MODE", app_mode);
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
     command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
     command.env_remove("AXIOM_LOCAL_SIGNER_CONFIG");
+    command.env_remove("DATABASE_URL");
     if let Some(value) = neg_risk_live_targets {
         command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value);
     }
@@ -449,6 +461,12 @@ fn app_live_output_raw_env_with_signer(
     }
     if let Some(value) = local_signer_config {
         command.env("AXIOM_LOCAL_SIGNER_CONFIG", value);
+    }
+    if needs_database_url {
+        command.env(
+            "DATABASE_URL",
+            "postgres://axiom:axiom@localhost:5432/axiom_arb",
+        );
     }
     command.output().expect("app-live should run")
 }

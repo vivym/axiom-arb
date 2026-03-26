@@ -5,12 +5,13 @@ use std::{
 };
 
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets,
+    load_local_signer_config, load_neg_risk_live_targets, run_live_from_durable_store_instrumented,
     run_live_with_neg_risk_live_targets_instrumented, run_paper_instrumented, AppInstrumentation,
     AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget, StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
+use persistence::PersistenceError;
 
 const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
 const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
@@ -40,22 +41,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
             let neg_risk_live_ready_families =
                 load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
-            let _local_signer_config = if live_neg_risk_work_requested(
+            if live_neg_risk_work_requested(
                 &neg_risk_live_targets,
                 &neg_risk_live_approved_families,
                 &neg_risk_live_ready_families,
             ) {
-                Some(load_local_signer_config_env()?)
+                let _local_signer_config = load_local_signer_config_env()?;
+                run_live_with_neg_risk_live_targets_instrumented(
+                    &source,
+                    instrumentation,
+                    neg_risk_live_targets,
+                    neg_risk_live_approved_families,
+                    neg_risk_live_ready_families,
+                )
             } else {
-                None
-            };
-            run_live_with_neg_risk_live_targets_instrumented(
-                &source,
-                instrumentation,
-                neg_risk_live_targets,
-                neg_risk_live_approved_families,
-                neg_risk_live_ready_families,
-            )
+                require_database_url_env()?;
+                run_live_from_durable_store_instrumented(&source, instrumentation)?
+            }
         }
     };
     let recorder = observability.recorder();
@@ -137,6 +139,12 @@ fn load_local_signer_config_env() -> Result<LocalSignerConfig, Box<dyn std::erro
         )
         .into()),
     }
+}
+
+fn require_database_url_env() -> Result<(), Box<dyn std::error::Error>> {
+    std::env::var("DATABASE_URL")
+        .map(|_| ())
+        .map_err(|_| PersistenceError::MissingDatabaseUrl.into())
 }
 
 fn live_neg_risk_work_requested(
