@@ -18,6 +18,19 @@ impl SubmitProviderError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileProviderError {
+    pub reason: String,
+}
+
+impl ReconcileProviderError {
+    pub fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
 pub trait SignerProvider: Send + Sync {
     fn sign_family(&self, plan: &ExecutionPlan) -> Result<SignedFamilySubmission, SigningError>;
 }
@@ -39,8 +52,11 @@ pub trait VenueExecutionProvider: Send + Sync {
     ) -> Result<LiveSubmitOutcome, SubmitProviderError>;
 }
 
-pub trait ReconcileProvider {
-    fn reconcile_live(&self, work: &PendingReconcileWork) -> ReconcileOutcome;
+pub trait ReconcileProvider: Send + Sync {
+    fn reconcile_live(
+        &self,
+        work: &PendingReconcileWork,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError>;
 }
 
 pub use VenueExecutionProvider as LiveSubmitProvider;

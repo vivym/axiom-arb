@@ -7,13 +7,15 @@ use domain::{
     ConditionId, EventFamilyId, ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode,
     SignedOrderIdentity, TokenId,
 };
-use execution::providers::{SignerProvider, SubmitProviderError, VenueExecutionProvider};
+use execution::providers::{
+    ReconcileProvider, SignerProvider, SubmitProviderError, VenueExecutionProvider,
+};
 use execution::signing::SignedFamilyMember;
 use execution::sink::{LiveVenueSink, VenueSink};
 use execution::{
     plans::{ExecutionPlan, NegRiskMemberOrderPlan},
     LiveSubmissionRecord, LiveSubmitOutcome, PendingReconcileWork, ReconcileOutcome,
-    SignedFamilySubmission, TestOrderSigner,
+    ReconcileProviderError, SignedFamilySubmission, TestOrderSigner,
 };
 use rust_decimal::Decimal;
 
@@ -147,6 +149,44 @@ fn live_sink_anchors_pending_refs_from_ambiguous_submit_provider_outcomes() {
     assert_eq!(receipt.pending_ref.as_deref(), Some("pending-2"));
 }
 
+#[test]
+fn live_sink_preserves_reconcile_anchor_for_unconfirmed_acceptance() {
+    let signer: Arc<dyn SignerProvider> = Arc::new(TestOrderSigner);
+    let provider = Arc::new(RecordingSubmitProvider::accepted_but_unconfirmed(
+        "submission-3",
+        "pending-reconcile-3",
+    ));
+    let sink = LiveVenueSink::with_submit_provider(signer, provider);
+
+    let receipt = sink
+        .execute(&sample_family_plan(), &live_attempt())
+        .unwrap();
+
+    assert_eq!(receipt.outcome, ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(receipt.submission_ref.as_deref(), Some("submission-3"));
+    assert_eq!(
+        receipt.pending_ref.as_deref(),
+        Some("pending-reconcile-3")
+    );
+}
+
+#[test]
+fn reconcile_provider_can_return_provider_errors_separately_from_domain_outcomes() {
+    let provider: Arc<dyn ReconcileProvider> = Arc::new(FailingReconcileProvider);
+    let work = PendingReconcileWork {
+        pending_ref: "pending-3".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+    };
+
+    let err = provider.reconcile_live(&work).unwrap_err();
+
+    assert_eq!(
+        err,
+        ReconcileProviderError::new("reconcile provider unavailable")
+    );
+}
+
 fn sample_submission_record(attempt_id: &str) -> LiveSubmissionRecord {
     LiveSubmissionRecord {
         submission_ref: "submission-1".to_owned(),
@@ -249,6 +289,23 @@ impl RecordingSubmitProvider {
             },
         }
     }
+
+    fn accepted_but_unconfirmed(submission_ref: &str, pending_ref: &str) -> Self {
+        Self {
+            calls: Arc::new(AtomicUsize::new(0)),
+            last_attempt_id: Arc::new(Mutex::new(None)),
+            outcome: LiveSubmitOutcome::AcceptedButUnconfirmed {
+                submission_record: LiveSubmissionRecord {
+                    submission_ref: submission_ref.to_owned(),
+                    attempt_id: "attempt-1".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    provider: "recording-submit".to_owned(),
+                },
+                pending_ref: pending_ref.to_owned(),
+            },
+        }
+    }
 }
 
 impl VenueExecutionProvider for RecordingSubmitProvider {
@@ -261,5 +318,22 @@ impl VenueExecutionProvider for RecordingSubmitProvider {
         *self.last_attempt_id.lock().unwrap() = Some(attempt.attempt_id.clone());
         assert_eq!(signed.plan_id, sample_family_plan().plan_id());
         Ok(self.outcome.clone())
+    }
+}
+
+struct FailingReconcileProvider;
+
+impl ReconcileProvider for FailingReconcileProvider {
+    fn reconcile_live(
+        &self,
+        work: &PendingReconcileWork,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        assert_eq!(work.pending_ref, "pending-3");
+        assert_eq!(work.route, "neg-risk");
+        assert_eq!(work.scope, "family-a");
+
+        Err(ReconcileProviderError::new(
+            "reconcile provider unavailable",
+        ))
     }
 }

@@ -252,12 +252,20 @@ fn receipt_from_live_submit_outcome(
     outcome: LiveSubmitOutcome,
 ) -> ExecutionReceipt {
     match outcome {
-        LiveSubmitOutcome::Accepted { submission_record }
-        | LiveSubmitOutcome::AcceptedButUnconfirmed { submission_record } => ExecutionReceipt::new(
+        LiveSubmitOutcome::Accepted { submission_record } => ExecutionReceipt::new(
             attempt.attempt_id.clone(),
             ExecutionAttemptOutcome::Succeeded,
         )
         .with_submission_ref(submission_record.submission_ref),
+        LiveSubmitOutcome::AcceptedButUnconfirmed {
+            submission_record,
+            pending_ref,
+        } => ExecutionReceipt::new(
+            attempt.attempt_id.clone(),
+            ExecutionAttemptOutcome::Succeeded,
+        )
+        .with_submission_ref(submission_record.submission_ref)
+        .with_pending_ref(pending_ref),
         LiveSubmitOutcome::RejectedDefinitive { .. } => ExecutionReceipt::new(
             attempt.attempt_id.clone(),
             ExecutionAttemptOutcome::FailedDefinitive,
