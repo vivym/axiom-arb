@@ -64,6 +64,15 @@ pub struct RelayerTransaction {
 }
 
 impl RelayerTransaction {
+    pub fn matches_pending_ref(&self, pending_ref: &str) -> bool {
+        let pending_ref = pending_ref.trim();
+        if pending_ref.is_empty() {
+            return false;
+        }
+
+        self.transaction_id == pending_ref || self.transaction_hash.as_deref() == Some(pending_ref)
+    }
+
     pub fn state_is_pending_or_unknown(&self) -> bool {
         matches!(
             classify_transaction_state(self.state.as_deref()),

@@ -78,7 +78,7 @@ async fn polymarket_reconcile_provider_maps_pending_relayer_status_into_still_pe
         r#"[{"transactionID":"tx-1","state":"STATE_NEW","type":"SAFE","nonce":"60","owner":"0x4444444444444444444444444444444444444444"}]"#,
     );
     let provider = sample_reconcile_provider(server.base_url());
-    let work = sample_pending_work();
+    let work = sample_pending_work("tx-1");
 
     let outcome = provider
         .reconcile_live(&work)
@@ -92,12 +92,44 @@ async fn polymarket_reconcile_provider_maps_pending_relayer_status_into_still_pe
 }
 
 #[tokio::test]
+async fn polymarket_reconcile_provider_maps_unknown_matching_status_into_still_pending() {
+    let server = MockServer::spawn(
+        "200 OK",
+        r#"[{"transactionID":"tx-unknown","state":"STATE_MYSTERY","type":"SAFE","nonce":"60","owner":"0x4444444444444444444444444444444444444444"}]"#,
+    );
+    let provider = sample_reconcile_provider(server.base_url());
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("tx-unknown"))
+        .expect("unknown status should stay pending");
+
+    assert!(matches!(outcome, ReconcileOutcome::StillPending));
+    let _ = server.finish();
+}
+
+#[tokio::test]
+async fn polymarket_reconcile_provider_ignores_unrelated_confirmed_transactions() {
+    let server = MockServer::spawn(
+        "200 OK",
+        r#"[{"transactionID":"tx-other","state":"STATE_CONFIRMED","type":"SAFE","nonce":"60","owner":"0x4444444444444444444444444444444444444444"}]"#,
+    );
+    let provider = sample_reconcile_provider(server.base_url());
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("tx-target"))
+        .expect("unrelated relayer rows should not resolve the work");
+
+    assert!(matches!(outcome, ReconcileOutcome::StillPending));
+    let _ = server.finish();
+}
+
+#[tokio::test]
 async fn polymarket_reconcile_provider_surfaces_transport_failures_as_provider_errors() {
     let server = MockServer::spawn("500 Internal Server Error", r#"{"error":"boom"}"#);
     let provider = sample_reconcile_provider(server.base_url());
 
     let err = provider
-        .reconcile_live(&sample_pending_work())
+        .reconcile_live(&sample_pending_work("pending-1"))
         .expect_err("transport failure should stay an error");
 
     assert!(err.reason.contains("500"));
@@ -160,9 +192,9 @@ fn sample_attempt() -> ExecutionAttemptContext {
     }
 }
 
-fn sample_pending_work() -> PendingReconcileWork {
+fn sample_pending_work(pending_ref: &str) -> PendingReconcileWork {
     PendingReconcileWork {
-        pending_ref: "pending-1".to_owned(),
+        pending_ref: pending_ref.to_owned(),
         route: "neg-risk".to_owned(),
         scope: "family-a".to_owned(),
     }

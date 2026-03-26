@@ -146,15 +146,23 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
             .fetch_recent_transactions(&self.auth)
             .await
             .map_err(map_relayer_error)?;
+        let matching_transactions: Vec<_> = transactions
+            .iter()
+            .filter(|transaction| transaction.matches_pending_ref(&work.pending_ref))
+            .collect();
 
-        if transactions
+        if matching_transactions.is_empty() {
+            return Ok(ReconcileOutcome::StillPending);
+        }
+
+        if matching_transactions
             .iter()
             .any(|transaction| transaction.state_is_pending_or_unknown())
         {
             return Ok(ReconcileOutcome::StillPending);
         }
 
-        if transactions
+        if matching_transactions
             .iter()
             .any(|transaction| transaction.state_is_confirmed())
         {
@@ -163,7 +171,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
             });
         }
 
-        if transactions
+        if matching_transactions
             .iter()
             .any(|transaction| transaction.state_is_terminal())
         {
