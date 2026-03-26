@@ -91,12 +91,23 @@ fn sample_attempt(
     plan_id: &str,
     route: &str,
 ) -> ExecutionAttemptRow {
+    let scope = if route == "neg-risk" {
+        plan_id
+            .split("negrisk-submit-family:")
+            .nth(1)
+            .and_then(|suffix| suffix.split(':').next())
+            .map(|family_id| format!("family:{family_id}"))
+            .unwrap_or_else(|| "family:family-a".to_owned())
+    } else {
+        "default".to_owned()
+    };
+
     ExecutionAttemptRow {
         attempt_id: attempt_id.to_owned(),
         plan_id: plan_id.to_owned(),
         snapshot_id: "snapshot-7".to_owned(),
         route: route.to_owned(),
-        scope: "family:family-a".to_owned(),
+        scope,
         matched_rule_id: Some("rule-negrisk-live".to_owned()),
         execution_mode: mode,
         attempt_no: 1,

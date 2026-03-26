@@ -1487,6 +1487,29 @@ pub struct LiveSubmissionRepo;
 impl LiveSubmissionRepo {
     pub async fn append(&self, pool: &PgPool, row: LiveSubmissionRecordRow) -> Result<()> {
         validate_live_submission_record_row(&row)?;
+        let attempt = sqlx::query(
+            r#"
+            SELECT route, scope
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $2
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .fetch_optional(pool)
+        .await?;
+
+        let Some(attempt) = attempt else {
+            return Err(PersistenceError::LiveSubmissionRequiresLiveAttempt {
+                submission_ref: row.submission_ref,
+                attempt_id: row.attempt_id,
+            });
+        };
+
+        let attempt_route: String = attempt.try_get("route")?;
+        let attempt_scope: String = attempt.try_get("scope")?;
+        validate_live_submission_record_against_attempt(&row, &attempt_route, &attempt_scope)?;
+
         let result = sqlx::query(
             r#"
             INSERT INTO live_submission_records (
@@ -1498,9 +1521,7 @@ impl LiveSubmissionRepo {
                 state,
                 payload
             )
-            SELECT $1, $2, $3, $4, $5, $6, $7
-            FROM execution_attempts
-            WHERE attempt_id = $2 AND execution_mode = $8
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (submission_ref) DO NOTHING
             "#,
         )
@@ -1511,7 +1532,6 @@ impl LiveSubmissionRepo {
         .bind(&row.provider)
         .bind(&row.state)
         .bind(&row.payload)
-        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
         .execute(pool)
         .await?;
 
@@ -1521,8 +1541,19 @@ impl LiveSubmissionRepo {
 
         let existing = sqlx::query(
             r#"
-            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
             FROM live_submission_records
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
             WHERE submission_ref = $1
             "#,
         )
@@ -1532,7 +1563,7 @@ impl LiveSubmissionRepo {
 
         match existing {
             Some(existing) => {
-                let existing = map_live_submission_record_row(existing)?;
+                let existing = map_live_submission_record_row_with_attempt(existing)?;
                 if existing == row {
                     Ok(())
                 } else {
@@ -1555,10 +1586,21 @@ impl LiveSubmissionRepo {
     ) -> Result<Vec<LiveSubmissionRecordRow>> {
         let rows = sqlx::query(
             r#"
-            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
             FROM live_submission_records
-            WHERE attempt_id = $1
-            ORDER BY created_at, submission_ref
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
+            WHERE live_submission_records.attempt_id = $1
+            ORDER BY live_submission_records.created_at, live_submission_records.submission_ref
             "#,
         )
         .bind(attempt_id)
@@ -1566,7 +1608,7 @@ impl LiveSubmissionRepo {
         .await?;
 
         rows.into_iter()
-            .map(map_live_submission_record_row)
+            .map(map_live_submission_record_row_with_attempt)
             .collect()
     }
 
@@ -1581,10 +1623,23 @@ impl LiveSubmissionRepo {
 
         let rows = sqlx::query(
             r#"
-            SELECT submission_ref, attempt_id, route, scope, provider, state, payload
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
             FROM live_submission_records
-            WHERE attempt_id = ANY($1)
-            ORDER BY attempt_id, created_at, submission_ref
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
+            WHERE live_submission_records.attempt_id = ANY($1)
+            ORDER BY live_submission_records.attempt_id,
+                     live_submission_records.created_at,
+                     live_submission_records.submission_ref
             "#,
         )
         .bind(attempt_ids)
@@ -1593,7 +1648,7 @@ impl LiveSubmissionRepo {
 
         let mut submissions = BTreeMap::<String, Vec<LiveSubmissionRecordRow>>::new();
         for row in rows {
-            let submission = map_live_submission_record_row(row)?;
+            let submission = map_live_submission_record_row_with_attempt(row)?;
             submissions
                 .entry(submission.attempt_id.clone())
                 .or_default()
@@ -1696,6 +1751,36 @@ fn validate_live_submission_record_row(row: &LiveSubmissionRecordRow) -> Result<
         return Err(PersistenceError::invalid_value(
             "live_submission_records.state",
             row.state.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_live_submission_record_against_attempt(
+    row: &LiveSubmissionRecordRow,
+    attempt_route: &str,
+    attempt_scope: &str,
+) -> Result<()> {
+    if row.route != attempt_route {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.route",
+            row.route.clone(),
+        ));
+    }
+
+    let expected_scope = if attempt_route == "neg-risk" {
+        attempt_scope
+            .strip_prefix("family:")
+            .unwrap_or(attempt_scope)
+    } else {
+        attempt_scope
+    };
+
+    if row.scope != expected_scope {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.scope",
+            row.scope.clone(),
         ));
     }
 
@@ -2136,6 +2221,14 @@ fn map_live_submission_record_row(row: PgRow) -> Result<LiveSubmissionRecordRow>
         payload: row.try_get("payload")?,
     };
     validate_live_submission_record_row(&row)?;
+    Ok(row)
+}
+
+fn map_live_submission_record_row_with_attempt(row: PgRow) -> Result<LiveSubmissionRecordRow> {
+    let attempt_route: String = row.try_get("attempt_route")?;
+    let attempt_scope: String = row.try_get("attempt_scope")?;
+    let row = map_live_submission_record_row(row)?;
+    validate_live_submission_record_against_attempt(&row, &attempt_route, &attempt_scope)?;
     Ok(row)
 }
 
