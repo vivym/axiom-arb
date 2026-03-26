@@ -307,6 +307,7 @@ git commit -m "feat: add phase3c live submit contracts"
 - Modify: `crates/execution/src/sink.rs`
 - Modify: `crates/execution/src/orchestrator.rs`
 - Modify: `crates/execution/src/lib.rs`
+- Modify: `crates/domain/tests/runtime_backbone.rs`
 - Test: `crates/execution/tests/negrisk_signing.rs`
 - Test: `crates/execution/tests/retry_and_redeem.rs`
 - Test: `crates/execution/tests/negrisk_live_submit.rs`
@@ -376,6 +377,7 @@ Compatibility requirement for this task:
 
 - keep a compatibility constructor such as `with_order_signer_and_hook(...)` or an equivalent adapter in place so [`crates/app-live/src/negrisk_live.rs`](/Users/viv/projs/axiom-arb/crates/app-live/src/negrisk_live.rs) still compiles unchanged until Task 5
 - keep the deterministic test signer surface usable by existing `Phase 3b` tests until the real app wiring is updated
+- because `ExecutionReceipt` gains receipt-anchor fields in this task, keep [`crates/domain/tests/runtime_backbone.rs`](/Users/viv/projs/axiom-arb/crates/domain/tests/runtime_backbone.rs) buildable by switching it to constructor-based receipt creation instead of stale struct literals
 
 - [ ] **Step 4: Re-run the focused execution tests**
 
@@ -390,7 +392,7 @@ Expected: PASS. Keep `ShadowVenueSink` behavior unchanged except for any necessa
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/domain/src/execution.rs crates/execution/src/providers.rs crates/execution/src/signing.rs crates/execution/src/sink.rs crates/execution/src/orchestrator.rs crates/execution/src/lib.rs crates/execution/tests/negrisk_signing.rs crates/execution/tests/retry_and_redeem.rs crates/execution/tests/negrisk_live_submit.rs crates/execution/tests/orchestrator.rs
+git add crates/domain/src/execution.rs crates/domain/tests/runtime_backbone.rs crates/execution/src/providers.rs crates/execution/src/signing.rs crates/execution/src/sink.rs crates/execution/src/orchestrator.rs crates/execution/src/lib.rs crates/execution/tests/negrisk_signing.rs crates/execution/tests/retry_and_redeem.rs crates/execution/tests/negrisk_live_submit.rs crates/execution/tests/orchestrator.rs
 git commit -m "feat: route live sink through phase3c providers"
 ```
 

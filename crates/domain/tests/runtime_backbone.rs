@@ -71,17 +71,17 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
     let state_confidence = StateConfidence::Certain;
     assert_eq!(state_confidence, StateConfidence::Certain);
 
-    let receipt = ExecutionReceipt {
-        attempt_id: attempt_context.attempt_id.clone(),
-        outcome: ExecutionAttemptOutcome::FailedAmbiguous,
-    };
+    let receipt = ExecutionReceipt::new(
+        attempt_context.attempt_id.clone(),
+        ExecutionAttemptOutcome::FailedAmbiguous,
+    );
     assert_eq!(receipt.attempt_id, "attempt-1");
     assert_eq!(receipt.outcome, ExecutionAttemptOutcome::FailedAmbiguous);
 
-    let shadow_receipt = ExecutionReceipt {
-        attempt_id: attempt_context.attempt_id.clone(),
-        outcome: ExecutionAttemptOutcome::ShadowRecorded,
-    };
+    let shadow_receipt = ExecutionReceipt::new(
+        attempt_context.attempt_id.clone(),
+        ExecutionAttemptOutcome::ShadowRecorded,
+    );
     assert_eq!(
         shadow_receipt.outcome,
         ExecutionAttemptOutcome::ShadowRecorded
