@@ -2,11 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use domain::{DecisionInput, ExecutionMode, ExecutionReceipt, IntentCandidate};
 use execution::{
-    attempt::ExecutionAttemptFactory,
     negrisk::{plan_family_submission, NegRiskFamilyTarget, NegRiskMemberTarget, ROUTE},
     signing::{SignedFamilySubmission, TestOrderSigner},
-    sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink},
+    sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError},
+    ExecutionInstrumentation, ExecutionOrchestrator, ExecutionPlanningInput,
 };
+use observability::RuntimeMetricsRecorder;
 use risk::{evaluate_decision, ActivationPolicy, RolloutRule};
 use serde_json::{json, Value};
 use venue_polymarket::{
@@ -64,6 +65,7 @@ pub fn eligible_live_records(
     targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
     approved_families: &std::collections::BTreeSet<String>,
     ready_families: &std::collections::BTreeSet<String>,
+    recorder: Option<RuntimeMetricsRecorder>,
 ) -> Result<Vec<NegRiskLiveExecutionRecord>, NegRiskLiveError> {
     let live_rules = approved_families
         .iter()
@@ -103,6 +105,10 @@ pub fn eligible_live_records(
                 .matched_rule_id
                 .as_deref()
                 .unwrap_or("phase3b-negrisk-live"),
+            match recorder.as_ref() {
+                Some(recorder) => ExecutionInstrumentation::enabled(recorder.clone()),
+                None => ExecutionInstrumentation::disabled(),
+            },
         )?);
     }
 
@@ -113,6 +119,7 @@ fn execute_live_family(
     snapshot_id: &str,
     target: &NegRiskFamilyLiveTarget,
     matched_rule_id: &str,
+    instrumentation: ExecutionInstrumentation,
 ) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError> {
     let request = domain::ExecutionRequest {
         request_id: format!("negrisk-live-request:{snapshot_id}:{}", target.family_id),
@@ -130,25 +137,27 @@ fn execute_live_family(
 
     let hook = Arc::new(RecordingSignedFamilyHook::default());
     let sink = LiveVenueSink::with_order_signer_and_hook(Arc::new(TestOrderSigner), hook.clone());
-    let (attempt, attempt_context) =
-        ExecutionAttemptFactory::new().next_for_plan(&plan, &request, request.activation_mode);
-    let receipt = sink
-        .execute(&plan, &attempt_context)
+    let execution_record = ExecutionOrchestrator::new_instrumented(sink, instrumentation)
+        .execute_with_attempt(&ExecutionPlanningInput::new(
+            request.clone(),
+            request.activation_mode,
+            plan.clone(),
+        ))
         .map_err(|err| NegRiskLiveError::Sink(format!("neg-risk live sink failed: {err:?}")))?;
-    ensure_success(&receipt)?;
+    ensure_success(&execution_record.receipt)?;
 
     Ok(NegRiskLiveExecutionRecord {
-        attempt_id: receipt.attempt_id,
-        plan_id: attempt.plan_id,
-        snapshot_id: attempt.snapshot_id,
-        execution_mode: attempt_context.execution_mode,
-        attempt_no: attempt.attempt_no,
-        idempotency_key: format!("idem-{}", attempt.attempt_id),
-        route: attempt_context.route,
-        scope: attempt_context.scope,
-        matched_rule_id: attempt_context.matched_rule_id,
-        submission_ref: receipt.submission_ref,
-        pending_ref: receipt.pending_ref,
+        idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
+        attempt_id: execution_record.receipt.attempt_id,
+        plan_id: execution_record.attempt.plan_id,
+        snapshot_id: execution_record.attempt.snapshot_id,
+        execution_mode: execution_record.attempt_context.execution_mode,
+        attempt_no: execution_record.attempt.attempt_no,
+        route: execution_record.attempt_context.route,
+        scope: execution_record.attempt_context.scope,
+        matched_rule_id: execution_record.attempt_context.matched_rule_id,
+        submission_ref: execution_record.receipt.submission_ref,
+        pending_ref: execution_record.receipt.pending_ref,
         artifacts: hook.artifacts(),
         order_requests: hook.order_requests(),
     })

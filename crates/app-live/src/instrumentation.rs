@@ -1,4 +1,6 @@
-use observability::{metric_dimensions, MetricDimension, MetricDimensions, RuntimeMetricsRecorder};
+use observability::{
+    metric_dimensions, span_names, MetricDimension, MetricDimensions, RuntimeMetricsRecorder,
+};
 use state::ReconcileAttention;
 
 #[derive(Debug, Clone, Default)]
@@ -35,6 +37,20 @@ impl AppInstrumentation {
             1,
             MetricDimensions::new([MetricDimension::ReconcileReason(reason)]),
         );
+    }
+
+    pub fn record_divergence(&self, divergence_kind: &'static str) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        tracing::warn_span!(
+            span_names::APP_RECOVERY_DIVERGENCE,
+            divergence_kind = divergence_kind
+        )
+        .in_scope(|| {
+            recorder.increment_divergence_count(1);
+        });
     }
 }
 

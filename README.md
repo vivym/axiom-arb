@@ -15,7 +15,7 @@
 - Live-mode bootstrap skeleton: `AXIOM_MODE=live cargo run -p app-live`
 - Replay summary from the beginning of an existing journal: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo run -p app-replay -- --from-seq 0`
 
-`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, `app-live` bootstraps observability once, then uses runtime-local structured spans plus metric-backed signals from the instrumented runtime path beyond the entrypoint. The observability path is still local-only and OTel-compatible rather than OTel-enabled, and there is no OpenTelemetry exporter in the binary. `venue-polymarket` now exposes repo-owned websocket-session and heartbeat producer observability primitives. This repository state does not claim full live websocket or heartbeat task wiring in `app-live` unless those loops are actually present in the binary, and it does not claim websocket, heartbeat, or order execution loops are instrumented unless they are actually present.
+`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, the Wave 1B observability surface is scoped to repo-owned local signals only: `execution` emits execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` emits recovery divergence signals for resume/rebuild mismatches, and `venue-polymarket` exposes relayer recent-transaction producer observability including local `relayer_pending_age`. The observability path remains local-only and OTel-compatible rather than OTel-enabled, and there is no OpenTelemetry exporter in the binary. This repository state still does not claim `unknown-order`, `broken-leg`, or collector-backed signals.
 
 ## V1b Neg-Risk Scope Status
 

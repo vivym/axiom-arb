@@ -6,10 +6,13 @@ pub mod span_names {
     pub const APP_RUNTIME_PUBLISH_SNAPSHOT: &str = "axiom.app.runtime.publish_snapshot";
     pub const APP_SUPERVISOR_RESUME: &str = "axiom.app.supervisor.resume";
     pub const APP_DISPATCH_FLUSH: &str = "axiom.app.dispatch.flush";
+    pub const EXECUTION_ATTEMPT: &str = "axiom.execution.attempt";
+    pub const APP_RECOVERY_DIVERGENCE: &str = "axiom.app.recovery.divergence";
     pub const REPLAY_RUN: &str = "axiom.app_replay.run";
     pub const REPLAY_SUMMARY: &str = "axiom.app_replay.summary";
     pub const VENUE_WS_SESSION: &str = "axiom.venue.ws.session";
     pub const VENUE_HEARTBEAT: &str = "axiom.venue.heartbeat";
+    pub const VENUE_RELAYER_POLL: &str = "axiom.venue.relayer.poll";
 }
 
 pub mod field_keys {
@@ -17,6 +20,18 @@ pub mod field_keys {
     pub const APP_MODE: &str = "app_mode";
     pub const RUNTIME_MODE: &str = "runtime_mode";
     pub const BOOTSTRAP_STATUS: &str = "bootstrap_status";
+    pub const EXECUTION_MODE: &str = "execution_mode";
+    pub const ROUTE: &str = "route";
+    pub const SCOPE: &str = "scope";
+    pub const PLAN_ID: &str = "plan_id";
+    pub const ATTEMPT_ID: &str = "attempt_id";
+    pub const ATTEMPT_NO: &str = "attempt_no";
+    pub const ATTEMPT_OUTCOME: &str = "attempt_outcome";
+    pub const SINK_KIND: &str = "sink_kind";
+    pub const DIVERGENCE_KIND: &str = "divergence_kind";
+    pub const RELAYER_TX_COUNT: &str = "relayer_tx_count";
+    pub const PENDING_TX_COUNT: &str = "pending_tx_count";
+    pub const PENDING_AGE_SECONDS: &str = "pending_age_seconds";
     pub const PROCESSED_COUNT: &str = "processed_count";
     pub const LAST_JOURNAL_SEQ: &str = "last_journal_seq";
     pub const COMMITTED_JOURNAL_SEQ: &str = "committed_journal_seq";
@@ -96,10 +111,10 @@ pub mod metric_dimensions {
     impl HaltScope {
         pub const fn as_pair(self) -> (&'static str, &'static str) {
             match self {
-                Self::Global => ("scope", "global"),
-                Self::Family => ("scope", "family"),
-                Self::Market => ("scope", "market"),
-                Self::Strategy => ("scope", "strategy"),
+                Self::Global => (field_keys::SCOPE, "global"),
+                Self::Family => (field_keys::SCOPE, "family"),
+                Self::Market => (field_keys::SCOPE, "market"),
+                Self::Strategy => (field_keys::SCOPE, "strategy"),
             }
         }
     }

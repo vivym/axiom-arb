@@ -24,6 +24,8 @@ pub enum VenueSinkError {
 }
 
 pub trait VenueSink {
+    fn sink_kind(&self) -> &'static str;
+
     fn execute(
         &self,
         plan: &ExecutionPlan,
@@ -128,6 +130,10 @@ fn ensure_live_sink_mode(
 }
 
 impl VenueSink for LiveVenueSink {
+    fn sink_kind(&self) -> &'static str {
+        "live"
+    }
+
     fn execute(
         &self,
         plan: &ExecutionPlan,
@@ -188,6 +194,10 @@ impl ShadowVenueSink {
 }
 
 impl VenueSink for ShadowVenueSink {
+    fn sink_kind(&self) -> &'static str {
+        "shadow"
+    }
+
     fn execute(
         &self,
         _plan: &ExecutionPlan,

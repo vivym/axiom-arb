@@ -1,14 +1,91 @@
+mod support;
+
 use std::collections::BTreeMap;
 
 use app_live::{
-    AppSupervisor, NegRiskFamilyLiveTarget, NegRiskLiveArtifact, NegRiskLiveExecutionRecord,
-    NegRiskLiveStateSource, NegRiskMemberLiveTarget, NegRiskRolloutEvidence,
+    AppRuntimeMode, AppSupervisor, NegRiskFamilyLiveTarget, NegRiskLiveArtifact,
+    NegRiskLiveExecutionRecord, NegRiskLiveStateSource, NegRiskMemberLiveTarget,
+    NegRiskRolloutEvidence,
 };
 use chrono::Utc;
 use domain::{ExecutionMode, ExternalFactEvent, RuntimeMode};
+use observability::{bootstrap_observability, field_keys, span_names};
 use rust_decimal::Decimal;
 use serde_json::json;
 use state::PendingReconcileAnchor;
+use state::RemoteSnapshot;
+use support::capture_spans;
+
+#[test]
+fn bootstrap_neg_risk_live_path_emits_execution_attempt_span_without_changing_artifacts() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::new_instrumented(
+        AppRuntimeMode::Live,
+        RemoteSnapshot::empty(),
+        observability.recorder(),
+    );
+    supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        NegRiskFamilyLiveTarget {
+            family_id: "family-a".to_owned(),
+            members: vec![NegRiskMemberLiveTarget {
+                condition_id: "condition-1".to_owned(),
+                token_id: "token-1".to_owned(),
+                price: Decimal::new(45, 2),
+                quantity: Decimal::new(10, 0),
+            }],
+        },
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.run_once().unwrap());
+
+    assert_eq!(summary.neg_risk_live_attempt_count, 1);
+    let execution_attempt_spans = captured_spans
+        .iter()
+        .filter(|span| span.name == span_names::EXECUTION_ATTEMPT)
+        .collect::<Vec<_>>();
+    assert_eq!(execution_attempt_spans.len(), 1);
+    let attempt_span = execution_attempt_spans[0];
+    assert_eq!(
+        attempt_span
+            .field(field_keys::EXECUTION_MODE)
+            .map(String::as_str),
+        Some("\"live\"")
+    );
+    assert_eq!(
+        attempt_span.field(field_keys::SCOPE).map(String::as_str),
+        Some("\"family-a\"")
+    );
+    let records = supervisor.neg_risk_live_execution_records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].execution_mode, ExecutionMode::Live);
+    assert_eq!(records[0].route, "neg-risk");
+    assert_eq!(records[0].scope, "family-a");
+    assert_eq!(records[0].matched_rule_id.as_deref(), Some("family-a-live"));
+    assert_eq!(records[0].attempt_no, 1);
+    assert!(records[0]
+        .plan_id
+        .contains("negrisk-submit-family:family-a"));
+    assert!(records[0].attempt_id.ends_with(":attempt-1"));
+    assert_eq!(
+        records[0].idempotency_key,
+        format!("idem-{}", records[0].attempt_id)
+    );
+    assert_eq!(records[0].artifacts.len(), 1);
+    assert_eq!(records[0].artifacts[0].stream, "neg-risk-live-orders");
+    assert_eq!(records[0].order_requests.len(), 1);
+    let expected_order_request = expected_bootstrap_order_request();
+    assert_eq!(records[0].order_requests[0], expected_order_request);
+    assert_eq!(
+        records[0].artifacts[0].payload,
+        expected_bootstrap_artifact_payload(
+            records[0].attempt_id.as_str(),
+            &expected_order_request,
+        )
+    );
+}
 
 #[test]
 fn live_ready_family_with_config_and_live_approval_records_real_attempt_artifacts_and_requests() {
@@ -337,4 +414,41 @@ fn sample_live_execution_record(snapshot_id: &str) -> NegRiskLiveExecutionRecord
             }
         })],
     }
+}
+
+fn expected_bootstrap_order_request() -> serde_json::Value {
+    json!({
+        "order": {
+            "maker": "0xmaker",
+            "signer": "0xsigner",
+            "taker": "0x0000000000000000000000000000000000000000",
+            "tokenId": "token-1",
+            "makerAmount": "10",
+            "takerAmount": "4.5",
+            "side": "BUY",
+            "expiration": "0",
+            "nonce": "0",
+            "feeRateBps": "30",
+            "signature": "test-sig:negrisk-submit-family:family-a:condition-1:token-1:0.45:10:0",
+            "salt": 123,
+            "signatureType": 0
+        },
+        "owner": "owner-family-a",
+        "orderType": "GTC",
+        "deferExec": false
+    })
+}
+
+fn expected_bootstrap_artifact_payload(
+    attempt_id: &str,
+    order_request: &serde_json::Value,
+) -> serde_json::Value {
+    json!({
+        "attempt_id": attempt_id,
+        "route": "neg-risk",
+        "scope": "family-a",
+        "matched_rule_id": "family-a-live",
+        "plan_id": "negrisk-submit-family:family-a:condition-1:token-1:0.45:10",
+        "requests": [order_request],
+    })
 }

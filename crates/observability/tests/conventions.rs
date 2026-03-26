@@ -21,6 +21,29 @@ fn observability_conventions_define_stable_span_names_and_field_keys() {
 }
 
 #[test]
+fn execution_recovery_and_relayer_conventions_are_repo_owned() {
+    assert_eq!(span_names::EXECUTION_ATTEMPT, "axiom.execution.attempt");
+    assert_eq!(
+        span_names::APP_RECOVERY_DIVERGENCE,
+        "axiom.app.recovery.divergence"
+    );
+    assert_eq!(span_names::VENUE_RELAYER_POLL, "axiom.venue.relayer.poll");
+
+    assert_eq!(field_keys::EXECUTION_MODE, "execution_mode");
+    assert_eq!(field_keys::ROUTE, "route");
+    assert_eq!(field_keys::SCOPE, "scope");
+    assert_eq!(field_keys::PLAN_ID, "plan_id");
+    assert_eq!(field_keys::ATTEMPT_ID, "attempt_id");
+    assert_eq!(field_keys::ATTEMPT_NO, "attempt_no");
+    assert_eq!(field_keys::ATTEMPT_OUTCOME, "attempt_outcome");
+    assert_eq!(field_keys::SINK_KIND, "sink_kind");
+    assert_eq!(field_keys::DIVERGENCE_KIND, "divergence_kind");
+    assert_eq!(field_keys::RELAYER_TX_COUNT, "relayer_tx_count");
+    assert_eq!(field_keys::PENDING_TX_COUNT, "pending_tx_count");
+    assert_eq!(field_keys::PENDING_AGE_SECONDS, "pending_age_seconds");
+}
+
+#[test]
 fn metric_dimension_vocabularies_are_repo_owned_and_finite() {
     assert_eq!(
         metric_dimensions::Channel::User.as_pair(),
