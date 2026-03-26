@@ -92,19 +92,12 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
             });
         }
 
-        let submission_record = LiveSubmissionRecord {
-            submission_ref: response.order_id.clone(),
-            attempt_id: attempt.attempt_id.clone(),
-            route: attempt.route.clone(),
-            scope: attempt.scope.clone(),
-            provider: PROVIDER_NAME.to_owned(),
-        };
-
         match response.status.trim().to_ascii_lowercase().as_str() {
-            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted { submission_record }),
-            "delayed" => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: Some(submission_record),
-                pending_ref: order_pending_ref(&response.order_id),
+            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted {
+                submission_record: submission_record(&response.order_id, attempt),
+            }),
+            "delayed" => Ok(LiveSubmitOutcome::Accepted {
+                submission_record: submission_record(&response.order_id, attempt),
             }),
             "matched" => {
                 let pending_tx = response
@@ -119,12 +112,12 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
                     })?;
 
                 Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                    submission_record: Some(submission_record),
+                    submission_record: Some(submission_record(pending_tx, attempt)),
                     pending_ref: tx_pending_ref(pending_tx),
                 })
             }
             _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: Some(submission_record),
+                submission_record: Some(submission_record(&response.order_id, attempt)),
                 pending_ref: order_pending_ref(&response.order_id),
             }),
         }
@@ -189,6 +182,15 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
 
         if matching_transactions
             .iter()
+            .any(|transaction| transaction.state_is_confirmed())
+        {
+            return Ok(ReconcileOutcome::ConfirmedAuthoritative {
+                submission_ref: tx_ref.to_owned(),
+            });
+        }
+
+        if matching_transactions
+            .iter()
             .any(|transaction| transaction.state_is_terminal())
         {
             return Ok(ReconcileOutcome::NeedsRecovery {
@@ -197,8 +199,6 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
             });
         }
 
-        // Recent-transactions rows expose transaction ids and hashes, not order ids, so a
-        // confirmed tx alone cannot safely produce the authoritative submission_ref here.
         Ok(ReconcileOutcome::StillPending)
     }
 
@@ -273,6 +273,19 @@ fn tx_pending_ref(tx_ref: &str) -> String {
 
 fn order_pending_ref(order_id: &str) -> String {
     format!("order:{order_id}")
+}
+
+fn submission_record(
+    submission_ref: &str,
+    attempt: &domain::ExecutionAttemptContext,
+) -> LiveSubmissionRecord {
+    LiveSubmissionRecord {
+        submission_ref: submission_ref.to_owned(),
+        attempt_id: attempt.attempt_id.clone(),
+        route: attempt.route.clone(),
+        scope: attempt.scope.clone(),
+        provider: PROVIDER_NAME.to_owned(),
+    }
 }
 
 fn submit_rejection_reason(response: &SubmitOrderResponse) -> String {

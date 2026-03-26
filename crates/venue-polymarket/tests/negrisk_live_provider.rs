@@ -86,7 +86,7 @@ async fn polymarket_submit_provider_maps_matched_response_into_tx_backed_unconfi
             pending_ref,
         } => {
             let submission_record = submission_record.expect("durable local anchor");
-            assert_eq!(submission_record.submission_ref, "0xorder-matched");
+            assert_eq!(submission_record.submission_ref, "0xtx-1");
             assert_eq!(pending_ref, "tx:0xtx-1");
         }
         other => panic!("unexpected outcome: {other:?}"),
@@ -96,8 +96,7 @@ async fn polymarket_submit_provider_maps_matched_response_into_tx_backed_unconfi
 }
 
 #[tokio::test]
-async fn polymarket_submit_provider_maps_delayed_response_into_order_backed_unconfirmed_acceptance()
-{
+async fn polymarket_submit_provider_maps_delayed_response_into_plain_acceptance() {
     let server = MockServer::spawn(
         "200 OK",
         r#"{"success":true,"orderID":"0xorder-2","status":"delayed","makingAmount":"10","takingAmount":"5","errorMsg":""}"#,
@@ -109,14 +108,9 @@ async fn polymarket_submit_provider_maps_delayed_response_into_order_backed_unco
         .expect("submit should succeed");
 
     match outcome {
-        LiveSubmitOutcome::AcceptedButUnconfirmed {
-            submission_record,
-            pending_ref,
-        } => {
-            let submission_record = submission_record.expect("durable local anchor");
+        LiveSubmitOutcome::Accepted { submission_record } => {
             assert_eq!(submission_record.provider, "polymarket");
             assert_eq!(submission_record.submission_ref, "0xorder-2");
-            assert_eq!(pending_ref, "order:0xorder-2");
         }
         other => panic!("unexpected outcome: {other:?}"),
     }
@@ -186,6 +180,28 @@ async fn polymarket_reconcile_provider_ignores_unrelated_confirmed_transactions(
         .expect("unrelated relayer rows should not resolve the work");
 
     assert!(matches!(outcome, ReconcileOutcome::StillPending));
+    let _ = server.finish();
+}
+
+#[tokio::test]
+async fn polymarket_reconcile_provider_confirms_matching_tx_pending_ref() {
+    let server = MockServer::spawn(
+        "200 OK",
+        r#"[{"transactionID":"tx-other","state":"STATE_CONFIRMED","type":"SAFE","nonce":"60","owner":"0x4444444444444444444444444444444444444444"},{"transactionID":"tx-1","transactionHash":"0xtx-1","state":"STATE_CONFIRMED","type":"SAFE","nonce":"61","owner":"0x4444444444444444444444444444444444444444"}]"#,
+    );
+    let provider = sample_reconcile_provider(server.base_url());
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("tx:0xtx-1"))
+        .expect("confirmed tx should resolve authoritatively");
+
+    match outcome {
+        ReconcileOutcome::ConfirmedAuthoritative { submission_ref } => {
+            assert_eq!(submission_ref, "0xtx-1");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
     let _ = server.finish();
 }
 
