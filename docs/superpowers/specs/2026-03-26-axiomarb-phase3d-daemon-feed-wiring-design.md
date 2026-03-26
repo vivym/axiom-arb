@@ -447,7 +447,7 @@ Resume must remain truth-first:
 - restore pending reconcile and live submission anchors
 - restore the active operator-target revision anchor
 - rebuild published snapshot state
-- re-establish recovery posture
+- re-establish recovery-related posture inputs and per-scope restrictions
 - only then resume continuous loops
 
 ### 11.3 No Duplicate Live Promotion
@@ -515,7 +515,7 @@ Test:
 Test at least:
 
 - happy-path continuous ingest -> publish -> dispatch -> submit -> reconcile
-- degraded-path feed gap or ambiguous relayer truth leading to fail-closed posture
+- degraded-path feed gap or ambiguous relayer truth leading to fail-closed posture or per-scope restrictions
 - restart from non-empty durable state without duplicate live submit
 
 ## 13. Acceptance Criteria
@@ -524,7 +524,7 @@ Test at least:
 
 - `app-live` operates as a long-running single-process daemon with layered supervisors
 - market websocket, user websocket, heartbeat, relayer poll, and metadata refresh are continuously wired through the authoritative fact chain
-- missed or invalid order heartbeat truth causes reconcile-required work or more conservative runtime posture for affected scopes
+- missed or invalid order heartbeat truth causes reconcile-required work or more conservative per-scope restriction inputs
 - reconcile, recovery, and dispatch are continuously scheduled rather than manually stepped
 - `operator-supplied live targets` remain the only live decision input in this phase
 - `operator-supplied live targets` are represented by a startup/restart-scoped repo-owned revisioned input surface rather than invisible ambient config
