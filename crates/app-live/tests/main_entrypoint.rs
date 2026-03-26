@@ -1,5 +1,9 @@
+use domain::ExecutionMode;
 use observability::span_names;
-use persistence::run_migrations;
+use persistence::{
+    models::{ExecutionAttemptRow, LiveSubmissionRecordRow},
+    run_migrations, ExecutionAttemptRepo, LiveSubmissionRepo, RuntimeProgressRepo,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{
     ffi::OsString,
@@ -328,6 +332,40 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
 }
 
 #[test]
+fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
+    let database = TestDatabase::new();
+    database.seed_durable_live_execution_record();
+    let output = app_live_output_raw_env_with_signer_and_database_url(
+        "live",
+        None,
+        None,
+        None,
+        None,
+        Some(database.database_url()),
+    );
+    database.cleanup();
+
+    assert!(
+        output.status.success(),
+        "live mode should restore durable live truth from a non-empty store"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("negrisk_mode=Live"), "{combined}");
+    assert!(
+        combined.contains("neg_risk_live_attempt_count=1"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("neg_risk_live_state_source=\"durable_restore\""),
+        "{combined}"
+    );
+}
+
+#[test]
 fn live_entrypoint_requires_database_url_even_when_operator_inputs_request_live_work() {
     let output = app_live_output_raw_env_with_signer_and_database_url(
         "live",
@@ -602,6 +640,57 @@ impl TestDatabase {
 
     fn database_url(&self) -> &str {
         &self.database_url
+    }
+
+    fn seed_durable_live_execution_record(&self) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(&self.pool, 41, 7, Some("snapshot-7"))
+                    .await
+                    .expect("runtime progress should persist");
+                ExecutionAttemptRepo
+                    .append(
+                        &self.pool,
+                        &ExecutionAttemptRow {
+                            attempt_id: "attempt-live-main-1".to_owned(),
+                            plan_id: "request-bound:7:req-1:negrisk-submit-family:family-a"
+                                .to_owned(),
+                            snapshot_id: "snapshot-7".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            matched_rule_id: Some("family-a-live".to_owned()),
+                            execution_mode: ExecutionMode::Live,
+                            attempt_no: 1,
+                            idempotency_key: "idem-attempt-live-main-1".to_owned(),
+                        },
+                    )
+                    .await
+                    .expect("execution attempt should persist");
+                LiveSubmissionRepo
+                    .append(
+                        &self.pool,
+                        LiveSubmissionRecordRow {
+                            submission_ref: "submission-live-main-1".to_owned(),
+                            attempt_id: "attempt-live-main-1".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            provider: "venue-polymarket".to_owned(),
+                            state: "submitted".to_owned(),
+                            payload: serde_json::json!({
+                                "submission_ref": "submission-live-main-1",
+                                "family_id": "family-a",
+                                "route": "neg-risk",
+                                "reason": "submitted_for_execution",
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("live submission record should persist");
+            });
     }
 
     fn cleanup(self) {

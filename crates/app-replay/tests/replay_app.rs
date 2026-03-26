@@ -115,6 +115,59 @@ fn summary_consumer_materializes_deterministic_replay_state() {
     assert_eq!(summary.per_event_type.get("heartbeat"), Some(&1));
 }
 
+#[test]
+fn summary_consumer_tracks_phase3c_live_submit_closure_events() {
+    let mut consumer = SummaryReplayConsumer::default();
+
+    replay_journal(
+        vec![
+            sample_entry_with_kind(
+                3,
+                "event-3",
+                "neg-risk-live",
+                SourceKind::Internal,
+                "reconcile_confirmed_authoritative",
+            ),
+            sample_entry_with_kind(
+                1,
+                "event-1",
+                "neg-risk-live",
+                SourceKind::Internal,
+                "live_submission_recorded",
+            ),
+            sample_entry_with_kind(
+                2,
+                "event-2",
+                "neg-risk-live",
+                SourceKind::Internal,
+                "pending_reconcile_created",
+            ),
+        ],
+        &mut consumer,
+    )
+    .unwrap();
+
+    let summary = consumer.summary();
+    assert_eq!(summary.processed_count, 3);
+    assert_eq!(summary.last_journal_seq, Some(3));
+    assert_eq!(summary.per_stream.get("neg-risk-live"), Some(&3));
+    assert_eq!(summary.per_source_kind.get("internal"), Some(&3));
+    assert_eq!(
+        summary.per_event_type.get("live_submission_recorded"),
+        Some(&1)
+    );
+    assert_eq!(
+        summary.per_event_type.get("pending_reconcile_created"),
+        Some(&1)
+    );
+    assert_eq!(
+        summary
+            .per_event_type
+            .get("reconcile_confirmed_authoritative"),
+        Some(&1)
+    );
+}
+
 #[tokio::test]
 async fn replay_event_journal_from_pool_materializes_summary_from_db_rows() {
     if database_url().is_none() {

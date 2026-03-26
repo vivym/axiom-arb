@@ -21,7 +21,7 @@
 
 - `v1b foundation` exists today as library and replay support.
 - `v1b live` now includes a bootstrap-time `neg-risk` live backbone for explicit operator inputs in the static harness.
-- `app-live` still does not place `neg-risk` orders.
+- `app-live` can now perform real `neg-risk` live submits in `bootstrap + resume` mode when explicit operator inputs provide config-backed, live-approved, and live-ready families and durable store access is available.
 - Family-halt precedence is `GlobalHalt > family halt > market-local halt > strategy-local filter`.
 - Foundation-phase family halt blocks new `neg-risk` activation only; it does not override bootstrap `CancelOnly` or global emergency controls.
 
@@ -32,13 +32,15 @@
 - Phase 3a on the unified runtime is `neg-risk` rollout gates and readiness evidence only.
 - Phase 3a does not add a new `neg-risk` pricing surface or live planner.
 - Phase 3b can plan `neg-risk` family submits, create request-bound attempts, build live artifact payloads, and materialize order-request bodies in `app-live` when explicit operator inputs provide config-backed, live-approved, and live-ready families.
+- Phase 3c closes the `bootstrap + resume` live submit loop with real signing, real venue submission, durable live submission records, durable pending-reconcile anchors, and fail-closed restart restore.
 - Fresh-boot promotion still depends on explicit operator inputs because the repository does not yet have a production `neg-risk` feed path.
-- Restart and resume require durable rollout evidence plus durable live-attempt anchors; they will not fabricate rebuilt readiness or rebuilt live attempts from env or in-memory sets.
-- `neg_risk_live_attempt_count` now counts actual bootstrap-time live execution records in the harness; it is still not evidence of external venue submission.
+- Restart and resume require durable rollout evidence plus durable live-attempt, live-submission, and pending-reconcile anchors; they will not fabricate rebuilt readiness or rebuilt live attempts from env or in-memory sets.
+- `neg_risk_live_attempt_count` now counts durable bootstrap/resume live execution records.
+- `observability` now defines typed counters `axiom_neg_risk_live_submit_accepted_total` and `axiom_neg_risk_live_submit_ambiguous_total` for accepted-versus-ambiguous live submit closure accounting.
 - `neg_risk_live_state_source` distinguishes fresh operator-synthesized bootstrap promotion from durable restored live-attempt anchors during restart/resume.
 - Families may remain in `Disabled`, `Shadow`, `ReduceOnly`, or `RecoveryOnly`.
-- Actual binary-driven family promotion still requires real feed, approval, and submit wiring beyond this bootstrap skeleton.
-- Phase 3 `neg-risk Live` is not fully enabled by this repository state.
+- Continuous daemonization, market-discovered pricing, and full production feed wiring remain follow-on work beyond this repository state.
+- Phase 3 `neg-risk Live` is still not fully production-enabled by this repository state.
 - Shadow artifacts stay on isolated storage and stream paths; they do not share authoritative live sinks.
 
 ## Verification

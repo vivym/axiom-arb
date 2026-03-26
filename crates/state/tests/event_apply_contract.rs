@@ -177,7 +177,7 @@ fn live_submit_fact_enters_reconcile_first_posture_without_advancing_state_versi
     assert_eq!(store.state_version(), 0);
     assert_eq!(store.pending_reconcile_count(), 1);
     assert_eq!(store.mode(), domain::RuntimeMode::Reconciling);
-    assert_eq!(store.first_reconcile_succeeded(), true);
+    assert!(store.first_reconcile_succeeded());
     assert_eq!(
         store.scope_confidence("family-a"),
         StateConfidence::Uncertain
@@ -194,23 +194,22 @@ fn live_submit_fact_enters_reconcile_first_posture_without_advancing_state_versi
 #[test]
 fn terminal_live_reconcile_clears_pending_anchor_and_restores_healthy_posture() {
     let mut store = StateStore::new();
-    let mut applier = StateApplier::new(&mut store);
-
-    applier
-        .apply(
-            19,
-            ExternalFactEvent::negrisk_live_submit_observed(
-                "session-live",
-                "evt-1",
-                "attempt-family-a-1",
-                "family-a",
-                "submission-family-a-1",
-                Utc::now(),
-            ),
-        )
-        .unwrap();
-
-    drop(applier);
+    {
+        let mut applier = StateApplier::new(&mut store);
+        applier
+            .apply(
+                19,
+                ExternalFactEvent::negrisk_live_submit_observed(
+                    "session-live",
+                    "evt-1",
+                    "attempt-family-a-1",
+                    "family-a",
+                    "submission-family-a-1",
+                    Utc::now(),
+                ),
+            )
+            .unwrap();
+    }
     let pending_ref = store.pending_reconcile_anchors()[0].pending_ref.clone();
     let mut applier = StateApplier::new(&mut store);
     let result = applier

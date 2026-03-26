@@ -733,8 +733,8 @@ async fn pending_reconcile_append_rejects_malformed_payload_missing_submission_r
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "pending_reconcile_items.payload.submission_ref"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.submission_ref"
     ));
 
     db.cleanup().await;
@@ -765,8 +765,8 @@ async fn pending_reconcile_append_rejects_blank_submission_refs() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "pending_reconcile_items.payload.submission_ref"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.submission_ref"
     ));
 
     db.cleanup().await;
@@ -797,8 +797,8 @@ async fn pending_reconcile_append_rejects_blank_family_scope_ids() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "pending_reconcile_items.payload.family_id"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.family_id"
     ));
 
     db.cleanup().await;
@@ -839,8 +839,8 @@ async fn pending_reconcile_list_all_rejects_malformed_rows() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "pending_reconcile_items.payload.route"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.route"
     ));
 
     db.cleanup().await;

@@ -545,8 +545,8 @@ async fn live_submission_records_reject_blank_submission_refs() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.payload.submission_ref"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.payload.submission_ref"
     ));
 
     db.cleanup().await;
@@ -588,8 +588,8 @@ async fn live_submission_records_reject_blank_family_scope_ids() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.payload.family_id"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.payload.family_id"
     ));
 
     db.cleanup().await;
@@ -631,8 +631,8 @@ async fn live_submission_records_reject_blank_providers() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.provider"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.provider"
     ));
 
     db.cleanup().await;
@@ -674,8 +674,8 @@ async fn live_submission_records_reject_attempt_route_mismatch() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.route"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.route"
     ));
 
     db.cleanup().await;
@@ -717,8 +717,8 @@ async fn live_submission_records_reject_malformed_anchor_state() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.state"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.state"
     ));
 
     db.cleanup().await;
@@ -875,8 +875,8 @@ async fn live_submission_records_list_for_attempt_rejects_malformed_rows() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.provider"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.provider"
     ));
 
     db.cleanup().await;
@@ -937,8 +937,8 @@ async fn live_submission_records_list_for_attempt_rejects_attempt_scope_mismatch
     assert!(
         matches!(
             err,
-            PersistenceError::InvalidValue { ref kind, .. }
-            if *kind == "live_submission_records.scope"
+            PersistenceError::InvalidValue { kind, .. }
+            if kind == "live_submission_records.scope"
         ),
         "{err:?}"
     );
@@ -1000,8 +1000,8 @@ async fn live_submission_records_list_for_attempts_rejects_malformed_rows() {
 
     assert!(matches!(
         err,
-        PersistenceError::InvalidValue { ref kind, .. }
-        if *kind == "live_submission_records.payload.submission_ref"
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "live_submission_records.payload.submission_ref"
     ));
 
     db.cleanup().await;
