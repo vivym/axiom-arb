@@ -5,7 +5,7 @@ use domain::{
     SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use rust_decimal::Decimal;
-use state::{ReconcileAttention, RelayerTxSummary, RemoteSnapshot, StateStore};
+use state::{ReconcileAttention, RelayerTxSummary, RemoteSnapshot, StateConfidence, StateStore};
 
 #[test]
 fn startup_remains_cancel_only_until_first_reconcile_succeeds() {
@@ -18,6 +18,40 @@ fn startup_remains_cancel_only_until_first_reconcile_succeeds() {
     assert_eq!(store.last_consumed_journal_seq(), None);
     assert!(!store.first_reconcile_succeeded());
     assert!(!store.allows_automatic_repair());
+}
+
+#[test]
+fn restored_live_submit_work_keeps_reconcile_first_posture_through_bootstrap_reconcile() {
+    let mut store = StateStore::new();
+
+    state::StateApplier::new(&mut store)
+        .apply(
+            19,
+            domain::ExternalFactEvent::negrisk_live_submit_observed(
+                "session-live",
+                "evt-1",
+                "attempt-family-a-1",
+                "family-a",
+                "submission-family-a-1",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    store.restore_committed_anchor(7, 41);
+
+    let report = store.reconcile(RemoteSnapshot::empty());
+
+    assert!(report.succeeded);
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+    assert_eq!(store.last_applied_journal_seq(), Some(41));
+    assert_eq!(store.state_version(), 7);
 }
 
 #[test]

@@ -9,9 +9,9 @@ pub mod repos;
 pub use models::StoredOrder;
 pub use repos::{
     persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,
-    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, NegRiskFamilyRepo, OrderRepo,
-    PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo,
-    SnapshotPublicationRepo,
+    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
+    NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo,
+    ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -50,6 +50,13 @@ pub enum PersistenceError {
     },
     DuplicatePendingReconcile {
         pending_ref: String,
+    },
+    ConflictingLiveSubmissionRecord {
+        submission_ref: String,
+    },
+    LiveSubmissionRequiresLiveAttempt {
+        submission_ref: String,
+        attempt_id: String,
     },
     ShadowArtifactRequiresShadowAttempt {
         attempt_id: String,
@@ -117,6 +124,19 @@ impl fmt::Display for PersistenceError {
             Self::DuplicatePendingReconcile { pending_ref } => {
                 write!(f, "pending reconcile item {pending_ref} already exists")
             }
+            Self::ConflictingLiveSubmissionRecord { submission_ref } => {
+                write!(
+                    f,
+                    "live submission record {submission_ref} already exists with a different payload"
+                )
+            }
+            Self::LiveSubmissionRequiresLiveAttempt {
+                submission_ref,
+                attempt_id,
+            } => write!(
+                f,
+                "live submission record {submission_ref} requires a live execution attempt for attempt_id {attempt_id}"
+            ),
             Self::ShadowArtifactRequiresShadowAttempt { attempt_id } => write!(
                 f,
                 "shadow artifact attempt {attempt_id} must reference an existing shadow execution attempt"

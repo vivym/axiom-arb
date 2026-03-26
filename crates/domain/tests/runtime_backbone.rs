@@ -1,8 +1,9 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use domain::{
     ActivationDecision, DecisionInput, ExecutionAttempt, ExecutionAttemptContext,
     ExecutionAttemptOutcome, ExecutionMode, ExecutionPlanRef, ExecutionReceipt, ExecutionRequest,
-    ExternalFactEvent, IntentCandidate, RecoveryIntent, StateConfidence,
+    ExternalFactEvent, ExternalFactPayload, ExternalFactPayloadData, IntentCandidate,
+    RecoveryIntent, StateConfidence,
 };
 
 #[test]
@@ -70,17 +71,17 @@ fn decision_contracts_stay_input_neutral_and_attempt_scoped() {
     let state_confidence = StateConfidence::Certain;
     assert_eq!(state_confidence, StateConfidence::Certain);
 
-    let receipt = ExecutionReceipt {
-        attempt_id: attempt_context.attempt_id.clone(),
-        outcome: ExecutionAttemptOutcome::FailedAmbiguous,
-    };
+    let receipt = ExecutionReceipt::new(
+        attempt_context.attempt_id.clone(),
+        ExecutionAttemptOutcome::FailedAmbiguous,
+    );
     assert_eq!(receipt.attempt_id, "attempt-1");
     assert_eq!(receipt.outcome, ExecutionAttemptOutcome::FailedAmbiguous);
 
-    let shadow_receipt = ExecutionReceipt {
-        attempt_id: attempt_context.attempt_id.clone(),
-        outcome: ExecutionAttemptOutcome::ShadowRecorded,
-    };
+    let shadow_receipt = ExecutionReceipt::new(
+        attempt_context.attempt_id.clone(),
+        ExecutionAttemptOutcome::ShadowRecorded,
+    );
     assert_eq!(
         shadow_receipt.outcome,
         ExecutionAttemptOutcome::ShadowRecorded
@@ -126,4 +127,82 @@ fn external_fact_event_carries_normalizer_anchor() {
         Utc::now(),
     );
     assert_eq!(event.normalizer_version, "v1-market-normalizer");
+}
+
+#[test]
+fn external_fact_event_can_carry_negrisk_live_submit_fact() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 34, 56).unwrap();
+    let fact = ExternalFactEvent::negrisk_live_submit_observed(
+        "session-live",
+        "evt-1",
+        "attempt-family-a-1",
+        "family-a",
+        "submission-family-a-1",
+        observed_at,
+    );
+
+    assert_eq!(fact.source_kind, "negrisk_live_submit");
+    assert_eq!(fact.payload.kind(), "negrisk_live_submit_observed");
+    assert_eq!(fact.observed_at, observed_at);
+}
+
+#[test]
+fn external_fact_payload_exposes_live_submit_fields() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 35, 0).unwrap();
+    let fact = ExternalFactEvent::negrisk_live_submit_observed(
+        "session-live",
+        "evt-1",
+        "attempt-family-a-1",
+        "family-a",
+        "submission-family-a-1",
+        observed_at,
+    );
+
+    match fact.payload.as_ref() {
+        Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(payload)) => {
+            assert_eq!(payload.attempt_id, "attempt-family-a-1");
+            assert_eq!(payload.scope, "family-a");
+            assert_eq!(payload.submission_ref, "submission-family-a-1");
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn external_fact_payload_exposes_live_reconcile_fields() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 36, 0).unwrap();
+    let fact = ExternalFactEvent::negrisk_live_reconcile_observed(
+        "session-live",
+        "evt-2",
+        "pending-family-a-1",
+        "family-a",
+        true,
+        observed_at,
+    );
+
+    match fact.payload.as_ref() {
+        Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(payload)) => {
+            assert_eq!(payload.pending_ref, "pending-family-a-1");
+            assert_eq!(payload.scope, "family-a");
+            assert!(payload.terminal);
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+
+    assert_eq!(fact.observed_at, observed_at);
+}
+
+#[test]
+fn external_fact_event_defaults_to_no_payload_for_legacy_calls() {
+    let fact = ExternalFactEvent::new(
+        "market_ws",
+        "session-legacy",
+        "evt-legacy",
+        "v1",
+        Utc::now(),
+    );
+
+    assert_eq!(fact.payload.kind(), "none");
+    assert!(fact.payload.as_ref().is_none());
+    assert_eq!(fact.payload, ExternalFactPayload::default());
 }

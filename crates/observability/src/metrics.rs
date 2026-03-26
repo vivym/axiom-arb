@@ -287,6 +287,8 @@ pub struct RuntimeMetrics {
     pub neg_risk_live_ready_family_count: GaugeHandle,
     pub neg_risk_live_attempt_count: GaugeHandle,
     pub neg_risk_live_gate_block_count: GaugeHandle,
+    pub neg_risk_live_submit_accepted_total: CounterHandle,
+    pub neg_risk_live_submit_ambiguous_total: CounterHandle,
     pub neg_risk_rollout_parity_mismatch_count: CounterHandle,
 }
 
@@ -327,6 +329,12 @@ impl Default for RuntimeMetrics {
             neg_risk_live_attempt_count: GaugeHandle::new("axiom_neg_risk_live_attempt_count"),
             neg_risk_live_gate_block_count: GaugeHandle::new(
                 "axiom_neg_risk_live_gate_block_count",
+            ),
+            neg_risk_live_submit_accepted_total: CounterHandle::new(
+                "axiom_neg_risk_live_submit_accepted_total",
+            ),
+            neg_risk_live_submit_ambiguous_total: CounterHandle::new(
+                "axiom_neg_risk_live_submit_ambiguous_total",
             ),
             neg_risk_rollout_parity_mismatch_count: CounterHandle::new(
                 "axiom_neg_risk_rollout_parity_mismatch_total",
@@ -543,6 +551,22 @@ impl RuntimeMetricsRecorder {
     pub fn record_neg_risk_live_gate_block_count(&self, count: f64) {
         self.registry
             .record_gauge(self.metrics.neg_risk_live_gate_block_count.sample(count));
+    }
+
+    pub fn increment_neg_risk_live_submit_accepted_total(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_live_submit_accepted_total
+                .increment(amount),
+        );
+    }
+
+    pub fn increment_neg_risk_live_submit_ambiguous_total(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_live_submit_ambiguous_total
+                .increment(amount),
+        );
     }
 
     pub fn increment_neg_risk_rollout_parity_mismatch_count(&self, amount: u64) {

@@ -7,9 +7,9 @@ use domain::{
     SignatureType, SignedOrderIdentity, SubmissionState, TokenId, VenueOrderState, WalletRoute,
 };
 use persistence::{
-    models::{InventoryBucketRow, JournalEntryInput, NewOrderRow},
+    models::{InventoryBucketRow, JournalEntryInput, NewOrderRow, PendingReconcileRow},
     run_migrations, ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo,
-    PersistenceError, ResolutionRepo,
+    PendingReconcileRepo, PersistenceError, ResolutionRepo,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -394,6 +394,153 @@ async fn persistence_repos_round_trip_runtime_foundation() {
     );
     assert_eq!(journal_row.journal_seq, 1);
     assert_eq!(journal.list_after(&db.pool, 0, 10).await.unwrap().len(), 1);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_migration_preserves_existing_live_artifacts_pending_reconcile_anchors_and_blocks_mode_drift(
+) {
+    let db = TestDatabase::new().await;
+
+    apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0006_phase3b_negrisk_live.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0007_phase3b_negrisk_live_followup.sql")
+        .await
+        .unwrap();
+    apply_migration_file(&db.pool, "0008_execution_attempt_audit_anchor.sql")
+        .await
+        .unwrap();
+
+    let pending_reconcile = PendingReconcileRow {
+        pending_ref: "pending-reconcile-0009-1".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-a".to_owned(),
+        reason: "awaiting_resolve".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-0009-1",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
+        }),
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind("attempt-live-0009-1")
+    .bind("request-bound:5:req-1:negrisk-submit-family:family-a")
+    .bind("snapshot-legacy")
+    .bind("live")
+    .bind(1_i32)
+    .bind("idem-legacy-0009-1")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    PendingReconcileRepo
+        .append(&db.pool, &pending_reconcile)
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_execution_artifacts (attempt_id, stream, payload)
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("attempt-live-0009-1")
+    .bind("live.execution")
+    .bind(json!({ "kind": "planned_order", "seq": 1 }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    apply_migration_file(&db.pool, "0009_phase3c_negrisk_live_submit_closure.sql")
+        .await
+        .unwrap();
+
+    assert!(table_exists(&db.pool, "live_submission_records").await);
+
+    let pending_rows = PendingReconcileRepo.list_all(&db.pool).await.unwrap();
+    assert_eq!(pending_rows, vec![pending_reconcile]);
+
+    let payloads: Vec<serde_json::Value> = sqlx::query_scalar(
+        r#"
+        SELECT payload
+        FROM live_execution_artifacts
+        WHERE attempt_id = $1 AND stream = $2
+        "#,
+    )
+    .bind("attempt-live-0009-1")
+    .bind("live.execution")
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(payloads, vec![json!({ "kind": "planned_order", "seq": 1 })]);
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_submission_records (
+            submission_ref,
+            attempt_id,
+            route,
+            scope,
+            provider,
+            state,
+            payload
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("submission-ref-0009-1")
+    .bind("attempt-live-0009-1")
+    .bind("neg-risk")
+    .bind("family-a")
+    .bind("venue-polymarket")
+    .bind("pending_reconcile")
+    .bind(json!({
+        "submission_ref": "submission-ref-0009-1",
+        "family_id": "family-a",
+        "route": "neg-risk",
+        "reason": "awaiting_resolve",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        UPDATE execution_attempts
+        SET execution_mode = 'shadow'
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-0009-1")
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("live submission records")
+            && message.contains("cannot change away from live"),
+        "unexpected database error: {message}"
+    );
 
     db.cleanup().await;
 }
@@ -807,4 +954,17 @@ async fn replaying_identical_signed_order_is_idempotent() {
     );
 
     db.cleanup().await;
+}
+
+fn migration_file(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../migrations")
+        .join(name)
+}
+
+async fn apply_migration_file(pool: &PgPool, file_name: &str) -> Result<(), sqlx::Error> {
+    let sql = std::fs::read_to_string(migration_file(file_name))
+        .expect("migration file should exist for migration tests");
+    sqlx::raw_sql(&sql).execute(pool).await?;
+    Ok(())
 }

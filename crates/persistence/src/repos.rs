@@ -10,9 +10,10 @@ use crate::{
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
-        LiveExecutionArtifactRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
-        NegRiskFamilyValidationRow, NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow,
-        RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        LiveExecutionArtifactRow, LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput,
+        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow, OrderRow,
+        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
+        SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1432,12 +1433,8 @@ impl ExecutionAttemptRepo {
 pub struct PendingReconcileRepo;
 
 impl PendingReconcileRepo {
-    pub async fn append(
-        &self,
-        pool: &PgPool,
-        row: &PendingReconcileRow,
-        payload: &Value,
-    ) -> Result<()> {
+    pub async fn append(&self, pool: &PgPool, row: &PendingReconcileRow) -> Result<()> {
+        validate_pending_reconcile_row(row)?;
         let result = sqlx::query(
             r#"
             INSERT INTO pending_reconcile_items (
@@ -1454,7 +1451,7 @@ impl PendingReconcileRepo {
         .bind(&row.scope_kind)
         .bind(&row.scope_id)
         .bind(&row.reason)
-        .bind(payload)
+        .bind(&row.payload)
         .execute(pool)
         .await;
 
@@ -1468,6 +1465,340 @@ impl PendingReconcileRepo {
             Err(err) => Err(err.into()),
         }
     }
+
+    pub async fn list_all(&self, pool: &PgPool) -> Result<Vec<PendingReconcileRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT pending_ref, scope_kind, scope_id, reason, payload
+            FROM pending_reconcile_items
+            ORDER BY created_at, pending_ref
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(map_pending_reconcile_row).collect()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LiveSubmissionRepo;
+
+impl LiveSubmissionRepo {
+    pub async fn append(&self, pool: &PgPool, row: LiveSubmissionRecordRow) -> Result<()> {
+        validate_live_submission_record_row(&row)?;
+        let attempt = sqlx::query(
+            r#"
+            SELECT route, scope
+            FROM execution_attempts
+            WHERE attempt_id = $1 AND execution_mode = $2
+            "#,
+        )
+        .bind(&row.attempt_id)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .fetch_optional(pool)
+        .await?;
+
+        let Some(attempt) = attempt else {
+            return Err(PersistenceError::LiveSubmissionRequiresLiveAttempt {
+                submission_ref: row.submission_ref,
+                attempt_id: row.attempt_id,
+            });
+        };
+
+        let attempt_route: String = attempt.try_get("route")?;
+        let attempt_scope: String = attempt.try_get("scope")?;
+        validate_live_submission_record_against_attempt(&row, &attempt_route, &attempt_scope)?;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO live_submission_records (
+                submission_ref,
+                attempt_id,
+                route,
+                scope,
+                provider,
+                state,
+                payload
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (submission_ref) DO NOTHING
+            "#,
+        )
+        .bind(&row.submission_ref)
+        .bind(&row.attempt_id)
+        .bind(&row.route)
+        .bind(&row.scope)
+        .bind(&row.provider)
+        .bind(&row.state)
+        .bind(&row.payload)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 1 {
+            return Ok(());
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
+            FROM live_submission_records
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
+            WHERE submission_ref = $1
+            "#,
+        )
+        .bind(&row.submission_ref)
+        .fetch_optional(pool)
+        .await?;
+
+        match existing {
+            Some(existing) => {
+                let existing = map_live_submission_record_row_with_attempt(existing)?;
+                if existing == row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingLiveSubmissionRecord {
+                        submission_ref: row.submission_ref,
+                    })
+                }
+            }
+            None => Err(PersistenceError::LiveSubmissionRequiresLiveAttempt {
+                submission_ref: row.submission_ref,
+                attempt_id: row.attempt_id,
+            }),
+        }
+    }
+
+    pub async fn list_for_attempt(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Vec<LiveSubmissionRecordRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
+            FROM live_submission_records
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
+            WHERE live_submission_records.attempt_id = $1
+            ORDER BY live_submission_records.created_at, live_submission_records.submission_ref
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_live_submission_record_row_with_attempt)
+            .collect()
+    }
+
+    pub async fn list_for_attempts(
+        &self,
+        pool: &PgPool,
+        attempt_ids: &[String],
+    ) -> Result<BTreeMap<String, Vec<LiveSubmissionRecordRow>>> {
+        if attempt_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                live_submission_records.submission_ref,
+                live_submission_records.attempt_id,
+                live_submission_records.route,
+                live_submission_records.scope,
+                live_submission_records.provider,
+                live_submission_records.state,
+                live_submission_records.payload,
+                execution_attempts.route AS attempt_route,
+                execution_attempts.scope AS attempt_scope
+            FROM live_submission_records
+            INNER JOIN execution_attempts
+                ON execution_attempts.attempt_id = live_submission_records.attempt_id
+            WHERE live_submission_records.attempt_id = ANY($1)
+            ORDER BY live_submission_records.attempt_id,
+                     live_submission_records.created_at,
+                     live_submission_records.submission_ref
+            "#,
+        )
+        .bind(attempt_ids)
+        .fetch_all(pool)
+        .await?;
+
+        let mut submissions = BTreeMap::<String, Vec<LiveSubmissionRecordRow>>::new();
+        for row in rows {
+            let submission = map_live_submission_record_row_with_attempt(row)?;
+            submissions
+                .entry(submission.attempt_id.clone())
+                .or_default()
+                .push(submission);
+        }
+
+        Ok(submissions)
+    }
+}
+
+const LIVE_SUBMISSION_ALLOWED_STATES: [&str; 2] = ["submitted", "pending_reconcile"];
+
+fn validate_pending_reconcile_row(row: &PendingReconcileRow) -> Result<()> {
+    if row.scope_kind != "family" {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.scope_kind",
+            row.scope_kind.clone(),
+        ));
+    }
+
+    let _submission_ref = required_anchor_string(
+        &row.payload,
+        "pending_reconcile_items.payload.submission_ref",
+    )?;
+    let family_id =
+        required_anchor_string(&row.payload, "pending_reconcile_items.payload.family_id")?;
+    let route = required_anchor_string(&row.payload, "pending_reconcile_items.payload.route")?;
+    let reason = required_anchor_string(&row.payload, "pending_reconcile_items.payload.reason")?;
+
+    if row.scope_id != family_id {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.scope_id",
+            row.scope_id.clone(),
+        ));
+    }
+
+    if row.reason != reason {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.reason",
+            row.reason.clone(),
+        ));
+    }
+
+    if route.is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.payload.route",
+            row.payload.to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_live_submission_record_row(row: &LiveSubmissionRecordRow) -> Result<()> {
+    let submission_ref = required_anchor_string(
+        &row.payload,
+        "live_submission_records.payload.submission_ref",
+    )?;
+    let family_id =
+        required_anchor_string(&row.payload, "live_submission_records.payload.family_id")?;
+    let route = required_anchor_string(&row.payload, "live_submission_records.payload.route")?;
+    let reason = required_anchor_string(&row.payload, "live_submission_records.payload.reason")?;
+
+    if submission_ref != row.submission_ref {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.payload.submission_ref",
+            submission_ref,
+        ));
+    }
+
+    if family_id != row.scope {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.scope",
+            row.scope.clone(),
+        ));
+    }
+
+    if route != row.route {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.route",
+            row.route.clone(),
+        ));
+    }
+
+    if row.provider.trim().is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.provider",
+            row.provider.clone(),
+        ));
+    }
+
+    if reason.is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.payload.reason",
+            row.payload.to_string(),
+        ));
+    }
+
+    if !LIVE_SUBMISSION_ALLOWED_STATES.contains(&row.state.as_str()) {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.state",
+            row.state.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_live_submission_record_against_attempt(
+    row: &LiveSubmissionRecordRow,
+    attempt_route: &str,
+    attempt_scope: &str,
+) -> Result<()> {
+    if row.route != attempt_route {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.route",
+            row.route.clone(),
+        ));
+    }
+
+    let expected_scope = if attempt_route == "neg-risk" {
+        attempt_scope
+            .strip_prefix("family:")
+            .unwrap_or(attempt_scope)
+    } else {
+        attempt_scope
+    };
+
+    if row.scope != expected_scope {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.scope",
+            row.scope.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn required_anchor_string<'a>(payload: &'a Value, field: &'static str) -> Result<&'a str> {
+    let key = field.rsplit('.').next().unwrap_or(field);
+    let value = payload
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| PersistenceError::invalid_value(field, payload.to_string()))?;
+
+    if value.trim().is_empty() {
+        return Err(PersistenceError::invalid_value(field, payload.to_string()));
+    }
+
+    Ok(value)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1845,6 +2176,18 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
     })
 }
 
+fn map_pending_reconcile_row(row: PgRow) -> Result<PendingReconcileRow> {
+    let row = PendingReconcileRow {
+        pending_ref: row.try_get("pending_ref")?,
+        scope_kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+        reason: row.try_get("reason")?,
+        payload: row.try_get("payload")?,
+    };
+    validate_pending_reconcile_row(&row)?;
+    Ok(row)
+}
+
 fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
     Ok(ExecutionAttemptRow {
         attempt_id: row.try_get("attempt_id")?,
@@ -1865,6 +2208,28 @@ fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRo
         stream: row.try_get("stream")?,
         payload: row.try_get("payload")?,
     })
+}
+
+fn map_live_submission_record_row(row: PgRow) -> Result<LiveSubmissionRecordRow> {
+    let row = LiveSubmissionRecordRow {
+        submission_ref: row.try_get("submission_ref")?,
+        attempt_id: row.try_get("attempt_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        provider: row.try_get("provider")?,
+        state: row.try_get("state")?,
+        payload: row.try_get("payload")?,
+    };
+    validate_live_submission_record_row(&row)?;
+    Ok(row)
+}
+
+fn map_live_submission_record_row_with_attempt(row: PgRow) -> Result<LiveSubmissionRecordRow> {
+    let attempt_route: String = row.try_get("attempt_route")?;
+    let attempt_scope: String = row.try_get("attempt_scope")?;
+    let row = map_live_submission_record_row(row)?;
+    validate_live_submission_record_against_attempt(&row, &attempt_route, &attempt_scope)?;
+    Ok(row)
 }
 
 fn map_neg_risk_family_validation_row(row: PgRow) -> Result<NegRiskFamilyValidationRow> {

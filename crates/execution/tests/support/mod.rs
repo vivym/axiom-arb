@@ -105,6 +105,8 @@ impl VenueSink for TruthfulShadowVenueSink {
         Ok(domain::ExecutionReceipt {
             attempt_id: attempt.attempt_id.clone(),
             outcome: domain::ExecutionAttemptOutcome::ShadowRecorded,
+            submission_ref: None,
+            pending_ref: None,
         })
     }
 }

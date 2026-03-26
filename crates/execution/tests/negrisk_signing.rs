@@ -6,6 +6,7 @@ use std::sync::{
 use domain::{ConditionId, EventFamilyId, TokenId};
 use domain::{ExecutionAttemptContext, ExecutionMode};
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
+use execution::providers::SignerProvider;
 use execution::signing::{OrderSigner, TestOrderSigner};
 use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
 use rust_decimal::Decimal;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 
 #[test]
 fn deterministic_test_signer_attaches_signed_identity_to_each_planned_member_order() {
-    let signed = TestOrderSigner.sign_family(&sample_family_plan()).unwrap();
+    let signed = OrderSigner::sign_family(&TestOrderSigner, &sample_family_plan()).unwrap();
     assert_eq!(signed.members.len(), 2);
     assert!(signed
         .members
@@ -29,8 +30,8 @@ fn deterministic_test_signer_canonicalizes_member_ordering_for_equivalent_family
         members.reverse();
     }
 
-    let signed_a = TestOrderSigner.sign_family(&plan_a).unwrap();
-    let signed_b = TestOrderSigner.sign_family(&plan_b).unwrap();
+    let signed_a = OrderSigner::sign_family(&TestOrderSigner, &plan_a).unwrap();
+    let signed_b = OrderSigner::sign_family(&TestOrderSigner, &plan_b).unwrap();
 
     assert_eq!(signed_a.plan_id, signed_b.plan_id);
     assert_eq!(signed_a.members, signed_b.members);
@@ -58,6 +59,15 @@ fn deterministic_test_signer_canonicalizes_member_ordering_for_equivalent_family
 }
 
 #[test]
+fn deterministic_test_signer_remains_usable_through_the_signer_provider_surface() {
+    let signer: Arc<dyn SignerProvider> = Arc::new(TestOrderSigner);
+    let signed = SignerProvider::sign_family(&*signer, &sample_family_plan()).unwrap();
+
+    assert_eq!(signed.plan_id, sample_family_plan().plan_id());
+    assert_eq!(signed.members.len(), 2);
+}
+
+#[test]
 fn live_sink_signs_negrisk_family_submit_plans_when_signer_and_hook_are_configured() {
     let called = Arc::new(AtomicUsize::new(0));
     let signer = Arc::new(SpySigner {
@@ -70,6 +80,11 @@ fn live_sink_signs_negrisk_family_submit_plans_when_signer_and_hook_are_configur
         .execute(&sample_family_plan(), &live_attempt())
         .unwrap();
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(receipt.submission_ref, None);
+    assert_eq!(
+        receipt.pending_ref.as_deref(),
+        Some("pending-hook:attempt-1")
+    );
     assert_eq!(called.load(Ordering::SeqCst), 1);
 }
 
@@ -268,7 +283,7 @@ impl OrderSigner for SpySigner {
         plan: &ExecutionPlan,
     ) -> Result<execution::signing::SignedFamilySubmission, execution::signing::SigningError> {
         self.called.fetch_add(1, Ordering::SeqCst);
-        self.inner.sign_family(plan)
+        OrderSigner::sign_family(&self.inner, plan)
     }
 }
 

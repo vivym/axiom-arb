@@ -1,9 +1,17 @@
 use domain::{ExecutionAttempt, RecoveryIntent};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingReconcilePayload {
+    pub submission_ref: String,
+    pub family_id: String,
+    pub route: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RecoveryOutputs {
     pub recovery_intent: Option<RecoveryIntent>,
-    pub pending_reconcile: Option<String>,
+    pub pending_reconcile: Option<PendingReconcilePayload>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

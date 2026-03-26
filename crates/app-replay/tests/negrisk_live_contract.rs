@@ -5,14 +5,17 @@ use std::{
 
 use domain::ExecutionMode;
 use persistence::{
-    models::{ExecutionAttemptRow, LiveExecutionArtifactRow},
-    run_migrations, ExecutionAttemptRepo, LiveArtifactRepo,
+    models::{ExecutionAttemptRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow},
+    run_migrations, ExecutionAttemptRepo, LiveArtifactRepo, LiveSubmissionRepo,
 };
 use serde_json::json;
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-use app_replay::{load_negrisk_live_attempt_artifacts, NegRiskLiveAttemptArtifacts};
+use app_replay::{
+    load_negrisk_live_attempt_artifacts, load_negrisk_live_submission_records,
+    NegRiskLiveAttemptArtifacts, NegRiskLiveSubmissionRecord,
+};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -88,12 +91,23 @@ fn sample_attempt(
     plan_id: &str,
     route: &str,
 ) -> ExecutionAttemptRow {
+    let scope = if route == "neg-risk" {
+        plan_id
+            .split("negrisk-submit-family:")
+            .nth(1)
+            .and_then(|suffix| suffix.split(':').next())
+            .map(|family_id| format!("family:{family_id}"))
+            .unwrap_or_else(|| "family:family-a".to_owned())
+    } else {
+        "default".to_owned()
+    };
+
     ExecutionAttemptRow {
         attempt_id: attempt_id.to_owned(),
         plan_id: plan_id.to_owned(),
         snapshot_id: "snapshot-7".to_owned(),
         route: route.to_owned(),
-        scope: "family:family-a".to_owned(),
+        scope,
         matched_rule_id: Some("rule-negrisk-live".to_owned()),
         execution_mode: mode,
         attempt_no: 1,
@@ -117,6 +131,23 @@ fn artifact(attempt_id: &str, stream: &str, kind: &str) -> LiveExecutionArtifact
         payload: json!({
             "kind": kind,
             "attempt_id": attempt_id,
+        }),
+    }
+}
+
+fn submission_record(attempt_id: &str, submission_ref: &str) -> LiveSubmissionRecordRow {
+    LiveSubmissionRecordRow {
+        submission_ref: submission_ref.to_owned(),
+        attempt_id: attempt_id.to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-c".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "pending_reconcile".to_owned(),
+        payload: json!({
+            "submission_ref": submission_ref,
+            "family_id": "family-c",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
         }),
     }
 }
@@ -445,6 +476,46 @@ async fn negrisk_live_contract_keeps_legacy_negrisk_attempts_replay_visible_afte
                 idempotency_key: "idem-legacy-live-contract-1".to_owned(),
             },
             artifacts: vec![artifact(attempt_id, "negrisk.live", "planned_order")],
+        }]
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn negrisk_live_contract_loads_live_submission_records_for_replay_resume_truth() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let attempt = sample_attempt(
+        "attempt-negrisk-live-submit-1",
+        ExecutionMode::Live,
+        &request_bound_plan_id(
+            "req-5",
+            "negrisk-submit-family:family-c:condition-3:token-3:0.4:5",
+        ),
+        "neg-risk",
+    );
+    ExecutionAttemptRepo
+        .append(&db.pool, &attempt)
+        .await
+        .unwrap();
+
+    let row = submission_record("attempt-negrisk-live-submit-1", "submission-ref-1");
+    LiveSubmissionRepo
+        .append(&db.pool, row.clone())
+        .await
+        .unwrap();
+
+    let rows = load_negrisk_live_submission_records(&db.pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        rows,
+        vec![NegRiskLiveSubmissionRecord {
+            attempt,
+            submissions: vec![row],
         }]
     );
 

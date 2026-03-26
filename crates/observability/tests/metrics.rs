@@ -78,6 +78,20 @@ fn runtime_metrics_expose_neg_risk_rollout_gate_counts() {
 }
 
 #[test]
+fn runtime_metrics_expose_negrisk_live_submit_closure_signals() {
+    let metrics = RuntimeMetrics::default();
+
+    assert_eq!(
+        metrics.neg_risk_live_submit_accepted_total.key(),
+        MetricKey::new("axiom_neg_risk_live_submit_accepted_total")
+    );
+    assert_eq!(
+        metrics.neg_risk_live_submit_ambiguous_total.key(),
+        MetricKey::new("axiom_neg_risk_live_submit_ambiguous_total")
+    );
+}
+
+#[test]
 fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
     let metrics = RuntimeMetrics::default();
 
@@ -140,6 +154,8 @@ fn runtime_metrics_recorder_updates_registry() {
     recorder.record_neg_risk_live_ready_family_count(4.0);
     recorder.record_neg_risk_live_attempt_count(1.0);
     recorder.record_neg_risk_live_gate_block_count(5.0);
+    recorder.increment_neg_risk_live_submit_accepted_total(2);
+    recorder.increment_neg_risk_live_submit_ambiguous_total(1);
     recorder.increment_neg_risk_rollout_parity_mismatch_count(2);
 
     let snapshot = observability.registry().snapshot();
@@ -197,6 +213,14 @@ fn runtime_metrics_recorder_updates_registry() {
     assert_eq!(
         snapshot.gauge(metrics.neg_risk_live_gate_block_count.key()),
         Some(5.0)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_live_submit_accepted_total.key()),
+        Some(2)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_live_submit_ambiguous_total.key()),
+        Some(1)
     );
     assert_eq!(
         snapshot.counter(metrics.neg_risk_rollout_parity_mismatch_count.key()),

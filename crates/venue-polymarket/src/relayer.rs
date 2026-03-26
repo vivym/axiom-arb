@@ -115,6 +115,38 @@ pub struct RelayerTransaction {
     pub metadata: Option<String>,
 }
 
+impl RelayerTransaction {
+    pub fn matches_pending_ref(&self, pending_ref: &str) -> bool {
+        let pending_ref = pending_ref.trim();
+        if pending_ref.is_empty() {
+            return false;
+        }
+
+        self.transaction_id == pending_ref || self.transaction_hash.as_deref() == Some(pending_ref)
+    }
+
+    pub fn state_is_pending_or_unknown(&self) -> bool {
+        matches!(
+            classify_transaction_state(self.state.as_deref()),
+            RelayerTransactionState::Pending | RelayerTransactionState::Unknown
+        )
+    }
+
+    pub fn state_is_confirmed(&self) -> bool {
+        matches!(
+            classify_transaction_state(self.state.as_deref()),
+            RelayerTransactionState::Confirmed
+        )
+    }
+
+    pub fn state_is_terminal(&self) -> bool {
+        matches!(
+            classify_transaction_state(self.state.as_deref()),
+            RelayerTransactionState::Terminal
+        )
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum RecentTransactionsResponse {
@@ -131,6 +163,14 @@ struct CurrentNonceResponse {
     nonce: Option<String>,
     #[serde(default)]
     current_nonce: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelayerTransactionState {
+    Pending,
+    Confirmed,
+    Terminal,
+    Unknown,
 }
 
 impl PolymarketRestClient {
@@ -184,6 +224,24 @@ fn current_nonce_from_response(response: CurrentNonceResponse) -> Result<String,
         .current_nonce
         .or(response.nonce)
         .ok_or(RestError::MissingField("nonce"))
+}
+
+fn classify_transaction_state(state: Option<&str>) -> RelayerTransactionState {
+    match state.map(|value| value.trim().to_ascii_uppercase()) {
+        Some(ref value)
+            if matches!(
+                value.as_str(),
+                "STATE_NEW" | "STATE_EXECUTED" | "STATE_MINED"
+            ) =>
+        {
+            RelayerTransactionState::Pending
+        }
+        Some(ref value) if value == "STATE_CONFIRMED" => RelayerTransactionState::Confirmed,
+        Some(ref value) if matches!(value.as_str(), "STATE_INVALID" | "STATE_FAILED") => {
+            RelayerTransactionState::Terminal
+        }
+        Some(_) | None => RelayerTransactionState::Unknown,
+    }
 }
 
 fn parse_created_at(created_at: &str) -> Option<DateTime<Utc>> {

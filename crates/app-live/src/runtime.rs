@@ -6,9 +6,16 @@ use std::{
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
+use persistence::{
+    connect_pool_from_env,
+    models::{
+        ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow, RuntimeProgressRow,
+    },
+    ExecutionAttemptRepo, LiveSubmissionRepo, PendingReconcileRepo, RuntimeProgressRepo,
+};
 use state::{
-    ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
-    StateStore,
+    ApplyError, ApplyResult, PendingReconcileAnchor, PublishedSnapshot, ReconcileReport,
+    RemoteSnapshot, StateApplier, StateStore,
 };
 use tracing::field;
 
@@ -16,6 +23,7 @@ use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
+use crate::negrisk_live::NegRiskLiveExecutionRecord;
 use crate::supervisor::{AppSupervisor, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +93,15 @@ pub struct AppRunResult {
     pub summary: SupervisorSummary,
 }
 
+#[derive(Debug, Clone)]
+struct DurableLiveStartupState {
+    last_journal_seq: i64,
+    last_state_version: u64,
+    published_snapshot_id: Option<String>,
+    pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+}
+
 impl AppRuntime {
     pub fn new(app_mode: AppRuntimeMode) -> Self {
         Self::new_instrumented(app_mode, AppInstrumentation::disabled())
@@ -139,6 +156,19 @@ impl AppRuntime {
         self.store.pending_reconcile_count()
     }
 
+    pub fn restore_committed_anchor(
+        &mut self,
+        committed_state_version: u64,
+        committed_journal_seq: i64,
+    ) {
+        self.store
+            .restore_committed_anchor(committed_state_version, committed_journal_seq);
+    }
+
+    pub fn restore_pending_reconcile_anchor(&mut self, anchor: PendingReconcileAnchor) {
+        self.store.restore_pending_reconcile_anchor(anchor);
+    }
+
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
         let span = tracing::info_span!(
             span_names::APP_RUNTIME_RECONCILE,
@@ -153,6 +183,9 @@ impl AppRuntime {
             for attention in &report.attention {
                 self.instrumentation.record_reconcile_attention(attention);
             }
+        }
+        if report.succeeded {
+            self.store.clear_pending_reconcile_after_restore();
         }
         self.anchor_baseline_if_ready(report.succeeded);
         let pending_reconcile_count = self.store.pending_reconcile_count();
@@ -331,6 +364,63 @@ where
     supervisor.run_bootstrap()
 }
 
+pub fn run_live_from_durable_store_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
+    run_live_from_durable_store_with_neg_risk_live_targets_instrumented(
+        source,
+        instrumentation,
+        BTreeMap::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+    )
+}
+
+pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
+    let durable_state = load_durable_live_startup_state()?;
+    let mut supervisor = match instrumentation.recorder() {
+        Some(recorder) => {
+            AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
+        }
+        None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
+    };
+    supervisor.seed_runtime_progress(
+        durable_state.last_journal_seq,
+        durable_state.last_state_version,
+        durable_state.published_snapshot_id.as_deref(),
+    );
+    supervisor.seed_committed_state_version(durable_state.last_state_version);
+    supervisor.seed_pending_reconcile_count(durable_state.pending_reconcile_anchors.len());
+    for anchor in durable_state.pending_reconcile_anchors {
+        supervisor.seed_pending_reconcile_anchor(anchor);
+    }
+    for record in durable_state.live_execution_records {
+        supervisor.seed_neg_risk_live_execution_record(record);
+    }
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    for family_id in neg_risk_live_approved_families {
+        supervisor.seed_neg_risk_live_approval(&family_id);
+    }
+    for family_id in neg_risk_live_ready_families {
+        supervisor.seed_neg_risk_live_ready_family(&family_id);
+    }
+
+    supervisor.run_startup().map_err(Into::into)
+}
+
 pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
 where
     S: BootstrapSource,
@@ -360,5 +450,226 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
         ApplyResult::Duplicate { .. } => "duplicate",
         ApplyResult::Deferred { .. } => "deferred",
         ApplyResult::ReconcileRequired { .. } => "reconcile_required",
+    }
+}
+
+fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn std::error::Error>>
+{
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        let progress = RuntimeProgressRepo.current(&pool).await?;
+        let attempts = ExecutionAttemptRepo.list_live_attempts(&pool).await?;
+        let submissions_by_attempt = LiveSubmissionRepo
+            .list_for_attempts(
+                &pool,
+                &attempts
+                    .iter()
+                    .map(|attempt| attempt.attempt_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        let pending_rows = PendingReconcileRepo.list_all(&pool).await?;
+        let pending_reconcile_anchors = pending_rows
+            .iter()
+            .map(pending_reconcile_anchor_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        let live_execution_records =
+            durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
+        let (last_journal_seq, last_state_version, published_snapshot_id) =
+            durable_progress_anchor(
+                progress,
+                !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty(),
+            )?;
+
+        Ok(DurableLiveStartupState {
+            last_journal_seq,
+            last_state_version,
+            published_snapshot_id,
+            pending_reconcile_anchors,
+            live_execution_records,
+        })
+    })
+}
+
+fn durable_live_execution_records(
+    attempts: Vec<ExecutionAttemptRow>,
+    submissions_by_attempt: BTreeMap<String, Vec<LiveSubmissionRecordRow>>,
+    pending_rows: &[PendingReconcileRow],
+) -> Result<Vec<NegRiskLiveExecutionRecord>, Box<dyn std::error::Error>> {
+    let pending_by_submission_ref = pending_rows
+        .iter()
+        .map(|row| {
+            let submission_ref =
+                payload_string(&row.payload, "submission_ref").map_err(boxed_error)?;
+            Ok((submission_ref, row.pending_ref.clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
+
+    attempts
+        .into_iter()
+        .map(|attempt| {
+            let attempt_no = u32::try_from(attempt.attempt_no).map_err(|_| {
+                boxed_error(format!(
+                    "durable live attempt {} has negative attempt_no {}",
+                    attempt.attempt_id, attempt.attempt_no
+                ))
+            })?;
+            let submissions = submissions_by_attempt
+                .get(&attempt.attempt_id)
+                .cloned()
+                .unwrap_or_default();
+            if submissions.is_empty() {
+                return Err(boxed_error(format!(
+                    "missing durable live submission record for attempt {}",
+                    attempt.attempt_id
+                )));
+            }
+            let submission_ref = submissions.first().map(|row| row.submission_ref.clone());
+            let pending_ref = submission_ref
+                .as_deref()
+                .and_then(|submission_ref| pending_by_submission_ref.get(submission_ref))
+                .cloned();
+
+            Ok(NegRiskLiveExecutionRecord {
+                attempt_id: attempt.attempt_id,
+                plan_id: attempt.plan_id,
+                snapshot_id: attempt.snapshot_id,
+                execution_mode: attempt.execution_mode,
+                attempt_no,
+                idempotency_key: attempt.idempotency_key,
+                route: attempt.route,
+                scope: attempt.scope,
+                matched_rule_id: attempt.matched_rule_id,
+                submission_ref,
+                pending_ref,
+                artifacts: Vec::new(),
+                order_requests: submissions.into_iter().map(|row| row.payload).collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()
+}
+
+fn durable_progress_anchor(
+    progress: Option<RuntimeProgressRow>,
+    has_follow_up_work: bool,
+) -> Result<(i64, u64, Option<String>), Box<dyn std::error::Error>> {
+    match progress {
+        Some(progress) => Ok((
+            progress.last_journal_seq,
+            u64::try_from(progress.last_state_version).map_err(|_| {
+                boxed_error(format!(
+                    "durable runtime progress state version {} is negative",
+                    progress.last_state_version
+                ))
+            })?,
+            progress.last_snapshot_id,
+        )),
+        None if has_follow_up_work => Err(boxed_error(
+            "durable runtime progress is required when live follow-up work exists",
+        )),
+        None => Ok((0, 0, Some("snapshot-0".to_owned()))),
+    }
+}
+
+fn pending_reconcile_anchor_from_row(
+    row: &PendingReconcileRow,
+) -> Result<PendingReconcileAnchor, Box<dyn std::error::Error>> {
+    Ok(PendingReconcileAnchor::new(
+        row.pending_ref.clone(),
+        payload_string(&row.payload, "submission_ref").map_err(boxed_error)?,
+        payload_string(&row.payload, "family_id").unwrap_or_else(|_| row.scope_id.clone()),
+        payload_string(&row.payload, "route").unwrap_or_else(|_| "neg-risk".to_owned()),
+        payload_string(&row.payload, "reason").unwrap_or_else(|_| row.reason.clone()),
+    ))
+}
+
+fn payload_string(payload: &serde_json::Value, key: &str) -> Result<String, String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("missing durable payload field {key}"))
+}
+
+fn boxed_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use domain::ExecutionMode;
+    use persistence::models::{ExecutionAttemptRow, RuntimeProgressRow};
+
+    use super::{durable_live_execution_records, durable_progress_anchor};
+
+    #[test]
+    fn durable_live_attempt_requires_submission_record() {
+        let err = durable_live_execution_records(
+            vec![ExecutionAttemptRow {
+                attempt_id: "attempt-live-1".to_owned(),
+                plan_id: "negrisk-submit-family:family-a".to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family-a".to_owned(),
+                matched_rule_id: Some("family-a-live".to_owned()),
+                execution_mode: ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: "idem-attempt-live-1".to_owned(),
+            }],
+            BTreeMap::new(),
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("missing durable live submission record"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn durable_follow_up_work_requires_runtime_progress_anchor() {
+        let err = durable_progress_anchor(None, true).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("durable runtime progress is required"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn durable_progress_anchor_allows_empty_baseline_without_follow_up_work() {
+        let (last_journal_seq, last_state_version, snapshot_id) =
+            durable_progress_anchor(None, false).unwrap();
+
+        assert_eq!(last_journal_seq, 0);
+        assert_eq!(last_state_version, 0);
+        assert_eq!(snapshot_id.as_deref(), Some("snapshot-0"));
+    }
+
+    #[test]
+    fn durable_progress_anchor_converts_persisted_runtime_progress() {
+        let (last_journal_seq, last_state_version, snapshot_id) = durable_progress_anchor(
+            Some(RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+            }),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(last_journal_seq, 41);
+        assert_eq!(last_state_version, 7);
+        assert_eq!(snapshot_id.as_deref(), Some("snapshot-7"));
     }
 }

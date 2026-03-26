@@ -1,6 +1,6 @@
 use chrono::Utc;
 use domain::ExternalFactEvent;
-use state::{ApplyResult, StateApplier, StateFactInput, StateStore};
+use state::{ApplyResult, StateApplier, StateConfidence, StateFactInput, StateStore};
 
 #[test]
 fn duplicate_fact_returns_duplicate_anchor_without_mutating_state_version() {
@@ -145,6 +145,124 @@ fn consumed_journal_seq_cannot_be_reused_after_reconcile_required() {
         err.to_string(),
         "journal sequence 19 is already bound to a different fact"
     );
+}
+
+#[test]
+fn live_submit_fact_enters_reconcile_first_posture_without_advancing_state_version() {
+    let mut store = StateStore::new();
+    let mut applier = StateApplier::new(&mut store);
+
+    let result = applier
+        .apply(
+            19,
+            ExternalFactEvent::negrisk_live_submit_observed(
+                "session-live",
+                "evt-1",
+                "attempt-family-a-1",
+                "family-a",
+                "submission-family-a-1",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        ApplyResult::ReconcileRequired {
+            journal_seq: 19,
+            pending_ref: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(store.state_version(), 0);
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.mode(), domain::RuntimeMode::Reconciling);
+    assert!(store.first_reconcile_succeeded());
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+    let anchors = store.pending_reconcile_anchors();
+    assert_eq!(anchors.len(), 1);
+    assert_eq!(anchors[0].submission_ref, "submission-family-a-1");
+    assert_eq!(anchors[0].family_id, "family-a");
+    assert_eq!(anchors[0].route, "negrisk_live_submit");
+    assert_eq!(anchors[0].reason, "live submit observed");
+    assert!(!store.allows_automatic_repair());
+}
+
+#[test]
+fn terminal_live_reconcile_clears_pending_anchor_and_restores_healthy_posture() {
+    let mut store = StateStore::new();
+    {
+        let mut applier = StateApplier::new(&mut store);
+        applier
+            .apply(
+                19,
+                ExternalFactEvent::negrisk_live_submit_observed(
+                    "session-live",
+                    "evt-1",
+                    "attempt-family-a-1",
+                    "family-a",
+                    "submission-family-a-1",
+                    Utc::now(),
+                ),
+            )
+            .unwrap();
+    }
+    let pending_ref = store.pending_reconcile_anchors()[0].pending_ref.clone();
+    let mut applier = StateApplier::new(&mut store);
+    let result = applier
+        .apply(
+            20,
+            ExternalFactEvent::negrisk_live_reconcile_observed(
+                "session-live",
+                "evt-2",
+                pending_ref,
+                "family-a",
+                true,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        ApplyResult::Applied {
+            journal_seq: 20,
+            state_version: 1,
+            ..
+        }
+    ));
+    assert_eq!(store.pending_reconcile_count(), 0);
+    assert_eq!(store.mode(), domain::RuntimeMode::Healthy);
+    assert_eq!(store.scope_confidence("family-a"), StateConfidence::Certain);
+    assert!(store.allows_automatic_repair());
+}
+
+#[test]
+fn state_confidence_reports_scope_uncertainty_from_live_submit_anchor() {
+    let mut store = StateStore::new();
+
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::negrisk_live_submit_observed(
+                "session-live",
+                "evt-1",
+                "attempt-family-a-1",
+                "family-a",
+                "submission-family-a-1",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(
+        store.state_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+    assert_eq!(store.state_confidence("family-b"), StateConfidence::Certain);
 }
 
 fn sample_out_of_order_user_trade() -> StateFactInput {

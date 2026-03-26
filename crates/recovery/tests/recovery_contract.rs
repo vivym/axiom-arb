@@ -1,5 +1,8 @@
 use domain::ExecutionAttempt;
-use recovery::{RecoveryCoordinator, RecoveryIntent, RecoveryOutputs, RecoveryScopeLock};
+use recovery::{
+    PendingReconcilePayload, RecoveryCoordinator, RecoveryIntent, RecoveryOutputs,
+    RecoveryScopeLock,
+};
 
 #[test]
 fn recovery_scope_lock_blocks_nested_child_scopes_without_cross_variant_aliasing() {
@@ -53,6 +56,21 @@ fn stable_business_plan_id_is_preserved_in_recovery_scope() {
             pending_reconcile: None,
         }
     );
+}
+
+#[test]
+fn pending_reconcile_payload_carries_persistence_fields() {
+    let payload = PendingReconcilePayload {
+        submission_ref: "submission-1".to_owned(),
+        family_id: "family-1".to_owned(),
+        route: "execution_path:redeem-resolved:condition-12".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+    };
+
+    assert_eq!(payload.submission_ref, "submission-1");
+    assert_eq!(payload.family_id, "family-1");
+    assert_eq!(payload.route, "execution_path:redeem-resolved:condition-12");
+    assert_eq!(payload.reason, "ambiguous_attempt");
 }
 
 fn sample_ambiguous_attempt() -> ExecutionAttempt {

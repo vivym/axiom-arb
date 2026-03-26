@@ -5,6 +5,7 @@ pub mod negrisk;
 pub mod orchestrator;
 pub mod orders;
 pub mod plans;
+pub mod providers;
 pub mod signing;
 pub mod sink;
 
@@ -16,6 +17,11 @@ pub use domain::{
 pub use instrumentation::ExecutionInstrumentation;
 pub use orchestrator::{
     ExecutionAttemptRecord, ExecutionError, ExecutionOrchestrator, ExecutionPlanningInput,
+};
+pub use providers::{
+    LiveSubmissionRecord, LiveSubmitOutcome, PendingReconcileWork, ReconcileOutcome,
+    ReconcileProvider, ReconcileProviderError, SignerProvider, SubmitProviderError,
+    VenueExecutionProvider,
 };
 pub use signing::{OrderSigner, SignedFamilySubmission, SigningError, TestOrderSigner};
 pub use sink::{

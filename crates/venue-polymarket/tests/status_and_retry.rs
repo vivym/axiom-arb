@@ -8,7 +8,7 @@ use support::{
 };
 use venue_polymarket::{
     map_venue_status, AuthError, BusinessErrorKind, HttpRetryContext, PolymarketRestClient,
-    RelayerTransactionType, RestError, RetryClass, RetryDecision,
+    RelayerTransaction, RelayerTransactionType, RestError, RetryClass, RetryDecision,
 };
 
 #[test]
@@ -299,6 +299,21 @@ async fn fetch_current_nonce_uses_documented_query_and_relayer_auth() {
     assert!(request.contains("relayer-api-key: relayer-key-1"));
     assert!(request.contains("relayer-api-key-address: 0x6666666666666666666666666666666666666666"));
     assert_eq!(nonce, "31");
+}
+
+#[test]
+fn relayer_transaction_pending_or_unknown_states_are_treated_as_pending() {
+    let pending: RelayerTransaction =
+        serde_json::from_str(r#"{"transactionID":"tx-2","state":"STATE_EXECUTED","type":"SAFE"}"#)
+            .expect("pending tx should deserialize");
+    let unknown: RelayerTransaction =
+        serde_json::from_str(r#"{"transactionID":"tx-3","state":"STATE_MYSTERY","type":"SAFE"}"#)
+            .expect("unknown tx should deserialize");
+
+    assert!(pending.state_is_pending_or_unknown());
+    assert!(unknown.state_is_pending_or_unknown());
+    assert!(!pending.state_is_confirmed());
+    assert!(!unknown.state_is_confirmed());
 }
 
 fn sample_signed_order() -> SignedOrderIdentity {

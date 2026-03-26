@@ -92,16 +92,43 @@ impl<'a> StateApplier<'a> {
 
         match fact.apply_hint() {
             FactApplyHint::None => {}
-            FactApplyHint::ReconcileRequired {
-                pending_ref,
-                reason,
-            } => {
-                self.store.record_pending_ref(pending_ref.clone());
+            FactApplyHint::PendingReconcile { anchor } => {
+                self.store.record_pending_reconcile(anchor.clone());
+                self.store.mark_reconcile_required();
 
                 return Ok(ApplyResult::ReconcileRequired {
                     journal_seq,
+                    pending_ref: Some(PendingRef(anchor.pending_ref.clone())),
+                    reason: anchor.reason.clone(),
+                });
+            }
+            FactApplyHint::LiveReconcileObserved {
+                pending_ref,
+                terminal,
+            } => {
+                if *terminal {
+                    let _ = self.store.clear_pending_reconcile(pending_ref);
+                    let state_version = self.store.record_applied_fact(journal_seq, fact_key);
+                    return Ok(ApplyResult::Applied {
+                        journal_seq,
+                        state_version,
+                        dirty_set: DirtySet::new([
+                            DirtyDomain::Runtime,
+                            DirtyDomain::Orders,
+                            DirtyDomain::Inventory,
+                            DirtyDomain::Approvals,
+                            DirtyDomain::Resolution,
+                            DirtyDomain::Relayer,
+                            DirtyDomain::NegRiskFamilies,
+                        ]),
+                    });
+                }
+
+                self.store.mark_reconcile_required();
+                return Ok(ApplyResult::ReconcileRequired {
+                    journal_seq,
                     pending_ref: Some(pending_ref.clone()),
-                    reason: (*reason).to_owned(),
+                    reason: "live reconcile remains pending".to_owned(),
                 });
             }
         }

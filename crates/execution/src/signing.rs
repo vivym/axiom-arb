@@ -7,6 +7,9 @@ pub enum SigningError {
     UnsupportedPlan { plan_id: String },
 }
 
+/// Compatibility signer surface used by existing Phase 3b wiring and tests.
+/// Phase 3c execution consumes the provider-facing `SignerProvider` trait, which
+/// is implemented for every `OrderSigner`.
 pub trait OrderSigner: Send + Sync {
     fn sign_family(&self, plan: &ExecutionPlan) -> Result<SignedFamilySubmission, SigningError>;
 }

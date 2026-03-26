@@ -5,9 +5,12 @@ use std::{
 
 use domain::ExecutionMode;
 use persistence::{
-    models::{ExecutionAttemptRow, PendingReconcileRow, ShadowExecutionArtifactRow},
-    run_migrations, ExecutionAttemptRepo, PendingReconcileRepo, PersistenceError,
-    RuntimeProgressRepo, ShadowArtifactRepo,
+    models::{
+        ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow,
+        ShadowExecutionArtifactRow,
+    },
+    run_migrations, ExecutionAttemptRepo, LiveSubmissionRepo, PendingReconcileRepo,
+    PersistenceError, RuntimeProgressRepo, ShadowArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -115,6 +118,32 @@ fn sample_pending_reconcile(pending_ref: &str) -> PendingReconcileRow {
         scope_kind: "family".to_owned(),
         scope_id: "family-1".to_owned(),
         reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-1",
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    }
+}
+
+fn sample_live_submission_record(
+    attempt_id: &str,
+    submission_ref: &str,
+) -> LiveSubmissionRecordRow {
+    LiveSubmissionRecordRow {
+        submission_ref: submission_ref.to_owned(),
+        attempt_id: attempt_id.to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-1".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "pending_reconcile".to_owned(),
+        payload: json!({
+            "submission_ref": submission_ref,
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
     }
 }
 
@@ -351,7 +380,8 @@ async fn execution_attempt_table_rejects_mode_change_when_live_artifacts_exist()
 
     let message = err.to_string();
     assert!(
-        message.contains("execution_attempts with live artifacts cannot change away from live"),
+        message.contains("live artifacts or live submission records")
+            && message.contains("cannot change away from live"),
         "unexpected database error: {message}"
     );
 
@@ -650,21 +680,10 @@ async fn pending_reconcile_append_rejects_duplicate_refs() {
     run_migrations(&db.pool).await.unwrap();
 
     let row = sample_pending_reconcile("pending-1");
-    PendingReconcileRepo
-        .append(
-            &db.pool,
-            &row,
-            &json!({ "attempt_id": "attempt-shadow-dup" }),
-        )
-        .await
-        .unwrap();
+    PendingReconcileRepo.append(&db.pool, &row).await.unwrap();
 
     let err = PendingReconcileRepo
-        .append(
-            &db.pool,
-            &row,
-            &json!({ "attempt_id": "attempt-shadow-dup" }),
-        )
+        .append(&db.pool, &row)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -672,6 +691,198 @@ async fn pending_reconcile_append_rejects_duplicate_refs() {
         PersistenceError::DuplicatePendingReconcile { ref pending_ref }
         if pending_ref == "pending-1"
     ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_round_trips_resume_payload_fields() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_pending_reconcile("pending-payload-1");
+    PendingReconcileRepo.append(&db.pool, &row).await.unwrap();
+
+    let rows = PendingReconcileRepo.list_all(&db.pool).await.unwrap();
+    assert_eq!(rows, vec![row]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_append_rejects_malformed_payload_missing_submission_ref() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-bad-1".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-1".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.submission_ref"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_append_rejects_blank_submission_refs() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-blank-submission-ref".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-1".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "submission_ref": "   ",
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.submission_ref"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_append_rejects_blank_family_scope_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-blank-family-id".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "   ".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-1",
+            "family_id": "   ",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.family_id"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_list_all_rejects_malformed_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO pending_reconcile_items (
+            pending_ref,
+            scope_kind,
+            scope_id,
+            reason,
+            payload
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind("pending-read-invalid-1")
+    .bind("family")
+    .bind("family-1")
+    .bind("ambiguous_attempt")
+    .bind(json!({
+        "submission_ref": "submission-ref-1",
+        "family_id": "family-1",
+        "route": "   ",
+        "reason": "ambiguous_attempt",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = PendingReconcileRepo.list_all(&db.pool).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { kind, .. }
+        if kind == "pending_reconcile_items.payload.route"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_reject_mode_drift_resume_anchors() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let attempt = sample_attempt("attempt-live-resume-1", ExecutionMode::Live);
+    ExecutionAttemptRepo
+        .append(&db.pool, &attempt)
+        .await
+        .unwrap();
+
+    LiveSubmissionRepo
+        .append(
+            &db.pool,
+            sample_live_submission_record("attempt-live-resume-1", "submission-ref-1"),
+        )
+        .await
+        .unwrap();
+
+    let err = sqlx::query(
+        r#"
+        UPDATE execution_attempts
+        SET execution_mode = 'shadow'
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-resume-1")
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    let message = err.to_string();
+    assert!(
+        message.contains("live artifacts or live submission records")
+            && message.contains("cannot change away from live"),
+        "unexpected database error: {message}"
+    );
 
     db.cleanup().await;
 }

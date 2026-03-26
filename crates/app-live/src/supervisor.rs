@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::Utc;
 use domain::{ExecutionMode, RuntimeMode};
 use observability::{field_keys, span_names, RuntimeMetricsRecorder};
-use state::{ApplyResult, PublishedSnapshot, RemoteSnapshot};
+use state::{ApplyResult, PendingReconcileAnchor, PublishedSnapshot, RemoteSnapshot};
 use tracing::field;
 
 use crate::{
@@ -100,6 +101,7 @@ struct RuntimeSeed {
     published_snapshot_id: Option<String>,
     committed_state_version: Option<u64>,
     pending_reconcile_count: Option<usize>,
+    pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
 }
@@ -167,7 +169,11 @@ impl AppSupervisor {
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
-        if self.runtime.bootstrap_status() != BootstrapStatus::Ready {
+        let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
+            && self.has_seeded_startup_state();
+        if restoring_seeded_startup {
+            self.restore_seeded_startup_state()?;
+        } else if self.runtime.bootstrap_status() != BootstrapStatus::Ready {
             let source = StaticSnapshotSource::new(self.bootstrap_snapshot.clone());
             self.runtime.bootstrap_once(&source);
         }
@@ -175,9 +181,28 @@ impl AppSupervisor {
         let allow_operator_synthesis = self.allow_operator_rollout_evidence_synthesis();
         self.publish_current_snapshot(allow_operator_synthesis);
         self.refresh_neg_risk_live_execution_records(allow_operator_synthesis)?;
+        if restoring_seeded_startup {
+            self.validate_seeded_startup_restore()?;
+        }
         let _ = self.flush_dispatch_instrumented();
 
         Ok(self.summary())
+    }
+
+    pub fn run_startup(self) -> Result<AppRunResult, SupervisorError> {
+        let mut supervisor = self;
+        let summary = supervisor.run_once()?;
+
+        Ok(AppRunResult {
+            runtime: supervisor.runtime,
+            report: state::ReconcileReport {
+                succeeded: true,
+                promoted_from_bootstrap: false,
+                remote_applied: false,
+                attention: Vec::new(),
+            },
+            summary,
+        })
     }
 
     pub fn run_bootstrap(self) -> AppRunResult {
@@ -230,6 +255,10 @@ impl AppSupervisor {
 
     pub fn seed_pending_reconcile_count(&mut self, pending_reconcile_count: usize) {
         self.seed.pending_reconcile_count = Some(pending_reconcile_count);
+    }
+
+    pub fn seed_pending_reconcile_anchor(&mut self, anchor: PendingReconcileAnchor) {
+        self.seed.pending_reconcile_anchors.push(anchor);
     }
 
     pub fn seed_neg_risk_rollout_evidence(&mut self, evidence: NegRiskRolloutEvidence) {
@@ -521,12 +550,25 @@ impl AppSupervisor {
     }
 
     fn allow_operator_rollout_evidence_synthesis(&self) -> bool {
-        self.seed.last_journal_seq.is_none()
+        let pristine_bootstrap = self.seed.last_journal_seq.is_none()
             && self.seed.committed_state_version.is_none()
             && self.seed.published_snapshot_id.is_none()
+            && self.seed.pending_reconcile_count.is_none()
+            && self.seed.pending_reconcile_anchors.is_empty()
+            && self.seed.neg_risk_rollout_evidence.is_none()
+            && self.seed.neg_risk_live_execution_records.is_empty()
             && self.committed_log.is_empty()
             && self.runtime.last_journal_seq() == Some(0)
-            && self.runtime.state_version() == 0
+            && self.runtime.state_version() == 0;
+        if pristine_bootstrap {
+            return true;
+        }
+
+        self.has_seeded_startup_state()
+            && self.runtime.pending_reconcile_count() == 0
+            && self.neg_risk_live_execution_records.is_empty()
+            && self.seed.pending_reconcile_anchors.is_empty()
+            && self.seed.neg_risk_rollout_evidence.is_none()
     }
 
     fn refresh_neg_risk_live_execution_records(
@@ -550,7 +592,7 @@ impl AppSupervisor {
             return Ok(());
         }
 
-        self.neg_risk_live_execution_records = eligible_live_records(
+        let records = eligible_live_records(
             snapshot_id,
             &self.neg_risk_live_targets,
             &self.neg_risk_live_approved_families,
@@ -558,12 +600,66 @@ impl AppSupervisor {
             self.metrics_recorder.clone(),
         )
         .map_err(|err| SupervisorError::new(err.to_string()))?;
+        let applied_record_count = self.apply_live_submit_facts(&records)?;
+        self.neg_risk_live_execution_records =
+            records.into_iter().take(applied_record_count).collect();
         self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {
             NegRiskLiveStateSource::None
         } else {
             NegRiskLiveStateSource::SyntheticBootstrap
         };
         Ok(())
+    }
+
+    fn apply_live_submit_facts(
+        &mut self,
+        records: &[NegRiskLiveExecutionRecord],
+    ) -> Result<usize, SupervisorError> {
+        let mut next_journal_seq = self.runtime.last_journal_seq().unwrap_or(0);
+        let mut applied_record_count = 0usize;
+
+        for record in records {
+            let submission_ref = record
+                .submission_ref
+                .as_deref()
+                .or(record.pending_ref.as_deref());
+            let Some(submission_ref) = submission_ref else {
+                continue;
+            };
+            applied_record_count += 1;
+            next_journal_seq += 1;
+            let input = InputTaskEvent::new(
+                next_journal_seq,
+                domain::ExternalFactEvent::negrisk_live_submit_observed(
+                    "app-live-bootstrap",
+                    format!("live-submit-{}", record.attempt_id),
+                    record.attempt_id.clone(),
+                    record.scope.clone(),
+                    submission_ref.to_owned(),
+                    Utc::now(),
+                ),
+            );
+            match self.runtime.apply_input(input.clone())? {
+                ApplyResult::Applied {
+                    state_version,
+                    dirty_set,
+                    ..
+                } => {
+                    self.dispatcher.record_apply(state_version, dirty_set);
+                    self.publish_current_snapshot(false);
+                }
+                ApplyResult::Duplicate { .. }
+                | ApplyResult::Deferred { .. }
+                | ApplyResult::ReconcileRequired { .. } => {}
+            }
+            self.record_committed_input(input);
+
+            if self.runtime.pending_reconcile_count() > 0 {
+                break;
+            }
+        }
+
+        Ok(applied_record_count)
     }
 
     fn retain_current_neg_risk_live_execution_records(&mut self) {
@@ -678,6 +774,69 @@ impl AppSupervisor {
                     && self.neg_risk_live_approved_families.contains(*family_id)
             })
             .count()
+    }
+
+    fn has_seeded_startup_state(&self) -> bool {
+        self.seed.last_journal_seq.is_some()
+            || self.seed.committed_state_version.is_some()
+            || self.seed.published_snapshot_id.is_some()
+            || self.seed.pending_reconcile_count.is_some()
+            || !self.seed.pending_reconcile_anchors.is_empty()
+            || !self.seed.neg_risk_live_execution_records.is_empty()
+    }
+
+    fn validate_seeded_startup_restore(&self) -> Result<(), SupervisorError> {
+        if self.seed.neg_risk_rollout_evidence.is_some() {
+            self.validate_rollout_evidence_anchor()?;
+        }
+
+        if !self.seed.neg_risk_live_execution_records.is_empty() {
+            self.validate_neg_risk_live_execution_anchor()?;
+        }
+
+        Ok(())
+    }
+
+    fn restore_seeded_startup_state(&mut self) -> Result<(), SupervisorError> {
+        self.runtime = AppRuntime::new_instrumented(
+            self.runtime.app_mode(),
+            runtime_instrumentation(self.metrics_recorder.as_ref()),
+        );
+        self.neg_risk_rollout_evidence = None;
+        self.neg_risk_live_execution_records = Vec::new();
+        self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
+
+        let committed_state_version = self
+            .seed
+            .committed_state_version
+            .unwrap_or(self.seed.last_state_version);
+        let last_journal_seq = self.seed.last_journal_seq.unwrap_or(0);
+        self.runtime
+            .restore_committed_anchor(committed_state_version, last_journal_seq);
+
+        for anchor in self.seed.pending_reconcile_anchors.iter().cloned() {
+            self.runtime.restore_pending_reconcile_anchor(anchor);
+        }
+        match self.seed.pending_reconcile_count {
+            Some(expected) if self.runtime.pending_reconcile_count() != expected => {
+                return Err(SupervisorError::new(format!(
+                    "durable pending reconcile count {} did not match restored count {}",
+                    expected,
+                    self.runtime.pending_reconcile_count()
+                )));
+            }
+            Some(0) | Some(_) | None => {}
+        }
+
+        self.publish_current_snapshot(false);
+        self.neg_risk_live_execution_records = self.seed.neg_risk_live_execution_records.clone();
+        self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {
+            NegRiskLiveStateSource::None
+        } else {
+            NegRiskLiveStateSource::DurableRestore
+        };
+        self.retain_current_neg_risk_live_execution_records();
+        Ok(())
     }
 
     fn record_recovery_backlog(&self, backlog_count: usize) {

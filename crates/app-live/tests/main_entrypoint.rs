@@ -1,8 +1,21 @@
+use domain::ExecutionMode;
 use observability::span_names;
-use std::{ffi::OsString, path::PathBuf, process::Command};
+use persistence::{
+    models::{ExecutionAttemptRow, LiveSubmissionRecordRow},
+    run_migrations, ExecutionAttemptRepo, LiveSubmissionRepo, RuntimeProgressRepo,
+};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::{
+    ffi::OsString,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
+
+static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn binary_entrypoint_emits_structured_bootstrap_log() {
@@ -88,6 +101,23 @@ fn paper_entrypoint_ignores_invalid_neg_risk_target_config() {
     assert!(
         output.status.success(),
         "paper mode should ignore live config"
+    );
+}
+
+#[test]
+fn paper_entrypoint_ignores_invalid_local_signer_config() {
+    let output = app_live_output_raw_env_with_signer(
+        "paper",
+        None,
+        None,
+        None,
+        Some(OsString::from("{")),
+        None,
+    );
+
+    assert!(
+        output.status.success(),
+        "paper mode should ignore live signer config"
     );
 }
 
@@ -246,14 +276,21 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
     let output = app_live_output("live", None);
 
     assert!(
-        output.status.success(),
-        "live mode should boot without config"
+        !output.status.success(),
+        "live mode should fail fast without durable store inputs"
     );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("DATABASE_URL"), "{combined}");
 }
 
 #[test]
 fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
-    let output = app_live_output_with_operator_inputs(
+    let database = TestDatabase::new();
+    let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
         Some(
             r#"
@@ -269,7 +306,10 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         ),
         Some("family-a"),
         Some("family-a"),
+        Some(valid_local_signer_config_json()),
+        Some(database.database_url()),
     );
+    database.cleanup();
 
     assert!(
         output.status.success(),
@@ -291,6 +331,148 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
     );
 }
 
+#[test]
+fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
+    let database = TestDatabase::new();
+    database.seed_durable_live_execution_record();
+    let output = app_live_output_raw_env_with_signer_and_database_url(
+        "live",
+        None,
+        None,
+        None,
+        None,
+        Some(database.database_url()),
+    );
+    database.cleanup();
+
+    assert!(
+        output.status.success(),
+        "live mode should restore durable live truth from a non-empty store"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("negrisk_mode=Live"), "{combined}");
+    assert!(
+        combined.contains("neg_risk_live_attempt_count=1"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("neg_risk_live_state_source=\"durable_restore\""),
+        "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_requires_database_url_even_when_operator_inputs_request_live_work() {
+    let output = app_live_output_raw_env_with_signer_and_database_url(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#
+            .into(),
+        ),
+        Some("family-a".into()),
+        Some("family-a".into()),
+        Some(valid_local_signer_config_json().into()),
+        None,
+    );
+
+    assert!(
+        !output.status.success(),
+        "live mode should fail closed without durable store access even when operator inputs request live work"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("DATABASE_URL"), "{combined}");
+}
+
+#[test]
+fn live_entrypoint_rejects_missing_local_signer_config_when_live_work_is_requested() {
+    let output = app_live_output_with_operator_inputs(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+        Some("family-a"),
+        Some("family-a"),
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail when live neg-risk work is requested without signer config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("missing local signer config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_rejects_invalid_local_signer_config_when_live_work_is_requested() {
+    let output = app_live_output_raw_env_with_signer(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#
+            .into(),
+        ),
+        Some("family-a".into()),
+        Some("family-a".into()),
+        Some(OsString::from("{")),
+        None,
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail when live neg-risk work is requested with invalid signer config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid local signer config"),
+        "{combined}"
+    );
+}
+
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {
     app_live_output_with_operator_inputs(app_mode, neg_risk_live_targets, None, None)
 }
@@ -301,35 +483,266 @@ fn app_live_output_with_operator_inputs(
     approved_families: Option<&str>,
     ready_families: Option<&str>,
 ) -> std::process::Output {
-    app_live_output_raw_env(
+    app_live_output_raw_env_with_signer(
         app_mode,
         neg_risk_live_targets.map(OsString::from),
         approved_families.map(OsString::from),
         ready_families.map(OsString::from),
+        None,
+        None,
     )
 }
 
 fn app_live_output_raw_env(
     app_mode: &str,
-    neg_risk_live_targets: Option<impl Into<OsString>>,
-    approved_families: Option<impl Into<OsString>>,
-    ready_families: Option<impl Into<OsString>>,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+) -> std::process::Output {
+    app_live_output_raw_env_with_signer(
+        app_mode,
+        neg_risk_live_targets,
+        approved_families,
+        ready_families,
+        None,
+        None,
+    )
+}
+
+fn app_live_output_with_operator_inputs_and_signer_and_database_url(
+    app_mode: &str,
+    neg_risk_live_targets: Option<&str>,
+    approved_families: Option<&str>,
+    ready_families: Option<&str>,
+    local_signer_config: Option<&str>,
+    database_url: Option<&str>,
+) -> std::process::Output {
+    app_live_output_raw_env_with_signer(
+        app_mode,
+        neg_risk_live_targets.map(OsString::from),
+        approved_families.map(OsString::from),
+        ready_families.map(OsString::from),
+        local_signer_config.map(OsString::from),
+        database_url,
+    )
+}
+
+fn app_live_output_raw_env_with_signer(
+    app_mode: &str,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+    local_signer_config: Option<OsString>,
+    database_url: Option<&str>,
+) -> std::process::Output {
+    let needs_database_url = app_mode == "live"
+        && (neg_risk_live_targets.is_some()
+            || approved_families.is_some()
+            || ready_families.is_some()
+            || local_signer_config.is_some());
+    app_live_output_raw_env_with_signer_and_database_url(
+        app_mode,
+        neg_risk_live_targets,
+        approved_families,
+        ready_families,
+        local_signer_config,
+        database_url.or_else(|| needs_database_url.then_some(default_test_database_url())),
+    )
+}
+
+fn app_live_output_raw_env_with_signer_and_database_url(
+    app_mode: &str,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+    local_signer_config: Option<OsString>,
+    database_url: Option<&str>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
     command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
+    command.env_remove("AXIOM_LOCAL_SIGNER_CONFIG");
+    command.env_remove("DATABASE_URL");
     if let Some(value) = neg_risk_live_targets {
-        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value);
     }
     if let Some(value) = approved_families {
-        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value);
     }
     if let Some(value) = ready_families {
-        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value);
+    }
+    if let Some(value) = local_signer_config {
+        command.env("AXIOM_LOCAL_SIGNER_CONFIG", value);
+    }
+    if let Some(database_url) = database_url {
+        command.env("DATABASE_URL", database_url);
     }
     command.output().expect("app-live should run")
+}
+
+fn default_test_database_url() -> &'static str {
+    "postgres://axiom:axiom@localhost:5432/axiom_arb"
+}
+
+struct TestDatabase {
+    admin_pool: PgPool,
+    pool: PgPool,
+    schema: String,
+    database_url: String,
+}
+
+impl TestDatabase {
+    fn new() -> Self {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                let admin_database_url = std::env::var("DATABASE_URL")
+                    .unwrap_or_else(|_| default_test_database_url().to_owned());
+                let admin_pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&admin_database_url)
+                    .await
+                    .expect("test database should connect");
+                let schema = format!(
+                    "app_live_main_entrypoint_{}_{}",
+                    std::process::id(),
+                    NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
+                );
+                let create_schema = format!(r#"CREATE SCHEMA "{schema}""#);
+                sqlx::query(&create_schema)
+                    .execute(&admin_pool)
+                    .await
+                    .expect("test schema should create");
+
+                let database_url = schema_scoped_database_url(&admin_database_url, &schema);
+                let pool = PgPoolOptions::new()
+                    .max_connections(2)
+                    .connect(&database_url)
+                    .await
+                    .expect("schema-scoped test pool should connect");
+                run_migrations(&pool)
+                    .await
+                    .expect("test migrations should run");
+
+                Self {
+                    admin_pool,
+                    pool,
+                    schema,
+                    database_url,
+                }
+            })
+    }
+
+    fn database_url(&self) -> &str {
+        &self.database_url
+    }
+
+    fn seed_durable_live_execution_record(&self) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(&self.pool, 41, 7, Some("snapshot-7"))
+                    .await
+                    .expect("runtime progress should persist");
+                ExecutionAttemptRepo
+                    .append(
+                        &self.pool,
+                        &ExecutionAttemptRow {
+                            attempt_id: "attempt-live-main-1".to_owned(),
+                            plan_id: "request-bound:7:req-1:negrisk-submit-family:family-a"
+                                .to_owned(),
+                            snapshot_id: "snapshot-7".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            matched_rule_id: Some("family-a-live".to_owned()),
+                            execution_mode: ExecutionMode::Live,
+                            attempt_no: 1,
+                            idempotency_key: "idem-attempt-live-main-1".to_owned(),
+                        },
+                    )
+                    .await
+                    .expect("execution attempt should persist");
+                LiveSubmissionRepo
+                    .append(
+                        &self.pool,
+                        LiveSubmissionRecordRow {
+                            submission_ref: "submission-live-main-1".to_owned(),
+                            attempt_id: "attempt-live-main-1".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            provider: "venue-polymarket".to_owned(),
+                            state: "submitted".to_owned(),
+                            payload: serde_json::json!({
+                                "submission_ref": "submission-live-main-1",
+                                "family_id": "family-a",
+                                "route": "neg-risk",
+                                "reason": "submitted_for_execution",
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("live submission record should persist");
+            });
+    }
+
+    fn cleanup(self) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                self.pool.close().await;
+                let drop_schema = format!(
+                    r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#,
+                    schema = self.schema
+                );
+                let _ = sqlx::query(&drop_schema).execute(&self.admin_pool).await;
+                self.admin_pool.close().await;
+            });
+    }
+}
+
+fn schema_scoped_database_url(base: &str, schema: &str) -> String {
+    let options = format!("options=-csearch_path%3D{schema}");
+    if base.contains('?') {
+        format!("{base}&{options}")
+    } else {
+        format!("{base}?{options}")
+    }
+}
+
+fn valid_local_signer_config_json() -> &'static str {
+    r#"
+    {
+      "signer": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "funder_address": "0x2222222222222222222222222222222222222222",
+        "signature_type": "Eoa",
+        "wallet_route": "Eoa"
+      },
+      "l2_auth": {
+        "api_key": "poly-api-key-1",
+        "passphrase": "poly-passphrase-1",
+        "timestamp": "1700000000",
+        "signature": "poly-signature-1"
+      },
+      "relayer_auth": {
+        "kind": "builder_api_key",
+        "api_key": "builder-api-key-1",
+        "timestamp": "1700000001",
+        "passphrase": "builder-passphrase-1",
+        "signature": "builder-signature-1"
+      }
+    }
+    "#
 }
 
 fn app_live_binary() -> PathBuf {
