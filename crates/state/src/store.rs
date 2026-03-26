@@ -193,7 +193,7 @@ impl StateStore {
             .collect::<Vec<_>>()
     }
 
-    pub fn scope_confidence(&self, scope: &str) -> StateConfidence {
+    pub fn state_confidence(&self, scope: &str) -> StateConfidence {
         if self
             .pending_reconcile_anchors
             .values()
@@ -203,6 +203,10 @@ impl StateStore {
         } else {
             StateConfidence::Certain
         }
+    }
+
+    pub fn scope_confidence(&self, scope: &str) -> StateConfidence {
+        self.state_confidence(scope)
     }
 
     pub fn open_orders(&self) -> &HashMap<OrderId, Order> {

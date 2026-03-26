@@ -241,6 +241,28 @@ fn terminal_live_reconcile_clears_pending_anchor_and_restores_healthy_posture() 
     assert!(store.allows_automatic_repair());
 }
 
+#[test]
+fn state_confidence_reports_scope_uncertainty_from_live_submit_anchor() {
+    let mut store = StateStore::new();
+
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::negrisk_live_submit_observed(
+                "session-live",
+                "evt-1",
+                "attempt-family-a-1",
+                "family-a",
+                "submission-family-a-1",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(store.state_confidence("family-a"), StateConfidence::Uncertain);
+    assert_eq!(store.state_confidence("family-b"), StateConfidence::Certain);
+}
+
 fn sample_out_of_order_user_trade() -> StateFactInput {
     StateFactInput::out_of_order_user_trade(ExternalFactEvent::new(
         "market_ws",

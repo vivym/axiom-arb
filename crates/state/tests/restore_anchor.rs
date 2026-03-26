@@ -1,6 +1,9 @@
 use chrono::Utc;
 use domain::{ExternalFactEvent, RuntimeMode};
-use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateConfidence, StateStore};
+use state::{
+    PendingReconcileAnchor, ProjectionReadiness, PublishedSnapshot, StateApplier,
+    StateConfidence, StateStore,
+};
 
 #[test]
 fn restore_committed_anchor_rehydrates_snapshot_and_next_apply_progress() {
@@ -84,4 +87,71 @@ fn restore_committed_anchor_preserves_durable_pending_reconcile_state() {
     );
     assert!(store.first_reconcile_succeeded());
     assert!(!store.allows_automatic_repair());
+}
+
+#[test]
+fn restore_pending_reconcile_anchor_rehydrates_exact_anchor_fields_and_state_confidence() {
+    let mut store = StateStore::new();
+    store.restore_committed_anchor(7, 41);
+
+    let anchor = PendingReconcileAnchor::new(
+        "pending-family-a-1",
+        "submission-family-a-1",
+        "family-a",
+        "live_submit_provider",
+        "accepted but unconfirmed on restore",
+    );
+
+    store.restore_pending_reconcile_anchor(anchor.clone());
+
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.pending_reconcile_anchors(), vec![anchor]);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(
+        store.mode_overlay(),
+        Some(domain::RuntimeOverlay::CancelOnly)
+    );
+    assert_eq!(store.state_confidence("family-a"), StateConfidence::Uncertain);
+    assert_eq!(store.state_confidence("family-b"), StateConfidence::Certain);
+    assert!(!store.allows_automatic_repair());
+}
+
+#[test]
+fn terminal_live_reconcile_clears_restored_pending_anchor_and_scope_uncertainty() {
+    let mut store = StateStore::new();
+    store.restore_committed_anchor(7, 41);
+    store.restore_pending_reconcile_anchor(PendingReconcileAnchor::new(
+        "pending-family-a-1",
+        "submission-family-a-1",
+        "family-a",
+        "live_submit_provider",
+        "accepted but unconfirmed on restore",
+    ));
+
+    let result = StateApplier::new(&mut store)
+        .apply(
+            42,
+            ExternalFactEvent::negrisk_live_reconcile_observed(
+                "session-live",
+                "evt-2",
+                "pending-family-a-1",
+                "family-a",
+                true,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        state::ApplyResult::Applied {
+            journal_seq: 42,
+            state_version: 8,
+            ..
+        }
+    ));
+    assert_eq!(store.pending_reconcile_count(), 0);
+    assert_eq!(store.mode(), RuntimeMode::Healthy);
+    assert_eq!(store.state_confidence("family-a"), StateConfidence::Certain);
+    assert!(store.allows_automatic_repair());
 }
