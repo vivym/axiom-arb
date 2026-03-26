@@ -6,7 +6,8 @@ mod snapshot;
 mod store;
 
 pub use apply::{ApplyError, ApplyResult, StateApplier};
-pub use facts::{DirtyDomain, DirtySet, PendingRef, StateFactInput};
+pub use domain::StateConfidence;
+pub use facts::{DirtyDomain, DirtySet, PendingReconcileAnchor, PendingRef, StateFactInput};
 pub use reconcile::{ReconcileAttention, ReconcileReport, RemoteSnapshot};
 pub use snapshot::{
     FullSetView, NegRiskFamilyRolloutReadiness, NegRiskView, ProjectionReadiness, PublishedSnapshot,

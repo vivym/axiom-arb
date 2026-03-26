@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use domain::{
     ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
-    RuntimeMode, RuntimeOverlay, RuntimePolicy, TokenId,
+    RuntimeMode, RuntimeOverlay, RuntimePolicy, StateConfidence, TokenId,
 };
 use rust_decimal::Decimal;
 
@@ -10,7 +10,7 @@ use crate::{
     bootstrap::{
         allows_automatic_repair, bootstrap_policy, reconcile_attention_policy, reconciled_policy,
     },
-    facts::{FactKey, PendingRef},
+    facts::{FactKey, PendingReconcileAnchor, PendingRef},
     reconcile::{reconcile_store, ReconcileReport, RemoteSnapshot},
 };
 
@@ -52,7 +52,7 @@ pub struct StateStore {
     first_reconcile_succeeded: bool,
     applied_fact_journal: BTreeMap<FactKey, i64>,
     consumed_journal: BTreeMap<i64, FactKey>,
-    pending_refs: BTreeSet<String>,
+    pending_reconcile_anchors: BTreeMap<String, PendingReconcileAnchor>,
     open_orders: HashMap<OrderId, Order>,
     approvals: HashMap<ApprovalKey, ApprovalState>,
     inventory: HashMap<InventoryEntry, Decimal>,
@@ -74,7 +74,7 @@ impl StateStore {
             first_reconcile_succeeded: false,
             applied_fact_journal: BTreeMap::new(),
             consumed_journal: BTreeMap::new(),
-            pending_refs: BTreeSet::new(),
+            pending_reconcile_anchors: BTreeMap::new(),
             open_orders: HashMap::new(),
             approvals: HashMap::new(),
             inventory: HashMap::new(),
@@ -104,9 +104,14 @@ impl StateStore {
         self.last_consumed_journal_seq = Some(committed_journal_seq);
         self.last_applied_journal_seq = Some(committed_journal_seq);
         self.rebuild_fullset_anchor(committed_journal_seq);
-        self.pending_refs.clear();
         self.first_reconcile_succeeded = true;
-        self.apply_policy(reconciled_policy());
+        self.apply_restore_posture();
+    }
+
+    pub fn restore_pending_reconcile_anchor(&mut self, anchor: PendingReconcileAnchor) {
+        self.record_pending_reconcile(anchor);
+        self.first_reconcile_succeeded = true;
+        self.apply_restore_posture();
     }
 
     pub fn mark_reconciled_after_restore(&mut self, baseline_journal_seq: i64) {
@@ -116,7 +121,7 @@ impl StateStore {
             self.rebuild_fullset_anchor(baseline_journal_seq);
         }
 
-        self.pending_refs.clear();
+        self.pending_reconcile_anchors.clear();
         self.first_reconcile_succeeded = true;
         self.apply_policy(reconciled_policy());
     }
@@ -132,9 +137,9 @@ impl StateStore {
     }
 
     pub fn clear_pending_reconcile_after_restore(&mut self) {
-        self.pending_refs.clear();
+        self.pending_reconcile_anchors.clear();
         if self.first_reconcile_succeeded {
-            self.apply_policy(reconciled_policy());
+            self.apply_restore_posture();
         }
     }
 
@@ -178,7 +183,26 @@ impl StateStore {
     }
 
     pub fn pending_reconcile_count(&self) -> usize {
-        self.pending_refs.len()
+        self.pending_reconcile_anchors.len()
+    }
+
+    pub fn pending_reconcile_anchors(&self) -> Vec<PendingReconcileAnchor> {
+        self.pending_reconcile_anchors
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    pub fn scope_confidence(&self, scope: &str) -> StateConfidence {
+        if self
+            .pending_reconcile_anchors
+            .values()
+            .any(|anchor| anchor.family_id == scope)
+        {
+            StateConfidence::Uncertain
+        } else {
+            StateConfidence::Certain
+        }
     }
 
     pub fn open_orders(&self) -> &HashMap<OrderId, Order> {
@@ -301,7 +325,6 @@ impl StateStore {
             .cloned()
             .map(|tx| (tx.tx_id.clone(), tx))
             .collect();
-        self.pending_refs.clear();
         if let Some(committed_journal_seq) = self.last_applied_journal_seq {
             self.rebuild_fullset_anchor(committed_journal_seq);
         }
@@ -309,20 +332,34 @@ impl StateStore {
         let promoted_from_bootstrap = !self.first_reconcile_succeeded;
 
         self.first_reconcile_succeeded = true;
-        self.apply_policy(reconciled_policy());
+        self.apply_restore_posture();
 
         promoted_from_bootstrap
     }
 
     pub(crate) fn set_mode_if_reconciled(&mut self) {
-        if self.first_reconcile_succeeded {
-            self.apply_policy(reconciled_policy());
-        }
+        self.apply_restore_posture();
     }
 
     fn apply_policy(&mut self, policy: RuntimePolicy) {
         self.runtime_mode = policy.mode;
         self.overlay = policy.overlay;
+    }
+
+    fn apply_restore_posture(&mut self) {
+        if !self.first_reconcile_succeeded {
+            return;
+        }
+
+        if self.has_pending_reconcile_anchors() {
+            self.enter_reconciling();
+        } else {
+            self.apply_policy(reconciled_policy());
+        }
+    }
+
+    fn has_pending_reconcile_anchors(&self) -> bool {
+        !self.pending_reconcile_anchors.is_empty()
     }
 
     pub(crate) fn duplicate_journal_seq(&self, fact_key: &FactKey) -> Option<i64> {
@@ -360,11 +397,22 @@ impl StateStore {
         self.last_applied_journal_seq = Some(journal_seq);
         self.applied_fact_journal.insert(fact_key, journal_seq);
         self.rebuild_fullset_anchor(journal_seq);
+        self.apply_restore_posture();
         self.state_version
     }
 
-    pub(crate) fn record_pending_ref(&mut self, pending_ref: PendingRef) {
-        self.pending_refs.insert(pending_ref.0);
+    pub(crate) fn record_pending_reconcile(&mut self, anchor: PendingReconcileAnchor) {
+        self.pending_reconcile_anchors
+            .insert(anchor.pending_ref.clone(), anchor);
+    }
+
+    pub(crate) fn clear_pending_reconcile(
+        &mut self,
+        pending_ref: &PendingRef,
+    ) -> Option<PendingReconcileAnchor> {
+        let cleared = self.pending_reconcile_anchors.remove(&pending_ref.0);
+        self.apply_restore_posture();
+        cleared
     }
 
     fn rebuild_fullset_anchor(&mut self, committed_journal_seq: i64) {

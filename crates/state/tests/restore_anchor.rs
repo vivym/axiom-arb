@@ -1,6 +1,6 @@
 use chrono::Utc;
 use domain::{ExternalFactEvent, RuntimeMode};
-use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore};
+use state::{ProjectionReadiness, PublishedSnapshot, StateApplier, StateConfidence, StateStore};
 
 #[test]
 fn restore_committed_anchor_rehydrates_snapshot_and_next_apply_progress() {
@@ -39,4 +39,49 @@ fn restore_committed_anchor_rehydrates_snapshot_and_next_apply_progress() {
     ));
     assert_eq!(store.state_version(), 8);
     assert_eq!(store.last_applied_journal_seq(), Some(42));
+}
+
+#[test]
+fn restore_committed_anchor_preserves_durable_pending_reconcile_state() {
+    let mut store = StateStore::new();
+
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::negrisk_live_submit_observed(
+                "session-live",
+                "evt-1",
+                "attempt-family-a-1",
+                "family-a",
+                "submission-family-a-1",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+    assert_eq!(store.pending_reconcile_anchors().len(), 1);
+
+    store.restore_committed_anchor(7, 41);
+
+    assert_eq!(store.state_version(), 7);
+    assert_eq!(store.last_applied_journal_seq(), Some(41));
+    assert_eq!(store.last_consumed_journal_seq(), Some(41));
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(
+        store.mode_overlay(),
+        Some(domain::RuntimeOverlay::CancelOnly)
+    );
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+    assert!(store.first_reconcile_succeeded());
+    assert!(!store.allows_automatic_repair());
 }

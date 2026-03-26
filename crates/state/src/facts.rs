@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use domain::ExternalFactEvent;
+use domain::{ExternalFactEvent, ExternalFactPayloadData};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DirtyDomain {
@@ -25,6 +25,62 @@ impl PendingRef {
             fact_key.source_event_id,
             fact_key.normalizer_version
         ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingReconcileAnchor {
+    pub pending_ref: String,
+    pub submission_ref: String,
+    pub family_id: String,
+    pub route: String,
+    pub reason: String,
+}
+
+impl PendingReconcileAnchor {
+    pub fn new(
+        pending_ref: impl Into<String>,
+        submission_ref: impl Into<String>,
+        family_id: impl Into<String>,
+        route: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            pending_ref: pending_ref.into(),
+            submission_ref: submission_ref.into(),
+            family_id: family_id.into(),
+            route: route.into(),
+            reason: reason.into(),
+        }
+    }
+
+    fn from_pending_ref_and_reason(
+        pending_ref: PendingRef,
+        family_id: impl Into<String>,
+        route: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        let pending_ref_value = pending_ref.0;
+        Self::new(
+            pending_ref_value.clone(),
+            pending_ref_value,
+            family_id,
+            route,
+            reason,
+        )
+    }
+
+    fn from_live_submit(
+        fact_key: &FactKey,
+        payload: &domain::NegRiskLiveSubmitObservedPayload,
+    ) -> Self {
+        Self::new(
+            PendingRef::from_fact_key(fact_key).0,
+            payload.submission_ref.clone(),
+            payload.scope.clone(),
+            fact_key.source_kind.clone(),
+            "live submit observed",
+        )
     }
 }
 
@@ -68,10 +124,23 @@ pub struct StateFactInput {
 
 impl StateFactInput {
     pub fn new(event: ExternalFactEvent) -> Self {
-        Self {
-            event,
-            hint: FactApplyHint::None,
-        }
+        let fact_key = FactKey::from_event(&event);
+        let hint = match event.payload.as_ref() {
+            Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(payload)) => {
+                FactApplyHint::PendingReconcile {
+                    anchor: PendingReconcileAnchor::from_live_submit(&fact_key, payload),
+                }
+            }
+            Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(payload)) => {
+                FactApplyHint::LiveReconcileObserved {
+                    pending_ref: PendingRef(payload.pending_ref.clone()),
+                    terminal: payload.terminal,
+                }
+            }
+            None => FactApplyHint::None,
+        };
+
+        Self { event, hint }
     }
 
     pub fn out_of_order_user_trade(event: ExternalFactEvent) -> Self {
@@ -79,9 +148,13 @@ impl StateFactInput {
 
         Self {
             event,
-            hint: FactApplyHint::ReconcileRequired {
-                pending_ref: PendingRef::from_fact_key(&fact_key),
-                reason: "user trade arrived out of authoritative order",
+            hint: FactApplyHint::PendingReconcile {
+                anchor: PendingReconcileAnchor::from_pending_ref_and_reason(
+                    PendingRef::from_fact_key(&fact_key),
+                    fact_key.source_session_id.clone(),
+                    fact_key.source_kind.clone(),
+                    "user trade arrived out of authoritative order",
+                ),
             },
         }
     }
@@ -104,8 +177,11 @@ impl From<ExternalFactEvent> for StateFactInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactApplyHint {
     None,
-    ReconcileRequired {
+    PendingReconcile {
+        anchor: PendingReconcileAnchor,
+    },
+    LiveReconcileObserved {
         pending_ref: PendingRef,
-        reason: &'static str,
+        terminal: bool,
     },
 }
