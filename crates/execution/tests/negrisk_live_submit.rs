@@ -164,10 +164,7 @@ fn live_sink_preserves_reconcile_anchor_for_unconfirmed_acceptance() {
 
     assert_eq!(receipt.outcome, ExecutionAttemptOutcome::Succeeded);
     assert_eq!(receipt.submission_ref.as_deref(), Some("submission-3"));
-    assert_eq!(
-        receipt.pending_ref.as_deref(),
-        Some("pending-reconcile-3")
-    );
+    assert_eq!(receipt.pending_ref.as_deref(), Some("pending-reconcile-3"));
 }
 
 #[test]
@@ -295,13 +292,13 @@ impl RecordingSubmitProvider {
             calls: Arc::new(AtomicUsize::new(0)),
             last_attempt_id: Arc::new(Mutex::new(None)),
             outcome: LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: LiveSubmissionRecord {
+                submission_record: Some(LiveSubmissionRecord {
                     submission_ref: submission_ref.to_owned(),
                     attempt_id: "attempt-1".to_owned(),
                     route: "neg-risk".to_owned(),
                     scope: "family-a".to_owned(),
                     provider: "recording-submit".to_owned(),
-                },
+                }),
                 pending_ref: pending_ref.to_owned(),
             },
         }

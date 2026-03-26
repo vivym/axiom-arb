@@ -88,7 +88,7 @@ pub enum LiveSubmitOutcome {
         reason: String,
     },
     AcceptedButUnconfirmed {
-        submission_record: LiveSubmissionRecord,
+        submission_record: Option<LiveSubmissionRecord>,
         pending_ref: String,
     },
     Ambiguous {

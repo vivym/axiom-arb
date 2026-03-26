@@ -80,6 +80,11 @@ fn live_sink_signs_negrisk_family_submit_plans_when_signer_and_hook_are_configur
         .execute(&sample_family_plan(), &live_attempt())
         .unwrap();
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(receipt.submission_ref, None);
+    assert_eq!(
+        receipt.pending_ref.as_deref(),
+        Some("pending-hook:attempt-1")
+    );
     assert_eq!(called.load(Ordering::SeqCst), 1);
 }
 

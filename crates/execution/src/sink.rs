@@ -7,8 +7,7 @@ use domain::{ExecutionAttemptContext, ExecutionAttemptOutcome, ExecutionMode, Ex
 
 use crate::plans::ExecutionPlan;
 use crate::providers::{
-    LiveSubmissionRecord, LiveSubmitOutcome, SignerProvider, SubmitProviderError,
-    VenueExecutionProvider,
+    LiveSubmitOutcome, SignerProvider, SubmitProviderError, VenueExecutionProvider,
 };
 use crate::signing::{OrderSigner, SignedFamilySubmission};
 
@@ -235,14 +234,9 @@ impl VenueExecutionProvider for HookSubmitProvider {
             SubmitProviderError::new(format!("signed-family hook error: {err:?}"))
         })?;
 
-        Ok(LiveSubmitOutcome::Accepted {
-            submission_record: LiveSubmissionRecord {
-                submission_ref: format!("hook-submit:{}", attempt.attempt_id),
-                attempt_id: attempt.attempt_id.clone(),
-                route: attempt.route.clone(),
-                scope: attempt.scope.clone(),
-                provider: "signed-family-hook".to_owned(),
-            },
+        Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+            submission_record: None,
+            pending_ref: format!("pending-hook:{}", attempt.attempt_id),
         })
     }
 }
@@ -264,8 +258,8 @@ fn receipt_from_live_submit_outcome(
             attempt.attempt_id.clone(),
             ExecutionAttemptOutcome::Succeeded,
         )
-        .with_submission_ref(submission_record.submission_ref)
-        .with_pending_ref(pending_ref),
+        .with_pending_ref(pending_ref)
+        .tap_if_some(submission_record.map(|record| record.submission_ref)),
         LiveSubmitOutcome::RejectedDefinitive { .. } => ExecutionReceipt::new(
             attempt.attempt_id.clone(),
             ExecutionAttemptOutcome::FailedDefinitive,
@@ -275,5 +269,18 @@ fn receipt_from_live_submit_outcome(
             ExecutionAttemptOutcome::FailedAmbiguous,
         )
         .with_pending_ref(pending_ref),
+    }
+}
+
+trait ExecutionReceiptExt {
+    fn tap_if_some(self, submission_ref: Option<String>) -> Self;
+}
+
+impl ExecutionReceiptExt for ExecutionReceipt {
+    fn tap_if_some(self, submission_ref: Option<String>) -> Self {
+        match submission_ref {
+            Some(submission_ref) => self.with_submission_ref(submission_ref),
+            None => self,
+        }
     }
 }
