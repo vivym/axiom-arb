@@ -352,10 +352,11 @@ fn live_entrypoint_rejects_invalid_local_signer_config_when_live_work_is_request
                 ]
               }
             ]
-            "#,
+            "#
+            .into(),
         ),
-        Some("family-a"),
-        Some("family-a"),
+        Some("family-a".into()),
+        Some("family-a".into()),
         Some(OsString::from("{")),
     );
 
