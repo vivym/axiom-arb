@@ -180,6 +180,95 @@ fn run_once_resets_rollout_gauges_when_bootstrap_publication_fails() {
     );
 }
 
+#[test]
+fn resume_pending_reconcile_mismatch_records_divergence_span_and_counter() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(3);
+
+    let (captured_spans, err) = capture_spans(|| supervisor.resume_once().unwrap_err());
+
+    assert!(err.to_string().contains("pending reconcile count"));
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().divergence_count.key()),
+        Some(1)
+    );
+
+    let divergence_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_RECOVERY_DIVERGENCE)
+        .expect("divergence span missing");
+    assert_eq!(
+        divergence_span
+            .field(field_keys::DIVERGENCE_KIND)
+            .map(String::as_str),
+        Some("\"pending_reconcile_count_mismatch\"")
+    );
+}
+
+#[test]
+fn resume_missing_durable_rollout_evidence_does_not_record_divergence_signal() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+
+    let (captured_spans, err) = capture_spans(|| supervisor.resume_once().unwrap_err());
+
+    assert!(err.to_string().contains("rollout gate evidence"));
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().divergence_count.key()),
+        None
+    );
+    assert!(captured_spans
+        .iter()
+        .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE));
+}
+
+#[test]
+fn resume_missing_live_attempt_anchors_does_not_record_divergence_signal() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    supervisor.seed_runtime_progress(0, 0, Some("snapshot-0"));
+    supervisor.seed_committed_state_version(0);
+    supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(NegRiskRolloutEvidence {
+        snapshot_id: "snapshot-0".to_owned(),
+        live_ready_family_count: 1,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    });
+
+    let (captured_spans, err) = capture_spans(|| supervisor.resume_once().unwrap_err());
+
+    assert!(err.to_string().contains("live attempt anchors"));
+    assert_eq!(
+        observability
+            .registry()
+            .snapshot()
+            .counter(observability.metrics().divergence_count.key()),
+        None
+    );
+    assert!(captured_spans
+        .iter()
+        .all(|span| span.name != span_names::APP_RECOVERY_DIVERGENCE));
+}
+
 #[derive(Debug, Clone)]
 struct CapturedSpan {
     name: String,

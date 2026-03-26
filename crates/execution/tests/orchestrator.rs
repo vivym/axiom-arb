@@ -1,3 +1,5 @@
+mod support;
+
 use std::collections::HashMap;
 
 use std::sync::Arc;
@@ -8,9 +10,10 @@ use execution::{
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     plans::ExecutionPlan,
     sink::{LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError},
-    TestOrderSigner,
+    ExecutionAttemptRecord, TestOrderSigner,
 };
 use rust_decimal::Decimal;
+use support::{sample_planning_input, FailingVenueSink};
 
 #[test]
 fn live_and_shadow_share_the_same_plan_before_sink_dispatch() {
@@ -235,20 +238,56 @@ fn plan_rejects_activation_mode_mismatch_between_request_and_input() {
     ));
 }
 
-fn sample_planning_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
-    ExecutionPlanningInput::new(
-        ExecutionRequest {
-            request_id: "request-1".to_owned(),
-            decision_input_id: "intent-1".to_owned(),
-            snapshot_id: "snapshot-1".to_owned(),
-            route: "full-set".to_owned(),
-            scope: "default".to_owned(),
-            activation_mode: execution_mode,
-            matched_rule_id: None,
-        },
-        execution_mode,
-        execution_plan(),
-    )
+#[test]
+fn execute_result_exposes_attempt_metadata_without_reconstructing_from_receipt() {
+    let request = ExecutionRequest {
+        request_id: "request-detailed".to_owned(),
+        decision_input_id: "intent-detailed".to_owned(),
+        snapshot_id: "snapshot-detailed".to_owned(),
+        route: "full-set".to_owned(),
+        scope: "default".to_owned(),
+        activation_mode: ExecutionMode::Live,
+        matched_rule_id: Some("rule-detailed".to_owned()),
+    };
+    let plan = execution_plan();
+    let expected_plan_id = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
+    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+
+    let result = orchestrator
+        .execute_with_attempt(&ExecutionPlanningInput::new(
+            request,
+            ExecutionMode::Live,
+            plan,
+        ))
+        .unwrap();
+
+    assert_eq!(
+        result,
+        ExecutionAttemptRecord {
+            attempt: domain::ExecutionAttempt::new(
+                "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1",
+                expected_plan_id,
+                "snapshot-detailed",
+                1,
+            ),
+            attempt_context: domain::ExecutionAttemptContext {
+                attempt_id:
+                    "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1"
+                        .to_owned(),
+                snapshot_id: "snapshot-detailed".to_owned(),
+                execution_mode: ExecutionMode::Live,
+                route: "full-set".to_owned(),
+                scope: "default".to_owned(),
+                matched_rule_id: Some("rule-detailed".to_owned()),
+            },
+            receipt: domain::ExecutionReceipt {
+                attempt_id:
+                    "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1"
+                        .to_owned(),
+                outcome: domain::ExecutionAttemptOutcome::Succeeded,
+            },
+        }
+    );
 }
 
 fn sample_non_risk_expanding_input(execution_mode: ExecutionMode) -> ExecutionPlanningInput {
@@ -329,19 +368,4 @@ fn sample_negrisk_planning_input(execution_mode: ExecutionMode) -> ExecutionPlan
         execution_mode,
         neg_risk_plan(),
     )
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FailingVenueSink;
-
-impl execution::sink::VenueSink for FailingVenueSink {
-    fn execute(
-        &self,
-        _plan: &execution::plans::ExecutionPlan,
-        _attempt: &domain::ExecutionAttemptContext,
-    ) -> Result<domain::ExecutionReceipt, execution::sink::VenueSinkError> {
-        Err(execution::sink::VenueSinkError::Rejected {
-            reason: "planned sink failure".to_owned(),
-        })
-    }
 }

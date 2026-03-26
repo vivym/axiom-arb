@@ -1,6 +1,10 @@
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::{build_relayer_auth_headers, PolymarketRestClient, RelayerAuth, RestError};
+use crate::{
+    build_relayer_auth_headers, PolymarketRestClient, RelayerAuth, RestError,
+    VenueProducerInstrumentation,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum RelayerTransactionType {
@@ -17,6 +21,54 @@ impl RelayerTransactionType {
             Self::Safe => "SAFE",
         }
     }
+}
+
+pub(crate) fn is_pending_relayer_state(state: Option<&str>) -> bool {
+    matches!(state, Some("STATE_PENDING"))
+}
+
+pub(crate) fn summarize_recent_transactions(
+    transactions: &[RelayerTransaction],
+    observed_at: DateTime<Utc>,
+) -> (usize, usize, f64) {
+    let mut pending_tx_count = 0usize;
+    let mut oldest_pending_age_seconds = 0.0f64;
+    let mut has_pending_age = false;
+
+    for transaction in transactions {
+        if !is_pending_relayer_state(transaction.state.as_deref()) {
+            continue;
+        }
+
+        pending_tx_count += 1;
+
+        let Some(created_at) = transaction.created_at.as_deref().and_then(parse_created_at) else {
+            continue;
+        };
+
+        let age_seconds = observed_at
+            .signed_duration_since(created_at)
+            .num_milliseconds() as f64
+            / 1000.0;
+        if age_seconds < 0.0 {
+            continue;
+        }
+
+        if !has_pending_age || age_seconds > oldest_pending_age_seconds {
+            oldest_pending_age_seconds = age_seconds;
+            has_pending_age = true;
+        }
+    }
+
+    (
+        transactions.len(),
+        pending_tx_count,
+        if has_pending_age {
+            oldest_pending_age_seconds
+        } else {
+            0.0
+        },
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -93,6 +145,17 @@ impl PolymarketRestClient {
         Ok(recent_transactions_from_response(response))
     }
 
+    pub async fn fetch_recent_transactions_instrumented(
+        &self,
+        auth: &RelayerAuth<'_>,
+        instrumentation: &VenueProducerInstrumentation,
+        observed_at: DateTime<Utc>,
+    ) -> Result<Vec<RelayerTransaction>, RestError> {
+        let transactions = self.fetch_recent_transactions(auth).await?;
+        instrumentation.record_relayer_transactions(&transactions, observed_at);
+        Ok(transactions)
+    }
+
     pub async fn fetch_current_nonce(
         &self,
         auth: &RelayerAuth<'_>,
@@ -121,6 +184,12 @@ fn current_nonce_from_response(response: CurrentNonceResponse) -> Result<String,
         .current_nonce
         .or(response.nonce)
         .ok_or(RestError::MissingField("nonce"))
+}
+
+fn parse_created_at(created_at: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(created_at)
+        .ok()
+        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 #[cfg(test)]

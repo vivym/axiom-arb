@@ -6,7 +6,9 @@ edition = "2021"
 [dependencies]
 # Reuses the domain-owned runtime backbone types directly.
 domain = { path = "../domain" }
+observability = { path = "../observability" }
 rust_decimal = "1.40.0"
+tracing = "0.1.41"
 
 [lib]
 path = "src/lib.rs"
