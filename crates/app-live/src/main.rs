@@ -5,9 +5,9 @@ use std::{
 };
 
 use app_live::{
-    load_neg_risk_live_targets, run_live_with_neg_risk_live_targets_instrumented,
-    run_paper_instrumented, AppInstrumentation, AppRuntimeMode, NegRiskFamilyLiveTarget,
-    StaticSnapshotSource,
+    load_local_signer_config, load_neg_risk_live_targets,
+    run_live_with_neg_risk_live_targets_instrumented, run_paper_instrumented, AppInstrumentation,
+    AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget, StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
@@ -15,6 +15,7 @@ use observability::{bootstrap_observability, span_names};
 const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
 const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
 const NEG_RISK_LIVE_READY_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_READY_FAMILIES";
+const LOCAL_SIGNER_CONFIG_ENV: &str = "AXIOM_LOCAL_SIGNER_CONFIG";
 
 fn main() {
     if let Err(error) = run() {
@@ -39,6 +40,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
             let neg_risk_live_ready_families =
                 load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
+            let _local_signer_config = if live_neg_risk_work_requested(
+                &neg_risk_live_targets,
+                &neg_risk_live_approved_families,
+                &neg_risk_live_ready_families,
+            ) {
+                Some(load_local_signer_config_env()?)
+            } else {
+                None
+            };
             run_live_with_neg_risk_live_targets_instrumented(
                 &source,
                 instrumentation,
@@ -116,4 +126,25 @@ fn load_family_scope_env(var_name: &str) -> Result<BTreeSet<String>, Box<dyn std
             Err(format!("invalid value for {var_name}: value is not valid UTF-8").into())
         }
     }
+}
+
+fn load_local_signer_config_env() -> Result<LocalSignerConfig, Box<dyn std::error::Error>> {
+    match env::var(LOCAL_SIGNER_CONFIG_ENV) {
+        Ok(value) => Ok(load_local_signer_config(Some(value.as_str()))?),
+        Err(env::VarError::NotPresent) => Err(ConfigError::MissingLocalSignerConfig.into()),
+        Err(env::VarError::NotUnicode(_)) => Err(format!(
+            "invalid value for {LOCAL_SIGNER_CONFIG_ENV}: value is not valid UTF-8"
+        )
+        .into()),
+    }
+}
+
+fn live_neg_risk_work_requested(
+    targets: &BTreeMap<String, NegRiskFamilyLiveTarget>,
+    approved_families: &BTreeSet<String>,
+    ready_families: &BTreeSet<String>,
+) -> bool {
+    targets.keys().any(|family_id| {
+        approved_families.contains(family_id) && ready_families.contains(family_id)
+    })
 }

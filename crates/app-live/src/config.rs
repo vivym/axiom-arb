@@ -17,10 +17,50 @@ pub struct NegRiskFamilyLiveTarget {
     pub members: Vec<NegRiskMemberLiveTarget>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LocalSignerConfig {
+    pub signer: LocalSignerIdentity,
+    pub l2_auth: LocalL2AuthHeaders,
+    pub relayer_auth: LocalRelayerAuth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LocalSignerIdentity {
+    pub address: String,
+    pub funder_address: String,
+    pub signature_type: String,
+    pub wallet_route: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LocalL2AuthHeaders {
+    pub api_key: String,
+    pub passphrase: String,
+    pub timestamp: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LocalRelayerAuth {
+    BuilderApiKey {
+        api_key: String,
+        timestamp: String,
+        passphrase: String,
+        signature: String,
+    },
+    RelayerApiKey {
+        api_key: String,
+        address: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     InvalidJson { value: String, message: String },
+    InvalidLocalSignerConfig { value: String, message: String },
     DuplicateFamilyId { family_id: String },
+    MissingLocalSignerConfig,
 }
 
 impl fmt::Display for ConfigError {
@@ -29,10 +69,19 @@ impl fmt::Display for ConfigError {
             Self::InvalidJson { message, .. } => {
                 write!(f, "invalid neg-risk live target config: {message}")
             }
+            Self::InvalidLocalSignerConfig { message, .. } => {
+                write!(f, "invalid local signer config: {message}")
+            }
             Self::DuplicateFamilyId { family_id } => {
                 write!(
                     f,
                     "duplicate neg-risk family_id in live target config: {family_id}"
+                )
+            }
+            Self::MissingLocalSignerConfig => {
+                write!(
+                    f,
+                    "missing local signer config for live neg-risk operator inputs"
                 )
             }
         }
@@ -63,4 +112,15 @@ pub fn load_neg_risk_live_targets(
     }
 
     Ok(targets)
+}
+
+pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig, ConfigError> {
+    let Some(json) = json else {
+        return Err(ConfigError::MissingLocalSignerConfig);
+    };
+
+    serde_json::from_str(json).map_err(|error| ConfigError::InvalidLocalSignerConfig {
+        value: json.to_owned(),
+        message: error.to_string(),
+    })
 }

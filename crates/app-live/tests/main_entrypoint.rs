@@ -92,6 +92,17 @@ fn paper_entrypoint_ignores_invalid_neg_risk_target_config() {
 }
 
 #[test]
+fn paper_entrypoint_ignores_invalid_local_signer_config() {
+    let output =
+        app_live_output_raw_env_with_signer("paper", None, None, None, Some(OsString::from("{")));
+
+    assert!(
+        output.status.success(),
+        "paper mode should ignore live signer config"
+    );
+}
+
+#[test]
 fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     let output = app_live_output(
         "live",
@@ -253,7 +264,7 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
 
 #[test]
 fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
-    let output = app_live_output_with_operator_inputs(
+    let output = app_live_output_with_operator_inputs_and_signer(
         "live",
         Some(
             r#"
@@ -269,6 +280,7 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         ),
         Some("family-a"),
         Some("family-a"),
+        Some(valid_local_signer_config_json()),
     );
 
     assert!(
@@ -291,6 +303,77 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
     );
 }
 
+#[test]
+fn live_entrypoint_rejects_missing_local_signer_config_when_live_work_is_requested() {
+    let output = app_live_output_with_operator_inputs(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+        Some("family-a"),
+        Some("family-a"),
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail when live neg-risk work is requested without signer config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("missing local signer config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn live_entrypoint_rejects_invalid_local_signer_config_when_live_work_is_requested() {
+    let output = app_live_output_raw_env_with_signer(
+        "live",
+        Some(
+            r#"
+            [
+              {
+                "family_id": "family-a",
+                "members": [
+                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+                ]
+              }
+            ]
+            "#,
+        ),
+        Some("family-a"),
+        Some("family-a"),
+        Some(OsString::from("{")),
+    );
+
+    assert!(
+        !output.status.success(),
+        "binary should fail when live neg-risk work is requested with invalid signer config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid local signer config"),
+        "{combined}"
+    );
+}
+
 fn app_live_output(app_mode: &str, neg_risk_live_targets: Option<&str>) -> std::process::Output {
     app_live_output_with_operator_inputs(app_mode, neg_risk_live_targets, None, None)
 }
@@ -301,35 +384,98 @@ fn app_live_output_with_operator_inputs(
     approved_families: Option<&str>,
     ready_families: Option<&str>,
 ) -> std::process::Output {
-    app_live_output_raw_env(
+    app_live_output_raw_env_with_signer(
         app_mode,
         neg_risk_live_targets.map(OsString::from),
         approved_families.map(OsString::from),
         ready_families.map(OsString::from),
+        None,
     )
 }
 
 fn app_live_output_raw_env(
     app_mode: &str,
-    neg_risk_live_targets: Option<impl Into<OsString>>,
-    approved_families: Option<impl Into<OsString>>,
-    ready_families: Option<impl Into<OsString>>,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+) -> std::process::Output {
+    app_live_output_raw_env_with_signer(
+        app_mode,
+        neg_risk_live_targets,
+        approved_families,
+        ready_families,
+        None,
+    )
+}
+
+fn app_live_output_with_operator_inputs_and_signer(
+    app_mode: &str,
+    neg_risk_live_targets: Option<&str>,
+    approved_families: Option<&str>,
+    ready_families: Option<&str>,
+    local_signer_config: Option<&str>,
+) -> std::process::Output {
+    app_live_output_raw_env_with_signer(
+        app_mode,
+        neg_risk_live_targets.map(OsString::from),
+        approved_families.map(OsString::from),
+        ready_families.map(OsString::from),
+        local_signer_config.map(OsString::from),
+    )
+}
+
+fn app_live_output_raw_env_with_signer(
+    app_mode: &str,
+    neg_risk_live_targets: Option<OsString>,
+    approved_families: Option<OsString>,
+    ready_families: Option<OsString>,
+    local_signer_config: Option<OsString>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
     command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
+    command.env_remove("AXIOM_LOCAL_SIGNER_CONFIG");
     if let Some(value) = neg_risk_live_targets {
-        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_TARGETS", value);
     }
     if let Some(value) = approved_families {
-        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES", value);
     }
     if let Some(value) = ready_families {
-        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value.into());
+        command.env("AXIOM_NEG_RISK_LIVE_READY_FAMILIES", value);
+    }
+    if let Some(value) = local_signer_config {
+        command.env("AXIOM_LOCAL_SIGNER_CONFIG", value);
     }
     command.output().expect("app-live should run")
+}
+
+fn valid_local_signer_config_json() -> &'static str {
+    r#"
+    {
+      "signer": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "funder_address": "0x2222222222222222222222222222222222222222",
+        "signature_type": "Eoa",
+        "wallet_route": "Eoa"
+      },
+      "l2_auth": {
+        "api_key": "poly-api-key-1",
+        "passphrase": "poly-passphrase-1",
+        "timestamp": "1700000000",
+        "signature": "poly-signature-1"
+      },
+      "relayer_auth": {
+        "kind": "builder_api_key",
+        "api_key": "builder-api-key-1",
+        "timestamp": "1700000001",
+        "passphrase": "builder-passphrase-1",
+        "signature": "builder-signature-1"
+      }
+    }
+    "#
 }
 
 fn app_live_binary() -> PathBuf {

@@ -1,4 +1,7 @@
-use app_live::{load_neg_risk_live_targets, ConfigError};
+use app_live::{
+    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
+    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+};
 
 #[test]
 fn parses_neg_risk_live_target_config_from_env_json() {
@@ -70,4 +73,75 @@ fn rejects_duplicate_neg_risk_family_ids() {
             family_id: "family-a".to_owned()
         }
     );
+}
+
+#[test]
+fn parses_local_signer_config_from_env_json() {
+    let json = r#"
+    {
+      "signer": {
+        "address": "0x1111111111111111111111111111111111111111",
+        "funder_address": "0x2222222222222222222222222222222222222222",
+        "signature_type": "Eoa",
+        "wallet_route": "Eoa"
+      },
+      "l2_auth": {
+        "api_key": "poly-api-key-1",
+        "passphrase": "poly-passphrase-1",
+        "timestamp": "1700000000",
+        "signature": "poly-signature-1"
+      },
+      "relayer_auth": {
+        "kind": "builder_api_key",
+        "api_key": "builder-api-key-1",
+        "timestamp": "1700000001",
+        "passphrase": "builder-passphrase-1",
+        "signature": "builder-signature-1"
+      }
+    }
+    "#;
+
+    let config = load_local_signer_config(Some(json)).unwrap();
+    assert_eq!(
+        config,
+        LocalSignerConfig {
+            signer: LocalSignerIdentity {
+                address: "0x1111111111111111111111111111111111111111".to_owned(),
+                funder_address: "0x2222222222222222222222222222222222222222".to_owned(),
+                signature_type: "Eoa".to_owned(),
+                wallet_route: "Eoa".to_owned(),
+            },
+            l2_auth: LocalL2AuthHeaders {
+                api_key: "poly-api-key-1".to_owned(),
+                passphrase: "poly-passphrase-1".to_owned(),
+                timestamp: "1700000000".to_owned(),
+                signature: "poly-signature-1".to_owned(),
+            },
+            relayer_auth: LocalRelayerAuth::BuilderApiKey {
+                api_key: "builder-api-key-1".to_owned(),
+                timestamp: "1700000001".to_owned(),
+                passphrase: "builder-passphrase-1".to_owned(),
+                signature: "builder-signature-1".to_owned(),
+            },
+        }
+    );
+}
+
+#[test]
+fn missing_local_signer_config_returns_error() {
+    let error = load_local_signer_config(None).unwrap_err();
+
+    assert!(matches!(error, ConfigError::MissingLocalSignerConfig));
+    assert!(error.to_string().contains("missing local signer config"));
+}
+
+#[test]
+fn rejects_invalid_local_signer_config_json() {
+    let error = load_local_signer_config(Some("{")).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidLocalSignerConfig { .. }
+    ));
+    assert!(error.to_string().contains("invalid local signer config"));
 }
