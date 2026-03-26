@@ -5,9 +5,10 @@ use app_live::{
     NegRiskLiveStateSource, NegRiskMemberLiveTarget, NegRiskRolloutEvidence,
 };
 use chrono::Utc;
-use domain::{ExecutionMode, ExternalFactEvent};
+use domain::{ExecutionMode, ExternalFactEvent, RuntimeMode};
 use rust_decimal::Decimal;
 use serde_json::json;
+use state::PendingReconcileAnchor;
 
 #[test]
 fn live_ready_family_with_config_and_live_approval_records_real_attempt_artifacts_and_requests() {
@@ -44,6 +45,25 @@ fn live_ready_family_with_config_and_live_approval_records_real_attempt_artifact
     assert_eq!(records[0].artifacts[0].stream, "neg-risk-live-orders");
     assert_eq!(records[0].order_requests.len(), 1);
     assert_eq!(records[0].order_requests[0]["order"]["tokenId"], "token-1");
+}
+
+#[test]
+fn live_ready_family_with_config_and_live_approval_enters_reconcile_first_posture() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        sample_live_target("family-a"),
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+
+    let summary = supervisor.run_once().unwrap();
+
+    assert_eq!(summary.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(summary.pending_reconcile_count, 1);
+    assert_eq!(summary.last_state_version, 0);
+    assert_eq!(summary.published_snapshot_id.as_deref(), Some("snapshot-0"));
+    assert_eq!(summary.published_snapshot_committed_journal_seq, Some(0));
 }
 
 #[test]
@@ -229,6 +249,38 @@ fn resume_discards_stale_live_execution_records_after_snapshot_advances() {
     assert!(supervisor.neg_risk_live_execution_records().is_empty());
 }
 
+#[test]
+fn restored_pending_reconcile_scope_blocks_fresh_live_submit_during_startup() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        sample_live_target("family-a"),
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+    supervisor.seed_runtime_progress(0, 0, Some("snapshot-0"));
+    supervisor.seed_committed_state_version(0);
+    supervisor.seed_pending_reconcile_count(1);
+    supervisor.seed_pending_reconcile_anchor(PendingReconcileAnchor::new(
+        "pending-family-a-1",
+        "submission-family-a-1",
+        "family-a",
+        "neg-risk",
+        "accepted but unconfirmed on restore",
+    ));
+
+    let summary = supervisor.run_once().unwrap();
+
+    assert_eq!(summary.runtime_mode, RuntimeMode::Reconciling);
+    assert_eq!(summary.pending_reconcile_count, 1);
+    assert_eq!(summary.neg_risk_live_attempt_count, 0);
+    assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+    assert_eq!(
+        summary.neg_risk_live_state_source,
+        NegRiskLiveStateSource::None
+    );
+}
+
 fn sample_input_task_event(journal_seq: i64) -> app_live::InputTaskEvent {
     app_live::InputTaskEvent::new(
         journal_seq,
@@ -265,6 +317,8 @@ fn sample_live_execution_record(snapshot_id: &str) -> NegRiskLiveExecutionRecord
         route: "neg-risk".to_owned(),
         scope: "family-a".to_owned(),
         matched_rule_id: Some("family-a-live".to_owned()),
+        submission_ref: Some("submission-family-a-1".to_owned()),
+        pending_ref: Some("pending-hook:attempt-family-a-1".to_owned()),
         artifacts: vec![NegRiskLiveArtifact {
             stream: "neg-risk-live-orders".to_owned(),
             payload: json!({

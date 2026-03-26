@@ -34,6 +34,8 @@ pub struct NegRiskLiveExecutionRecord {
     pub route: String,
     pub scope: String,
     pub matched_rule_id: Option<String>,
+    pub submission_ref: Option<String>,
+    pub pending_ref: Option<String>,
     pub artifacts: Vec<NegRiskLiveArtifact>,
     pub order_requests: Vec<Value>,
 }
@@ -145,6 +147,8 @@ fn execute_live_family(
         route: attempt_context.route,
         scope: attempt_context.scope,
         matched_rule_id: attempt_context.matched_rule_id,
+        submission_ref: receipt.submission_ref,
+        pending_ref: receipt.pending_ref,
         artifacts: hook.artifacts(),
         order_requests: hook.order_requests(),
     })

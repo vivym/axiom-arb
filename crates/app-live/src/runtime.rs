@@ -6,9 +6,14 @@ use std::{
 
 use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
+use persistence::{
+    connect_pool_from_env,
+    models::{ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow},
+    ExecutionAttemptRepo, LiveSubmissionRepo, PendingReconcileRepo, RuntimeProgressRepo,
+};
 use state::{
-    ApplyError, ApplyResult, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
-    StateStore,
+    ApplyError, ApplyResult, PendingReconcileAnchor, PublishedSnapshot, ReconcileReport,
+    RemoteSnapshot, StateApplier, StateStore,
 };
 use tracing::field;
 
@@ -16,6 +21,7 @@ use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
 use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
+use crate::negrisk_live::NegRiskLiveExecutionRecord;
 use crate::supervisor::{AppSupervisor, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +91,15 @@ pub struct AppRunResult {
     pub summary: SupervisorSummary,
 }
 
+#[derive(Debug, Clone)]
+struct DurableLiveStartupState {
+    last_journal_seq: i64,
+    last_state_version: u64,
+    published_snapshot_id: Option<String>,
+    pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+}
+
 impl AppRuntime {
     pub fn new(app_mode: AppRuntimeMode) -> Self {
         Self::new_instrumented(app_mode, AppInstrumentation::disabled())
@@ -139,6 +154,19 @@ impl AppRuntime {
         self.store.pending_reconcile_count()
     }
 
+    pub fn restore_committed_anchor(
+        &mut self,
+        committed_state_version: u64,
+        committed_journal_seq: i64,
+    ) {
+        self.store
+            .restore_committed_anchor(committed_state_version, committed_journal_seq);
+    }
+
+    pub fn restore_pending_reconcile_anchor(&mut self, anchor: PendingReconcileAnchor) {
+        self.store.restore_pending_reconcile_anchor(anchor);
+    }
+
     pub fn reconcile(&mut self, snapshot: RemoteSnapshot) -> ReconcileReport {
         let span = tracing::info_span!(
             span_names::APP_RUNTIME_RECONCILE,
@@ -153,6 +181,9 @@ impl AppRuntime {
             for attention in &report.attention {
                 self.instrumentation.record_reconcile_attention(attention);
             }
+        }
+        if report.succeeded {
+            self.store.clear_pending_reconcile_after_restore();
         }
         self.anchor_baseline_if_ready(report.succeeded);
         let pending_reconcile_count = self.store.pending_reconcile_count();
@@ -331,6 +362,37 @@ where
     supervisor.run_bootstrap()
 }
 
+pub fn run_live_from_durable_store_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
+    let durable_state = load_durable_live_startup_state()?;
+    let mut supervisor = match instrumentation.recorder() {
+        Some(recorder) => {
+            AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
+        }
+        None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
+    };
+    supervisor.seed_runtime_progress(
+        durable_state.last_journal_seq,
+        durable_state.last_state_version,
+        durable_state.published_snapshot_id.as_deref(),
+    );
+    supervisor.seed_committed_state_version(durable_state.last_state_version);
+    supervisor.seed_pending_reconcile_count(durable_state.pending_reconcile_anchors.len());
+    for anchor in durable_state.pending_reconcile_anchors {
+        supervisor.seed_pending_reconcile_anchor(anchor);
+    }
+    for record in durable_state.live_execution_records {
+        supervisor.seed_neg_risk_live_execution_record(record);
+    }
+
+    supervisor.run_startup().map_err(Into::into)
+}
+
 pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
 where
     S: BootstrapSource,
@@ -361,4 +423,131 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
         ApplyResult::Deferred { .. } => "deferred",
         ApplyResult::ReconcileRequired { .. } => "reconcile_required",
     }
+}
+
+fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        let progress = RuntimeProgressRepo.current(&pool).await?;
+        let attempts = ExecutionAttemptRepo.list_live_attempts(&pool).await?;
+        let submissions_by_attempt = LiveSubmissionRepo
+            .list_for_attempts(
+                &pool,
+                &attempts
+                    .iter()
+                    .map(|attempt| attempt.attempt_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        let pending_rows = PendingReconcileRepo.list_all(&pool).await?;
+        let pending_reconcile_anchors = pending_rows
+            .iter()
+            .map(pending_reconcile_anchor_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        let live_execution_records =
+            durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
+
+        let (last_journal_seq, last_state_version, published_snapshot_id) = match progress {
+            Some(progress) => (
+                progress.last_journal_seq,
+                u64::try_from(progress.last_state_version).map_err(|_| {
+                    boxed_error(format!(
+                        "durable runtime progress state version {} is negative",
+                        progress.last_state_version
+                    ))
+                })?,
+                progress.last_snapshot_id,
+            ),
+            None => (0, 0, Some("snapshot-0".to_owned())),
+        };
+
+        Ok(DurableLiveStartupState {
+            last_journal_seq,
+            last_state_version,
+            published_snapshot_id,
+            pending_reconcile_anchors,
+            live_execution_records,
+        })
+    })
+}
+
+fn durable_live_execution_records(
+    attempts: Vec<ExecutionAttemptRow>,
+    submissions_by_attempt: BTreeMap<String, Vec<LiveSubmissionRecordRow>>,
+    pending_rows: &[PendingReconcileRow],
+) -> Result<Vec<NegRiskLiveExecutionRecord>, Box<dyn std::error::Error>> {
+    let pending_by_submission_ref = pending_rows
+        .iter()
+        .map(|row| {
+            let submission_ref =
+                payload_string(&row.payload, "submission_ref").map_err(boxed_error)?;
+            Ok((submission_ref, row.pending_ref.clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>, Box<dyn std::error::Error>>>()?;
+
+    attempts
+        .into_iter()
+        .map(|attempt| {
+            let attempt_no = u32::try_from(attempt.attempt_no).map_err(|_| {
+                boxed_error(format!(
+                    "durable live attempt {} has negative attempt_no {}",
+                    attempt.attempt_id, attempt.attempt_no
+                ))
+            })?;
+            let submissions = submissions_by_attempt
+                .get(&attempt.attempt_id)
+                .cloned()
+                .unwrap_or_default();
+            let submission_ref = submissions.first().map(|row| row.submission_ref.clone());
+            let pending_ref = submission_ref
+                .as_deref()
+                .and_then(|submission_ref| pending_by_submission_ref.get(submission_ref))
+                .cloned();
+
+            Ok(NegRiskLiveExecutionRecord {
+                attempt_id: attempt.attempt_id,
+                plan_id: attempt.plan_id,
+                snapshot_id: attempt.snapshot_id,
+                execution_mode: attempt.execution_mode,
+                attempt_no,
+                idempotency_key: attempt.idempotency_key,
+                route: attempt.route,
+                scope: attempt.scope,
+                matched_rule_id: attempt.matched_rule_id,
+                submission_ref,
+                pending_ref,
+                artifacts: Vec::new(),
+                order_requests: submissions.into_iter().map(|row| row.payload).collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()
+}
+
+fn pending_reconcile_anchor_from_row(
+    row: &PendingReconcileRow,
+) -> Result<PendingReconcileAnchor, Box<dyn std::error::Error>> {
+    Ok(PendingReconcileAnchor::new(
+        row.pending_ref.clone(),
+        payload_string(&row.payload, "submission_ref").map_err(boxed_error)?,
+        payload_string(&row.payload, "family_id").unwrap_or_else(|_| row.scope_id.clone()),
+        payload_string(&row.payload, "route").unwrap_or_else(|_| "neg-risk".to_owned()),
+        payload_string(&row.payload, "reason").unwrap_or_else(|_| row.reason.clone()),
+    ))
+}
+
+fn payload_string(payload: &serde_json::Value, key: &str) -> Result<String, String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("missing durable payload field {key}"))
+}
+
+fn boxed_error(message: impl Into<String>) -> Box<dyn std::error::Error> {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
 }
