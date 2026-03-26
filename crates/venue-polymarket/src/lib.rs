@@ -2,6 +2,7 @@ mod auth;
 mod heartbeat;
 mod instrumentation;
 mod metadata;
+mod negrisk_live;
 mod orders;
 mod relayer;
 mod rest;
@@ -19,6 +20,7 @@ pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
 pub use instrumentation::VenueProducerInstrumentation;
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
+pub use negrisk_live::{PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider};
 pub use orders::{
     build_post_order_request_from_signed_member, OrderSide, OrderType, PostOrder,
     PostOrderBuildError, PostOrderRequest, PostOrderTransport,
