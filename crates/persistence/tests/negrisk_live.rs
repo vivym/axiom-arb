@@ -510,6 +510,83 @@ async fn live_submission_records_carry_resume_truth_payload() {
 }
 
 #[tokio::test]
+async fn live_submission_records_reject_malformed_anchor_state() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-bad-state",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = LiveSubmissionRecordRow {
+        submission_ref: "submission-ref-bad-state".to_owned(),
+        attempt_id: "attempt-live-submit-bad-state".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "in_review".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-bad-state",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
+        }),
+    };
+
+    let err = LiveSubmissionRepo.append(&db.pool, row).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.state"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_reject_shadow_attempt_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-shadow-submit-1",
+                ExecutionMode::Shadow,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let err = LiveSubmissionRepo
+        .append(
+            &db.pool,
+            sample_live_submission_record("attempt-shadow-submit-1", "submission-ref-shadow"),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::LiveSubmissionRequiresLiveAttempt { ref attempt_id, .. }
+        if attempt_id == "attempt-shadow-submit-1"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_artifacts_reject_shadow_attempt_ids() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

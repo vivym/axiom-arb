@@ -1434,6 +1434,7 @@ pub struct PendingReconcileRepo;
 
 impl PendingReconcileRepo {
     pub async fn append(&self, pool: &PgPool, row: &PendingReconcileRow) -> Result<()> {
+        validate_pending_reconcile_row(row)?;
         let result = sqlx::query(
             r#"
             INSERT INTO pending_reconcile_items (
@@ -1485,6 +1486,7 @@ pub struct LiveSubmissionRepo;
 
 impl LiveSubmissionRepo {
     pub async fn append(&self, pool: &PgPool, row: LiveSubmissionRecordRow) -> Result<()> {
+        validate_live_submission_record_row(&row)?;
         let result = sqlx::query(
             r#"
             INSERT INTO live_submission_records (
@@ -1496,7 +1498,9 @@ impl LiveSubmissionRepo {
                 state,
                 payload
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            SELECT $1, $2, $3, $4, $5, $6, $7
+            FROM execution_attempts
+            WHERE attempt_id = $2 AND execution_mode = $8
             ON CONFLICT (submission_ref) DO NOTHING
             "#,
         )
@@ -1507,6 +1511,7 @@ impl LiveSubmissionRepo {
         .bind(&row.provider)
         .bind(&row.state)
         .bind(&row.payload)
+        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
         .execute(pool)
         .await?;
 
@@ -1597,6 +1602,105 @@ impl LiveSubmissionRepo {
 
         Ok(submissions)
     }
+}
+
+const LIVE_SUBMISSION_ALLOWED_STATES: [&str; 2] = ["submitted", "pending_reconcile"];
+
+fn validate_pending_reconcile_row(row: &PendingReconcileRow) -> Result<()> {
+    if row.scope_kind != "family" {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.scope_kind",
+            row.scope_kind.clone(),
+        ));
+    }
+
+    let _submission_ref = required_anchor_string(
+        &row.payload,
+        "pending_reconcile_items.payload.submission_ref",
+    )?;
+    let family_id =
+        required_anchor_string(&row.payload, "pending_reconcile_items.payload.family_id")?;
+    let route = required_anchor_string(&row.payload, "pending_reconcile_items.payload.route")?;
+    let reason = required_anchor_string(&row.payload, "pending_reconcile_items.payload.reason")?;
+
+    if row.scope_id != family_id {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.scope_id",
+            row.scope_id.clone(),
+        ));
+    }
+
+    if row.reason != reason {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.reason",
+            row.reason.clone(),
+        ));
+    }
+
+    if route.is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "pending_reconcile_items.payload.route",
+            row.payload.to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_live_submission_record_row(row: &LiveSubmissionRecordRow) -> Result<()> {
+    let submission_ref = required_anchor_string(
+        &row.payload,
+        "live_submission_records.payload.submission_ref",
+    )?;
+    let family_id =
+        required_anchor_string(&row.payload, "live_submission_records.payload.family_id")?;
+    let route = required_anchor_string(&row.payload, "live_submission_records.payload.route")?;
+    let reason = required_anchor_string(&row.payload, "live_submission_records.payload.reason")?;
+
+    if submission_ref != row.submission_ref {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.payload.submission_ref",
+            submission_ref,
+        ));
+    }
+
+    if family_id != row.scope {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.scope",
+            row.scope.clone(),
+        ));
+    }
+
+    if route != row.route {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.route",
+            row.route.clone(),
+        ));
+    }
+
+    if reason.is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.payload.reason",
+            row.payload.to_string(),
+        ));
+    }
+
+    if !LIVE_SUBMISSION_ALLOWED_STATES.contains(&row.state.as_str()) {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.state",
+            row.state.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn required_anchor_string<'a>(payload: &'a Value, field: &'static str) -> Result<&'a str> {
+    let key = field.rsplit('.').next().unwrap_or(field);
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| PersistenceError::invalid_value(field, payload.to_string()))
 }
 
 #[derive(Debug, Default, Clone, Copy)]

@@ -399,7 +399,8 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 }
 
 #[tokio::test]
-async fn live_submission_migration_preserves_existing_live_artifacts_pending_reconcile_anchors_and_blocks_mode_drift() {
+async fn live_submission_migration_preserves_existing_live_artifacts_pending_reconcile_anchors_and_blocks_mode_drift(
+) {
     let db = TestDatabase::new().await;
 
     apply_migration_file(&db.pool, "0005_unified_runtime_backbone.sql")

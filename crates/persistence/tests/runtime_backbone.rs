@@ -710,6 +710,37 @@ async fn pending_reconcile_round_trips_resume_payload_fields() {
 }
 
 #[tokio::test]
+async fn pending_reconcile_append_rejects_malformed_payload_missing_submission_ref() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-bad-1".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-1".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "pending_reconcile_items.payload.submission_ref"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_submission_records_reject_mode_drift_resume_anchors() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
