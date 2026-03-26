@@ -741,6 +741,112 @@ async fn pending_reconcile_append_rejects_malformed_payload_missing_submission_r
 }
 
 #[tokio::test]
+async fn pending_reconcile_append_rejects_blank_submission_refs() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-blank-submission-ref".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "family-1".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "submission_ref": "   ",
+            "family_id": "family-1",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "pending_reconcile_items.payload.submission_ref"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_append_rejects_blank_family_scope_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = PendingReconcileRow {
+        pending_ref: "pending-blank-family-id".to_owned(),
+        scope_kind: "family".to_owned(),
+        scope_id: "   ".to_owned(),
+        reason: "ambiguous_attempt".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-1",
+            "family_id": "   ",
+            "route": "neg-risk",
+            "reason": "ambiguous_attempt",
+        }),
+    };
+
+    let err = PendingReconcileRepo
+        .append(&db.pool, &row)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "pending_reconcile_items.payload.family_id"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn pending_reconcile_list_all_rejects_malformed_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO pending_reconcile_items (
+            pending_ref,
+            scope_kind,
+            scope_id,
+            reason,
+            payload
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind("pending-read-invalid-1")
+    .bind("family")
+    .bind("family-1")
+    .bind("ambiguous_attempt")
+    .bind(json!({
+        "submission_ref": "submission-ref-1",
+        "family_id": "family-1",
+        "route": "   ",
+        "reason": "ambiguous_attempt",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = PendingReconcileRepo.list_all(&db.pool).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "pending_reconcile_items.payload.route"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_submission_records_reject_mode_drift_resume_anchors() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

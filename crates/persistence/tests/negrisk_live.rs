@@ -510,6 +510,135 @@ async fn live_submission_records_carry_resume_truth_payload() {
 }
 
 #[tokio::test]
+async fn live_submission_records_reject_blank_submission_refs() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-blank-ref",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = LiveSubmissionRecordRow {
+        submission_ref: "   ".to_owned(),
+        attempt_id: "attempt-live-submit-blank-ref".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "submitted".to_owned(),
+        payload: json!({
+            "submission_ref": "   ",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "submitted_for_execution",
+        }),
+    };
+
+    let err = LiveSubmissionRepo.append(&db.pool, row).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.payload.submission_ref"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_reject_blank_family_scope_ids() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-blank-scope",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = LiveSubmissionRecordRow {
+        submission_ref: "submission-ref-blank-scope".to_owned(),
+        attempt_id: "attempt-live-submit-blank-scope".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "   ".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "submitted".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-blank-scope",
+            "family_id": "   ",
+            "route": "neg-risk",
+            "reason": "submitted_for_execution",
+        }),
+    };
+
+    let err = LiveSubmissionRepo.append(&db.pool, row).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.payload.family_id"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_reject_blank_providers() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-blank-provider",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row = LiveSubmissionRecordRow {
+        submission_ref: "submission-ref-blank-provider".to_owned(),
+        attempt_id: "attempt-live-submit-blank-provider".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "   ".to_owned(),
+        state: "submitted".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-blank-provider",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "submitted_for_execution",
+        }),
+    };
+
+    let err = LiveSubmissionRepo.append(&db.pool, row).await.unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.provider"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_submission_records_reject_malformed_anchor_state() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -547,6 +676,225 @@ async fn live_submission_records_reject_malformed_anchor_state() {
         err,
         PersistenceError::InvalidValue { ref kind, .. }
         if *kind == "live_submission_records.state"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_append_is_idempotent_per_submission_ref() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-idempotent-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let row =
+        sample_live_submission_record("attempt-live-submit-idempotent-1", "submission-ref-same");
+
+    LiveSubmissionRepo
+        .append(&db.pool, row.clone())
+        .await
+        .unwrap();
+    LiveSubmissionRepo
+        .append(&db.pool, row.clone())
+        .await
+        .unwrap();
+
+    let rows = LiveSubmissionRepo
+        .list_for_attempt(&db.pool, "attempt-live-submit-idempotent-1")
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![row]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_append_rejects_conflicting_reuse_of_submission_ref() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-conflict-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let original =
+        sample_live_submission_record("attempt-live-submit-conflict-1", "submission-ref-shared");
+    let conflicting = LiveSubmissionRecordRow {
+        submission_ref: "submission-ref-shared".to_owned(),
+        attempt_id: "attempt-live-submit-conflict-1".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        provider: "venue-polymarket".to_owned(),
+        state: "pending_reconcile".to_owned(),
+        payload: json!({
+            "submission_ref": "submission-ref-shared",
+            "family_id": "family-a",
+            "route": "neg-risk",
+            "reason": "awaiting_resolve",
+        }),
+    };
+
+    LiveSubmissionRepo
+        .append(&db.pool, original.clone())
+        .await
+        .unwrap();
+
+    let err = LiveSubmissionRepo
+        .append(&db.pool, conflicting)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::ConflictingLiveSubmissionRecord { ref submission_ref }
+        if submission_ref == "submission-ref-shared"
+    ));
+
+    let rows = LiveSubmissionRepo
+        .list_for_attempt(&db.pool, "attempt-live-submit-conflict-1")
+        .await
+        .unwrap();
+    assert_eq!(rows, vec![original]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_list_for_attempt_rejects_malformed_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-read-invalid-1",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_submission_records (
+            submission_ref,
+            attempt_id,
+            route,
+            scope,
+            provider,
+            state,
+            payload
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("submission-ref-read-invalid-1")
+    .bind("attempt-live-submit-read-invalid-1")
+    .bind("neg-risk")
+    .bind("family-a")
+    .bind("   ")
+    .bind("submitted")
+    .bind(json!({
+        "submission_ref": "submission-ref-read-invalid-1",
+        "family_id": "family-a",
+        "route": "neg-risk",
+        "reason": "submitted_for_execution",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = LiveSubmissionRepo
+        .list_for_attempt(&db.pool, "attempt-live-submit-read-invalid-1")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.provider"
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn live_submission_records_list_for_attempts_rejects_malformed_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    ExecutionAttemptRepo
+        .append(
+            &db.pool,
+            &sample_attempt(
+                "attempt-live-submit-read-invalid-2",
+                ExecutionMode::Live,
+                "negrisk-submit-family:family-a:member-1",
+            ),
+        )
+        .await
+        .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO live_submission_records (
+            submission_ref,
+            attempt_id,
+            route,
+            scope,
+            provider,
+            state,
+            payload
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("submission-ref-read-invalid-2")
+    .bind("attempt-live-submit-read-invalid-2")
+    .bind("neg-risk")
+    .bind("family-a")
+    .bind("venue-polymarket")
+    .bind("submitted")
+    .bind(json!({
+        "submission_ref": "   ",
+        "family_id": "family-a",
+        "route": "neg-risk",
+        "reason": "submitted_for_execution",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let err = LiveSubmissionRepo
+        .list_for_attempts(&db.pool, &["attempt-live-submit-read-invalid-2".to_owned()])
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidValue { ref kind, .. }
+        if *kind == "live_submission_records.payload.submission_ref"
     ));
 
     db.cleanup().await;

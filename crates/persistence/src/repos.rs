@@ -1678,6 +1678,13 @@ fn validate_live_submission_record_row(row: &LiveSubmissionRecordRow) -> Result<
         ));
     }
 
+    if row.provider.trim().is_empty() {
+        return Err(PersistenceError::invalid_value(
+            "live_submission_records.provider",
+            row.provider.clone(),
+        ));
+    }
+
     if reason.is_empty() {
         return Err(PersistenceError::invalid_value(
             "live_submission_records.payload.reason",
@@ -1697,10 +1704,16 @@ fn validate_live_submission_record_row(row: &LiveSubmissionRecordRow) -> Result<
 
 fn required_anchor_string<'a>(payload: &'a Value, field: &'static str) -> Result<&'a str> {
     let key = field.rsplit('.').next().unwrap_or(field);
-    payload
+    let value = payload
         .get(key)
         .and_then(Value::as_str)
-        .ok_or_else(|| PersistenceError::invalid_value(field, payload.to_string()))
+        .ok_or_else(|| PersistenceError::invalid_value(field, payload.to_string()))?;
+
+    if value.trim().is_empty() {
+        return Err(PersistenceError::invalid_value(field, payload.to_string()));
+    }
+
+    Ok(value)
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -2079,13 +2092,15 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
 }
 
 fn map_pending_reconcile_row(row: PgRow) -> Result<PendingReconcileRow> {
-    Ok(PendingReconcileRow {
+    let row = PendingReconcileRow {
         pending_ref: row.try_get("pending_ref")?,
         scope_kind: row.try_get("scope_kind")?,
         scope_id: row.try_get("scope_id")?,
         reason: row.try_get("reason")?,
         payload: row.try_get("payload")?,
-    })
+    };
+    validate_pending_reconcile_row(&row)?;
+    Ok(row)
 }
 
 fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
@@ -2111,7 +2126,7 @@ fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRo
 }
 
 fn map_live_submission_record_row(row: PgRow) -> Result<LiveSubmissionRecordRow> {
-    Ok(LiveSubmissionRecordRow {
+    let row = LiveSubmissionRecordRow {
         submission_ref: row.try_get("submission_ref")?,
         attempt_id: row.try_get("attempt_id")?,
         route: row.try_get("route")?,
@@ -2119,7 +2134,9 @@ fn map_live_submission_record_row(row: PgRow) -> Result<LiveSubmissionRecordRow>
         provider: row.try_get("provider")?,
         state: row.try_get("state")?,
         payload: row.try_get("payload")?,
-    })
+    };
+    validate_live_submission_record_row(&row)?;
+    Ok(row)
 }
 
 fn map_neg_risk_family_validation_row(row: PgRow) -> Result<NegRiskFamilyValidationRow> {
