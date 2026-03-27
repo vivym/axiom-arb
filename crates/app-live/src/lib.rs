@@ -32,8 +32,8 @@ pub use instrumentation::AppInstrumentation;
 pub use negrisk_live::{NegRiskLiveArtifact, NegRiskLiveExecutionRecord};
 pub use posture::{ScopeRestriction, ScopeRestrictionKind, SupervisorPosture};
 pub use queues::{
-    CandidateNotice, CandidateNoticeQueue, FollowUpQueue, FollowUpWork, IngressQueue,
-    SnapshotDispatchQueue, SnapshotNotice,
+    CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth, FollowUpQueue, FollowUpWork,
+    IngressQueue, SnapshotDispatchQueue, SnapshotNotice,
 };
 pub use runtime::{
     run_live, run_live_from_durable_store_instrumented,

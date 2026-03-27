@@ -116,11 +116,36 @@ impl SnapshotDispatchQueue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateRestrictionTruth {
+    Eligible,
+    Restricted { reason: String },
+}
+
+impl CandidateRestrictionTruth {
+    pub fn eligible() -> Self {
+        Self::Eligible
+    }
+
+    pub fn restricted(reason: impl Into<String>) -> Self {
+        Self::Restricted {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn restriction_reason(&self) -> Option<&str> {
+        match self {
+            Self::Eligible => None,
+            Self::Restricted { reason } => Some(reason.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateNotice {
     pub publication: CandidatePublication,
     pub dirty_domains: BTreeSet<DirtyDomain>,
     pub operator_target_revision: Option<String>,
-    pub halted: bool,
+    pub restriction: CandidateRestrictionTruth,
 }
 
 impl CandidateNotice {
@@ -128,13 +153,13 @@ impl CandidateNotice {
         publication: &CandidatePublication,
         dirty_domains: impl IntoIterator<Item = DirtyDomain>,
         operator_target_revision: Option<&str>,
-        halted: bool,
+        restriction: CandidateRestrictionTruth,
     ) -> Self {
         Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
-            halted,
+            restriction,
         }
     }
 }

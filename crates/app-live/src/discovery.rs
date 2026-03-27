@@ -6,7 +6,7 @@ use persistence::models::{AdoptableTargetRevisionRow, CandidateTargetSetRow};
 use serde_json::json;
 use state::{CandidatePublication, DirtyDomain};
 
-use crate::queues::CandidateNoticeQueue;
+use crate::queues::{CandidateNoticeQueue, CandidateRestrictionTruth};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryReport {
@@ -42,15 +42,17 @@ impl CandidateBridge {
         candidate_set: &CandidateTargetSet,
         operator_target_revision: Option<&str>,
     ) -> Result<CandidateArtifactRender, String> {
+        let Some(operator_target_revision) = operator_target_revision.map(str::to_owned) else {
+            return Err(
+                "candidate bridge requires explicit rendered operator target revision".to_owned(),
+            );
+        };
         let candidate_revision = candidate_set.target_set_id.clone();
         let adoptable_revision = candidate_set
             .adoptable_revision
             .as_ref()
             .map(|revision| revision.revision_id.clone())
             .unwrap_or_else(|| format!("adoptable-{candidate_revision}"));
-        let operator_target_revision = operator_target_revision
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("operator-target-{candidate_revision}"));
         let advisory = CandidatePricingEngine::default().advisory_terms(candidate_set);
 
         Ok(CandidateArtifactRender {
@@ -105,7 +107,7 @@ impl CandidateValidationEngine {
     fn candidate_set_from_publication(
         &self,
         publication: &CandidatePublication,
-        halted: bool,
+        restriction: &CandidateRestrictionTruth,
         _operator_target_revision: Option<&str>,
     ) -> Result<(CandidateTargetSet, String), String> {
         let Some(view) = publication.view.as_ref() else {
@@ -116,11 +118,11 @@ impl CandidateValidationEngine {
             return Err("candidate publication has no discovery records".to_owned());
         };
 
-        let disposition = candidate_disposition(&discovery_record, halted);
+        let disposition = candidate_disposition(&discovery_record, restriction);
         let validation = match disposition {
             "adoptable" => CandidateValidationResult::Adoptable,
             "deferred" => CandidateValidationResult::Deferred {
-                reason: deferred_reason(&discovery_record, halted),
+                reason: deferred_reason(&discovery_record, restriction),
             },
             "excluded" => CandidateValidationResult::Rejected {
                 reason: "candidate excluded by conservative discovery policy".to_owned(),
@@ -190,11 +192,11 @@ impl DiscoverySupervisor {
         let _ = self.pricing;
         let (candidate_set, disposition) = self.validation.candidate_set_from_publication(
             &notice.publication,
-            notice.halted,
+            &notice.restriction,
             notice.operator_target_revision.as_deref(),
         )?;
 
-        if disposition != "adoptable" {
+        if disposition != "adoptable" || notice.operator_target_revision.is_none() {
             return Ok(DiscoveryReport {
                 candidate_revision: Some(candidate_set.target_set_id),
                 adoptable_revision: None,
@@ -218,8 +220,13 @@ impl DiscoverySupervisor {
     }
 }
 
-fn candidate_disposition(discovery_record: &FamilyDiscoveryRecord, halted: bool) -> &'static str {
-    if halted || discovery_record.backfill_completed_at.is_none() {
+fn candidate_disposition(
+    discovery_record: &FamilyDiscoveryRecord,
+    restriction: &CandidateRestrictionTruth,
+) -> &'static str {
+    if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
+        || discovery_record.backfill_completed_at.is_none()
+    {
         "deferred"
     } else if discovery_record.family_id.as_str().trim().is_empty() {
         "excluded"
@@ -228,9 +235,12 @@ fn candidate_disposition(discovery_record: &FamilyDiscoveryRecord, halted: bool)
     }
 }
 
-fn deferred_reason(discovery_record: &FamilyDiscoveryRecord, halted: bool) -> String {
-    if halted {
-        "candidate generation halted by validation truth".to_owned()
+fn deferred_reason(
+    discovery_record: &FamilyDiscoveryRecord,
+    restriction: &CandidateRestrictionTruth,
+) -> String {
+    if let Some(reason) = restriction.restriction_reason() {
+        reason.to_owned()
     } else if discovery_record.backfill_completed_at.is_none() {
         "candidate generation deferred until discovery backfill completes".to_owned()
     } else {

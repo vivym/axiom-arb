@@ -1,6 +1,7 @@
 use app_live::{
     CandidateArtifactRender, CandidateBridge, CandidateNotice, CandidateNoticeQueue,
-    DiscoveryReport, DiscoverySupervisor, InputTaskEvent, SnapshotDispatchQueue, SnapshotNotice,
+    CandidateRestrictionTruth, DiscoveryReport, DiscoverySupervisor, InputTaskEvent,
+    SnapshotDispatchQueue, SnapshotNotice,
 };
 use chrono::{TimeZone, Utc};
 use domain::{
@@ -18,7 +19,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
-        false,
+        CandidateRestrictionTruth::eligible(),
     );
 
     let mut candidate_queue = CandidateNoticeQueue::default();
@@ -92,13 +93,47 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
 }
 
 #[test]
-fn discovery_supervisor_defers_halted_candidate_without_rendering_adoption_outputs() {
+fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_operator_revision_missing(
+) {
+    let publication = ready_candidate_publication();
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-7".to_owned()),
+            adoptable_revision: None,
+            operator_target_revision: None,
+            live_dispatch_woken: false,
+            disposition: "adoptable".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_outputs() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
-        true,
+        CandidateRestrictionTruth::restricted("candidate generation halted by validation truth"),
     );
 
     let mut candidate_queue = CandidateNoticeQueue::default();
@@ -139,7 +174,7 @@ fn discovery_supervisor_excludes_weak_candidate_without_rendering_adoption_outpu
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
-        false,
+        CandidateRestrictionTruth::eligible(),
     );
 
     let mut candidate_queue = CandidateNoticeQueue::default();
