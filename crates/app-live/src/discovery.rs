@@ -14,6 +14,9 @@ pub struct DiscoveryReport {
     pub adoptable_revision: Option<String>,
     pub operator_target_revision: Option<String>,
     pub target_count: usize,
+    pub adoptable_target_count: usize,
+    pub deferred_target_count: usize,
+    pub excluded_target_count: usize,
     pub live_dispatch_woken: bool,
     pub disposition: String,
 }
@@ -132,7 +135,7 @@ impl CandidateValidationEngine {
         publication: &CandidatePublication,
         restriction: &CandidateRestrictionTruth,
         _operator_target_revision: Option<&str>,
-    ) -> Result<(CandidateTargetSet, String), String> {
+    ) -> Result<(CandidateTargetSet, String, ValidationSummary), String> {
         let Some(view) = publication.view.as_ref() else {
             return Err("candidate publication is not ready".to_owned());
         };
@@ -141,33 +144,26 @@ impl CandidateValidationEngine {
             return Err("candidate publication has no discovery records".to_owned());
         };
 
-        let disposition = candidate_disposition(&view.discovery_records, restriction);
-        let validation = match disposition.as_str() {
-            "adoptable" => CandidateValidationResult::Adoptable,
-            "deferred" => CandidateValidationResult::Deferred {
-                reason: deferred_reason(&view.discovery_records, restriction),
-            },
-            "excluded" => CandidateValidationResult::Rejected {
-                reason: "candidate excluded by conservative discovery policy".to_owned(),
-            },
-            other => return Err(format!("unsupported candidate disposition {other}")),
-        };
+        let targets: Vec<_> = view
+            .discovery_records
+            .iter()
+            .map(|record| {
+                CandidateTarget::new(
+                    format!("candidate-target-{}", record.family_id.as_str()),
+                    EventFamilyId::from(record.family_id.as_str()),
+                    validation_for_record(record, restriction),
+                )
+            })
+            .collect();
+        let summary = ValidationSummary::from_targets(&targets);
+        let disposition = summary.aggregate_disposition().to_owned();
 
         let mut candidate_set = CandidateTargetSet::new(
             publication.publication_id.clone(),
             publication.publication_id.clone(),
             discovery_record.clone(),
             CandidatePolicyAnchor::new("candidate-generation", "policy-v1"),
-            view.discovery_records
-                .iter()
-                .map(|record| {
-                    CandidateTarget::new(
-                        format!("candidate-target-{}", record.family_id.as_str()),
-                        EventFamilyId::from(record.family_id.as_str()),
-                        validation.clone(),
-                    )
-                })
-                .collect(),
+            targets,
         );
 
         if disposition == "adoptable" {
@@ -178,7 +174,7 @@ impl CandidateValidationEngine {
             ));
         }
 
-        Ok((candidate_set, disposition.to_owned()))
+        Ok((candidate_set, disposition, summary))
     }
 }
 
@@ -212,17 +208,21 @@ impl DiscoverySupervisor {
                 adoptable_revision: None,
                 operator_target_revision: notice.operator_target_revision,
                 target_count: 0,
+                adoptable_target_count: 0,
+                deferred_target_count: 0,
+                excluded_target_count: 0,
                 live_dispatch_woken: false,
                 disposition: "ignored".to_owned(),
             });
         }
 
         let _ = self.pricing;
-        let (candidate_set, disposition) = self.validation.candidate_set_from_publication(
-            &notice.publication,
-            &notice.restriction,
-            notice.operator_target_revision.as_deref(),
-        )?;
+        let (candidate_set, disposition, summary) =
+            self.validation.candidate_set_from_publication(
+                &notice.publication,
+                &notice.restriction,
+                notice.operator_target_revision.as_deref(),
+            )?;
 
         if disposition != "adoptable" || notice.operator_target_revision.is_none() {
             return Ok(DiscoveryReport {
@@ -230,6 +230,9 @@ impl DiscoverySupervisor {
                 adoptable_revision: None,
                 operator_target_revision: None,
                 target_count: candidate_set.targets.len(),
+                adoptable_target_count: summary.adoptable_count,
+                deferred_target_count: summary.deferred_count,
+                excluded_target_count: summary.excluded_count,
                 live_dispatch_woken: false,
                 disposition,
             });
@@ -244,42 +247,78 @@ impl DiscoverySupervisor {
             adoptable_revision: Some(rendered.adoptable.adoptable_revision),
             operator_target_revision: Some(rendered.adoptable.rendered_operator_target_revision),
             target_count: candidate_set.targets.len(),
+            adoptable_target_count: summary.adoptable_count,
+            deferred_target_count: summary.deferred_count,
+            excluded_target_count: summary.excluded_count,
             live_dispatch_woken: false,
             disposition,
         })
     }
 }
 
-fn candidate_disposition(
-    discovery_records: &[FamilyDiscoveryRecord],
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidationSummary {
+    adoptable_count: usize,
+    deferred_count: usize,
+    excluded_count: usize,
+}
+
+impl ValidationSummary {
+    fn from_targets(targets: &[CandidateTarget]) -> Self {
+        let mut summary = Self {
+            adoptable_count: 0,
+            deferred_count: 0,
+            excluded_count: 0,
+        };
+
+        for target in targets {
+            match target.validation {
+                CandidateValidationResult::Adoptable => summary.adoptable_count += 1,
+                CandidateValidationResult::Deferred { .. } => summary.deferred_count += 1,
+                CandidateValidationResult::Rejected { .. } => summary.excluded_count += 1,
+            }
+        }
+
+        summary
+    }
+
+    fn aggregate_disposition(&self) -> &'static str {
+        if self.adoptable_count > 0 && self.deferred_count == 0 && self.excluded_count == 0 {
+            "adoptable"
+        } else if self.excluded_count > 0 {
+            "excluded"
+        } else {
+            "deferred"
+        }
+    }
+}
+
+fn validation_for_record(
+    discovery_record: &FamilyDiscoveryRecord,
     restriction: &CandidateRestrictionTruth,
-) -> String {
+) -> CandidateValidationResult {
     if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
-        || discovery_records
-            .iter()
-            .any(|record| record.backfill_completed_at.is_none())
+        || discovery_record.backfill_completed_at.is_none()
     {
-        "deferred".to_owned()
-    } else if discovery_records
-        .iter()
-        .any(|record| record.family_id.as_str().trim().is_empty())
-    {
-        "excluded".to_owned()
+        CandidateValidationResult::Deferred {
+            reason: deferred_reason(discovery_record, restriction),
+        }
+    } else if discovery_record.family_id.as_str().trim().is_empty() {
+        CandidateValidationResult::Rejected {
+            reason: "candidate excluded by conservative discovery policy".to_owned(),
+        }
     } else {
-        "adoptable".to_owned()
+        CandidateValidationResult::Adoptable
     }
 }
 
 fn deferred_reason(
-    discovery_records: &[FamilyDiscoveryRecord],
+    discovery_record: &FamilyDiscoveryRecord,
     restriction: &CandidateRestrictionTruth,
 ) -> String {
     if let Some(reason) = restriction.restriction_reason() {
         reason.to_owned()
-    } else if discovery_records
-        .iter()
-        .any(|record| record.backfill_completed_at.is_none())
-    {
+    } else if discovery_record.backfill_completed_at.is_none() {
         "candidate generation deferred until discovery backfill completes".to_owned()
     } else {
         "candidate generation deferred by conservative discovery policy".to_owned()

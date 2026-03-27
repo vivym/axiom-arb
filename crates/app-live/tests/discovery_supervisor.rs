@@ -48,6 +48,9 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
             adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
             operator_target_revision: Some("targets-rev-operator".to_owned()),
             target_count: 1,
+            adoptable_target_count: 1,
+            deferred_target_count: 0,
+            excluded_target_count: 0,
             live_dispatch_woken: false,
             disposition: "adoptable".to_owned(),
         }
@@ -191,6 +194,9 @@ fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_o
             adoptable_revision: None,
             operator_target_revision: None,
             target_count: 1,
+            adoptable_target_count: 1,
+            deferred_target_count: 0,
+            excluded_target_count: 0,
             live_dispatch_woken: false,
             disposition: "adoptable".to_owned(),
         }
@@ -232,6 +238,9 @@ fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_o
             adoptable_revision: None,
             operator_target_revision: None,
             target_count: 1,
+            adoptable_target_count: 0,
+            deferred_target_count: 1,
+            excluded_target_count: 0,
             live_dispatch_woken: false,
             disposition: "deferred".to_owned(),
         }
@@ -274,6 +283,9 @@ fn discovery_supervisor_excludes_weak_candidate_without_rendering_adoption_outpu
             adoptable_revision: None,
             operator_target_revision: None,
             target_count: 1,
+            adoptable_target_count: 0,
+            deferred_target_count: 0,
+            excluded_target_count: 1,
             live_dispatch_woken: false,
             disposition: "excluded".to_owned(),
         }
@@ -309,8 +321,48 @@ fn discovery_supervisor_keeps_all_discovery_records_in_candidate_targets() {
             adoptable_revision: Some("adoptable-candidate-pub-multi".to_owned()),
             operator_target_revision: Some("targets-rev-multi".to_owned()),
             target_count: 2,
+            adoptable_target_count: 2,
+            deferred_target_count: 0,
+            excluded_target_count: 0,
             live_dispatch_woken: false,
             disposition: "adoptable".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn discovery_supervisor_preserves_per_family_validation_for_mixed_publication() {
+    let publication = ready_mixed_candidate_publication();
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-mixed"),
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-mixed".to_owned()),
+            adoptable_revision: None,
+            operator_target_revision: None,
+            target_count: 2,
+            adoptable_target_count: 1,
+            deferred_target_count: 0,
+            excluded_target_count: 1,
+            live_dispatch_woken: false,
+            disposition: "excluded".to_owned(),
         }
     );
 }
@@ -394,6 +446,10 @@ fn ready_candidate_publication_with_family_id(family_id: &str) -> CandidatePubli
 
 fn ready_candidate_publication_with_family_ids(family_ids: &[&str]) -> CandidatePublication {
     ready_candidate_publication_fixture("candidate-pub-multi", family_ids)
+}
+
+fn ready_mixed_candidate_publication() -> CandidatePublication {
+    ready_candidate_publication_fixture("candidate-pub-mixed", &["family-a", "   "])
 }
 
 fn ready_candidate_publication_fixture(
