@@ -85,13 +85,19 @@ pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
         .build()
         .expect("test client");
 
-    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+    PolymarketRestClient::with_http_client(
+        client,
+        base_url.clone(),
+        base_url.clone(),
+        base_url,
+        None,
+    )
 }
 
 #[allow(dead_code)]
 pub fn sample_client_with_instrumentation(
     recorder: RuntimeMetricsRecorder,
-) -> PolymarketRestClient {
+) -> (PolymarketRestClient, ScriptedServer) {
     sample_metadata_client(
         vec![
             ScriptedResponse {
@@ -112,13 +118,39 @@ pub fn sample_client_with_instrumentation(
 #[allow(dead_code)]
 pub fn sample_failing_client_with_instrumentation(
     recorder: RuntimeMetricsRecorder,
-) -> PolymarketRestClient {
+) -> (PolymarketRestClient, ScriptedServer) {
     sample_metadata_client(
         vec![ScriptedResponse {
             expected_query_fragments: &["limit=2", "offset=0"],
             status_line: "200 OK",
             body: FAILURE_METADATA_PAGE,
         }],
+        recorder,
+    )
+}
+
+#[allow(dead_code)]
+pub fn sample_refresh_then_fail_client_with_instrumentation(
+    recorder: RuntimeMetricsRecorder,
+) -> (PolymarketRestClient, ScriptedServer) {
+    sample_metadata_client(
+        vec![
+            ScriptedResponse {
+                expected_query_fragments: &["limit=2", "offset=0"],
+                status_line: "200 OK",
+                body: SUCCESS_METADATA_PAGE_ONE,
+            },
+            ScriptedResponse {
+                expected_query_fragments: &["limit=2", "offset=2"],
+                status_line: "200 OK",
+                body: SUCCESS_METADATA_PAGE_TWO,
+            },
+            ScriptedResponse {
+                expected_query_fragments: &["limit=2", "offset=0"],
+                status_line: "200 OK",
+                body: FAILURE_METADATA_PAGE,
+            },
+        ],
         recorder,
     )
 }
@@ -351,51 +383,23 @@ const FAILURE_METADATA_PAGE: &str = r#"
 fn sample_metadata_client(
     scripted_responses: Vec<ScriptedResponse>,
     recorder: RuntimeMetricsRecorder,
-) -> PolymarketRestClient {
-    let base_url = spawn_scripted_server(scripted_responses);
+) -> (PolymarketRestClient, ScriptedServer) {
+    let server = ScriptedServer::spawn(scripted_responses);
+    let base_url = server.base_url();
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()
         .expect("test client");
 
-    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
-        .with_instrumentation(VenueProducerInstrumentation::enabled(recorder))
-}
+    let client = PolymarketRestClient::with_http_client(
+        client,
+        base_url.clone(),
+        base_url.clone(),
+        base_url,
+        Some(VenueProducerInstrumentation::enabled(recorder)),
+    );
 
-fn spawn_scripted_server(scripted_responses: Vec<ScriptedResponse>) -> Url {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-    let address = listener.local_addr().expect("server addr");
-
-    thread::spawn(move || {
-        for response in scripted_responses {
-            let (mut stream, _) = listener.accept().expect("accept request");
-            let request = read_request(&mut stream);
-
-            assert!(
-                request.starts_with("GET /events?"),
-                "unexpected request line: {request}"
-            );
-            for fragment in response.expected_query_fragments {
-                assert!(
-                    request.contains(fragment),
-                    "request missing fragment `{fragment}`: {request}"
-                );
-            }
-
-            let wire_response = format!(
-                "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                response.status_line,
-                response.body.len(),
-                response.body
-            );
-            stream
-                .write_all(wire_response.as_bytes())
-                .expect("write response");
-            stream.flush().expect("flush response");
-        }
-    });
-
-    Url::parse(&format!("http://{address}/")).expect("base url")
+    (client, server)
 }
 
 fn read_request(stream: &mut std::net::TcpStream) -> String {
@@ -422,6 +426,64 @@ struct ScriptedResponse {
     expected_query_fragments: &'static [&'static str],
     status_line: &'static str,
     body: &'static str,
+}
+
+#[derive(Debug)]
+pub struct ScriptedServer {
+    base_url: Url,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl ScriptedServer {
+    fn spawn(scripted_responses: Vec<ScriptedResponse>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("server addr");
+        let handle = thread::spawn(move || {
+            for response in scripted_responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let request = read_request(&mut stream);
+
+                assert!(
+                    request.starts_with("GET /events?"),
+                    "unexpected request line: {request}"
+                );
+                for fragment in response.expected_query_fragments {
+                    assert!(
+                        request.contains(fragment),
+                        "request missing fragment `{fragment}`: {request}"
+                    );
+                }
+
+                let wire_response = format!(
+                    "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    response.status_line,
+                    response.body.len(),
+                    response.body
+                );
+                stream
+                    .write_all(wire_response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+            }
+        });
+
+        Self {
+            base_url: Url::parse(&format!("http://{address}/")).expect("base url"),
+            handle: Some(handle),
+        }
+    }
+
+    pub fn base_url(&self) -> Url {
+        self.base_url.clone()
+    }
+}
+
+impl Drop for ScriptedServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("join scripted server thread");
+        }
+    }
 }
 
 #[allow(dead_code)]

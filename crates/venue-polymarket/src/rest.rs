@@ -115,8 +115,19 @@ impl From<url::ParseError> for RestError {
 }
 
 impl PolymarketRestClient {
-    pub fn new(clob_host: Url, data_api_host: Url, relayer_host: Url) -> Self {
-        Self::with_http_client(Client::new(), clob_host, data_api_host, relayer_host)
+    pub fn new(
+        clob_host: Url,
+        data_api_host: Url,
+        relayer_host: Url,
+        instrumentation: Option<VenueProducerInstrumentation>,
+    ) -> Self {
+        Self::with_http_client(
+            Client::new(),
+            clob_host,
+            data_api_host,
+            relayer_host,
+            instrumentation,
+        )
     }
 
     pub fn with_http_client(
@@ -124,6 +135,7 @@ impl PolymarketRestClient {
         clob_host: Url,
         data_api_host: Url,
         relayer_host: Url,
+        instrumentation: Option<VenueProducerInstrumentation>,
     ) -> Self {
         Self {
             http,
@@ -132,13 +144,8 @@ impl PolymarketRestClient {
             relayer_host,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
-            instrumentation: VenueProducerInstrumentation::disabled(),
+            instrumentation: instrumentation.unwrap_or_else(VenueProducerInstrumentation::disabled),
         }
-    }
-
-    pub fn with_instrumentation(mut self, instrumentation: VenueProducerInstrumentation) -> Self {
-        self.instrumentation = instrumentation;
-        self
     }
 
     pub async fn fetch_clob_status(&self) -> Result<VenueStatusResponse, RestError> {
