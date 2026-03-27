@@ -102,6 +102,15 @@ async fn failed_metadata_refresh_does_not_publish_new_discovered_family_gauge() 
         ),
         None
     );
+    assert_eq!(
+        observability.registry().snapshot().counter(
+            observability
+                .metrics()
+                .neg_risk_metadata_refresh_count
+                .key()
+        ),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -140,5 +149,14 @@ async fn fallback_cache_read_does_not_publish_new_discovered_family_gauge() {
                 .key()
         ),
         Some(99.0)
+    );
+    assert_eq!(
+        observability.registry().snapshot().counter(
+            observability
+                .metrics()
+                .neg_risk_metadata_refresh_count
+                .key()
+        ),
+        Some(2)
     );
 }

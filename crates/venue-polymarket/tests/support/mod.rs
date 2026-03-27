@@ -403,19 +403,41 @@ fn sample_metadata_client(
     (client, server)
 }
 
-fn read_request(stream: &mut std::net::TcpStream) -> String {
+fn read_request(
+    stream: &mut std::net::TcpStream,
+    deadline: Instant,
+    request_index: usize,
+    expected_requests: usize,
+) -> String {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 1024];
 
     loop {
-        let read = stream.read(&mut chunk).expect("read request");
-        if read == 0 {
-            break;
-        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                buffer.extend_from_slice(&chunk[..read]);
+                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    panic!(
+                        "timed out reading scripted request {} of {}",
+                        request_index + 1,
+                        expected_requests
+                    );
+                }
 
-        buffer.extend_from_slice(&chunk[..read]);
-        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("read request: {err}"),
         }
     }
 
@@ -448,7 +470,12 @@ impl ScriptedServer {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 let mut stream = loop {
                     match listener.accept() {
-                        Ok((stream, _)) => break stream,
+                        Ok((stream, _)) => {
+                            stream
+                                .set_read_timeout(Some(Duration::from_millis(100)))
+                                .expect("configure test stream");
+                            break stream;
+                        }
                         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                             if Instant::now() >= deadline {
                                 panic!(
@@ -463,7 +490,7 @@ impl ScriptedServer {
                         Err(err) => panic!("accept request: {err}"),
                     }
                 };
-                let request = read_request(&mut stream);
+                let request = read_request(&mut stream, deadline, request_index, expected_requests);
 
                 assert!(
                     request.starts_with("GET /events?"),
