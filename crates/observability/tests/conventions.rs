@@ -131,3 +131,33 @@ fn runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_r
         ("attention_reason", "inventory_mismatch")
     );
 }
+
+#[test]
+fn wave1c_negrisk_conventions_are_repo_owned() {
+    assert_eq!(span_names::VENUE_METADATA_REFRESH, "axiom.venue.metadata.refresh");
+    assert_eq!(
+        span_names::NEG_RISK_FAMILY_VALIDATION,
+        "axiom.neg_risk.family.validation"
+    );
+    assert_eq!(span_names::NEG_RISK_FAMILY_HALT, "axiom.neg_risk.family.halt");
+    assert_eq!(
+        span_names::REPLAY_NEGRISK_SUMMARY,
+        "axiom.app_replay.negrisk_summary"
+    );
+
+    assert_eq!(field_keys::DISCOVERY_REVISION, "discovery_revision");
+    assert_eq!(
+        field_keys::METADATA_SNAPSHOT_HASH,
+        "metadata_snapshot_hash"
+    );
+    assert_eq!(field_keys::REFRESH_RESULT, "refresh_result");
+    assert_eq!(field_keys::REFRESH_DURATION_MS, "refresh_duration_ms");
+    assert_eq!(
+        field_keys::DISCOVERED_FAMILY_COUNT,
+        "discovered_family_count"
+    );
+    assert_eq!(field_keys::VALIDATION_STATUS, "validation_status");
+    assert_eq!(field_keys::EXCLUSION_REASON, "exclusion_reason");
+    assert_eq!(field_keys::HALTED, "halted");
+    assert_eq!(field_keys::EVIDENCE_SOURCE, "evidence_source");
+}

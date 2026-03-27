@@ -14,6 +14,10 @@ pub mod span_names {
     pub const VENUE_WS_SESSION: &str = "axiom.venue.ws.session";
     pub const VENUE_HEARTBEAT: &str = "axiom.venue.heartbeat";
     pub const VENUE_RELAYER_POLL: &str = "axiom.venue.relayer.poll";
+    pub const VENUE_METADATA_REFRESH: &str = "axiom.venue.metadata.refresh";
+    pub const NEG_RISK_FAMILY_VALIDATION: &str = "axiom.neg_risk.family.validation";
+    pub const NEG_RISK_FAMILY_HALT: &str = "axiom.neg_risk.family.halt";
+    pub const REPLAY_NEGRISK_SUMMARY: &str = "axiom.app_replay.negrisk_summary";
 }
 
 pub mod field_keys {
@@ -52,6 +56,15 @@ pub mod field_keys {
     pub const SESSION_STATUS: &str = "session_status";
     pub const HEARTBEAT_ID: &str = "heartbeat_id";
     pub const HEARTBEAT_STATUS: &str = "heartbeat_status";
+    pub const DISCOVERY_REVISION: &str = "discovery_revision";
+    pub const METADATA_SNAPSHOT_HASH: &str = "metadata_snapshot_hash";
+    pub const REFRESH_RESULT: &str = "refresh_result";
+    pub const REFRESH_DURATION_MS: &str = "refresh_duration_ms";
+    pub const DISCOVERED_FAMILY_COUNT: &str = "discovered_family_count";
+    pub const VALIDATION_STATUS: &str = "validation_status";
+    pub const EXCLUSION_REASON: &str = "exclusion_reason";
+    pub const HALTED: &str = "halted";
+    pub const EVIDENCE_SOURCE: &str = "evidence_source";
 }
 
 pub mod metric_dimensions {
