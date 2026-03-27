@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fmt};
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {
@@ -145,6 +146,67 @@ pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig,
 fn stable_neg_risk_live_target_revision(
     targets: &BTreeMap<String, NegRiskFamilyLiveTarget>,
 ) -> String {
-    serde_json::to_string(targets)
-        .expect("neg-risk live target config should serialize into a stable revision")
+    let canonical = CanonicalNegRiskLiveTargetSet {
+        families: targets
+            .iter()
+            .map(|(family_id, family)| CanonicalNegRiskFamily {
+                family_id,
+                members: canonical_members(&family.members),
+            })
+            .collect(),
+    };
+    let canonical_bytes =
+        serde_json::to_vec(&canonical).expect("neg-risk live target config should serialize");
+    let digest = Sha256::digest(canonical_bytes);
+
+    format!("sha256:{digest:x}")
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskLiveTargetSet<'a> {
+    families: Vec<CanonicalNegRiskFamily<'a>>,
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskFamily<'a> {
+    family_id: &'a str,
+    members: Vec<CanonicalNegRiskMember<'a>>,
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskMember<'a> {
+    condition_id: &'a str,
+    token_id: &'a str,
+    price: String,
+    quantity: String,
+}
+
+fn canonical_members<'a>(
+    members: &'a [NegRiskMemberLiveTarget],
+) -> Vec<CanonicalNegRiskMember<'a>> {
+    let mut canonical_members: Vec<_> = members.iter().collect();
+    canonical_members.sort_by(|left, right| {
+        left.condition_id
+            .as_str()
+            .cmp(right.condition_id.as_str())
+            .then_with(|| left.token_id.as_str().cmp(right.token_id.as_str()))
+            .then_with(|| normalize_decimal(&left.price).cmp(&normalize_decimal(&right.price)))
+            .then_with(|| {
+                normalize_decimal(&left.quantity).cmp(&normalize_decimal(&right.quantity))
+            })
+    });
+
+    canonical_members
+        .into_iter()
+        .map(|member| CanonicalNegRiskMember {
+            condition_id: member.condition_id.as_str(),
+            token_id: member.token_id.as_str(),
+            price: normalize_decimal(&member.price),
+            quantity: normalize_decimal(&member.quantity),
+        })
+        .collect()
+}
+
+fn normalize_decimal(value: &Decimal) -> String {
+    value.normalize().to_string()
 }

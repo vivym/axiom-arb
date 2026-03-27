@@ -36,13 +36,14 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
       {
         "family_id": "family-b",
         "members": [
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.4100", "quantity": "5.0" }
         ]
       },
       {
         "family_id": "family-a",
         "members": [
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.410", "quantity": "5" },
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.4300", "quantity": "5.00" }
         ]
       }
     ]
@@ -52,7 +53,8 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
       {
         "family_id": "family-a",
         "members": [
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" },
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5.0" }
         ]
       },
       {
@@ -68,11 +70,12 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
     let config_b = load_neg_risk_live_targets(Some(json_b)).unwrap();
 
     assert_eq!(config_a.revision, config_b.revision);
+    assert!(config_a.revision.starts_with("sha256:"));
     assert_eq!(
         config_a.targets.keys().cloned().collect::<Vec<_>>(),
         vec!["family-a".to_owned(), "family-b".to_owned()]
     );
-    assert_eq!(config_a.targets["family-a"].members[0].token_id, "token-1");
+    assert_eq!(config_a.targets["family-a"].members[0].token_id, "token-2");
 }
 
 #[test]

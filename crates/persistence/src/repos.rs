@@ -1292,7 +1292,10 @@ impl RuntimeProgressRepo {
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
                 last_snapshot_id = EXCLUDED.last_snapshot_id,
-                operator_target_revision = EXCLUDED.operator_target_revision,
+                operator_target_revision = COALESCE(
+                    EXCLUDED.operator_target_revision,
+                    runtime_apply_progress.operator_target_revision
+                ),
                 updated_at = NOW()
             "#,
         )
