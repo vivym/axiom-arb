@@ -84,6 +84,11 @@ impl CandidateBridge {
                     "candidate_policy_version": candidate_set.policy.policy_version.clone(),
                     "bridge_policy_version": "bridge-policy-v1",
                     "target_count": candidate_set.targets.len(),
+                    "targets": candidate_set
+                        .targets
+                        .iter()
+                        .map(serialized_candidate_target)
+                        .collect::<Vec<_>>(),
                     "advisory_pricing": advisory,
                     "warnings": [],
                     "execution_requests": [],
@@ -116,6 +121,28 @@ impl CandidateBridge {
             },
         })
     }
+}
+
+fn serialized_candidate_target(target: &CandidateTarget) -> serde_json::Value {
+    let validation = match &target.validation {
+        CandidateValidationResult::Adoptable => json!({
+            "status": "adoptable",
+        }),
+        CandidateValidationResult::Deferred { reason } => json!({
+            "status": "deferred",
+            "reason": reason,
+        }),
+        CandidateValidationResult::Rejected { reason } => json!({
+            "status": "excluded",
+            "reason": reason,
+        }),
+    };
+
+    json!({
+        "target_id": target.target_id,
+        "family_id": target.family_id.as_str(),
+        "validation": validation,
+    })
 }
 
 impl CandidatePricingEngine {

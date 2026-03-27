@@ -5,8 +5,8 @@ use app_live::{
 };
 use chrono::{TimeZone, Utc};
 use domain::{
-    AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTargetSet, DiscoverySourceAnchor,
-    EventFamilyId, FamilyDiscoveryRecord,
+    AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTarget, CandidateTargetSet,
+    CandidateValidationResult, DiscoverySourceAnchor, EventFamilyId, FamilyDiscoveryRecord,
 };
 use serde_json::json;
 use state::{
@@ -104,6 +104,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
                     "bridge_policy_version": "bridge-policy-v1",
                     "source_revision": "evt-9",
                     "target_count": 0,
+                    "targets": [],
                     "advisory_pricing": {
                         "price_band_bps": 25,
                         "size_cap_contracts": 1,
@@ -140,6 +141,70 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
                 }),
             },
         }
+    );
+}
+
+#[test]
+fn candidate_bridge_serializes_per_family_target_validations_for_mixed_candidate_set() {
+    let bridge = CandidateBridge::for_tests();
+    let candidate_set = CandidateTargetSet::new(
+        "candidate-bridge-mixed",
+        "snapshot-mixed",
+        FamilyDiscoveryRecord::new(
+            EventFamilyId::from("family-a"),
+            DiscoverySourceAnchor::new(
+                "metadata_refresh",
+                "session-mixed",
+                "evt-mixed",
+                "v1-refresh",
+            ),
+            Utc.with_ymd_and_hms(2026, 3, 28, 11, 10, 0).unwrap(),
+        ),
+        CandidatePolicyAnchor::new("candidate-generation", "policy-v1"),
+        vec![
+            CandidateTarget::new(
+                "candidate-target-family-a",
+                EventFamilyId::from("family-a"),
+                CandidateValidationResult::Adoptable,
+            ),
+            CandidateTarget::new(
+                "candidate-target-family-b",
+                EventFamilyId::from("family-b"),
+                CandidateValidationResult::Rejected {
+                    reason: "candidate excluded by conservative discovery policy".to_owned(),
+                },
+            ),
+        ],
+    )
+    .with_adoptable_revision(AdoptableTargetRevision::new(
+        "adoptable-candidate-bridge-mixed",
+        "snapshot-mixed",
+        "policy-v1",
+    ));
+
+    let render = bridge
+        .render(&candidate_set, Some("targets-rev-mixed"))
+        .expect("candidate render");
+
+    assert_eq!(
+        render.candidate.payload["targets"],
+        json!([
+            {
+                "target_id": "candidate-target-family-a",
+                "family_id": "family-a",
+                "validation": {
+                    "status": "adoptable"
+                }
+            },
+            {
+                "target_id": "candidate-target-family-b",
+                "family_id": "family-b",
+                "validation": {
+                    "status": "excluded",
+                    "reason": "candidate excluded by conservative discovery policy"
+                }
+            }
+        ])
     );
 }
 
