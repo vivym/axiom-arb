@@ -1354,6 +1354,10 @@ async fn refresh_authoritative_neg_risk_current_view_metrics_best_effort(
     update_kind: &str,
     event_family_id: &str,
 ) {
+    if !instrumentation.is_enabled() {
+        return;
+    }
+
     if let Err(err) =
         record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await
     {

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{Duration, Utc};
-use observability::bootstrap_observability;
+use observability::{bootstrap_observability, bootstrap_tracing};
 use persistence::{
     models::{
         FamilyHaltRow, JournalEntryInput, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
@@ -454,6 +454,21 @@ async fn persistence_upserts_without_authoritative_snapshot_do_not_publish_curre
 
 mod negrisk {
     use super::*;
+    use std::process::{Command, Output};
+
+    fn helper_mode() -> Option<String> {
+        std::env::var("PERSISTENCE_NEGRISK_HELPER_MODE").ok()
+    }
+
+    fn spawn_helper(test_name: &str, helper_mode: &str) -> Output {
+        Command::new(std::env::current_exe().expect("current test binary"))
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env("PERSISTENCE_NEGRISK_HELPER_MODE", helper_mode)
+            .output()
+            .expect("spawn negrisk helper")
+    }
 
     #[tokio::test]
     async fn stores_family_validation_revision_and_explainability_fields() {
@@ -914,5 +929,69 @@ mod negrisk {
             .any(|row| row.event_type == "family_halt"));
 
         db.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn disabled_instrumentation_skips_refresh_warning_when_latest_snapshot_is_invalid() {
+        if helper_mode().as_deref() == Some("child") {
+            bootstrap_tracing("persistence-disabled-refresh-test");
+
+            let db = TestDatabase::new().await;
+            run_migrations(&db.pool).await.unwrap();
+
+            JournalRepo
+                .append(
+                    &db.pool,
+                    &JournalEntryInput {
+                        stream: "neg_risk_discovery".to_owned(),
+                        source_kind: "test".to_owned(),
+                        source_session_id: "session-1".to_owned(),
+                        source_event_id: "invalid-discovery".to_owned(),
+                        dedupe_key: "invalid-discovery".to_owned(),
+                        causal_parent_id: None,
+                        event_type: "neg_risk_discovery_snapshot".to_owned(),
+                        event_ts: Utc::now(),
+                        payload: json!({
+                            "discovery_revision": 9,
+                            "metadata_snapshot_hash": "sha256:discovery-9",
+                            "discovered_family_count": 1,
+                            "family_ids": [9],
+                            "captured_at": Utc::now().to_rfc3339(),
+                        }),
+                    },
+                )
+                .await
+                .unwrap();
+
+            NegRiskFamilyRepo::with_instrumentation(NegRiskPersistenceInstrumentation::disabled())
+                .upsert_validation(&db.pool, &sample_validation("family-1"))
+                .await
+                .unwrap();
+
+            db.cleanup().await;
+            return;
+        }
+
+        let output = spawn_helper(
+            "disabled_instrumentation_skips_refresh_warning_when_latest_snapshot_is_invalid",
+            "child",
+        );
+
+        assert!(
+            output.status.success(),
+            "helper failed: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !combined.contains("neg-risk current-view metric refresh failed after durable commit"),
+            "disabled instrumentation still emitted a refresh warning: {combined}"
+        );
     }
 }

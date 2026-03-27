@@ -18,6 +18,10 @@ impl NegRiskPersistenceInstrumentation {
         }
     }
 
+    pub fn is_enabled(&self) -> bool {
+        self.recorder.is_some()
+    }
+
     pub fn record_validation_upsert(&self, row: &NegRiskFamilyValidationRow) {
         let Some(_recorder) = &self.recorder else {
             return;
