@@ -147,6 +147,34 @@ fn external_fact_event_can_carry_negrisk_live_submit_fact() {
 }
 
 #[test]
+fn external_fact_event_can_carry_runtime_attention_payload() {
+    let observed_at = Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 0).unwrap();
+    let fact = ExternalFactEvent::runtime_attention_observed(
+        "heartbeat",
+        "session-live",
+        "hb-gap-1",
+        "family-a",
+        "missed_heartbeat",
+        "heartbeat freshness exceeded threshold",
+        observed_at,
+    );
+
+    assert_eq!(fact.source_kind, "runtime_attention");
+    assert_eq!(fact.payload.kind(), "runtime_attention_observed");
+    assert_eq!(fact.observed_at, observed_at);
+
+    match fact.payload.as_ref() {
+        Some(ExternalFactPayloadData::RuntimeAttentionObserved(payload)) => {
+            assert_eq!(payload.source, "heartbeat");
+            assert_eq!(payload.scope_id, "family-a");
+            assert_eq!(payload.attention_kind, "missed_heartbeat");
+            assert_eq!(payload.reason, "heartbeat freshness exceeded threshold");
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
 fn external_fact_payload_exposes_live_submit_fields() {
     let observed_at = Utc.with_ymd_and_hms(2026, 3, 25, 12, 35, 0).unwrap();
     let fact = ExternalFactEvent::negrisk_live_submit_observed(

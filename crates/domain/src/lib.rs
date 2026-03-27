@@ -20,6 +20,7 @@ pub use execution::{
 pub use facts::{
     ExternalFactEvent, ExternalFactPayload, ExternalFactPayloadData,
     NegRiskLiveReconcileObservedPayload, NegRiskLiveSubmitObservedPayload,
+    RuntimeAttentionObservedPayload,
 };
 pub use identifiers::{
     Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap,

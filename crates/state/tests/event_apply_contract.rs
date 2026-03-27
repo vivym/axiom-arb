@@ -101,6 +101,69 @@ fn out_of_order_fact_creates_reconcile_required_pending_ref() {
 }
 
 #[test]
+fn heartbeat_attention_becomes_reconcile_required_via_state_applier() {
+    let mut store = StateStore::new();
+    let result = StateApplier::new(&mut store)
+        .apply(
+            51,
+            ExternalFactEvent::runtime_attention_observed(
+                "heartbeat",
+                "session-live",
+                "hb-gap-1",
+                "family-a",
+                "missed_heartbeat",
+                "heartbeat freshness exceeded threshold",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        ApplyResult::ReconcileRequired {
+            journal_seq: 51,
+            pending_ref: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+}
+
+#[test]
+fn metadata_staleness_attention_becomes_runtime_dirty_fact_without_pending_reconcile() {
+    let mut store = StateStore::new();
+    let result = StateApplier::new(&mut store)
+        .apply(
+            52,
+            ExternalFactEvent::runtime_attention_observed(
+                "metadata_refresh",
+                "session-live",
+                "metadata-stale-1",
+                "family-a",
+                "metadata_stale",
+                "metadata refresh exceeded threshold",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        ApplyResult::Applied {
+            journal_seq: 52,
+            state_version: 1,
+            ..
+        }
+    ));
+    assert_eq!(store.pending_reconcile_count(), 0);
+    assert!(store.has_runtime_attention("family-a", "metadata_stale"));
+}
+
+#[test]
 fn reconcile_required_does_not_advance_state_version() {
     let mut store = StateStore::new();
     let mut applier = StateApplier::new(&mut store);

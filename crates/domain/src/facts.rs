@@ -7,6 +7,7 @@ pub struct ExternalFactPayload(Option<ExternalFactPayloadData>);
 pub enum ExternalFactPayloadData {
     NegRiskLiveSubmitObserved(NegRiskLiveSubmitObservedPayload),
     NegRiskLiveReconcileObserved(NegRiskLiveReconcileObservedPayload),
+    RuntimeAttentionObserved(RuntimeAttentionObservedPayload),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,14 @@ pub struct NegRiskLiveReconcileObservedPayload {
     pub pending_ref: String,
     pub scope: String,
     pub terminal: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAttentionObservedPayload {
+    pub source: String,
+    pub scope_id: String,
+    pub attention_kind: String,
+    pub reason: String,
 }
 
 impl ExternalFactPayload {
@@ -56,6 +65,22 @@ impl ExternalFactPayload {
         )))
     }
 
+    pub fn runtime_attention_observed(
+        source: impl Into<String>,
+        scope_id: impl Into<String>,
+        attention_kind: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self(Some(ExternalFactPayloadData::RuntimeAttentionObserved(
+            RuntimeAttentionObservedPayload {
+                source: source.into(),
+                scope_id: scope_id.into(),
+                attention_kind: attention_kind.into(),
+                reason: reason.into(),
+            },
+        )))
+    }
+
     pub fn as_ref(&self) -> Option<&ExternalFactPayloadData> {
         self.0.as_ref()
     }
@@ -68,6 +93,9 @@ impl ExternalFactPayload {
             }
             Some(ExternalFactPayloadData::NegRiskLiveReconcileObserved(_)) => {
                 "negrisk_live_reconcile_observed"
+            }
+            Some(ExternalFactPayloadData::RuntimeAttentionObserved(_)) => {
+                "runtime_attention_observed"
             }
         }
     }
@@ -145,6 +173,33 @@ impl ExternalFactEvent {
                 pending_ref,
                 scope,
                 terminal,
+            ),
+        }
+    }
+
+    pub fn runtime_attention_observed(
+        source: impl Into<String>,
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        scope_id: impl Into<String>,
+        attention_kind: impl Into<String>,
+        reason: impl Into<String>,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        let source = source.into();
+
+        Self {
+            source_kind: "runtime_attention".to_owned(),
+            source_session_id: source_session_id.into(),
+            source_event_id: source_event_id.into(),
+            normalizer_version: format!("v1-runtime-attention-{source}"),
+            observed_at,
+            raw_payload_hash: None,
+            payload: ExternalFactPayload::runtime_attention_observed(
+                source,
+                scope_id,
+                attention_kind,
+                reason,
             ),
         }
     }
