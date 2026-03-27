@@ -1,5 +1,3 @@
-use std::sync::{OnceLock, RwLock};
-
 use observability::{span_names, RuntimeMetricsRecorder};
 
 use crate::models::{FamilyHaltRow, NegRiskFamilyValidationRow};
@@ -18,20 +16,6 @@ impl NegRiskPersistenceInstrumentation {
         Self {
             recorder: Some(recorder),
         }
-    }
-
-    pub fn install_as_default(&self) {
-        let mut slot = default_slot()
-            .write()
-            .expect("instrumentation lock poisoned");
-        *slot = self.clone();
-    }
-
-    pub fn current() -> Self {
-        default_slot()
-            .read()
-            .expect("instrumentation lock poisoned")
-            .clone()
     }
 
     pub fn record_validation_upsert(&self, row: &NegRiskFamilyValidationRow) {
@@ -78,9 +62,4 @@ impl NegRiskPersistenceInstrumentation {
         recorder.record_neg_risk_family_excluded_count(excluded_count as f64);
         recorder.record_neg_risk_family_halt_count(halt_count as f64);
     }
-}
-
-fn default_slot() -> &'static RwLock<NegRiskPersistenceInstrumentation> {
-    static SLOT: OnceLock<RwLock<NegRiskPersistenceInstrumentation>> = OnceLock::new();
-    SLOT.get_or_init(|| RwLock::new(NegRiskPersistenceInstrumentation::disabled()))
 }

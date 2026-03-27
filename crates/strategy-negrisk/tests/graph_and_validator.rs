@@ -74,9 +74,25 @@ fn validator_records_verdict_without_emitting_discovered_family_count() {
     });
 
     assert_eq!(verdict.discovery_revision, 7);
-    assert!(spans
+    let validation_span = spans
         .iter()
-        .any(|span| span.name == span_names::NEG_RISK_FAMILY_VALIDATION));
+        .find(|span| span.name == span_names::NEG_RISK_FAMILY_VALIDATION)
+        .expect("validation span should be emitted");
+    assert_eq!(
+        validation_span.field("validation_status").map(String::as_str),
+        Some("\"included\"")
+    );
+    assert_eq!(validation_span.field("exclusion_reason"), None);
+    assert_eq!(
+        validation_span.field("discovery_revision").map(String::as_str),
+        Some("7")
+    );
+    assert_eq!(
+        validation_span
+            .field("metadata_snapshot_hash")
+            .map(String::as_str),
+        Some("\"sha256:snapshot-7\"")
+    );
     assert_eq!(
         observability.registry().snapshot().gauge(
             observability

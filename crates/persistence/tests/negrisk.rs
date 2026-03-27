@@ -233,7 +233,9 @@ async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view
     )
     .await
     .unwrap();
-    reconcile_current_family_view(&db.pool, 7).await.unwrap();
+    repo.reconcile_current_family_view(&db.pool, 7)
+        .await
+        .unwrap();
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
@@ -261,6 +263,105 @@ async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view
     db.cleanup().await;
 }
 
+async fn persistence_upserts_refresh_current_view_metrics_without_reconcile_case() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let observability = bootstrap_observability("persistence-upsert-metrics-test");
+    let repo = NegRiskFamilyRepo::with_instrumentation(NegRiskPersistenceInstrumentation::enabled(
+        observability.recorder(),
+    ));
+
+    let included = sample_validation("family-1");
+    repo.upsert_validation(&db.pool, &included).await.unwrap();
+
+    let mut excluded = sample_validation("family-2");
+    excluded.validation_status = "excluded".to_owned();
+    excluded.exclusion_reason = Some("placeholder_outcome".to_owned());
+    repo.upsert_validation(&db.pool, &excluded).await.unwrap();
+    repo.upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
+        .await
+        .unwrap();
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
+        Some(1.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
+        Some(1.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
+        Some(1.0)
+    );
+    assert_eq!(
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_family_discovered_count
+                .key()
+        ),
+        None
+    );
+
+    db.cleanup().await;
+}
+
+async fn persistence_repo_instrumentation_is_instance_scoped_case() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let observability_a = bootstrap_observability("persistence-instance-a");
+    let repo_a = NegRiskFamilyRepo::with_instrumentation(
+        NegRiskPersistenceInstrumentation::enabled(observability_a.recorder()),
+    );
+    let observability_b = bootstrap_observability("persistence-instance-b");
+    let repo_b = NegRiskFamilyRepo::with_instrumentation(
+        NegRiskPersistenceInstrumentation::enabled(observability_b.recorder()),
+    );
+
+    repo_a
+        .upsert_validation(&db.pool, &sample_validation("family-a"))
+        .await
+        .unwrap();
+    repo_b
+        .upsert_validation(&db.pool, &sample_validation("family-b"))
+        .await
+        .unwrap();
+
+    let snapshot_a = observability_a.registry().snapshot();
+    assert_eq!(
+        snapshot_a.gauge(observability_a.metrics().neg_risk_family_included_count.key()),
+        Some(1.0)
+    );
+    assert_eq!(
+        snapshot_a.gauge(observability_a.metrics().neg_risk_family_excluded_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot_a.gauge(observability_a.metrics().neg_risk_family_halt_count.key()),
+        Some(0.0)
+    );
+
+    let snapshot_b = observability_b.registry().snapshot();
+    assert_eq!(
+        snapshot_b.gauge(observability_b.metrics().neg_risk_family_included_count.key()),
+        Some(2.0)
+    );
+    assert_eq!(
+        snapshot_b.gauge(observability_b.metrics().neg_risk_family_excluded_count.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot_b.gauge(observability_b.metrics().neg_risk_family_halt_count.key()),
+        Some(0.0)
+    );
+
+    db.cleanup().await;
+}
+
 #[tokio::test]
 async fn stores_family_validation_revision_and_explainability_fields() {
     stores_family_validation_revision_and_explainability_fields_case().await;
@@ -271,12 +372,32 @@ async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view
     persistence_validation_and_halt_upserts_emit_authoritative_current_view_metrics_case().await;
 }
 
+#[tokio::test]
+async fn persistence_upserts_refresh_current_view_metrics_without_reconcile() {
+    persistence_upserts_refresh_current_view_metrics_without_reconcile_case().await;
+}
+
+#[tokio::test]
+async fn persistence_repo_instrumentation_is_instance_scoped() {
+    persistence_repo_instrumentation_is_instance_scoped_case().await;
+}
+
 mod negrisk {
     use super::*;
 
     #[tokio::test]
     async fn stores_family_validation_revision_and_explainability_fields() {
         stores_family_validation_revision_and_explainability_fields_case().await;
+    }
+
+    #[tokio::test]
+    async fn upserts_refresh_current_view_metrics_without_reconcile() {
+        persistence_upserts_refresh_current_view_metrics_without_reconcile_case().await;
+    }
+
+    #[tokio::test]
+    async fn repo_instrumentation_is_instance_scoped() {
+        persistence_repo_instrumentation_is_instance_scoped_case().await;
     }
 
     #[tokio::test]
@@ -401,7 +522,9 @@ mod negrisk {
         )
         .await
         .unwrap();
-        reconcile_current_family_view(&db.pool, 7).await.unwrap();
+        repo.reconcile_current_family_view(&db.pool, 7)
+            .await
+            .unwrap();
 
         persist_discovery_snapshot(
             &db.pool,
@@ -409,7 +532,9 @@ mod negrisk {
         )
         .await
         .unwrap();
-        reconcile_current_family_view(&db.pool, 8).await.unwrap();
+        repo.reconcile_current_family_view(&db.pool, 8)
+            .await
+            .unwrap();
 
         let rows = NegRiskFamilyRepo.list_validations(&db.pool).await.unwrap();
         assert!(rows.iter().any(|row| {
@@ -460,12 +585,16 @@ mod negrisk {
         )
         .await
         .unwrap();
-        reconcile_current_family_view(&db.pool, 7).await.unwrap();
+        repo.reconcile_current_family_view(&db.pool, 7)
+            .await
+            .unwrap();
 
         persist_discovery_snapshot(&db.pool, sample_discovery_snapshot("rev-8", vec![]))
             .await
             .unwrap();
-        reconcile_current_family_view(&db.pool, 8).await.unwrap();
+        repo.reconcile_current_family_view(&db.pool, 8)
+            .await
+            .unwrap();
 
         assert!(NegRiskFamilyRepo
             .list_validations(&db.pool)
