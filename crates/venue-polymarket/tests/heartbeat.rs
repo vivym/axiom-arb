@@ -1,5 +1,11 @@
 use chrono::{Duration, TimeZone, Utc};
-use venue_polymarket::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
+mod support;
+
+use support::MockServer;
+use venue_polymarket::{
+    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
+    PolymarketRestClient, Url,
+};
 
 #[test]
 fn heartbeat_missing_success_triggers_reconcile_once_and_persists_attention() {
@@ -90,6 +96,35 @@ fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
         HeartbeatReconcileReason::InvalidHeartbeat.as_status(),
         "invalid"
     );
+}
+
+#[tokio::test]
+async fn heartbeat_fetch_maps_success_payload_into_monitor_input() {
+    let server = MockServer::spawn("200 OK", r#"{"success":true,"heartbeat_id":"hb-42"}"#);
+    let client = sample_client(server.base_url());
+
+    let heartbeat = client
+        .fetch_order_heartbeat()
+        .await
+        .expect("heartbeat fetch should succeed");
+
+    assert_eq!(
+        heartbeat,
+        HeartbeatFetchResult {
+            heartbeat_id: "hb-42".to_owned(),
+            valid: true,
+        }
+    );
+    assert!(server.finish().starts_with("GET /heartbeat HTTP/1.1"));
+}
+
+fn sample_client(base_url: Url) -> PolymarketRestClient {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("test client");
+
+    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
 }
 
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {

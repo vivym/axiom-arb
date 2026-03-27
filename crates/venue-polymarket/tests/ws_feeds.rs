@@ -1,9 +1,12 @@
+use std::{collections::VecDeque, future::Future, pin::Pin};
+
 use chrono::{TimeZone, Utc};
 use venue_polymarket::{
     parse_market_message, parse_user_message, MarketBookUpdate, MarketLifecycleUpdate,
     MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
-    UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind, WsChannelLivenessMonitor,
-    WsChannelReconcileReason, WsChannelState, WsParseError,
+    PolymarketWsClient, Url, UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
+    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsMessageSource,
+    WsParseError,
 };
 
 #[test]
@@ -264,6 +267,55 @@ fn ws_channel_requires_explicit_reset_to_clear_reconcile_attention() {
     assert!(!state.requires_reconcile_attention);
     assert_eq!(state.stale_since, None);
     assert_eq!(state.last_message_at, ts(10, 0, 45));
+}
+
+#[tokio::test]
+async fn ws_client_market_events_still_drive_existing_liveness_monitor() {
+    let mut client = PolymarketWsClient::with_transports(
+        Url::parse("wss://market.example/ws").expect("market url"),
+        Url::parse("wss://user.example/ws").expect("user url"),
+        ScriptedWsTransport::new(vec![r#"{"event":"PING"}"#.to_owned()]),
+        ScriptedWsTransport::new(vec![]),
+    );
+    let monitor =
+        WsChannelLivenessMonitor::new(WsChannelKind::Market, chrono::Duration::seconds(30));
+    let mut state = WsChannelState::new(WsChannelKind::Market, ts(10, 0, 0));
+
+    let event = client.next_market_event().await.expect("market event");
+    monitor.record_market_event(&mut state, &event, ts(10, 0, 10));
+
+    assert_eq!(event, MarketWsEvent::Ping);
+    assert_eq!(state.last_message_at, ts(10, 0, 10));
+    assert_eq!(state.last_ping_at, Some(ts(10, 0, 10)));
+    assert!(!state.requires_reconcile_attention);
+}
+
+#[derive(Debug)]
+struct ScriptedWsTransport {
+    messages: VecDeque<String>,
+}
+
+impl ScriptedWsTransport {
+    fn new(messages: Vec<String>) -> Self {
+        Self {
+            messages: VecDeque::from(messages),
+        }
+    }
+}
+
+impl WsMessageSource for ScriptedWsTransport {
+    fn next_message<'a>(
+        &'a mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<String, venue_polymarket::WsClientError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.messages.pop_front().ok_or_else(|| {
+                venue_polymarket::WsClientError::Transport(
+                    "scripted websocket transport exhausted".to_owned(),
+                )
+            })
+        })
+    }
 }
 
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {

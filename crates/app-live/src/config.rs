@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use venue_polymarket::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {
@@ -92,11 +93,25 @@ pub enum LocalRelayerAuth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolymarketSourceConfig {
+    pub clob_host: Url,
+    pub data_api_host: Url,
+    pub relayer_host: Url,
+    pub market_ws_url: Url,
+    pub user_ws_url: Url,
+    pub heartbeat_interval_seconds: u64,
+    pub relayer_poll_interval_seconds: u64,
+    pub metadata_refresh_interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     InvalidJson { value: String, message: String },
     InvalidLocalSignerConfig { value: String, message: String },
+    InvalidPolymarketSourceConfig { value: String, message: String },
     DuplicateFamilyId { family_id: String },
     MissingLocalSignerConfig,
+    MissingPolymarketSourceConfig,
 }
 
 impl fmt::Display for ConfigError {
@@ -107,6 +122,9 @@ impl fmt::Display for ConfigError {
             }
             Self::InvalidLocalSignerConfig { message, .. } => {
                 write!(f, "invalid local signer config: {message}")
+            }
+            Self::InvalidPolymarketSourceConfig { message, .. } => {
+                write!(f, "invalid polymarket source config: {message}")
             }
             Self::DuplicateFamilyId { family_id } => {
                 write!(
@@ -119,6 +137,9 @@ impl fmt::Display for ConfigError {
                     f,
                     "missing local signer config for live neg-risk operator inputs"
                 )
+            }
+            Self::MissingPolymarketSourceConfig => {
+                write!(f, "missing polymarket source config for live daemon inputs")
             }
         }
     }
@@ -225,4 +246,48 @@ fn canonical_members<'a>(
 
 fn normalize_decimal(value: &Decimal) -> String {
     value.normalize().to_string()
+}
+
+pub fn load_polymarket_source_config(
+    json: Option<&str>,
+) -> Result<PolymarketSourceConfig, ConfigError> {
+    let Some(json) = json else {
+        return Err(ConfigError::MissingPolymarketSourceConfig);
+    };
+
+    let raw: RawPolymarketSourceConfig =
+        serde_json::from_str(json).map_err(|error| ConfigError::InvalidPolymarketSourceConfig {
+            value: json.to_owned(),
+            message: error.to_string(),
+        })?;
+
+    Ok(PolymarketSourceConfig {
+        clob_host: parse_source_url("clob_host", &raw.clob_host, json)?,
+        data_api_host: parse_source_url("data_api_host", &raw.data_api_host, json)?,
+        relayer_host: parse_source_url("relayer_host", &raw.relayer_host, json)?,
+        market_ws_url: parse_source_url("market_ws_url", &raw.market_ws_url, json)?,
+        user_ws_url: parse_source_url("user_ws_url", &raw.user_ws_url, json)?,
+        heartbeat_interval_seconds: raw.heartbeat_interval_seconds,
+        relayer_poll_interval_seconds: raw.relayer_poll_interval_seconds,
+        metadata_refresh_interval_seconds: raw.metadata_refresh_interval_seconds,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct RawPolymarketSourceConfig {
+    clob_host: String,
+    data_api_host: String,
+    relayer_host: String,
+    market_ws_url: String,
+    user_ws_url: String,
+    heartbeat_interval_seconds: u64,
+    relayer_poll_interval_seconds: u64,
+    metadata_refresh_interval_seconds: u64,
+}
+
+fn parse_source_url(field: &'static str, value: &str, raw_json: &str) -> Result<Url, ConfigError> {
+    Url::parse(value).map_err(|error| ConfigError::InvalidPolymarketSourceConfig {
+        value: raw_json.to_owned(),
+        message: format!("{field}: {error}"),
+    })
 }

@@ -1,6 +1,6 @@
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    load_local_signer_config, load_neg_risk_live_targets, load_polymarket_source_config,
+    ConfigError, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
 };
 
 #[test]
@@ -196,4 +196,43 @@ fn rejects_invalid_local_signer_config_json() {
         ConfigError::InvalidLocalSignerConfig { .. }
     ));
     assert!(error.to_string().contains("invalid local signer config"));
+}
+
+#[test]
+fn parses_polymarket_source_config_from_env_json() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
+      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let config = load_polymarket_source_config(Some(json)).unwrap();
+
+    assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
+    assert_eq!(
+        config.data_api_host.as_str(),
+        "https://data-api.polymarket.com/"
+    );
+    assert_eq!(
+        config.relayer_host.as_str(),
+        "https://relayer-v2.polymarket.com/"
+    );
+    assert_eq!(
+        config.market_ws_url.as_str(),
+        "wss://ws-subscriptions.polymarket.com/market"
+    );
+    assert_eq!(
+        config.user_ws_url.as_str(),
+        "wss://ws-subscriptions.polymarket.com/user"
+    );
+    assert_eq!(config.heartbeat_interval_seconds, 15);
+    assert_eq!(config.relayer_poll_interval_seconds, 5);
+    assert_eq!(config.metadata_refresh_interval_seconds, 60);
 }

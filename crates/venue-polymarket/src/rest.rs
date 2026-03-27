@@ -10,6 +10,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
+use crate::heartbeat::HeartbeatFetchResult;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::{
@@ -66,6 +67,14 @@ pub struct BalanceAllowanceResponse {
     pub allowance: Option<String>,
     #[serde(default)]
     pub spender: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct HeartbeatResponse {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    heartbeat_id: Option<String>,
 }
 
 impl fmt::Display for RestError {
@@ -126,6 +135,15 @@ impl PolymarketRestClient {
 
     pub async fn fetch_clob_status(&self) -> Result<VenueStatusResponse, RestError> {
         self.get_clob("status", &[]).await
+    }
+
+    pub async fn fetch_order_heartbeat(&self) -> Result<HeartbeatFetchResult, RestError> {
+        let heartbeat: HeartbeatResponse = self.get_clob("heartbeat", &[]).await?;
+        let valid = heartbeat.success && heartbeat.heartbeat_id.is_some();
+        Ok(HeartbeatFetchResult {
+            heartbeat_id: heartbeat.heartbeat_id.unwrap_or_default(),
+            valid,
+        })
     }
 
     pub fn build_open_orders_request(

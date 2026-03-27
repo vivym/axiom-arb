@@ -10,9 +10,10 @@ pub mod supervisor;
 
 pub use bootstrap::{BootstrapSource, StaticSnapshotSource};
 pub use config::{
-    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
-    NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
+    load_local_signer_config, load_neg_risk_live_targets, load_polymarket_source_config,
+    ConfigError, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
+    PolymarketSourceConfig,
 };
 pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;
