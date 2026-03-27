@@ -81,7 +81,12 @@ impl OrderHeartbeatMonitor {
             return None;
         }
 
-        self.record_invalid(state, at)
+        state.heartbeat_id = if result.heartbeat_id.is_empty() {
+            None
+        } else {
+            Some(result.heartbeat_id.clone())
+        };
+        self.raise_attention(state, at, HeartbeatReconcileReason::InvalidHeartbeat)
     }
 
     pub fn reconcile_trigger(

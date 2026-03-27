@@ -240,7 +240,7 @@ struct MarketEnvelope {
     last_trade_price: Option<Value>,
     #[serde(default)]
     size: Option<Value>,
-    #[serde(default, alias = "tick_size")]
+    #[serde(default, alias = "tick_size", alias = "new_tick_size")]
     tick_size: Option<Value>,
     #[serde(default, alias = "previous_tick_size", alias = "old_tick_size")]
     previous_tick_size: Option<Value>,

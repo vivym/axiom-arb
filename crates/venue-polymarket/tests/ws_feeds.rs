@@ -3,11 +3,11 @@ use std::{collections::VecDeque, future::Future, pin::Pin};
 use chrono::{TimeZone, Utc};
 use url::Url;
 use venue_polymarket::{
-    parse_market_message, parse_user_message, MarketBookUpdate, MarketLifecycleUpdate,
-    MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
-    PolymarketWsClient, UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
-    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsClientError,
-    WsMessageSource, WsParseError, WsTransportMessage,
+    parse_market_message, parse_market_messages, parse_user_message, MarketBookUpdate,
+    MarketLifecycleUpdate, MarketPriceChangeUpdate, MarketTickSizeChangeUpdate,
+    MarketTradePriceUpdate, MarketWsEvent, PolymarketWsClient, UserOrderUpdate, UserTradeUpdate,
+    UserWsEvent, WsChannelKind, WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState,
+    WsClientError, WsMessageSource, WsParseError, WsTransportMessage,
 };
 
 #[test]
@@ -156,10 +156,72 @@ fn ws_user_parses_documented_trade_and_order_payload_shape() {
             status: "PLACEMENT".to_owned(),
             condition_id: "condition-10".to_owned(),
             price: Some("0.52".to_owned()),
-            size: Some("0".to_owned()),
+            size: None,
             fee_rate_bps: None,
             transaction_hash: None,
             event_ts: Some(ts(12, 0, 6)),
+        })
+    );
+    assert_eq!(
+        parse_user_message(
+            r#"{
+                "asset_id":"token-yes",
+                "event_type":"order",
+                "id":"order-11",
+                "market":"condition-11",
+                "price":"0.51",
+                "original_size":"10",
+                "size_matched":"0",
+                "timestamp":"1774353607",
+                "type":"PLACEMENT"
+            }"#
+        )
+        .unwrap(),
+        UserWsEvent::Order(UserOrderUpdate {
+            order_id: "order-11".to_owned(),
+            status: "PLACEMENT".to_owned(),
+            condition_id: "condition-11".to_owned(),
+            price: Some("0.51".to_owned()),
+            size: Some("10".to_owned()),
+            fee_rate_bps: None,
+            transaction_hash: None,
+            event_ts: Some(ts(12, 0, 7)),
+        })
+    );
+}
+
+#[test]
+fn ws_user_prefers_matching_maker_order_for_documented_trade_payloads() {
+    assert_eq!(
+        parse_user_message(
+            r#"{
+                "event_type":"trade",
+                "id":"trade-maker-1",
+                "market":"condition-maker",
+                "price":"0.48",
+                "size":"7",
+                "status":"MATCHED",
+                "taker_order_id":"order-taker-1",
+                "trade_owner":"0xmaker-b",
+                "maker_orders":[
+                    {"order_id":"order-maker-a","owner":"0xmaker-a"},
+                    {"order_id":"order-maker-b","owner":"0xmaker-b"}
+                ],
+                "timestamp":"1774353608",
+                "type":"TRADE"
+            }"#
+        )
+        .unwrap(),
+        UserWsEvent::Trade(UserTradeUpdate {
+            trade_id: "trade-maker-1".to_owned(),
+            order_id: "order-maker-b".to_owned(),
+            status: "MATCHED".to_owned(),
+            condition_id: "condition-maker".to_owned(),
+            price: Some("0.48".to_owned()),
+            size: Some("7".to_owned()),
+            fee_rate_bps: None,
+            transaction_hash: None,
+            event_ts: Some(ts(12, 0, 8)),
         })
     );
 }
@@ -223,6 +285,24 @@ fn ws_market_parses_price_tick_trade_and_lifecycle_events() {
     assert_eq!(
         parse_market_message(
             r#"{
+                "event_type":"tick_size_change",
+                "asset_id":"token-no",
+                "old_tick_size":"0.01",
+                "new_tick_size":"0.005",
+                "timestamp":"2026-03-24T10:00:04Z"
+            }"#
+        )
+        .unwrap(),
+        MarketWsEvent::TickSizeChange(MarketTickSizeChangeUpdate {
+            asset_id: "token-no".to_owned(),
+            previous_tick_size: Some("0.01".to_owned()),
+            tick_size: "0.005".to_owned(),
+            event_ts: Some(ts(10, 0, 4)),
+        })
+    );
+    assert_eq!(
+        parse_market_message(
+            r#"{
                 "event":"status",
                 "market_id":"market-1",
                 "asset_id":"token-yes",
@@ -267,6 +347,48 @@ fn ws_user_parses_order_and_trade_settlement_fields() {
             transaction_hash: Some("0xorder".to_owned()),
             event_ts: Some(ts(10, 0, 6)),
         })
+    );
+}
+
+#[test]
+fn ws_market_exposes_non_lossy_batch_parser_for_price_change_messages() {
+    let events = parse_market_messages(
+        r#"{
+            "market":"condition-1",
+            "price_changes":[
+                {
+                    "asset_id":"token-yes",
+                    "price":"0.50",
+                    "side":"BUY"
+                },
+                {
+                    "asset_id":"token-no",
+                    "price":"0.50",
+                    "side":"SELL"
+                }
+            ],
+            "timestamp":"1774353602000",
+            "event_type":"price_change"
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        events,
+        VecDeque::from([
+            MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+                asset_id: "token-yes".to_owned(),
+                price: "0.50".to_owned(),
+                side: Some("BUY".to_owned()),
+                event_ts: Some(ts(12, 0, 2)),
+            }),
+            MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+                asset_id: "token-no".to_owned(),
+                price: "0.50".to_owned(),
+                side: Some("SELL".to_owned()),
+                event_ts: Some(ts(12, 0, 2)),
+            }),
+        ])
     );
 }
 

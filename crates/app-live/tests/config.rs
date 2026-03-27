@@ -206,8 +206,8 @@ fn parses_polymarket_source_config_from_env_json() {
       "clob_host": "https://clob.polymarket.com",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -227,11 +227,11 @@ fn parses_polymarket_source_config_from_env_json() {
     );
     assert_eq!(
         config.market_ws_url.as_str(),
-        "wss://ws-subscriptions.polymarket.com/market"
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     );
     assert_eq!(
         config.user_ws_url.as_str(),
-        "wss://ws-subscriptions.polymarket.com/user"
+        "wss://ws-subscriptions-clob.polymarket.com/ws/user"
     );
     assert_eq!(config.heartbeat_interval_seconds, 15);
     assert_eq!(config.relayer_poll_interval_seconds, 5);
@@ -245,8 +245,8 @@ fn rejects_polymarket_source_config_with_non_http_hosts() {
       "clob_host": "ftp://clob.polymarket.com",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -269,8 +269,8 @@ fn rejects_polymarket_source_config_with_non_ws_urls() {
       "clob_host": "https://clob.polymarket.com",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "https://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "https://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -293,8 +293,8 @@ fn rejects_polymarket_source_config_with_zero_cadence() {
       "clob_host": "https://clob.polymarket.com",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 0,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -317,8 +317,8 @@ fn rejects_polymarket_source_config_with_non_root_host_path() {
       "clob_host": "https://clob.polymarket.com/api",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -341,8 +341,8 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
       "clob_host": "https://clob.polymarket.com?foo=bar",
       "data_api_host": "https://data-api.polymarket.com",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60
@@ -353,8 +353,8 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
       "clob_host": "https://clob.polymarket.com",
       "data_api_host": "https://data-api.polymarket.com#fragment",
       "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
-      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
       "heartbeat_interval_seconds": 15,
       "relayer_poll_interval_seconds": 5,
       "metadata_refresh_interval_seconds": 60

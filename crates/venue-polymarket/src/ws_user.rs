@@ -64,13 +64,27 @@ struct UserEnvelope {
     #[serde(default)]
     size: Option<Value>,
     #[serde(default)]
-    size_matched: Option<Value>,
+    original_size: Option<Value>,
     #[serde(default)]
     fee_rate_bps: Option<Value>,
     #[serde(default)]
     transaction_hash: Option<Value>,
+    #[serde(default)]
+    trade_owner: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    maker_orders: Option<Vec<MakerOrderEnvelope>>,
     #[serde(default, alias = "timestamp")]
     ts: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MakerOrderEnvelope {
+    #[serde(default)]
+    order_id: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
 }
 
 pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
@@ -94,7 +108,7 @@ pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
                 "condition_id",
             )?,
             price: optional_string(envelope.price, "price")?,
-            size: optional_string(envelope.size.or(envelope.size_matched), "size")?,
+            size: optional_string(envelope.size.or(envelope.original_size), "size")?,
             fee_rate_bps: optional_string(envelope.fee_rate_bps, "fee_rate_bps")?,
             transaction_hash: optional_string(envelope.transaction_hash, "transaction_hash")?,
             event_ts: parse_timestamp(envelope.ts)?,
@@ -104,13 +118,7 @@ pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
                 envelope.trade_id.clone().or(envelope.id.clone()),
                 "trade_id",
             )?,
-            order_id: required(
-                envelope
-                    .order_id
-                    .or(envelope.taker_order_id)
-                    .or(envelope.id),
-                "order_id",
-            )?,
+            order_id: required(resolve_trade_order_id(&envelope), "order_id")?,
             status: required(envelope.status, "status")?,
             condition_id: required(envelope.condition_id.or(envelope.market), "condition_id")?,
             price: optional_string(envelope.price, "price")?,
@@ -121,6 +129,28 @@ pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
         })),
         other => Err(WsParseError::UnknownEvent(other.to_owned())),
     }
+}
+
+fn resolve_trade_order_id(envelope: &UserEnvelope) -> Option<String> {
+    if let Some(order_id) = envelope.order_id.clone() {
+        return Some(order_id);
+    }
+
+    let trade_owner = envelope
+        .trade_owner
+        .as_deref()
+        .or(envelope.owner.as_deref());
+    if let (Some(trade_owner), Some(maker_orders)) = (trade_owner, envelope.maker_orders.as_ref()) {
+        if let Some(order_id) = maker_orders
+            .iter()
+            .find(|maker_order| maker_order.owner.as_deref() == Some(trade_owner))
+            .and_then(|maker_order| maker_order.order_id.clone())
+        {
+            return Some(order_id);
+        }
+    }
+
+    envelope.taker_order_id.clone()
 }
 
 fn required(value: Option<String>, field: &'static str) -> Result<String, WsParseError> {

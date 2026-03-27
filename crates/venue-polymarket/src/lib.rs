@@ -40,9 +40,10 @@ pub use ws_client::{
     WsTransportMessage, WsUserChannelAuth,
 };
 pub use ws_market::{
-    parse_market_message, MarketBookUpdate, MarketLifecycleUpdate, MarketPriceChangeUpdate,
-    MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent, WsChannelKind,
-    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
+    parse_market_message, parse_market_messages, MarketBookUpdate, MarketLifecycleUpdate,
+    MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
+    WsChannelKind, WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState,
+    WsParseError,
 };
 pub use ws_session::{WsSessionEvent, WsSessionMonitor, WsSessionState, WsSessionStatus};
 pub use ws_user::{parse_user_message, UserOrderUpdate, UserTradeUpdate, UserWsEvent};

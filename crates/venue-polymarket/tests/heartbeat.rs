@@ -80,6 +80,36 @@ fn heartbeat_success_updates_latest_id_and_freshness() {
 }
 
 #[test]
+fn heartbeat_invalid_fetch_result_preserves_replacement_id_for_follow_up() {
+    let monitor = OrderHeartbeatMonitor::new(Duration::seconds(30));
+    let mut state = OrderHeartbeatState {
+        heartbeat_id: Some("hb-1".to_owned()),
+        last_success_at: ts(10, 0, 0),
+        reconcile_attention_since: None,
+        reconcile_reason: None,
+        requires_reconcile_attention: false,
+    };
+
+    assert_eq!(
+        monitor.record_fetch_result(
+            &mut state,
+            &HeartbeatFetchResult {
+                heartbeat_id: "hb-2".to_owned(),
+                valid: false,
+            },
+            ts(10, 0, 10),
+        ),
+        Some(HeartbeatReconcileReason::InvalidHeartbeat)
+    );
+    assert_eq!(state.heartbeat_id.as_deref(), Some("hb-2"));
+    assert!(state.requires_reconcile_attention);
+    assert_eq!(
+        state.reconcile_reason,
+        Some(HeartbeatReconcileReason::InvalidHeartbeat)
+    );
+}
+
+#[test]
 fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
     let state = OrderHeartbeatState {
         heartbeat_id: Some("hb-1".to_owned()),
