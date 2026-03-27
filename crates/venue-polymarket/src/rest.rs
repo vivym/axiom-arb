@@ -11,6 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::heartbeat::HeartbeatFetchResult;
+use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::{
@@ -25,6 +26,7 @@ pub struct PolymarketRestClient {
     pub relayer_host: Url,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
+    pub(crate) instrumentation: VenueProducerInstrumentation,
 }
 
 #[derive(Debug)]
@@ -130,7 +132,13 @@ impl PolymarketRestClient {
             relayer_host,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
+            instrumentation: VenueProducerInstrumentation::disabled(),
         }
+    }
+
+    pub fn with_instrumentation(mut self, instrumentation: VenueProducerInstrumentation) -> Self {
+        self.instrumentation = instrumentation;
+        self
     }
 
     pub async fn fetch_clob_status(&self) -> Result<VenueStatusResponse, RestError> {

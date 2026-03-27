@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::Future,
     io::{Read, Write},
     net::TcpListener,
     sync::{
@@ -11,13 +12,16 @@ use std::{
 };
 
 use domain::{SignatureType, WalletRoute};
+use observability::RuntimeMetricsRecorder;
 use reqwest::Url;
 use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
     Event, Metadata, Subscriber,
 };
-use venue_polymarket::{L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext};
+use venue_polymarket::{
+    L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext, VenueProducerInstrumentation,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -53,6 +57,28 @@ pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
 }
 
 #[allow(dead_code)]
+pub async fn capture_spans_async<T, F>(f: impl FnOnce() -> F) -> (Vec<CapturedSpan>, T)
+where
+    F: Future<Output = T>,
+{
+    let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
+    let subscriber = CaptureSubscriber {
+        spans: Arc::clone(&spans),
+        next_id: Arc::new(AtomicU64::new(1)),
+    };
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let result = f().await;
+    let captured = spans
+        .lock()
+        .expect("capture lock poisoned")
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    (captured, result)
+}
+
+#[allow(dead_code)]
 pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -60,6 +86,41 @@ pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
         .expect("test client");
 
     PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+}
+
+#[allow(dead_code)]
+pub fn sample_client_with_instrumentation(
+    recorder: RuntimeMetricsRecorder,
+) -> PolymarketRestClient {
+    sample_metadata_client(
+        vec![
+            ScriptedResponse {
+                expected_query_fragments: &["limit=2", "offset=0"],
+                status_line: "200 OK",
+                body: SUCCESS_METADATA_PAGE_ONE,
+            },
+            ScriptedResponse {
+                expected_query_fragments: &["limit=2", "offset=2"],
+                status_line: "200 OK",
+                body: SUCCESS_METADATA_PAGE_TWO,
+            },
+        ],
+        recorder,
+    )
+}
+
+#[allow(dead_code)]
+pub fn sample_failing_client_with_instrumentation(
+    recorder: RuntimeMetricsRecorder,
+) -> PolymarketRestClient {
+    sample_metadata_client(
+        vec![ScriptedResponse {
+            expected_query_fragments: &["limit=2", "offset=0"],
+            status_line: "200 OK",
+            body: FAILURE_METADATA_PAGE,
+        }],
+        recorder,
+    )
 }
 
 #[allow(dead_code)]
@@ -231,6 +292,136 @@ impl MockServer {
 
         request
     }
+}
+
+const SUCCESS_METADATA_PAGE_ONE: &str = r#"
+[
+  {
+    "id": "event-1",
+    "title": "Championship Winner",
+    "parentEvent": "family-1",
+    "negRisk": true,
+    "markets": [
+      {
+        "conditionId": "condition-1",
+        "clobTokenIds": "[\"token-1\",\"token-no-1\"]",
+        "groupItemTitle": "Alice",
+        "negRisk": true
+      }
+    ]
+  },
+  {
+    "id": "event-2",
+    "title": "Championship Winner",
+    "parentEvent": "family-1",
+    "negRisk": true,
+    "markets": [
+      {
+        "conditionId": "condition-2",
+        "clobTokenIds": "[\"token-2\",\"token-no-2\"]",
+        "groupItemTitle": "Bob",
+        "negRisk": true
+      }
+    ]
+  }
+]
+"#;
+
+const SUCCESS_METADATA_PAGE_TWO: &str = "[]";
+
+const FAILURE_METADATA_PAGE: &str = r#"
+[
+  {
+    "title": "Broken Event",
+    "parentEvent": "family-bad",
+    "negRisk": true,
+    "markets": [
+      {
+        "conditionId": "condition-bad",
+        "clobTokenIds": "[\"token-bad\",\"token-no-bad\"]",
+        "groupItemTitle": "Broken",
+        "negRisk": true
+      }
+    ]
+  }
+]
+"#;
+
+#[allow(dead_code)]
+fn sample_metadata_client(
+    scripted_responses: Vec<ScriptedResponse>,
+    recorder: RuntimeMetricsRecorder,
+) -> PolymarketRestClient {
+    let base_url = spawn_scripted_server(scripted_responses);
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("test client");
+
+    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+        .with_instrumentation(VenueProducerInstrumentation::enabled(recorder))
+}
+
+fn spawn_scripted_server(scripted_responses: Vec<ScriptedResponse>) -> Url {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = listener.local_addr().expect("server addr");
+
+    thread::spawn(move || {
+        for response in scripted_responses {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let request = read_request(&mut stream);
+
+            assert!(
+                request.starts_with("GET /events?"),
+                "unexpected request line: {request}"
+            );
+            for fragment in response.expected_query_fragments {
+                assert!(
+                    request.contains(fragment),
+                    "request missing fragment `{fragment}`: {request}"
+                );
+            }
+
+            let wire_response = format!(
+                "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response.status_line,
+                response.body.len(),
+                response.body
+            );
+            stream
+                .write_all(wire_response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
+    });
+
+    Url::parse(&format!("http://{address}/")).expect("base url")
+}
+
+fn read_request(stream: &mut std::net::TcpStream) -> String {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+
+    loop {
+        let read = stream.read(&mut chunk).expect("read request");
+        if read == 0 {
+            break;
+        }
+
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    String::from_utf8_lossy(&buffer).into_owned()
+}
+
+#[derive(Debug)]
+struct ScriptedResponse {
+    expected_query_fragments: &'static [&'static str],
+    status_line: &'static str,
+    body: &'static str,
 }
 
 #[allow(dead_code)]

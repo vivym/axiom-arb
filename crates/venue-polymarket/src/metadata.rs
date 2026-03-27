@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, time::Instant};
 
 use domain::{MarketRoute, NegRiskVariant};
 use serde::Deserialize;
@@ -225,7 +225,16 @@ impl PolymarketRestClient {
         &self,
     ) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
         let _refresh_guard = self.metadata_refresh_lock.lock().await;
-        let discovery = self.discover_neg_risk_metadata_rows().await?;
+        self.instrumentation.record_metadata_refresh_started();
+        let refresh_started_at = Instant::now();
+        let discovery = match self.discover_neg_risk_metadata_rows().await {
+            Ok(discovery) => discovery,
+            Err(err) => {
+                self.instrumentation
+                    .record_metadata_refresh_failure(elapsed_millis(refresh_started_at));
+                return Err(err);
+            }
+        };
         let mut cache = self
             .metadata_state
             .lock()
@@ -252,6 +261,13 @@ impl PolymarketRestClient {
         if let Some(previous) = cache.current.replace(snapshot.clone()) {
             cache.history.push(previous);
         }
+
+        self.instrumentation.record_metadata_refresh_success(
+            snapshot.discovery_revision,
+            &snapshot.metadata_snapshot_hash,
+            count_distinct_families(&snapshot.rows),
+            elapsed_millis(refresh_started_at),
+        );
 
         Ok(snapshot.rows)
     }
@@ -534,6 +550,17 @@ fn parse_string_list(value: &str) -> Vec<String> {
         .map(|entry| entry.trim().trim_matches('"').to_owned())
         .filter(|entry| !entry.is_empty())
         .collect()
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    started_at.elapsed().as_millis() as u64
+}
+
+fn count_distinct_families(rows: &[NegRiskMarketMetadata]) -> usize {
+    rows.iter()
+        .map(|row| row.event_family_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 fn is_retryable_metadata_error(error: &RestError) -> bool {
