@@ -33,6 +33,7 @@ pub struct SupervisorSummary {
     pub negrisk_mode: ExecutionMode,
     pub neg_risk_live_attempt_count: usize,
     pub neg_risk_live_state_source: NegRiskLiveStateSource,
+    pub neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
     pub bootstrap_status: BootstrapStatus,
     pub runtime_mode: RuntimeMode,
     pub pending_reconcile_count: usize,
@@ -60,6 +61,26 @@ impl NegRiskLiveStateSource {
             Self::None => "none",
             Self::SyntheticBootstrap => "synthetic_bootstrap",
             Self::DurableRestore => "durable_restore",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NegRiskRolloutEvidenceSource {
+    #[default]
+    None,
+    Bootstrap,
+    Neutral,
+    Snapshot,
+}
+
+impl NegRiskRolloutEvidenceSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Bootstrap => "bootstrap",
+            Self::Neutral => "neutral",
+            Self::Snapshot => "snapshot",
         }
     }
 }
@@ -124,6 +145,8 @@ pub struct AppSupervisor {
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
+    neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
+    last_emitted_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
     neg_risk_live_state_source: NegRiskLiveStateSource,
 }
@@ -162,6 +185,8 @@ impl AppSupervisor {
             neg_risk_live_approved_families: BTreeSet::new(),
             neg_risk_live_ready_families: BTreeSet::new(),
             neg_risk_rollout_evidence: None,
+            neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::None,
+            last_emitted_rollout_evidence: None,
             neg_risk_live_execution_records: Vec::new(),
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
         }
@@ -198,6 +223,7 @@ impl AppSupervisor {
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
+        self.last_emitted_rollout_evidence = None;
         let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
             && self.has_seeded_startup_state();
         if restoring_seeded_startup {
@@ -236,6 +262,7 @@ impl AppSupervisor {
 
     pub fn run_bootstrap(self) -> AppRunResult {
         let mut supervisor = self;
+        supervisor.last_emitted_rollout_evidence = None;
         let source = StaticSnapshotSource::new(supervisor.bootstrap_snapshot.clone());
         let report = supervisor.runtime.bootstrap_once(&source);
         let allow_operator_synthesis = supervisor.allow_operator_rollout_evidence_synthesis();
@@ -334,6 +361,7 @@ impl AppSupervisor {
     }
 
     pub fn resume_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
+        self.last_emitted_rollout_evidence = None;
         let span = tracing::info_span!(
             span_names::APP_SUPERVISOR_RESUME,
             app_mode = field::Empty,
@@ -345,7 +373,8 @@ impl AppSupervisor {
             pending_reconcile_count = field::Empty,
             global_posture = field::Empty,
             ingress_backlog = field::Empty,
-            follow_up_backlog = field::Empty
+            follow_up_backlog = field::Empty,
+            evidence_source = field::Empty
         );
         let _span_guard = span.enter();
         span.record(field_keys::APP_MODE, self.runtime.app_mode().as_str());
@@ -355,6 +384,7 @@ impl AppSupervisor {
             runtime_instrumentation(self.metrics_recorder.as_ref()),
         );
         self.neg_risk_rollout_evidence = None;
+        self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
         self.record_recovery_backlog(self.input_tasks.len());
@@ -477,6 +507,10 @@ impl AppSupervisor {
             field_keys::FOLLOW_UP_BACKLOG,
             summary.follow_up_backlog_count,
         );
+        span.record(
+            field_keys::EVIDENCE_SOURCE,
+            summary.neg_risk_rollout_evidence_source.as_str(),
+        );
         if let Some(snapshot_id) = summary.published_snapshot_id.as_deref() {
             span.record(field_keys::SNAPSHOT_ID, snapshot_id);
         }
@@ -488,9 +522,6 @@ impl AppSupervisor {
         let neg_risk_live_attempt_count = self.neg_risk_live_execution_records.len();
         let ingress_backlog_count = self.input_tasks.len();
         let follow_up_backlog_count = self.runtime.follow_up_backlog_count();
-        if let Some(evidence) = self.neg_risk_rollout_evidence.as_ref() {
-            self.record_rollout_evidence(evidence);
-        }
         self.record_status_surface(ingress_backlog_count, follow_up_backlog_count);
         SupervisorSummary {
             fullset_mode: ExecutionMode::Live,
@@ -501,6 +532,7 @@ impl AppSupervisor {
             },
             neg_risk_live_attempt_count,
             neg_risk_live_state_source: self.neg_risk_live_state_source,
+            neg_risk_rollout_evidence_source: self.neg_risk_rollout_evidence_source,
             bootstrap_status: self.runtime.bootstrap_status(),
             runtime_mode: self.runtime.runtime_mode(),
             pending_reconcile_count: self.runtime.pending_reconcile_count(),
@@ -522,14 +554,17 @@ impl AppSupervisor {
             .runtime
             .publish_snapshot(&snapshot_id_for(self.runtime.state_version()))
         {
-            let evidence = self.rollout_evidence_for_snapshot(&snapshot, allow_operator_synthesis);
+            let (evidence, evidence_source) =
+                self.rollout_evidence_for_snapshot(&snapshot, allow_operator_synthesis);
             self.record_rollout_evidence(&evidence);
             self.neg_risk_rollout_evidence = Some(evidence);
+            self.neg_risk_rollout_evidence_source = evidence_source;
             self.retain_current_neg_risk_live_execution_records();
             self.dispatcher.observe_snapshot(snapshot);
         } else {
             self.record_zero_rollout_evidence();
             self.neg_risk_rollout_evidence = None;
+            self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
             self.retain_current_neg_risk_live_execution_records();
         }
     }
@@ -730,36 +765,45 @@ impl AppSupervisor {
         &self,
         snapshot: &PublishedSnapshot,
         allow_operator_synthesis: bool,
-    ) -> NegRiskRolloutEvidence {
+    ) -> (NegRiskRolloutEvidence, NegRiskRolloutEvidenceSource) {
         if snapshot.negrisk.is_some() {
-            return rollout_evidence_from_snapshot(snapshot);
+            return (
+                rollout_evidence_from_snapshot(snapshot),
+                NegRiskRolloutEvidenceSource::Snapshot,
+            );
         }
 
         if !allow_operator_synthesis {
             if let Some(evidence) = self.seed.neg_risk_rollout_evidence.as_ref() {
                 if evidence.snapshot_id == snapshot.snapshot_id {
-                    return evidence.clone();
+                    return (evidence.clone(), NegRiskRolloutEvidenceSource::Bootstrap);
                 }
             }
         }
 
         if allow_operator_synthesis {
             let live_ready_family_count = self.synthetic_live_ready_family_count();
-            return NegRiskRolloutEvidence {
-                snapshot_id: snapshot.snapshot_id.clone(),
-                live_ready_family_count,
-                blocked_family_count: self
-                    .neg_risk_live_targets
-                    .len()
-                    .saturating_sub(live_ready_family_count),
-                parity_mismatch_count: 0,
-            };
+            return (
+                NegRiskRolloutEvidence {
+                    snapshot_id: snapshot.snapshot_id.clone(),
+                    live_ready_family_count,
+                    blocked_family_count: self
+                        .neg_risk_live_targets
+                        .len()
+                        .saturating_sub(live_ready_family_count),
+                    parity_mismatch_count: 0,
+                },
+                NegRiskRolloutEvidenceSource::Bootstrap,
+            );
         }
 
-        NegRiskRolloutEvidence {
-            snapshot_id: snapshot.snapshot_id.clone(),
-            ..NegRiskRolloutEvidence::default()
-        }
+        (
+            NegRiskRolloutEvidence {
+                snapshot_id: snapshot.snapshot_id.clone(),
+                ..NegRiskRolloutEvidence::default()
+            },
+            NegRiskRolloutEvidenceSource::Neutral,
+        )
     }
 
     fn validate_neg_risk_live_execution_anchor(&self) -> Result<(), SupervisorError> {
@@ -847,6 +891,8 @@ impl AppSupervisor {
             runtime_instrumentation(self.metrics_recorder.as_ref()),
         );
         self.neg_risk_rollout_evidence = None;
+        self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
+        self.last_emitted_rollout_evidence = None;
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
 
@@ -891,13 +937,18 @@ impl AppSupervisor {
         recorder.record_recovery_backlog_count(backlog_count as f64);
     }
 
-    fn record_rollout_evidence(&self, evidence: &NegRiskRolloutEvidence) {
+    fn record_rollout_evidence(&mut self, evidence: &NegRiskRolloutEvidence) {
         let Some(recorder) = &self.metrics_recorder else {
             return;
         };
 
         recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
         recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
+        if self.last_emitted_rollout_evidence.as_ref() != Some(evidence) {
+            recorder
+                .increment_neg_risk_rollout_parity_mismatch_count(evidence.parity_mismatch_count);
+            self.last_emitted_rollout_evidence = Some(evidence.clone());
+        }
     }
 
     fn record_zero_rollout_evidence(&self) {
@@ -918,7 +969,6 @@ impl AppSupervisor {
         recorder.record_ingress_backlog(ingress_backlog_count as f64);
         recorder.record_follow_up_backlog(follow_up_backlog_count as f64);
     }
-
     fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {
         let span = tracing::info_span!(
             span_names::APP_DISPATCH_FLUSH,

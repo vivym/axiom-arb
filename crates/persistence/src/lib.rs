@@ -3,9 +3,11 @@ use std::{error::Error as StdError, fmt};
 use domain::IdentifierMapError;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
+pub mod instrumentation;
 pub mod models;
 pub mod repos;
 
+pub use instrumentation::NegRiskPersistenceInstrumentation;
 pub use models::{RuntimeProgressRow, StoredOrder};
 pub use repos::{
     persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,

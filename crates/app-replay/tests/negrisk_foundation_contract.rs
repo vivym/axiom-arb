@@ -398,6 +398,7 @@ fn test_client(base_url: String) -> PolymarketRestClient {
         base_url.parse().expect("base url"),
         base_url.parse().expect("base url"),
         base_url.parse().expect("base url"),
+        None,
     )
 }
 

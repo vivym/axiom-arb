@@ -54,6 +54,23 @@ async fn negrisk_summary_reports_family_validation_halt_and_recent_event_counts(
 }
 
 #[tokio::test]
+async fn negrisk_summary_exposes_latest_snapshot_identity() {
+    with_test_database(|db| async move {
+        run_migrations(&db.pool).await.unwrap();
+        seed_foundation_rows(&db.pool).await;
+
+        let summary = load_neg_risk_foundation_summary(&db.pool).await.unwrap();
+
+        assert_eq!(summary.latest_discovery_revision, 7);
+        assert_eq!(
+            summary.latest_metadata_snapshot_hash.as_deref(),
+            Some("sha256:discovery-7")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn negrisk_summary_uses_latest_discovery_family_set_without_counting_stale_state_rows() {
     with_test_database(|db| async move {
         run_migrations(&db.pool).await.unwrap();

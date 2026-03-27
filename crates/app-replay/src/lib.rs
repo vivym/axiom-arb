@@ -92,6 +92,14 @@ pub async fn load_negrisk_live_submission_records(
         .collect())
 }
 
+pub async fn load_neg_risk_foundation_summary_from_env(
+) -> Result<NegRiskFoundationSummary, NegRiskSummaryError> {
+    let pool = connect_pool_from_env()
+        .await
+        .map_err(NegRiskSummaryError::Persistence)?;
+    load_neg_risk_foundation_summary(&pool).await
+}
+
 pub trait ReplayConsumer {
     type Error;
 

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 
 use crate::{
+    instrumentation::NegRiskPersistenceInstrumentation,
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
@@ -862,117 +863,29 @@ impl ResolutionRepo {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NegRiskFamilyRepo;
 
+#[derive(Debug, Default, Clone)]
+pub struct InstrumentedNegRiskFamilyRepo {
+    instrumentation: NegRiskPersistenceInstrumentation,
+}
+
 impl NegRiskFamilyRepo {
+    pub fn with_instrumentation(
+        instrumentation: NegRiskPersistenceInstrumentation,
+    ) -> InstrumentedNegRiskFamilyRepo {
+        InstrumentedNegRiskFamilyRepo { instrumentation }
+    }
+
     pub async fn upsert_validation(
         &self,
         pool: &PgPool,
         row: &NegRiskFamilyValidationRow,
     ) -> Result<()> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query(
-            r#"
-            SELECT
-                event_family_id,
-                validation_status,
-                exclusion_reason,
-                metadata_snapshot_hash,
-                last_seen_discovery_revision,
-                member_count,
-                first_seen_at,
-                last_seen_at,
-                validated_at,
-                updated_at
-            FROM neg_risk_family_validations
-            WHERE event_family_id = $1
-            FOR UPDATE
-            "#,
+        upsert_validation_with_instrumentation(
+            pool,
+            row,
+            &NegRiskPersistenceInstrumentation::disabled(),
         )
-        .bind(&row.event_family_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .map(map_neg_risk_family_validation_row)
-        .transpose()?;
-
-        if existing
-            .as_ref()
-            .is_some_and(|existing| same_validation_state(existing, row))
-        {
-            tx.commit().await?;
-            return Ok(());
-        }
-
-        sqlx::query(
-            r#"
-            INSERT INTO neg_risk_family_validations (
-                event_family_id,
-                validation_status,
-                exclusion_reason,
-                metadata_snapshot_hash,
-                last_seen_discovery_revision,
-                member_count,
-                first_seen_at,
-                last_seen_at,
-                validated_at,
-                updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (event_family_id) DO UPDATE
-            SET validation_status = EXCLUDED.validation_status,
-                exclusion_reason = EXCLUDED.exclusion_reason,
-                metadata_snapshot_hash = EXCLUDED.metadata_snapshot_hash,
-                last_seen_discovery_revision = EXCLUDED.last_seen_discovery_revision,
-                member_count = EXCLUDED.member_count,
-                first_seen_at = EXCLUDED.first_seen_at,
-                last_seen_at = EXCLUDED.last_seen_at,
-                validated_at = EXCLUDED.validated_at,
-                updated_at = EXCLUDED.updated_at
-            "#,
-        )
-        .bind(&row.event_family_id)
-        .bind(&row.validation_status)
-        .bind(row.exclusion_reason.as_deref())
-        .bind(&row.metadata_snapshot_hash)
-        .bind(row.last_seen_discovery_revision)
-        .bind(row.member_count)
-        .bind(row.first_seen_at)
-        .bind(row.last_seen_at)
-        .bind(row.validated_at)
-        .bind(row.updated_at)
-        .execute(&mut *tx)
-        .await?;
-
-        let entry = JournalEntryInput {
-            stream: format!("neg_risk_family:{}", row.event_family_id),
-            source_kind: row.source_kind.clone(),
-            source_session_id: row.source_session_id.clone(),
-            source_event_id: row.source_event_id.clone(),
-            dedupe_key: format!(
-                "family_validation:{}:{}:{}:{}",
-                row.event_family_id,
-                row.last_seen_discovery_revision,
-                row.metadata_snapshot_hash,
-                row.source_event_id
-            ),
-            causal_parent_id: None,
-            event_type: "family_validation".to_owned(),
-            event_ts: row.event_ts,
-            payload: json!({
-                "event_family_id": row.event_family_id,
-                "validation_status": row.validation_status,
-                "exclusion_reason": row.exclusion_reason,
-                "metadata_snapshot_hash": row.metadata_snapshot_hash,
-                "discovery_revision": row.last_seen_discovery_revision,
-                "member_count": row.member_count,
-                "first_seen_at": row.first_seen_at.to_rfc3339(),
-                "last_seen_at": row.last_seen_at.to_rfc3339(),
-                "validated_at": row.validated_at.to_rfc3339(),
-                "member_vector": member_vector_json(&row.member_vector),
-            }),
-        };
-        append_journal_entry(&mut *tx, &entry).await?;
-
-        tx.commit().await?;
-        Ok(())
+        .await
     }
 
     pub async fn list_validations(&self, pool: &PgPool) -> Result<Vec<NegRiskFamilyValidationRow>> {
@@ -1002,101 +915,8 @@ impl NegRiskFamilyRepo {
     }
 
     pub async fn upsert_halt(&self, pool: &PgPool, row: &FamilyHaltRow) -> Result<()> {
-        let mut tx = pool.begin().await?;
-        let existing = sqlx::query(
-            r#"
-            SELECT
-                event_family_id,
-                halted,
-                reason,
-                blocks_new_risk,
-                metadata_snapshot_hash,
-                last_seen_discovery_revision,
-                set_at,
-                updated_at
-            FROM family_halt_settings
-            WHERE event_family_id = $1
-            FOR UPDATE
-            "#,
-        )
-        .bind(&row.event_family_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .map(map_family_halt_row)
-        .transpose()?;
-
-        if existing
-            .as_ref()
-            .is_some_and(|existing| same_halt_state(existing, row))
-        {
-            tx.commit().await?;
-            return Ok(());
-        }
-
-        sqlx::query(
-            r#"
-            INSERT INTO family_halt_settings (
-                event_family_id,
-                halted,
-                reason,
-                blocks_new_risk,
-                metadata_snapshot_hash,
-                last_seen_discovery_revision,
-                set_at,
-                updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (event_family_id) DO UPDATE
-            SET halted = EXCLUDED.halted,
-                reason = EXCLUDED.reason,
-                blocks_new_risk = EXCLUDED.blocks_new_risk,
-                metadata_snapshot_hash = EXCLUDED.metadata_snapshot_hash,
-                last_seen_discovery_revision = EXCLUDED.last_seen_discovery_revision,
-                set_at = EXCLUDED.set_at,
-                updated_at = EXCLUDED.updated_at
-            "#,
-        )
-        .bind(&row.event_family_id)
-        .bind(row.halted)
-        .bind(row.reason.as_deref())
-        .bind(row.blocks_new_risk)
-        .bind(row.metadata_snapshot_hash.as_deref())
-        .bind(row.last_seen_discovery_revision)
-        .bind(row.set_at)
-        .bind(row.updated_at)
-        .execute(&mut *tx)
-        .await?;
-
-        let entry = JournalEntryInput {
-            stream: format!("neg_risk_family:{}", row.event_family_id),
-            source_kind: row.source_kind.clone(),
-            source_session_id: row.source_session_id.clone(),
-            source_event_id: row.source_event_id.clone(),
-            dedupe_key: format!(
-                "family_halt:{}:{}:{}:{}",
-                row.event_family_id,
-                row.last_seen_discovery_revision,
-                row.metadata_snapshot_hash.as_deref().unwrap_or("none"),
-                row.source_event_id
-            ),
-            causal_parent_id: None,
-            event_type: "family_halt".to_owned(),
-            event_ts: row.event_ts,
-            payload: json!({
-                "event_family_id": row.event_family_id,
-                "halted": row.halted,
-                "reason": row.reason,
-                "blocks_new_risk": row.blocks_new_risk,
-                "metadata_snapshot_hash": row.metadata_snapshot_hash,
-                "discovery_revision": row.last_seen_discovery_revision,
-                "set_at": row.set_at.to_rfc3339(),
-                "member_vector": member_vector_json(&row.member_vector),
-            }),
-        };
-        append_journal_entry(&mut *tx, &entry).await?;
-
-        tx.commit().await?;
-        Ok(())
+        upsert_halt_with_instrumentation(pool, row, &NegRiskPersistenceInstrumentation::disabled())
+            .await
     }
 
     pub async fn list_halts(&self, pool: &PgPool) -> Result<Vec<FamilyHaltRow>> {
@@ -1120,6 +940,271 @@ impl NegRiskFamilyRepo {
 
         rows.into_iter().map(map_family_halt_row).collect()
     }
+}
+
+impl InstrumentedNegRiskFamilyRepo {
+    pub async fn upsert_validation(
+        &self,
+        pool: &PgPool,
+        row: &NegRiskFamilyValidationRow,
+    ) -> Result<()> {
+        upsert_validation_with_instrumentation(pool, row, &self.instrumentation).await
+    }
+
+    pub async fn list_validations(&self, pool: &PgPool) -> Result<Vec<NegRiskFamilyValidationRow>> {
+        NegRiskFamilyRepo.list_validations(pool).await
+    }
+
+    pub async fn upsert_halt(&self, pool: &PgPool, row: &FamilyHaltRow) -> Result<()> {
+        upsert_halt_with_instrumentation(pool, row, &self.instrumentation).await
+    }
+
+    pub async fn list_halts(&self, pool: &PgPool) -> Result<Vec<FamilyHaltRow>> {
+        NegRiskFamilyRepo.list_halts(pool).await
+    }
+
+    pub async fn reconcile_current_family_view(
+        &self,
+        pool: &PgPool,
+        discovery_revision: i64,
+    ) -> Result<()> {
+        reconcile_current_family_view_with_instrumentation(
+            pool,
+            discovery_revision,
+            &self.instrumentation,
+        )
+        .await
+    }
+}
+
+async fn upsert_validation_with_instrumentation(
+    pool: &PgPool,
+    row: &NegRiskFamilyValidationRow,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query(
+        r#"
+        SELECT
+            event_family_id,
+            validation_status,
+            exclusion_reason,
+            metadata_snapshot_hash,
+            last_seen_discovery_revision,
+            member_count,
+            first_seen_at,
+            last_seen_at,
+            validated_at,
+            updated_at
+        FROM neg_risk_family_validations
+        WHERE event_family_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(&row.event_family_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(map_neg_risk_family_validation_row)
+    .transpose()?;
+
+    if existing
+        .as_ref()
+        .is_some_and(|existing| same_validation_state(existing, row))
+    {
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO neg_risk_family_validations (
+            event_family_id,
+            validation_status,
+            exclusion_reason,
+            metadata_snapshot_hash,
+            last_seen_discovery_revision,
+            member_count,
+            first_seen_at,
+            last_seen_at,
+            validated_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (event_family_id) DO UPDATE
+        SET validation_status = EXCLUDED.validation_status,
+            exclusion_reason = EXCLUDED.exclusion_reason,
+            metadata_snapshot_hash = EXCLUDED.metadata_snapshot_hash,
+            last_seen_discovery_revision = EXCLUDED.last_seen_discovery_revision,
+            member_count = EXCLUDED.member_count,
+            first_seen_at = EXCLUDED.first_seen_at,
+            last_seen_at = EXCLUDED.last_seen_at,
+            validated_at = EXCLUDED.validated_at,
+            updated_at = EXCLUDED.updated_at
+        "#,
+    )
+    .bind(&row.event_family_id)
+    .bind(&row.validation_status)
+    .bind(row.exclusion_reason.as_deref())
+    .bind(&row.metadata_snapshot_hash)
+    .bind(row.last_seen_discovery_revision)
+    .bind(row.member_count)
+    .bind(row.first_seen_at)
+    .bind(row.last_seen_at)
+    .bind(row.validated_at)
+    .bind(row.updated_at)
+    .execute(&mut *tx)
+    .await?;
+
+    let entry = JournalEntryInput {
+        stream: format!("neg_risk_family:{}", row.event_family_id),
+        source_kind: row.source_kind.clone(),
+        source_session_id: row.source_session_id.clone(),
+        source_event_id: row.source_event_id.clone(),
+        dedupe_key: format!(
+            "family_validation:{}:{}:{}:{}",
+            row.event_family_id,
+            row.last_seen_discovery_revision,
+            row.metadata_snapshot_hash,
+            row.source_event_id
+        ),
+        causal_parent_id: None,
+        event_type: "family_validation".to_owned(),
+        event_ts: row.event_ts,
+        payload: json!({
+            "event_family_id": row.event_family_id,
+            "validation_status": row.validation_status,
+            "exclusion_reason": row.exclusion_reason,
+            "metadata_snapshot_hash": row.metadata_snapshot_hash,
+            "discovery_revision": row.last_seen_discovery_revision,
+            "member_count": row.member_count,
+            "first_seen_at": row.first_seen_at.to_rfc3339(),
+            "last_seen_at": row.last_seen_at.to_rfc3339(),
+            "validated_at": row.validated_at.to_rfc3339(),
+            "member_vector": member_vector_json(&row.member_vector),
+        }),
+    };
+    append_journal_entry(&mut *tx, &entry).await?;
+
+    tx.commit().await?;
+    instrumentation.record_validation_upsert(row);
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "validation",
+        &row.event_family_id,
+    )
+    .await;
+    Ok(())
+}
+
+async fn upsert_halt_with_instrumentation(
+    pool: &PgPool,
+    row: &FamilyHaltRow,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query(
+        r#"
+        SELECT
+            event_family_id,
+            halted,
+            reason,
+            blocks_new_risk,
+            metadata_snapshot_hash,
+            last_seen_discovery_revision,
+            set_at,
+            updated_at
+        FROM family_halt_settings
+        WHERE event_family_id = $1
+        FOR UPDATE
+        "#,
+    )
+    .bind(&row.event_family_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(map_family_halt_row)
+    .transpose()?;
+
+    if existing
+        .as_ref()
+        .is_some_and(|existing| same_halt_state(existing, row))
+    {
+        tx.commit().await?;
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO family_halt_settings (
+            event_family_id,
+            halted,
+            reason,
+            blocks_new_risk,
+            metadata_snapshot_hash,
+            last_seen_discovery_revision,
+            set_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (event_family_id) DO UPDATE
+        SET halted = EXCLUDED.halted,
+            reason = EXCLUDED.reason,
+            blocks_new_risk = EXCLUDED.blocks_new_risk,
+            metadata_snapshot_hash = EXCLUDED.metadata_snapshot_hash,
+            last_seen_discovery_revision = EXCLUDED.last_seen_discovery_revision,
+            set_at = EXCLUDED.set_at,
+            updated_at = EXCLUDED.updated_at
+        "#,
+    )
+    .bind(&row.event_family_id)
+    .bind(row.halted)
+    .bind(row.reason.as_deref())
+    .bind(row.blocks_new_risk)
+    .bind(row.metadata_snapshot_hash.as_deref())
+    .bind(row.last_seen_discovery_revision)
+    .bind(row.set_at)
+    .bind(row.updated_at)
+    .execute(&mut *tx)
+    .await?;
+
+    let entry = JournalEntryInput {
+        stream: format!("neg_risk_family:{}", row.event_family_id),
+        source_kind: row.source_kind.clone(),
+        source_session_id: row.source_session_id.clone(),
+        source_event_id: row.source_event_id.clone(),
+        dedupe_key: format!(
+            "family_halt:{}:{}:{}:{}",
+            row.event_family_id,
+            row.last_seen_discovery_revision,
+            row.metadata_snapshot_hash.as_deref().unwrap_or("none"),
+            row.source_event_id
+        ),
+        causal_parent_id: None,
+        event_type: "family_halt".to_owned(),
+        event_ts: row.event_ts,
+        payload: json!({
+            "event_family_id": row.event_family_id,
+            "halted": row.halted,
+            "reason": row.reason,
+            "blocks_new_risk": row.blocks_new_risk,
+            "metadata_snapshot_hash": row.metadata_snapshot_hash,
+            "discovery_revision": row.last_seen_discovery_revision,
+            "set_at": row.set_at.to_rfc3339(),
+            "member_vector": member_vector_json(&row.member_vector),
+        }),
+    };
+    append_journal_entry(&mut *tx, &entry).await?;
+
+    tx.commit().await?;
+    instrumentation.record_halt_upsert(row);
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "halt",
+        &row.event_family_id,
+    )
+    .await;
+    Ok(())
 }
 
 pub async fn persist_discovery_snapshot(
@@ -1184,6 +1269,19 @@ pub async fn persist_discovery_snapshot(
 }
 
 pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i64) -> Result<()> {
+    reconcile_current_family_view_with_instrumentation(
+        pool,
+        discovery_revision,
+        &NegRiskPersistenceInstrumentation::disabled(),
+    )
+    .await
+}
+
+async fn reconcile_current_family_view_with_instrumentation(
+    pool: &PgPool,
+    discovery_revision: i64,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+) -> Result<()> {
     let _ = discovery_revision;
 
     let latest_snapshot = latest_discovery_snapshot(pool)
@@ -1214,7 +1312,100 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
     .await?;
 
     tx.commit().await?;
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "reconcile",
+        "<current-view>",
+    )
+    .await;
     Ok(())
+}
+
+async fn record_authoritative_neg_risk_current_view_metrics(
+    pool: &PgPool,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+) -> Result<()> {
+    let Some(authoritative_family_ids) = latest_discovery_snapshot(pool)
+        .await?
+        .map(|snapshot| snapshot.family_ids)
+    else {
+        return Ok(());
+    };
+
+    let included_count =
+        count_authoritative_validation_rows(pool, &authoritative_family_ids, "included").await?;
+    let excluded_count =
+        count_authoritative_validation_rows(pool, &authoritative_family_ids, "excluded").await?;
+    let halt_count = count_authoritative_halt_rows(pool, &authoritative_family_ids).await?;
+
+    instrumentation.record_authoritative_current_view_counts(
+        included_count as u64,
+        excluded_count as u64,
+        halt_count as u64,
+    );
+
+    Ok(())
+}
+
+async fn refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+    pool: &PgPool,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+    update_kind: &str,
+    event_family_id: &str,
+) {
+    if !instrumentation.is_enabled() {
+        return;
+    }
+
+    if let Err(err) =
+        record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await
+    {
+        tracing::warn!(
+            error = %err,
+            update_kind,
+            event_family_id,
+            "neg-risk current-view metric refresh failed after durable commit"
+        );
+    }
+}
+
+async fn count_authoritative_validation_rows(
+    pool: &PgPool,
+    authoritative_family_ids: &[String],
+    validation_status: &str,
+) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM neg_risk_family_validations
+        WHERE event_family_id = ANY($1)
+          AND validation_status = $2
+        "#,
+    )
+    .bind(authoritative_family_ids)
+    .bind(validation_status)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn count_authoritative_halt_rows(
+    pool: &PgPool,
+    authoritative_family_ids: &[String],
+) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM family_halt_settings
+        WHERE event_family_id = ANY($1)
+          AND halted = TRUE
+        "#,
+    )
+    .bind(authoritative_family_ids)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
 #[derive(Debug, Default, Clone, Copy)]

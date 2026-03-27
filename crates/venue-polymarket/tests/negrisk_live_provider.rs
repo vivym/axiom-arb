@@ -264,7 +264,13 @@ fn sample_rest_client(base_url: Url) -> PolymarketRestClient {
         .build()
         .expect("test client");
 
-    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+    PolymarketRestClient::with_http_client(
+        client,
+        base_url.clone(),
+        base_url.clone(),
+        base_url,
+        None,
+    )
 }
 
 fn sample_l2_auth() -> L2AuthHeaders<'static> {

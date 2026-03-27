@@ -1,5 +1,19 @@
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use chrono::{DateTime, Utc};
 use observability::span_names;
-use std::{path::PathBuf, process::Command};
+use persistence::{
+    models::{NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow},
+    persist_discovery_snapshot, run_migrations, NegRiskFamilyRepo,
+};
+use serde_json::json;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+
+static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[test]
 fn binary_entrypoint_emits_structured_replay_summary() {
@@ -84,6 +98,48 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_cli_args() {
     );
 }
 
+#[tokio::test]
+async fn app_replay_main_emits_operator_facing_negrisk_summary_without_new_metrics() {
+    let Some(database_url) = std::env::var_os("DATABASE_URL") else {
+        return;
+    };
+    let database_url = database_url
+        .into_string()
+        .expect("DATABASE_URL should be valid utf8");
+    let db = TestDatabase::new(&database_url).await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_negrisk_summary_rows(&db.pool).await;
+
+    let output = Command::new(app_replay_binary())
+        .env("DATABASE_URL", &database_url)
+        .env("PGOPTIONS", format!("-c search_path={}", db.schema))
+        .args(["--from-seq", "0", "--limit", "10"])
+        .output()
+        .expect("app-replay should run");
+
+    db.cleanup().await;
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains(span_names::REPLAY_NEGRISK_SUMMARY),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("app-replay neg-risk summary"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("latest_metadata_snapshot_hash"),
+        "{combined}"
+    );
+    assert!(combined.contains("sha256:discovery-7"), "{combined}");
+}
+
 fn app_replay_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-replay") {
         return PathBuf::from(path);
@@ -100,4 +156,134 @@ fn app_replay_binary() -> PathBuf {
     }
 
     path
+}
+
+#[derive(Clone)]
+struct TestDatabase {
+    admin_pool: PgPool,
+    pool: PgPool,
+    schema: String,
+}
+
+impl TestDatabase {
+    async fn new(database_url: &str) -> Self {
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(database_url)
+            .await
+            .expect("test database should connect");
+
+        let schema = format!(
+            "app_replay_main_{}_{}",
+            std::process::id(),
+            NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
+        );
+
+        sqlx::query(&format!(r#"CREATE SCHEMA "{schema}""#))
+            .execute(&admin_pool)
+            .await
+            .expect("schema should create");
+
+        let search_path_sql = format!(r#"SET search_path TO "{schema}""#);
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |conn, _meta| {
+                let search_path_sql = search_path_sql.clone();
+                Box::pin(async move {
+                    sqlx::query(&search_path_sql).execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect(database_url)
+            .await
+            .expect("isolated pool should connect");
+
+        Self {
+            admin_pool,
+            pool,
+            schema,
+        }
+    }
+
+    async fn cleanup(self) {
+        self.pool.close().await;
+        sqlx::query(&format!(
+            r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#,
+            schema = self.schema
+        ))
+        .execute(&self.admin_pool)
+        .await
+        .expect("schema should drop");
+        self.admin_pool.close().await;
+    }
+}
+
+async fn seed_negrisk_summary_rows(pool: &PgPool) {
+    persist_discovery_snapshot(
+        pool,
+        NegRiskDiscoverySnapshotInput {
+            discovery_revision: 7,
+            metadata_snapshot_hash: "sha256:discovery-7".to_owned(),
+            family_ids: vec!["family-1".to_owned()],
+            captured_at: ts("2026-03-24T00:00:07Z"),
+            source_kind: "test".to_owned(),
+            source_session_id: "session-7".to_owned(),
+            source_event_id: "discovery-7".to_owned(),
+            dedupe_key: "discovery:7".to_owned(),
+            extra_payload: json!({}),
+        },
+    )
+    .await
+    .unwrap();
+
+    NegRiskFamilyRepo
+        .upsert_validation(
+            pool,
+            &NegRiskFamilyValidationRow {
+                event_family_id: "family-1".to_owned(),
+                validation_status: "included".to_owned(),
+                exclusion_reason: None,
+                metadata_snapshot_hash: "sha256:snapshot-7".to_owned(),
+                last_seen_discovery_revision: 7,
+                member_count: 2,
+                first_seen_at: ts("2026-03-24T00:00:01Z"),
+                last_seen_at: ts("2026-03-24T00:00:05Z"),
+                validated_at: ts("2026-03-24T00:00:06Z"),
+                updated_at: ts("2026-03-24T00:00:06Z"),
+                member_vector: sample_member_vector("family-1"),
+                source_kind: "test".to_owned(),
+                source_session_id: "validation-session-1".to_owned(),
+                source_event_id: "validation-family-1".to_owned(),
+                event_ts: ts("2026-03-24T00:00:06Z"),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+fn sample_member_vector(family_id: &str) -> Vec<NegRiskFamilyMemberRow> {
+    vec![
+        NegRiskFamilyMemberRow {
+            condition_id: format!("condition-{family_id}-1"),
+            token_id: format!("token-{family_id}-1"),
+            outcome_label: "Alice".to_owned(),
+            is_placeholder: false,
+            is_other: false,
+            neg_risk_variant: "standard".to_owned(),
+        },
+        NegRiskFamilyMemberRow {
+            condition_id: format!("condition-{family_id}-2"),
+            token_id: format!("token-{family_id}-2"),
+            outcome_label: "Bob".to_owned(),
+            is_placeholder: false,
+            is_other: false,
+            neg_risk_variant: "standard".to_owned(),
+        },
+    ]
+}
+
+fn ts(value: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(value)
+        .expect("timestamp should parse")
+        .with_timezone(&Utc)
 }

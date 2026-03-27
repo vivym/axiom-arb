@@ -62,6 +62,19 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
 }
 
 #[test]
+fn binary_entrypoint_emits_structured_bootstrap_log_after_metric_removal() {
+    let output = app_live_output("paper", None);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
+    );
+
+    assert!(combined.contains("app-live bootstrap complete"));
+    assert!(combined.contains("neg_risk_live_attempt_count"));
+}
+
+#[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
     let output = app_live_output("invalid-mode", None);
 
@@ -326,6 +339,10 @@ fn live_entrypoint_persists_operator_target_revision_anchor_during_startup() {
         combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
         "{combined}"
     );
+    assert!(
+        combined.contains("evidence_source=\"bootstrap\""),
+        "{combined}"
+    );
 
     let progress = database
         .runtime_progress()
@@ -426,6 +443,10 @@ fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
     );
     assert!(
         combined.contains("neg_risk_live_state_source=\"durable_restore\""),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("evidence_source=\"neutral\""),
         "{combined}"
     );
 }

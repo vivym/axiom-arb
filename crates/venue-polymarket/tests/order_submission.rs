@@ -108,7 +108,7 @@ fn sample_rest_client() -> PolymarketRestClient {
         .expect("test client");
     let base = Url::parse("https://clob.polymarket.com/").expect("clob url should parse for tests");
 
-    PolymarketRestClient::with_http_client(client, base.clone(), base.clone(), base)
+    PolymarketRestClient::with_http_client(client, base.clone(), base.clone(), base, None)
 }
 
 fn sample_l2_auth() -> L2AuthHeaders<'static> {

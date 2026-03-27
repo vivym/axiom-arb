@@ -11,6 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::heartbeat::HeartbeatFetchResult;
+use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::{
@@ -25,6 +26,7 @@ pub struct PolymarketRestClient {
     pub relayer_host: Url,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
+    pub(crate) instrumentation: VenueProducerInstrumentation,
 }
 
 #[derive(Debug)]
@@ -113,8 +115,19 @@ impl From<url::ParseError> for RestError {
 }
 
 impl PolymarketRestClient {
-    pub fn new(clob_host: Url, data_api_host: Url, relayer_host: Url) -> Self {
-        Self::with_http_client(Client::new(), clob_host, data_api_host, relayer_host)
+    pub fn new(
+        clob_host: Url,
+        data_api_host: Url,
+        relayer_host: Url,
+        instrumentation: Option<VenueProducerInstrumentation>,
+    ) -> Self {
+        Self::with_http_client(
+            Client::new(),
+            clob_host,
+            data_api_host,
+            relayer_host,
+            instrumentation,
+        )
     }
 
     pub fn with_http_client(
@@ -122,6 +135,7 @@ impl PolymarketRestClient {
         clob_host: Url,
         data_api_host: Url,
         relayer_host: Url,
+        instrumentation: Option<VenueProducerInstrumentation>,
     ) -> Self {
         Self {
             http,
@@ -130,6 +144,7 @@ impl PolymarketRestClient {
             relayer_host,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
+            instrumentation: instrumentation.unwrap_or_else(VenueProducerInstrumentation::disabled),
         }
     }
 

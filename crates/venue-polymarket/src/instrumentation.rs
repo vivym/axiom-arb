@@ -124,4 +124,49 @@ impl VenueProducerInstrumentation {
         )
         .in_scope(|| {});
     }
+
+    pub fn record_metadata_refresh_started(&self) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.increment_neg_risk_metadata_refresh_count(1);
+    }
+
+    pub fn record_metadata_refresh_success(
+        &self,
+        discovery_revision: i64,
+        metadata_snapshot_hash: &str,
+        discovered_family_count: usize,
+        refresh_duration_ms: u64,
+    ) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+
+        recorder.record_neg_risk_family_discovered_count(discovered_family_count as f64);
+
+        tracing::info_span!(
+            span_names::VENUE_METADATA_REFRESH,
+            discovery_revision = discovery_revision,
+            metadata_snapshot_hash = metadata_snapshot_hash,
+            refresh_result = "success",
+            refresh_duration_ms = refresh_duration_ms,
+            discovered_family_count = discovered_family_count,
+        )
+        .in_scope(|| {});
+    }
+
+    pub fn record_metadata_refresh_failure(&self, refresh_duration_ms: u64) {
+        let Some(_recorder) = &self.recorder else {
+            return;
+        };
+
+        tracing::warn_span!(
+            span_names::VENUE_METADATA_REFRESH,
+            refresh_result = "failure",
+            refresh_duration_ms = refresh_duration_ms,
+        )
+        .in_scope(|| {});
+    }
 }

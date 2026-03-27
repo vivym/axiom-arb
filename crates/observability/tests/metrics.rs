@@ -92,6 +92,22 @@ fn runtime_metrics_expose_negrisk_live_submit_closure_signals() {
 }
 
 #[test]
+fn runtime_metrics_keep_wave1c_control_plane_contracts() {
+    let metrics = RuntimeMetrics::default();
+    assert_eq!(
+        metrics.neg_risk_family_discovered_count.key().as_str(),
+        "axiom_neg_risk_family_discovered_count"
+    );
+    assert_eq!(
+        metrics
+            .neg_risk_rollout_parity_mismatch_count
+            .key()
+            .as_str(),
+        "axiom_neg_risk_rollout_parity_mismatch_total"
+    );
+}
+
+#[test]
 fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
     let metrics = RuntimeMetrics::default();
 

@@ -17,6 +17,7 @@ pub struct NegRiskFoundationSummary {
     pub recent_validation_event_count: u64,
     pub recent_halt_event_count: u64,
     pub latest_discovery_revision: i64,
+    pub latest_metadata_snapshot_hash: Option<String>,
     pub families: Vec<NegRiskFoundationFamilySummary>,
 }
 
@@ -223,6 +224,7 @@ pub async fn load_neg_risk_foundation_summary(
         recent_validation_event_count,
         recent_halt_event_count,
         latest_discovery_revision: discovery.latest_discovery_revision,
+        latest_metadata_snapshot_hash: discovery.latest_metadata_snapshot_hash,
         families,
     })
 }
@@ -281,6 +283,7 @@ pub async fn load_member_vector_from_journal(
 struct LatestDiscoverySnapshot {
     discovered_family_count: u64,
     latest_discovery_revision: i64,
+    latest_metadata_snapshot_hash: Option<String>,
     family_ids: Vec<String>,
 }
 
@@ -323,6 +326,8 @@ async fn latest_discovery_snapshot(
             Ok(LatestDiscoverySnapshot {
                 discovered_family_count: family_ids.len() as u64,
                 latest_discovery_revision,
+                latest_metadata_snapshot_hash: optional_str(&payload, "metadata_snapshot_hash")
+                    .map(str::to_owned),
                 family_ids,
             })
         })
