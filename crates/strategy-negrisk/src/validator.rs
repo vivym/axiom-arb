@@ -1,11 +1,21 @@
 use domain::{FamilyExclusionReason, MarketRoute, NegRiskVariant};
 
 use crate::graph::NegRiskGraphFamily;
+use crate::instrumentation::NegRiskValidatorInstrumentation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FamilyValidationStatus {
     Included,
     Excluded,
+}
+
+impl FamilyValidationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Included => "included",
+            Self::Excluded => "excluded",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +64,17 @@ pub fn validate_family(
         metadata_snapshot_hash: metadata_snapshot_hash.to_owned(),
         member_count: family.family.members.len(),
     }
+}
+
+pub fn validate_family_instrumented(
+    family: &NegRiskGraphFamily,
+    discovery_revision: i64,
+    metadata_snapshot_hash: &str,
+    instrumentation: &NegRiskValidatorInstrumentation,
+) -> FamilyValidation {
+    let verdict = validate_family(family, discovery_revision, metadata_snapshot_hash);
+    instrumentation.record_validation(&verdict);
+    verdict
 }
 
 fn has_named_outcome(member: &domain::NegRiskNode) -> bool {

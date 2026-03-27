@@ -1,6 +1,21 @@
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+};
+
 use domain::{FamilyExclusionReason, IdentifierRecord, MarketRoute, NegRiskVariant};
+use observability::{bootstrap_observability, span_names};
 use strategy_negrisk::{
-    build_family_graph, validate_family, FamilyValidationStatus, NegRiskGraph, NegRiskGraphFamily,
+    build_family_graph, validate_family, validate_family_instrumented, FamilyValidationStatus,
+    NegRiskGraph, NegRiskGraphFamily, NegRiskValidatorInstrumentation,
+};
+use tracing::{
+    field::{Field, Visit},
+    span::{Attributes, Id, Record},
+    Event, Metadata, Subscriber,
 };
 use venue_polymarket::NegRiskMarketMetadata;
 
@@ -42,6 +57,35 @@ fn validator_recomputes_verdict_when_snapshot_hash_changes() {
     let second = validate_family(&second_family, 8, "sha256:snapshot-b");
 
     assert_ne!(first.metadata_snapshot_hash, second.metadata_snapshot_hash);
+}
+
+#[test]
+fn validator_records_verdict_without_emitting_discovered_family_count() {
+    let observability = bootstrap_observability("validator-test");
+    let instrumentation = NegRiskValidatorInstrumentation::enabled(observability.recorder());
+
+    let (spans, verdict) = capture_spans(|| {
+        validate_family_instrumented(
+            &sample_named_family(),
+            7,
+            "sha256:snapshot-7",
+            &instrumentation,
+        )
+    });
+
+    assert_eq!(verdict.discovery_revision, 7);
+    assert!(spans
+        .iter()
+        .any(|span| span.name == span_names::NEG_RISK_FAMILY_VALIDATION));
+    assert_eq!(
+        observability.registry().snapshot().gauge(
+            observability
+                .metrics()
+                .neg_risk_family_discovered_count
+                .key()
+        ),
+        None
+    );
 }
 
 fn sample_identifier_records() -> Vec<IdentifierRecord> {
@@ -202,6 +246,114 @@ fn family_from_graph(graph: NegRiskGraph) -> NegRiskGraphFamily {
 
 fn sample_discovery_revision() -> i64 {
     7
+}
+
+#[derive(Debug, Clone)]
+struct CapturedSpan {
+    name: String,
+    fields: BTreeMap<String, String>,
+}
+
+#[allow(dead_code)]
+impl CapturedSpan {
+    fn field(&self, key: &str) -> Option<&String> {
+        self.fields.get(key)
+    }
+}
+
+fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
+    let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
+    let subscriber = CaptureSubscriber {
+        spans: Arc::clone(&spans),
+        next_id: Arc::new(AtomicU64::new(1)),
+    };
+
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let captured = spans
+        .lock()
+        .expect("capture lock poisoned")
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    (captured, result)
+}
+
+#[derive(Clone)]
+struct CaptureSubscriber {
+    spans: Arc<Mutex<BTreeMap<u64, CapturedSpan>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+impl Subscriber for CaptureSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn register_callsite(
+        &self,
+        _metadata: &'static Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::always()
+    }
+
+    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
+        let raw_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = Id::from_u64(raw_id);
+        let mut fields = BTreeMap::new();
+        let mut visitor = FieldVisitor {
+            fields: &mut fields,
+        };
+        attrs.record(&mut visitor);
+
+        self.spans.lock().expect("capture lock poisoned").insert(
+            raw_id,
+            CapturedSpan {
+                name: attrs.metadata().name().to_owned(),
+                fields,
+            },
+        );
+
+        id
+    }
+
+    fn record(&self, span: &Id, values: &Record<'_>) {
+        let span_id = span.clone().into_u64();
+        let mut spans = self.spans.lock().expect("capture lock poisoned");
+        if let Some(captured) = spans.get_mut(&span_id) {
+            let mut visitor = FieldVisitor {
+                fields: &mut captured.fields,
+            };
+            values.record(&mut visitor);
+        }
+    }
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+
+    fn clone_span(&self, id: &Id) -> Id {
+        id.clone()
+    }
+
+    fn try_close(&self, _id: Id) -> bool {
+        true
+    }
+}
+
+struct FieldVisitor<'a> {
+    fields: &'a mut BTreeMap<String, String>,
+}
+
+impl Visit for FieldVisitor<'_> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .insert(field.name().to_owned(), format!("{value:?}"));
+    }
 }
 
 struct MetadataRowInput<'a> {

@@ -5,9 +5,14 @@ edition = "2021"
 
 [dependencies]
 domain = { path = "../domain" }
+observability = { path = "../observability" }
 rust_decimal = { version = "1.40.0" }
 state = { path = "../state" }
+tracing = "0.1.41"
 venue-polymarket = { path = "../venue-polymarket" }
+
+[dev-dependencies]
+observability = { path = "../observability" }
 
 [lib]
 path = "src/lib.rs"

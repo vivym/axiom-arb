@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 
 use crate::{
+    instrumentation::NegRiskPersistenceInstrumentation,
     models::{
         execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
         FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
@@ -863,6 +864,11 @@ impl ResolutionRepo {
 pub struct NegRiskFamilyRepo;
 
 impl NegRiskFamilyRepo {
+    pub fn with_instrumentation(instrumentation: NegRiskPersistenceInstrumentation) -> Self {
+        instrumentation.install_as_default();
+        Self
+    }
+
     pub async fn upsert_validation(
         &self,
         pool: &PgPool,
@@ -972,6 +978,7 @@ impl NegRiskFamilyRepo {
         append_journal_entry(&mut *tx, &entry).await?;
 
         tx.commit().await?;
+        NegRiskPersistenceInstrumentation::current().record_validation_upsert(row);
         Ok(())
     }
 
@@ -1096,6 +1103,7 @@ impl NegRiskFamilyRepo {
         append_journal_entry(&mut *tx, &entry).await?;
 
         tx.commit().await?;
+        NegRiskPersistenceInstrumentation::current().record_halt_upsert(row);
         Ok(())
     }
 
@@ -1214,6 +1222,47 @@ pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i6
     .await?;
 
     tx.commit().await?;
+    record_authoritative_neg_risk_current_view_metrics(pool).await?;
+    Ok(())
+}
+
+async fn record_authoritative_neg_risk_current_view_metrics(pool: &PgPool) -> Result<()> {
+    let included_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM neg_risk_family_validations
+        WHERE validation_status = 'included'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let excluded_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM neg_risk_family_validations
+        WHERE validation_status = 'excluded'
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let halt_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM family_halt_settings
+        WHERE halted = TRUE
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    NegRiskPersistenceInstrumentation::current().record_authoritative_current_view_counts(
+        included_count as u64,
+        excluded_count as u64,
+        halt_count as u64,
+    );
+
     Ok(())
 }
 
