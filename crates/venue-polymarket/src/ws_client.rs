@@ -77,7 +77,8 @@ impl WsMessageSource for RealWsMessageSource {
                         return String::from_utf8(bytes.to_vec())
                             .map_err(|err| WsClientError::Transport(err.to_string()));
                     }
-                    Message::Ping(_) | Message::Pong(_) => continue,
+                    Message::Ping(_) => return Ok(r#"{"event":"PING"}"#.to_owned()),
+                    Message::Pong(_) => return Ok(r#"{"event":"PONG"}"#.to_owned()),
                     Message::Close(_) => {
                         return Err(WsClientError::Transport("websocket closed".to_owned()));
                     }
@@ -127,5 +128,53 @@ where
     pub async fn next_user_event(&mut self) -> Result<UserWsEvent, WsClientError> {
         let message = self.user_transport.next_message().await?;
         parse_user_message(&message).map_err(WsClientError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use futures_util::SinkExt;
+    use tokio::net::TcpListener;
+    use tokio::time::{sleep, Duration};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    #[tokio::test]
+    async fn real_ws_message_source_surfaces_ping_and_pong_control_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept connection");
+            let mut ws = accept_async(stream).await.expect("accept websocket");
+
+            ws.send(Message::Ping(Vec::new().into()))
+                .await
+                .expect("send ping");
+            ws.send(Message::Pong(Vec::new().into()))
+                .await
+                .expect("send pong");
+            ws.send(Message::Text(
+                r#"{"event":"book","asset_id":"token-1"}"#.into(),
+            ))
+            .await
+            .expect("send text");
+            sleep(Duration::from_millis(250)).await;
+        });
+
+        let url = Url::parse(&format!("ws://{addr}/control")).expect("ws url");
+        let mut source = RealWsMessageSource::connect(url).await.expect("connect");
+
+        assert_eq!(
+            source.next_message().await.expect("ping frame"),
+            r#"{"event":"PING"}"#
+        );
+        assert_eq!(
+            source.next_message().await.expect("pong frame"),
+            r#"{"event":"PONG"}"#
+        );
+
+        server.await.expect("server task");
     }
 }

@@ -237,3 +237,75 @@ fn parses_polymarket_source_config_from_env_json() {
     assert_eq!(config.relayer_poll_interval_seconds, 5);
     assert_eq!(config.metadata_refresh_interval_seconds, 60);
 }
+
+#[test]
+fn rejects_polymarket_source_config_with_non_http_hosts() {
+    let json = r#"
+    {
+      "clob_host": "ftp://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
+      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("clob_host"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_non_ws_urls() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "https://ws-subscriptions.polymarket.com/market",
+      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("market_ws_url"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_zero_cadence() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions.polymarket.com/market",
+      "user_ws_url": "wss://ws-subscriptions.polymarket.com/user",
+      "heartbeat_interval_seconds": 0,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("heartbeat_interval_seconds"));
+}

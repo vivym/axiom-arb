@@ -34,8 +34,7 @@ pub use rest::{
     VenueStatusResponse,
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
-pub use url::Url;
-pub use ws_client::{PolymarketWsClient, RealWsMessageSource, WsClientError, WsMessageSource};
+pub use ws_client::{PolymarketWsClient, WsClientError, WsMessageSource};
 pub use ws_market::{
     parse_market_message, MarketBookUpdate, MarketLifecycleUpdate, MarketPriceChangeUpdate,
     MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent, WsChannelKind,

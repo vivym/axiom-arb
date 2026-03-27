@@ -2,9 +2,10 @@ use chrono::{Duration, TimeZone, Utc};
 mod support;
 
 use support::MockServer;
+use url::Url;
 use venue_polymarket::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
-    PolymarketRestClient, Url,
+    PolymarketRestClient,
 };
 
 #[test]

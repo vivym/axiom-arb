@@ -1,10 +1,11 @@
 use std::{collections::VecDeque, future::Future, pin::Pin};
 
 use chrono::{TimeZone, Utc};
+use url::Url;
 use venue_polymarket::{
     parse_market_message, parse_user_message, MarketBookUpdate, MarketLifecycleUpdate,
     MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
-    PolymarketWsClient, Url, UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
+    PolymarketWsClient, UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
     WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsMessageSource,
     WsParseError,
 };

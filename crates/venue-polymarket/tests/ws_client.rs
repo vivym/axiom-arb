@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, future::Future, pin::Pin};
 
+use url::Url;
 use venue_polymarket::{
-    MarketBookUpdate, MarketWsEvent, PolymarketWsClient, Url, UserTradeUpdate, UserWsEvent,
+    MarketBookUpdate, MarketWsEvent, PolymarketWsClient, UserTradeUpdate, UserWsEvent,
     WsMessageSource,
 };
 

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use venue_polymarket::Url;
+use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {
@@ -262,14 +262,36 @@ pub fn load_polymarket_source_config(
         })?;
 
     Ok(PolymarketSourceConfig {
-        clob_host: parse_source_url("clob_host", &raw.clob_host, json)?,
-        data_api_host: parse_source_url("data_api_host", &raw.data_api_host, json)?,
-        relayer_host: parse_source_url("relayer_host", &raw.relayer_host, json)?,
-        market_ws_url: parse_source_url("market_ws_url", &raw.market_ws_url, json)?,
-        user_ws_url: parse_source_url("user_ws_url", &raw.user_ws_url, json)?,
-        heartbeat_interval_seconds: raw.heartbeat_interval_seconds,
-        relayer_poll_interval_seconds: raw.relayer_poll_interval_seconds,
-        metadata_refresh_interval_seconds: raw.metadata_refresh_interval_seconds,
+        clob_host: parse_source_url("clob_host", &raw.clob_host, &["http", "https"], json)?,
+        data_api_host: parse_source_url(
+            "data_api_host",
+            &raw.data_api_host,
+            &["http", "https"],
+            json,
+        )?,
+        relayer_host: parse_source_url(
+            "relayer_host",
+            &raw.relayer_host,
+            &["http", "https"],
+            json,
+        )?,
+        market_ws_url: parse_source_url("market_ws_url", &raw.market_ws_url, &["ws", "wss"], json)?,
+        user_ws_url: parse_source_url("user_ws_url", &raw.user_ws_url, &["ws", "wss"], json)?,
+        heartbeat_interval_seconds: parse_positive_interval(
+            "heartbeat_interval_seconds",
+            raw.heartbeat_interval_seconds,
+            json,
+        )?,
+        relayer_poll_interval_seconds: parse_positive_interval(
+            "relayer_poll_interval_seconds",
+            raw.relayer_poll_interval_seconds,
+            json,
+        )?,
+        metadata_refresh_interval_seconds: parse_positive_interval(
+            "metadata_refresh_interval_seconds",
+            raw.metadata_refresh_interval_seconds,
+            json,
+        )?,
     })
 }
 
@@ -285,9 +307,42 @@ struct RawPolymarketSourceConfig {
     metadata_refresh_interval_seconds: u64,
 }
 
-fn parse_source_url(field: &'static str, value: &str, raw_json: &str) -> Result<Url, ConfigError> {
-    Url::parse(value).map_err(|error| ConfigError::InvalidPolymarketSourceConfig {
+fn parse_source_url(
+    field: &'static str,
+    value: &str,
+    allowed_schemes: &[&'static str],
+    raw_json: &str,
+) -> Result<Url, ConfigError> {
+    let url = Url::parse(value).map_err(|error| ConfigError::InvalidPolymarketSourceConfig {
         value: raw_json.to_owned(),
         message: format!("{field}: {error}"),
-    })
+    })?;
+
+    if allowed_schemes.contains(&url.scheme()) {
+        Ok(url)
+    } else {
+        Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!(
+                "{field}: unsupported scheme '{}', expected one of: {}",
+                url.scheme(),
+                allowed_schemes.join(", ")
+            ),
+        })
+    }
+}
+
+fn parse_positive_interval(
+    field: &'static str,
+    value: u64,
+    raw_json: &str,
+) -> Result<u64, ConfigError> {
+    if value > 0 {
+        Ok(value)
+    } else {
+        Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!("{field}: must be > 0"),
+        })
+    }
 }
