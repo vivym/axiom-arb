@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin};
 
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use venue_polymarket::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
 };
@@ -142,6 +142,44 @@ impl DecisionTaskGroup {
             follow_up_backlog: self.follow_up.len(),
             snapshot_id: Some(notice.snapshot_id),
         }
+    }
+}
+
+impl MetadataTaskGroup {
+    pub fn discovery_input(
+        journal_seq: i64,
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        observed_at: DateTime<Utc>,
+    ) -> InputTaskEvent {
+        InputTaskEvent::family_discovery_observed(
+            journal_seq,
+            source_session_id,
+            source_event_id,
+            family_id,
+            observed_at,
+        )
+    }
+
+    pub fn backfill_input(
+        journal_seq: i64,
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        cursor: impl Into<String>,
+        complete: bool,
+        observed_at: DateTime<Utc>,
+    ) -> InputTaskEvent {
+        InputTaskEvent::family_backfill_observed(
+            journal_seq,
+            source_session_id,
+            source_event_id,
+            family_id,
+            cursor,
+            complete,
+            observed_at,
+        )
     }
 }
 

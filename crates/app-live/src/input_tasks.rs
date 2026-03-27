@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use domain::ExternalFactEvent;
 use state::StateFactInput;
 
@@ -23,6 +24,46 @@ impl InputTaskEvent {
             event,
             hint: InputTaskHint::OutOfOrderUserTrade,
         }
+    }
+
+    pub fn family_discovery_observed(
+        journal_seq: i64,
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        Self::new(
+            journal_seq,
+            ExternalFactEvent::family_discovery_observed(
+                source_session_id,
+                source_event_id,
+                family_id,
+                observed_at,
+            ),
+        )
+    }
+
+    pub fn family_backfill_observed(
+        journal_seq: i64,
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        cursor: impl Into<String>,
+        complete: bool,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        Self::new(
+            journal_seq,
+            ExternalFactEvent::family_backfill_observed(
+                source_session_id,
+                source_event_id,
+                family_id,
+                cursor,
+                complete,
+                observed_at,
+            ),
+        )
     }
 
     pub fn into_state_fact_input(self) -> StateFactInput {
