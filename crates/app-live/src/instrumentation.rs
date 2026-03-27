@@ -86,6 +86,9 @@ pub fn emit_bootstrap_completion_observability(
         neg_risk_live_state_source = result.summary.neg_risk_live_state_source.as_str(),
         evidence_source = result.summary.neg_risk_rollout_evidence_source.as_str(),
         pending_reconcile_count = result.summary.pending_reconcile_count,
+        global_posture = %result.summary.global_posture.as_str(),
+        ingress_backlog = result.summary.ingress_backlog_count,
+        follow_up_backlog = result.summary.follow_up_backlog_count,
         published_snapshot_id = %result
             .summary
             .published_snapshot_id

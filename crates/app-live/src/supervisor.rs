@@ -522,9 +522,6 @@ impl AppSupervisor {
         let neg_risk_live_attempt_count = self.neg_risk_live_execution_records.len();
         let ingress_backlog_count = self.input_tasks.len();
         let follow_up_backlog_count = self.runtime.follow_up_backlog_count();
-        if let Some(evidence) = self.neg_risk_rollout_evidence.as_ref() {
-            self.record_rollout_evidence(evidence);
-        }
         self.record_status_surface(ingress_backlog_count, follow_up_backlog_count);
         SupervisorSummary {
             fullset_mode: ExecutionMode::Live,

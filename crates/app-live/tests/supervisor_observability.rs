@@ -10,7 +10,7 @@ use app_live::{
     bootstrap::BootstrapStatus, instrumentation::emit_bootstrap_completion_observability,
     supervisor::NegRiskRolloutEvidenceSource, AppRunResult, AppRuntime, AppRuntimeMode,
     AppSupervisor, InputTaskEvent, NegRiskLiveStateSource, NegRiskRolloutEvidence,
-    SupervisorSummary,
+    SupervisorPosture, SupervisorSummary,
 };
 use chrono::Utc;
 use domain::{ConditionId, ExternalFactEvent, TokenId};
@@ -606,6 +606,9 @@ fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
             published_snapshot_committed_journal_seq: Some(12),
             neg_risk_rollout_evidence: Some(sample_bootstrap_rollout_evidence("snapshot-7")),
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::Bootstrap,
+            global_posture: SupervisorPosture::Healthy,
+            ingress_backlog_count: 0,
+            follow_up_backlog_count: 0,
         },
     }
 }
@@ -633,6 +636,9 @@ fn sample_neutral_rollout_result() -> AppRunResult {
             published_snapshot_committed_journal_seq: Some(12),
             neg_risk_rollout_evidence: Some(sample_rollout_evidence("snapshot-7")),
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::Neutral,
+            global_posture: SupervisorPosture::Healthy,
+            ingress_backlog_count: 0,
+            follow_up_backlog_count: 0,
         },
     }
 }
