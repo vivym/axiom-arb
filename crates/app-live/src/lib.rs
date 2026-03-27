@@ -9,6 +9,7 @@ pub mod queues;
 pub mod runtime;
 mod snapshot_meta;
 pub mod supervisor;
+pub mod task_groups;
 
 pub use bootstrap::{BootstrapSource, StaticSnapshotSource};
 pub use config::{
@@ -34,4 +35,9 @@ pub use runtime::{
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,
     SupervisorSummary,
+};
+pub use task_groups::{
+    DecisionTaskGroup, DecisionTickResult, HeartbeatSource, HeartbeatTaskGroup,
+    MarketDataTaskGroup, MetadataTaskGroup, RecoveryTaskGroup, RelayerTaskGroup,
+    UserStateTaskGroup,
 };

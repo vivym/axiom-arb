@@ -52,6 +52,18 @@ impl AppInstrumentation {
             recorder.increment_divergence_count(1);
         });
     }
+
+    pub fn record_runtime_attention_fact(&self, source: &str, attention_kind: &str) {
+        if self.recorder.is_none() {
+            return;
+        }
+
+        tracing::debug!(
+            attention_source = source,
+            attention_kind = attention_kind,
+            "recorded runtime attention fact"
+        );
+    }
 }
 
 fn reconcile_reason(attention: &ReconcileAttention) -> metric_dimensions::ReconcileReason {

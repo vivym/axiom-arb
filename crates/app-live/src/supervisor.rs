@@ -176,6 +176,10 @@ impl AppSupervisor {
         self.posture
     }
 
+    pub fn can_resume_ingest_loops(&self) -> bool {
+        self.runtime.follow_up_backlog_count() == 0 && self.input_tasks.is_empty()
+    }
+
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
         let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
             && self.has_seeded_startup_state();

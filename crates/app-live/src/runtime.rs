@@ -156,6 +156,10 @@ impl AppRuntime {
         self.store.pending_reconcile_count()
     }
 
+    pub fn follow_up_backlog_count(&self) -> usize {
+        self.store.pending_reconcile_count()
+    }
+
     pub fn restore_committed_anchor(
         &mut self,
         committed_state_version: u64,

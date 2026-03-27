@@ -1,10 +1,12 @@
 use app_live::{
-    FollowUpQueue, FollowUpWork, IngressQueue, InputTaskEvent, ScopeRestriction,
-    ScopeRestrictionKind, SnapshotDispatchQueue, SnapshotNotice, SupervisorPosture,
+    DecisionTaskGroup, FollowUpQueue, FollowUpWork, HeartbeatSource, HeartbeatTaskGroup,
+    IngressQueue, InputTaskEvent, ScopeRestriction, ScopeRestrictionKind, SnapshotDispatchQueue,
+    SnapshotNotice, SupervisorPosture,
 };
 use chrono::Utc;
 use domain::ExternalFactEvent;
 use state::DirtyDomain;
+use venue_polymarket::HeartbeatFetchResult;
 
 #[test]
 fn global_posture_and_scope_restrictions_are_not_the_same_authority() {
@@ -85,6 +87,33 @@ fn follow_up_queue_preserves_fifo_work_items() {
     assert!(queue.is_empty());
 }
 
+#[test]
+fn heartbeat_task_group_emits_runtime_attention_fact_when_freshness_expires() {
+    let emitted = run_async(async {
+        let mut group = HeartbeatTaskGroup::for_tests(ScriptedHeartbeatSource::timeout());
+        group.tick().await.unwrap().expect("runtime attention fact")
+    });
+
+    assert_eq!(emitted.event.source_kind, "runtime_attention");
+    assert_eq!(emitted.event.payload.kind(), "runtime_attention_observed");
+}
+
+#[test]
+fn decision_task_group_suppresses_live_expansion_while_follow_up_backlog_exists() {
+    let result = run_async(async {
+        let mut group = DecisionTaskGroup::for_tests();
+        group.seed_pending_reconcile("family-a");
+        group
+            .tick(
+                SnapshotNotice::new("snapshot-9", 9, [DirtyDomain::NegRiskFamilies])
+                    .with_projection_readiness(true, true),
+            )
+            .await
+    });
+
+    assert!(result.suppressed);
+}
+
 fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
     InputTaskEvent::new(
         journal_seq,
@@ -96,4 +125,39 @@ fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {
             Utc::now(),
         ),
     )
+}
+
+#[derive(Debug)]
+struct ScriptedHeartbeatSource {
+    result: Result<HeartbeatFetchResult, String>,
+}
+
+impl ScriptedHeartbeatSource {
+    fn timeout() -> Self {
+        Self {
+            result: Err("heartbeat timeout".to_owned()),
+        }
+    }
+}
+
+impl HeartbeatSource for ScriptedHeartbeatSource {
+    fn poll<'a>(
+        &'a mut self,
+        _previous_heartbeat_id: Option<&'a str>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<HeartbeatFetchResult, String>> + Send + 'a>,
+    > {
+        let result = self.result.clone();
+        Box::pin(async move { result })
+    }
+}
+
+fn run_async<F>(future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(future)
 }
