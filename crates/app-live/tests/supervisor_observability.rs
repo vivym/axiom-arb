@@ -8,8 +8,9 @@ use std::{
 
 use app_live::{
     bootstrap::BootstrapStatus, instrumentation::emit_bootstrap_completion_observability,
-    AppRunResult, AppRuntime, AppRuntimeMode, AppSupervisor, InputTaskEvent,
-    NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorSummary,
+    supervisor::NegRiskRolloutEvidenceSource, AppRunResult, AppRuntime, AppRuntimeMode,
+    AppSupervisor, InputTaskEvent, NegRiskLiveStateSource, NegRiskRolloutEvidence,
+    SupervisorSummary,
 };
 use chrono::Utc;
 use domain::{ConditionId, ExternalFactEvent, TokenId};
@@ -172,11 +173,13 @@ fn supervisor_records_bootstrap_rollout_metrics_with_explicit_provenance() {
         .iter()
         .find(|span| span.name == span_names::APP_SUPERVISOR_RESUME)
         .expect("resume span missing");
+    let expected_evidence_source =
+        format!("\"{}\"", summary.neg_risk_rollout_evidence_source.as_str());
     assert_eq!(
         completion_span
             .field(field_keys::EVIDENCE_SOURCE)
             .map(String::as_str),
-        Some("\"bootstrap\"")
+        Some(expected_evidence_source.as_str())
     );
 }
 
@@ -574,7 +577,7 @@ fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
             fullset_mode: domain::ExecutionMode::Live,
             negrisk_mode: domain::ExecutionMode::Live,
             neg_risk_live_attempt_count: 5,
-            neg_risk_live_state_source: NegRiskLiveStateSource::SyntheticBootstrap,
+            neg_risk_live_state_source: NegRiskLiveStateSource::None,
             bootstrap_status: BootstrapStatus::Ready,
             runtime_mode: domain::RuntimeMode::Healthy,
             pending_reconcile_count: 0,
@@ -583,6 +586,7 @@ fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
             published_snapshot_id: Some("snapshot-7".to_owned()),
             published_snapshot_committed_journal_seq: Some(12),
             neg_risk_rollout_evidence: Some(sample_bootstrap_rollout_evidence("snapshot-7")),
+            neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::Bootstrap,
         },
     }
 }

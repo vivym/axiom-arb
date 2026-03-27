@@ -3,7 +3,7 @@ use observability::{
 };
 use state::ReconcileAttention;
 
-use crate::{runtime::AppRunResult, NegRiskLiveStateSource, SupervisorSummary};
+use crate::runtime::AppRunResult;
 
 #[derive(Debug, Clone, Default)]
 pub struct AppInstrumentation {
@@ -73,7 +73,6 @@ pub fn emit_bootstrap_completion_observability(
     result: &AppRunResult,
 ) {
     recorder.record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
-    let evidence_source = bootstrap_evidence_source(&result.summary);
 
     let completion_span = tracing::info_span!(
         span_names::APP_BOOTSTRAP_COMPLETE,
@@ -85,7 +84,7 @@ pub fn emit_bootstrap_completion_observability(
         negrisk_mode = ?result.summary.negrisk_mode,
         neg_risk_live_attempt_count = result.summary.neg_risk_live_attempt_count,
         neg_risk_live_state_source = result.summary.neg_risk_live_state_source.as_str(),
-        evidence_source = evidence_source,
+        evidence_source = result.summary.neg_risk_rollout_evidence_source.as_str(),
         pending_reconcile_count = result.summary.pending_reconcile_count,
         published_snapshot_id = %result
             .summary
@@ -95,18 +94,6 @@ pub fn emit_bootstrap_completion_observability(
     );
     let _completion_guard = completion_span.enter();
     tracing::info!("app-live bootstrap complete");
-}
-
-fn bootstrap_evidence_source(summary: &SupervisorSummary) -> &'static str {
-    if summary.neg_risk_rollout_evidence.is_none() {
-        return "none";
-    }
-
-    if summary.neg_risk_live_state_source == NegRiskLiveStateSource::SyntheticBootstrap {
-        "bootstrap"
-    } else {
-        "snapshot"
-    }
 }
 
 fn runtime_mode_label(mode: domain::RuntimeMode) -> &'static str {
