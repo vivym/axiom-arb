@@ -1557,7 +1557,7 @@ impl CandidateArtifactRepo {
             });
         }
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO candidate_target_sets (
                 candidate_revision,
@@ -1573,7 +1573,36 @@ impl CandidateArtifactRepo {
         .bind(&row.source_revision)
         .bind(&row.payload)
         .execute(&mut *tx)
-        .await?;
+        .await;
+
+        match result {
+            Ok(_) => {}
+            Err(err) if constraint_name(&err) == Some("candidate_target_sets_pkey") => {
+                let existing = sqlx::query(
+                    r#"
+                    SELECT candidate_revision, snapshot_id, source_revision, payload
+                    FROM candidate_target_sets
+                    WHERE candidate_revision = $1
+                    "#,
+                )
+                .bind(&row.candidate_revision)
+                .fetch_optional(&mut *tx)
+                .await?
+                .map(map_candidate_target_set_row)
+                .transpose()?
+                .expect("candidate_target_sets primary key conflict should load existing row");
+
+                if existing == *row {
+                    tx.commit().await?;
+                    return Ok(());
+                }
+
+                return Err(PersistenceError::ConflictingCandidateTargetSet {
+                    candidate_revision: row.candidate_revision.clone(),
+                });
+            }
+            Err(err) => return Err(err.into()),
+        }
 
         tx.commit().await?;
 
@@ -1634,7 +1663,7 @@ impl CandidateArtifactRepo {
             });
         }
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO adoptable_target_revisions (
                 adoptable_revision,
@@ -1650,7 +1679,40 @@ impl CandidateArtifactRepo {
         .bind(&row.rendered_operator_target_revision)
         .bind(&row.payload)
         .execute(&mut *tx)
-        .await?;
+        .await;
+
+        match result {
+            Ok(_) => {}
+            Err(err) if constraint_name(&err) == Some("adoptable_target_revisions_pkey") => {
+                let existing = sqlx::query(
+                    r#"
+                    SELECT
+                        adoptable_revision,
+                        candidate_revision,
+                        rendered_operator_target_revision,
+                        payload
+                    FROM adoptable_target_revisions
+                    WHERE adoptable_revision = $1
+                    "#,
+                )
+                .bind(&row.adoptable_revision)
+                .fetch_optional(&mut *tx)
+                .await?
+                .map(map_adoptable_target_revision_row)
+                .transpose()?
+                .expect("adoptable_target_revisions primary key conflict should load existing row");
+
+                if existing == *row {
+                    tx.commit().await?;
+                    return Ok(());
+                }
+
+                return Err(PersistenceError::ConflictingAdoptableTargetRevision {
+                    adoptable_revision: row.adoptable_revision.clone(),
+                });
+            }
+            Err(err) => return Err(err.into()),
+        }
 
         tx.commit().await?;
 
@@ -1716,7 +1778,7 @@ impl CandidateAdoptionRepo {
             });
         }
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO candidate_adoption_provenance (
                 operator_target_revision,
@@ -1730,7 +1792,38 @@ impl CandidateAdoptionRepo {
         .bind(&row.adoptable_revision)
         .bind(&row.candidate_revision)
         .execute(&mut *tx)
-        .await?;
+        .await;
+
+        match result {
+            Ok(_) => {}
+            Err(err) if constraint_name(&err) == Some("candidate_adoption_provenance_pkey") => {
+                let existing = sqlx::query(
+                    r#"
+                    SELECT operator_target_revision, adoptable_revision, candidate_revision
+                    FROM candidate_adoption_provenance
+                    WHERE operator_target_revision = $1
+                    "#,
+                )
+                .bind(&row.operator_target_revision)
+                .fetch_optional(&mut *tx)
+                .await?
+                .map(map_candidate_adoption_provenance_row)
+                .transpose()?
+                .expect(
+                    "candidate_adoption_provenance primary key conflict should load existing row",
+                );
+
+                if existing == *row {
+                    tx.commit().await?;
+                    return Ok(());
+                }
+
+                return Err(PersistenceError::ConflictingCandidateAdoptionProvenance {
+                    operator_target_revision: row.operator_target_revision.clone(),
+                });
+            }
+            Err(err) => return Err(err.into()),
+        }
 
         tx.commit().await?;
 
