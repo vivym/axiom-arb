@@ -140,6 +140,52 @@ fn backfill_without_prior_discovery_keeps_authoritative_fact_anchor() {
     assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-2"));
 }
 
+#[test]
+fn discovery_after_backfill_preserves_backfill_metadata() {
+    let mut store = StateStore::new();
+    apply_anchor_event(&mut store, 17);
+
+    StateApplier::new(&mut store)
+        .apply(
+            18,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-2",
+                "family-a",
+                "cursor-2",
+                true,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::family_discovery_observed(
+                "session-discovery",
+                "evt-3",
+                "family-a",
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let discoveries = store.family_discovery_records();
+    assert_eq!(discoveries.len(), 1);
+    assert_eq!(discoveries[0].source.source_kind, "family_discovery");
+    assert_eq!(discoveries[0].source.source_event_id, "evt-3");
+    assert_eq!(
+        discoveries[0].discovered_at,
+        Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap()
+    );
+    assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-2"));
+    assert_eq!(
+        discoveries[0].backfill_completed_at,
+        Some(Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap())
+    );
+}
+
 fn apply_anchor_event(store: &mut StateStore, journal_seq: i64) {
     StateApplier::new(store)
         .apply(

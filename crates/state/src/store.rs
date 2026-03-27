@@ -435,7 +435,12 @@ impl StateStore {
             .insert(anchor.pending_ref.clone(), anchor);
     }
 
-    pub(crate) fn record_family_discovery(&mut self, record: FamilyDiscoveryRecord) {
+    pub(crate) fn record_family_discovery(&mut self, mut record: FamilyDiscoveryRecord) {
+        if let Some(existing) = self.family_discovery_records.get(record.family_id.as_str()) {
+            record.backfill_cursor = existing.backfill_cursor.clone();
+            record.backfill_completed_at = existing.backfill_completed_at;
+        }
+
         self.family_discovery_records
             .insert(record.family_id.as_str().to_owned(), record);
     }
