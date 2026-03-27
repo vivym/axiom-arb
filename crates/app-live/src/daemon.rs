@@ -146,6 +146,23 @@ where
     );
     supervisor.seed_committed_state_version(durable_state.last_state_version);
     supervisor.seed_pending_reconcile_count(durable_state.pending_reconcile_anchors.len());
+    supervisor.seed_candidate_restore_status(
+        durable_state
+            .candidate_restore_status
+            .latest_candidate_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .latest_adoptable_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .latest_candidate_operator_target_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .adoption_provenance_resolved,
+    );
     for anchor in durable_state.pending_reconcile_anchors {
         supervisor.seed_pending_reconcile_anchor(anchor);
     }

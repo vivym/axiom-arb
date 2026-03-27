@@ -41,6 +41,10 @@ pub struct SupervisorSummary {
     pub last_state_version: u64,
     pub published_snapshot_id: Option<String>,
     pub published_snapshot_committed_journal_seq: Option<i64>,
+    pub latest_candidate_revision: Option<String>,
+    pub latest_adoptable_revision: Option<String>,
+    pub latest_candidate_operator_target_revision: Option<String>,
+    pub adoption_provenance_resolved: bool,
     pub neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     pub global_posture: SupervisorPosture,
     pub ingress_backlog_count: usize,
@@ -93,6 +97,14 @@ pub struct NegRiskRolloutEvidence {
     pub parity_mismatch_count: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CandidateRestoreStatus {
+    pub latest_candidate_revision: Option<String>,
+    pub latest_adoptable_revision: Option<String>,
+    pub latest_candidate_operator_target_revision: Option<String>,
+    pub adoption_provenance_resolved: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorError {
     message: String,
@@ -128,6 +140,7 @@ struct RuntimeSeed {
     committed_state_version: Option<u64>,
     pending_reconcile_count: Option<usize>,
     pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    candidate_restore_status: CandidateRestoreStatus,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
 }
@@ -147,6 +160,7 @@ pub struct AppSupervisor {
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
     last_emitted_rollout_evidence: Option<NegRiskRolloutEvidence>,
+    candidate_restore_status: CandidateRestoreStatus,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
     neg_risk_live_state_source: NegRiskLiveStateSource,
 }
@@ -187,6 +201,7 @@ impl AppSupervisor {
             neg_risk_rollout_evidence: None,
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::None,
             last_emitted_rollout_evidence: None,
+            candidate_restore_status: CandidateRestoreStatus::default(),
             neg_risk_live_execution_records: Vec::new(),
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
         }
@@ -321,6 +336,23 @@ impl AppSupervisor {
         self.seed.neg_risk_rollout_evidence = Some(evidence);
     }
 
+    pub fn seed_candidate_restore_status(
+        &mut self,
+        latest_candidate_revision: Option<&str>,
+        latest_adoptable_revision: Option<&str>,
+        latest_candidate_operator_target_revision: Option<&str>,
+        adoption_provenance_resolved: bool,
+    ) {
+        self.seed.candidate_restore_status = CandidateRestoreStatus {
+            latest_candidate_revision: latest_candidate_revision.map(str::to_owned),
+            latest_adoptable_revision: latest_adoptable_revision.map(str::to_owned),
+            latest_candidate_operator_target_revision: latest_candidate_operator_target_revision
+                .map(str::to_owned),
+            adoption_provenance_resolved,
+        };
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
+    }
+
     pub fn seed_neg_risk_live_targets(
         &mut self,
         targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
@@ -385,6 +417,7 @@ impl AppSupervisor {
         );
         self.neg_risk_rollout_evidence = None;
         self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
+        self.candidate_restore_status = CandidateRestoreStatus::default();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
         self.record_recovery_backlog(self.input_tasks.len());
@@ -403,6 +436,7 @@ impl AppSupervisor {
             }
         };
         self.runtime.replay_committed_history(&self.committed_log)?;
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
         match self.seed.pending_reconcile_count {
             Some(0) => self.runtime.clear_pending_reconcile_after_restore(),
             Some(expected) if self.runtime.pending_reconcile_count() != expected => {
@@ -542,6 +576,21 @@ impl AppSupervisor {
             published_snapshot_committed_journal_seq: self
                 .runtime
                 .published_snapshot_committed_journal_seq(),
+            latest_candidate_revision: self
+                .candidate_restore_status
+                .latest_candidate_revision
+                .clone(),
+            latest_adoptable_revision: self
+                .candidate_restore_status
+                .latest_adoptable_revision
+                .clone(),
+            latest_candidate_operator_target_revision: self
+                .candidate_restore_status
+                .latest_candidate_operator_target_revision
+                .clone(),
+            adoption_provenance_resolved: self
+                .candidate_restore_status
+                .adoption_provenance_resolved,
             neg_risk_rollout_evidence: self.neg_risk_rollout_evidence.clone(),
             global_posture: self.posture,
             ingress_backlog_count,
@@ -893,6 +942,7 @@ impl AppSupervisor {
         self.neg_risk_rollout_evidence = None;
         self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
         self.last_emitted_rollout_evidence = None;
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
 
