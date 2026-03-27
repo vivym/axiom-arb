@@ -19,21 +19,38 @@ pub fn summarize_negrisk_candidate_chain(
     adoptable_target_revisions: &[AdoptableTargetRevisionRow],
     adoption_provenance: &[CandidateAdoptionProvenanceRow],
 ) -> NegRiskCandidateSummary {
-    let (latest_candidate_revision, latest_adoptable_revision) = if candidate_target_sets.len() == 1
-    {
-        let candidate_revision = Some(candidate_target_sets[0].candidate_revision.clone());
-        let adoptable_revision = if adoptable_target_revisions.len() == 1
-            && adoptable_target_revisions[0].candidate_revision
-                == candidate_target_sets[0].candidate_revision
-        {
-            Some(adoptable_target_revisions[0].adoptable_revision.clone())
+    let (latest_candidate_revision, latest_adoptable_revision, operator_target_revision) =
+        if candidate_target_sets.len() == 1 {
+            let candidate = &candidate_target_sets[0];
+            let adoptable = if adoptable_target_revisions.len() == 1
+                && adoptable_target_revisions[0].candidate_revision == candidate.candidate_revision
+            {
+                Some(&adoptable_target_revisions[0])
+            } else {
+                None
+            };
+            let operator_target_revision = match adoptable {
+                Some(adoptable) if adoption_provenance.len() == 1 => {
+                    let provenance = &adoption_provenance[0];
+                    if provenance.candidate_revision == candidate.candidate_revision
+                        && provenance.adoptable_revision == adoptable.adoptable_revision
+                    {
+                        Some(provenance.operator_target_revision.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            (
+                Some(candidate.candidate_revision.clone()),
+                adoptable.map(|row| row.adoptable_revision.clone()),
+                operator_target_revision,
+            )
         } else {
-            None
+            (None, None, None)
         };
-        (candidate_revision, adoptable_revision)
-    } else {
-        (None, None)
-    };
 
     NegRiskCandidateSummary {
         candidate_target_set_count: candidate_target_sets.len() as u64,
@@ -41,7 +58,7 @@ pub fn summarize_negrisk_candidate_chain(
         adoption_provenance_count: adoption_provenance.len() as u64,
         latest_candidate_revision,
         latest_adoptable_revision,
-        operator_target_revision: None,
+        operator_target_revision,
     }
 }
 

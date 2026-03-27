@@ -219,6 +219,45 @@ fn summary_fails_closed_for_advisory_multi_row_ambiguity() {
     );
 }
 
+#[test]
+fn summary_surfaces_single_fully_aligned_chain_without_runtime_progress() {
+    let summary = summarize_negrisk_candidate_chain(
+        &[CandidateTargetSetRow {
+            candidate_revision: "candidate-9".to_owned(),
+            snapshot_id: "snapshot-9".to_owned(),
+            source_revision: "discovery-9".to_owned(),
+            payload: json!({ "candidate_revision": "candidate-9" }),
+        }],
+        &[AdoptableTargetRevisionRow {
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+            rendered_operator_target_revision: "targets-rev-9".to_owned(),
+            payload: json!({
+                "adoptable_revision": "adoptable-9",
+                "candidate_revision": "candidate-9",
+                "rendered_operator_target_revision": "targets-rev-9",
+            }),
+        }],
+        &[CandidateAdoptionProvenanceRow {
+            operator_target_revision: "targets-rev-9".to_owned(),
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        NegRiskCandidateSummary {
+            candidate_target_set_count: 1,
+            adoptable_target_revision_count: 1,
+            adoption_provenance_count: 1,
+            latest_candidate_revision: Some("candidate-9".to_owned()),
+            latest_adoptable_revision: Some("adoptable-9".to_owned()),
+            operator_target_revision: Some("targets-rev-9".to_owned()),
+        }
+    );
+}
+
 #[tokio::test]
 async fn replay_summary_prefers_runtime_progress_adoption_anchor_over_revision_sorting() {
     let Some(db) = TestDatabase::new().await else {
