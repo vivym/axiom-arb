@@ -154,6 +154,8 @@ impl MockServer {
             let (mut stream, _) = listener.accept().expect("accept request");
             let mut buffer = Vec::new();
             let mut chunk = [0_u8; 1024];
+            let mut header_end = None;
+            let mut content_length = 0_usize;
 
             loop {
                 let read = stream.read(&mut chunk).expect("read request");
@@ -162,8 +164,32 @@ impl MockServer {
                 }
 
                 buffer.extend_from_slice(&chunk[..read]);
-                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
+                if header_end.is_none() {
+                    header_end = buffer
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .map(|index| index + 4);
+                    if let Some(end) = header_end {
+                        let headers = String::from_utf8_lossy(&buffer[..end]);
+                        content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                if name.eq_ignore_ascii_case("content-length") {
+                                    value.trim().parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                    }
+                }
+
+                if let Some(end) = header_end {
+                    let expected_len = end + content_length;
+                    if buffer.len() >= expected_len {
+                        break;
+                    }
                 }
             }
 

@@ -1,16 +1,27 @@
-use std::{fmt, future::Future, pin::Pin};
+use std::{collections::VecDeque, fmt, future::Future, pin::Pin};
 
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use url::Url;
 
-use crate::{parse_market_message, parse_user_message, MarketWsEvent, UserWsEvent, WsParseError};
+use crate::{
+    parse_user_message, ws_market::parse_market_messages, MarketWsEvent, UserWsEvent, WsParseError,
+};
 
 type WsMessageFuture<'a> =
     Pin<Box<dyn Future<Output = Result<WsTransportMessage, WsClientError>> + Send + 'a>>;
+type WsSendFuture<'a> = Pin<Box<dyn Future<Output = Result<(), WsClientError>> + Send + 'a>>;
 
 pub trait WsMessageSource: Send {
     fn next_message<'a>(&'a mut self) -> WsMessageFuture<'a>;
+
+    fn send_message<'a>(&'a mut self, _message: WsTransportMessage) -> WsSendFuture<'a> {
+        Box::pin(async {
+            Err(WsClientError::Transport(
+                "websocket transport does not support sending messages".to_owned(),
+            ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +38,28 @@ pub struct WsCloseFrame {
     pub code: u16,
     pub label: String,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WsSubscriptionOp {
+    Subscribe,
+    Unsubscribe,
+}
+
+impl WsSubscriptionOp {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Subscribe => "subscribe",
+            Self::Unsubscribe => "unsubscribe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WsUserChannelAuth<'a> {
+    pub api_key: &'a str,
+    pub secret: &'a str,
+    pub passphrase: &'a str,
 }
 
 #[derive(Debug)]
@@ -69,6 +102,7 @@ pub struct PolymarketWsClient<T = RealWsMessageSource> {
     pub user_ws_url: Url,
     market_transport: T,
     user_transport: T,
+    pending_market_events: VecDeque<MarketWsEvent>,
 }
 
 impl RealWsMessageSource {
@@ -95,6 +129,14 @@ impl WsMessageSource for RealWsMessageSource {
             }
         })
     }
+
+    fn send_message<'a>(&'a mut self, message: WsTransportMessage) -> WsSendFuture<'a> {
+        Box::pin(async move {
+            let tungstenite_message = map_transport_message_to_tungstenite(message);
+            self.stream.send(tungstenite_message).await?;
+            Ok(())
+        })
+    }
 }
 
 impl PolymarketWsClient<RealWsMessageSource> {
@@ -106,6 +148,7 @@ impl PolymarketWsClient<RealWsMessageSource> {
             user_ws_url,
             market_transport,
             user_transport,
+            pending_market_events: VecDeque::new(),
         })
     }
 }
@@ -125,19 +168,114 @@ where
             user_ws_url,
             market_transport,
             user_transport,
+            pending_market_events: VecDeque::new(),
         }
     }
 
     pub async fn next_market_event(&mut self) -> Result<MarketWsEvent, WsClientError> {
-        let message = self.market_transport.next_message().await?;
-        let message = transport_message_to_payload(message)?;
-        parse_market_message(&message).map_err(WsClientError::from)
+        if let Some(event) = self.pending_market_events.pop_front() {
+            return Ok(event);
+        }
+
+        loop {
+            let message = self.market_transport.next_message().await?;
+            let message = transport_message_to_payload(message)?;
+            let mut events = parse_market_messages(&message).map_err(WsClientError::from)?;
+            if let Some(event) = events.pop_front() {
+                self.pending_market_events.extend(events);
+                return Ok(event);
+            }
+        }
     }
 
     pub async fn next_user_event(&mut self) -> Result<UserWsEvent, WsClientError> {
         let message = self.user_transport.next_message().await?;
         let message = transport_message_to_payload(message)?;
         parse_user_message(&message).map_err(WsClientError::from)
+    }
+
+    pub async fn subscribe_market_assets(
+        &mut self,
+        asset_ids: &[String],
+        custom_feature_enabled: bool,
+    ) -> Result<(), WsClientError> {
+        self.market_transport
+            .send_message(WsTransportMessage::Text(
+                serde_json::json!({
+                    "assets_ids": asset_ids,
+                    "type": "market",
+                    "custom_feature_enabled": custom_feature_enabled,
+                })
+                .to_string(),
+            ))
+            .await
+    }
+
+    pub async fn update_market_assets(
+        &mut self,
+        operation: WsSubscriptionOp,
+        asset_ids: &[String],
+        custom_feature_enabled: bool,
+    ) -> Result<(), WsClientError> {
+        self.market_transport
+            .send_message(WsTransportMessage::Text(
+                serde_json::json!({
+                    "assets_ids": asset_ids,
+                    "operation": operation.as_str(),
+                    "custom_feature_enabled": custom_feature_enabled,
+                })
+                .to_string(),
+            ))
+            .await
+    }
+
+    pub async fn subscribe_user_markets(
+        &mut self,
+        auth: &WsUserChannelAuth<'_>,
+        markets: &[String],
+    ) -> Result<(), WsClientError> {
+        self.user_transport
+            .send_message(WsTransportMessage::Text(
+                serde_json::json!({
+                    "auth": {
+                        "apiKey": auth.api_key,
+                        "secret": auth.secret,
+                        "passphrase": auth.passphrase,
+                    },
+                    "markets": markets,
+                    "type": "user",
+                })
+                .to_string(),
+            ))
+            .await
+    }
+
+    pub async fn update_user_markets(
+        &mut self,
+        operation: WsSubscriptionOp,
+        markets: &[String],
+    ) -> Result<(), WsClientError> {
+        self.user_transport
+            .send_message(WsTransportMessage::Text(
+                serde_json::json!({
+                    "markets": markets,
+                    "operation": operation.as_str(),
+                })
+                .to_string(),
+            ))
+            .await
+    }
+
+    pub async fn send_market_ping(&mut self) -> Result<(), WsClientError> {
+        self.market_transport
+            .send_message(WsTransportMessage::Ping)
+            .await
+    }
+
+    pub async fn send_user_ping(&mut self) -> Result<(), WsClientError> {
+        self.user_transport
+            .send_message(WsTransportMessage::Ping)
+            .await
     }
 }
 
@@ -160,6 +298,21 @@ fn map_tungstenite_message(message: Message) -> Result<Option<WsTransportMessage
     })
 }
 
+fn map_transport_message_to_tungstenite(message: WsTransportMessage) -> Message {
+    match message {
+        WsTransportMessage::Text(text) => Message::Text(text.into()),
+        WsTransportMessage::Binary(bytes) => Message::Binary(bytes.into()),
+        WsTransportMessage::Ping => Message::Text("PING".into()),
+        WsTransportMessage::Pong => Message::Text("PONG".into()),
+        WsTransportMessage::Close(frame) => {
+            Message::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: frame.code.into(),
+                reason: frame.reason.into(),
+            }))
+        }
+    }
+}
+
 fn close_frame_from_tungstenite(
     frame: tokio_tungstenite::tungstenite::protocol::CloseFrame,
 ) -> WsCloseFrame {
@@ -172,7 +325,16 @@ fn close_frame_from_tungstenite(
 
 fn transport_message_to_payload(message: WsTransportMessage) -> Result<String, WsClientError> {
     match message {
-        WsTransportMessage::Text(text) => Ok(text),
+        WsTransportMessage::Text(text) => {
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("PING") {
+                Ok(r#"{"event":"PING"}"#.to_owned())
+            } else if trimmed.eq_ignore_ascii_case("PONG") {
+                Ok(r#"{"event":"PONG"}"#.to_owned())
+            } else {
+                Ok(text)
+            }
+        }
         WsTransportMessage::Binary(bytes) => {
             String::from_utf8(bytes).map_err(|err| WsClientError::Transport(err.to_string()))
         }

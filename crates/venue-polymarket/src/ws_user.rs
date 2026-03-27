@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -39,47 +39,80 @@ pub struct UserTradeUpdate {
 
 #[derive(Debug, Deserialize)]
 struct UserEnvelope {
-    event: String,
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    event_type: Option<String>,
+    #[serde(default, rename = "type")]
+    type_field: Option<String>,
     #[serde(default)]
     order_id: Option<String>,
     #[serde(default)]
     trade_id: Option<String>,
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    taker_order_id: Option<String>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     condition_id: Option<String>,
+    #[serde(default, alias = "market")]
+    market: Option<String>,
     #[serde(default)]
     price: Option<Value>,
     #[serde(default)]
     size: Option<Value>,
     #[serde(default)]
+    size_matched: Option<Value>,
+    #[serde(default)]
     fee_rate_bps: Option<Value>,
     #[serde(default)]
     transaction_hash: Option<Value>,
     #[serde(default, alias = "timestamp")]
-    ts: Option<String>,
+    ts: Option<Value>,
 }
 
 pub fn parse_user_message(message: &str) -> Result<UserWsEvent, WsParseError> {
+    let trimmed = message.trim();
+    if trimmed.eq_ignore_ascii_case("PING") {
+        return Ok(UserWsEvent::Ping);
+    }
+    if trimmed.eq_ignore_ascii_case("PONG") {
+        return Ok(UserWsEvent::Pong);
+    }
+
     let envelope: UserEnvelope = serde_json::from_str(message)?;
-    match envelope.event.trim().to_ascii_uppercase().as_str() {
+    match normalized_user_event(&envelope)?.as_str() {
         "PING" => Ok(UserWsEvent::Ping),
         "PONG" => Ok(UserWsEvent::Pong),
         "ORDER" => Ok(UserWsEvent::Order(UserOrderUpdate {
-            order_id: required(envelope.order_id, "order_id")?,
-            status: required(envelope.status, "status")?,
-            condition_id: required(envelope.condition_id, "condition_id")?,
+            order_id: required(envelope.order_id.or(envelope.id.clone()), "order_id")?,
+            status: required(envelope.status.or(envelope.type_field.clone()), "status")?,
+            condition_id: required(
+                envelope.condition_id.or(envelope.market.clone()),
+                "condition_id",
+            )?,
             price: optional_string(envelope.price, "price")?,
-            size: optional_string(envelope.size, "size")?,
+            size: optional_string(envelope.size.or(envelope.size_matched), "size")?,
             fee_rate_bps: optional_string(envelope.fee_rate_bps, "fee_rate_bps")?,
             transaction_hash: optional_string(envelope.transaction_hash, "transaction_hash")?,
             event_ts: parse_timestamp(envelope.ts)?,
         })),
         "TRADE" => Ok(UserWsEvent::Trade(UserTradeUpdate {
-            trade_id: required(envelope.trade_id, "trade_id")?,
-            order_id: required(envelope.order_id, "order_id")?,
+            trade_id: required(
+                envelope.trade_id.clone().or(envelope.id.clone()),
+                "trade_id",
+            )?,
+            order_id: required(
+                envelope
+                    .order_id
+                    .or(envelope.taker_order_id)
+                    .or(envelope.id),
+                "order_id",
+            )?,
             status: required(envelope.status, "status")?,
-            condition_id: required(envelope.condition_id, "condition_id")?,
+            condition_id: required(envelope.condition_id.or(envelope.market), "condition_id")?,
             price: optional_string(envelope.price, "price")?,
             size: optional_string(envelope.size, "size")?,
             fee_rate_bps: optional_string(envelope.fee_rate_bps, "fee_rate_bps")?,
@@ -94,14 +127,46 @@ fn required(value: Option<String>, field: &'static str) -> Result<String, WsPars
     value.ok_or(WsParseError::MissingField(field))
 }
 
-fn parse_timestamp(value: Option<String>) -> Result<Option<DateTime<Utc>>, WsParseError> {
+fn normalized_user_event(envelope: &UserEnvelope) -> Result<String, WsParseError> {
+    envelope
+        .event
+        .as_deref()
+        .or(envelope.event_type.as_deref())
+        .map(|value| value.trim().to_ascii_uppercase())
+        .ok_or(WsParseError::MissingField("event_type"))
+}
+
+fn parse_timestamp(value: Option<Value>) -> Result<Option<DateTime<Utc>>, WsParseError> {
     let Some(value) = value else {
         return Ok(None);
     };
 
-    let parsed = DateTime::parse_from_rfc3339(&value)
-        .map_err(|_| WsParseError::InvalidTimestamp(value.clone()))?;
-    Ok(Some(parsed.with_timezone(&Utc)))
+    let raw = match value {
+        Value::String(value) => value,
+        Value::Number(value) => value.to_string(),
+        other => {
+            return Err(WsParseError::InvalidField {
+                field: "timestamp",
+                value: other.to_string(),
+            });
+        }
+    };
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(&raw) {
+        return Ok(Some(parsed.with_timezone(&Utc)));
+    }
+
+    let numeric = raw
+        .parse::<i64>()
+        .map_err(|_| WsParseError::InvalidTimestamp(raw.clone()))?;
+    let parsed = if raw.len() >= 13 {
+        Utc.timestamp_millis_opt(numeric).single()
+    } else {
+        Utc.timestamp_opt(numeric, 0).single()
+    }
+    .ok_or_else(|| WsParseError::InvalidTimestamp(raw.clone()))?;
+
+    Ok(Some(parsed))
 }
 
 fn optional_string(

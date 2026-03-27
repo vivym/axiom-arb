@@ -40,6 +40,32 @@ fn ws_market_parses_book_update_and_ping_pong() {
         parse_market_message(r#"{"event":"PONG"}"#).unwrap(),
         MarketWsEvent::Pong
     );
+    assert_eq!(parse_market_message("PONG").unwrap(), MarketWsEvent::Pong);
+}
+
+#[test]
+fn ws_market_parses_documented_book_payload_shape() {
+    let book = parse_market_message(
+        r#"{
+            "event_type":"book",
+            "asset_id":"token-yes",
+            "market":"condition-1",
+            "bids":[{"price":"0.45","size":"30"}],
+            "asks":[{"price":"0.47","size":"25"}],
+            "timestamp":"1774353600000"
+        }"#,
+    )
+    .expect("book message should parse");
+
+    assert_eq!(
+        book,
+        MarketWsEvent::Book(MarketBookUpdate {
+            asset_id: "token-yes".to_owned(),
+            best_bid: Some("0.45".to_owned()),
+            best_ask: Some("0.47".to_owned()),
+            event_ts: Some(ts(12, 0, 0)),
+        })
+    );
 }
 
 #[test]
@@ -77,6 +103,64 @@ fn ws_user_parses_trade_and_pong() {
     assert_eq!(
         parse_user_message(r#"{"event":"PONG"}"#).unwrap(),
         UserWsEvent::Pong
+    );
+    assert_eq!(parse_user_message("PING").unwrap(), UserWsEvent::Ping);
+}
+
+#[test]
+fn ws_user_parses_documented_trade_and_order_payload_shape() {
+    assert_eq!(
+        parse_user_message(
+            r#"{
+                "asset_id":"token-yes",
+                "event_type":"trade",
+                "id":"trade-1",
+                "market":"condition-1",
+                "price":"0.57",
+                "size":"10",
+                "status":"MATCHED",
+                "taker_order_id":"order-1",
+                "timestamp":"1774353601",
+                "type":"TRADE"
+            }"#
+        )
+        .unwrap(),
+        UserWsEvent::Trade(UserTradeUpdate {
+            trade_id: "trade-1".to_owned(),
+            order_id: "order-1".to_owned(),
+            status: "MATCHED".to_owned(),
+            condition_id: "condition-1".to_owned(),
+            price: Some("0.57".to_owned()),
+            size: Some("10".to_owned()),
+            fee_rate_bps: None,
+            transaction_hash: None,
+            event_ts: Some(ts(12, 0, 1)),
+        })
+    );
+    assert_eq!(
+        parse_user_message(
+            r#"{
+                "asset_id":"token-yes",
+                "event_type":"order",
+                "id":"order-10",
+                "market":"condition-10",
+                "price":"0.52",
+                "size_matched":"0",
+                "timestamp":"1774353606",
+                "type":"PLACEMENT"
+            }"#
+        )
+        .unwrap(),
+        UserWsEvent::Order(UserOrderUpdate {
+            order_id: "order-10".to_owned(),
+            status: "PLACEMENT".to_owned(),
+            condition_id: "condition-10".to_owned(),
+            price: Some("0.52".to_owned()),
+            size: Some("0".to_owned()),
+            fee_rate_bps: None,
+            transaction_hash: None,
+            event_ts: Some(ts(12, 0, 6)),
+        })
     );
 }
 
@@ -291,6 +375,69 @@ async fn ws_client_market_events_still_drive_existing_liveness_monitor() {
     assert!(!state.requires_reconcile_attention);
 }
 
+#[tokio::test]
+async fn ws_client_expands_documented_price_change_batch_payloads() {
+    let mut client = PolymarketWsClient::with_transports(
+        Url::parse("wss://market.example/ws").expect("market url"),
+        Url::parse("wss://user.example/ws").expect("user url"),
+        ScriptedWsTransport::new(vec![WsTransportMessage::Text(
+            r#"{
+                "market":"condition-1",
+                "price_changes":[
+                    {
+                        "asset_id":"token-yes",
+                        "price":"0.50",
+                        "size":"200",
+                        "side":"BUY",
+                        "best_bid":"0.50",
+                        "best_ask":"1"
+                    },
+                    {
+                        "asset_id":"token-no",
+                        "price":"0.50",
+                        "size":"200",
+                        "side":"SELL",
+                        "best_bid":"0",
+                        "best_ask":"0.50"
+                    }
+                ],
+                "timestamp":"1774353602000",
+                "event_type":"price_change"
+            }"#
+            .to_owned(),
+        )]),
+        ScriptedWsTransport::new(vec![]),
+    );
+
+    let first = client
+        .next_market_event()
+        .await
+        .expect("first price change");
+    let second = client
+        .next_market_event()
+        .await
+        .expect("second price change");
+
+    assert_eq!(
+        first,
+        MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+            asset_id: "token-yes".to_owned(),
+            price: "0.50".to_owned(),
+            side: Some("BUY".to_owned()),
+            event_ts: Some(ts(12, 0, 2)),
+        })
+    );
+    assert_eq!(
+        second,
+        MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+            asset_id: "token-no".to_owned(),
+            price: "0.50".to_owned(),
+            side: Some("SELL".to_owned()),
+            event_ts: Some(ts(12, 0, 2)),
+        })
+    );
+}
+
 #[derive(Debug)]
 struct ScriptedWsTransport {
     messages: VecDeque<WsTransportMessage>,
@@ -313,6 +460,13 @@ impl WsMessageSource for ScriptedWsTransport {
                 WsClientError::Transport("scripted websocket transport exhausted".to_owned())
             })
         })
+    }
+
+    fn send_message<'a>(
+        &'a mut self,
+        _message: WsTransportMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WsClientError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }
 

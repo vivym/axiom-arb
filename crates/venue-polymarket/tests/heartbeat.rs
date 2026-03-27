@@ -1,11 +1,12 @@
 use chrono::{Duration, TimeZone, Utc};
 mod support;
 
+use domain::{SignatureType, WalletRoute};
 use support::MockServer;
 use url::Url;
 use venue_polymarket::{
-    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
-    PolymarketRestClient,
+    HeartbeatFetchResult, HeartbeatReconcileReason, L2AuthHeaders, OrderHeartbeatMonitor,
+    OrderHeartbeatState, PolymarketRestClient, SignerContext,
 };
 
 #[test]
@@ -105,7 +106,7 @@ async fn heartbeat_fetch_maps_success_payload_into_monitor_input() {
     let client = sample_client(server.base_url());
 
     let heartbeat = client
-        .fetch_order_heartbeat()
+        .post_order_heartbeat(&sample_auth(), "hb-41")
         .await
         .expect("heartbeat fetch should succeed");
 
@@ -116,7 +117,35 @@ async fn heartbeat_fetch_maps_success_payload_into_monitor_input() {
             valid: true,
         }
     );
-    assert!(server.finish().starts_with("GET /heartbeat HTTP/1.1"));
+    let request = server.finish();
+    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.contains("poly-api-key: key-1"));
+    assert!(request.contains(r#""heartbeat_id":"hb-41""#));
+}
+
+#[tokio::test]
+async fn heartbeat_invalid_response_returns_replacement_id_without_generic_http_error() {
+    let server = MockServer::spawn(
+        "400 Bad Request",
+        r#"{"success":false,"heartbeat_id":"hb-43"}"#,
+    );
+    let client = sample_client(server.base_url());
+
+    let heartbeat = client
+        .post_order_heartbeat(&sample_auth(), "hb-42")
+        .await
+        .expect("invalid heartbeat should still return replacement id");
+
+    assert_eq!(
+        heartbeat,
+        HeartbeatFetchResult {
+            heartbeat_id: "hb-43".to_owned(),
+            valid: false,
+        }
+    );
+    let request = server.finish();
+    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.contains(r#""heartbeat_id":"hb-42""#));
 }
 
 fn sample_client(base_url: Url) -> PolymarketRestClient {
@@ -126,6 +155,21 @@ fn sample_client(base_url: Url) -> PolymarketRestClient {
         .expect("test client");
 
     PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+}
+
+fn sample_auth() -> L2AuthHeaders<'static> {
+    L2AuthHeaders {
+        signer: SignerContext {
+            address: "0xowner",
+            funder_address: "0xfunder",
+            signature_type: SignatureType::Eoa,
+            wallet_route: WalletRoute::Eoa,
+        },
+        api_key: "key-1",
+        passphrase: "pass-1",
+        timestamp: "1700000000",
+        signature: "0xsig",
+    }
 }
 
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {

@@ -1,9 +1,15 @@
-use std::{collections::VecDeque, future::Future, pin::Pin};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use url::Url;
 use venue_polymarket::{
     MarketBookUpdate, MarketWsEvent, PolymarketWsClient, UserTradeUpdate, UserWsEvent,
-    WsClientError, WsCloseFrame, WsMessageSource, WsTransportMessage,
+    WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp, WsTransportMessage,
+    WsUserChannelAuth,
 };
 
 #[tokio::test]
@@ -112,15 +118,119 @@ async fn websocket_client_surfaces_close_frame_details_from_scripted_transport()
     }
 }
 
+#[tokio::test]
+async fn market_ws_client_sends_documented_subscription_dynamic_update_and_ping() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let mut client = PolymarketWsClient::with_transports(
+        Url::parse("wss://market.example/ws").expect("market url"),
+        Url::parse("wss://user.example/ws").expect("user url"),
+        ScriptedWsTransport::with_sent_messages(vec![], Arc::clone(&sent)),
+        ScriptedWsTransport::new(vec![]),
+    );
+
+    client
+        .subscribe_market_assets(&["token-1".to_owned(), "token-2".to_owned()], true)
+        .await
+        .expect("market subscribe");
+    client
+        .update_market_assets(WsSubscriptionOp::Subscribe, &["token-3".to_owned()], true)
+        .await
+        .expect("market dynamic subscribe");
+    client.send_market_ping().await.expect("market ping");
+
+    let sent = sent.lock().expect("sent lock");
+    assert_eq!(sent.len(), 3);
+    assert_json_text(
+        &sent[0],
+        serde_json::json!({
+            "assets_ids": ["token-1", "token-2"],
+            "type": "market",
+            "custom_feature_enabled": true
+        }),
+    );
+    assert_json_text(
+        &sent[1],
+        serde_json::json!({
+            "assets_ids": ["token-3"],
+            "operation": "subscribe",
+            "custom_feature_enabled": true
+        }),
+    );
+    assert_eq!(sent[2], WsTransportMessage::Ping);
+}
+
+#[tokio::test]
+async fn user_ws_client_sends_authenticated_subscription_and_dynamic_update() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let mut client = PolymarketWsClient::with_transports(
+        Url::parse("wss://market.example/ws").expect("market url"),
+        Url::parse("wss://user.example/ws").expect("user url"),
+        ScriptedWsTransport::new(vec![]),
+        ScriptedWsTransport::with_sent_messages(vec![], Arc::clone(&sent)),
+    );
+
+    client
+        .subscribe_user_markets(
+            &WsUserChannelAuth {
+                api_key: "api-key",
+                secret: "api-secret",
+                passphrase: "api-passphrase",
+            },
+            &["condition-1".to_owned()],
+        )
+        .await
+        .expect("user subscribe");
+    client
+        .update_user_markets(WsSubscriptionOp::Unsubscribe, &["condition-2".to_owned()])
+        .await
+        .expect("user dynamic unsubscribe");
+    client.send_user_ping().await.expect("user ping");
+
+    let sent = sent.lock().expect("sent lock");
+    assert_eq!(sent.len(), 3);
+    assert_json_text(
+        &sent[0],
+        serde_json::json!({
+            "auth": {
+                "apiKey": "api-key",
+                "secret": "api-secret",
+                "passphrase": "api-passphrase"
+            },
+            "markets": ["condition-1"],
+            "type": "user"
+        }),
+    );
+    assert_json_text(
+        &sent[1],
+        serde_json::json!({
+            "markets": ["condition-2"],
+            "operation": "unsubscribe"
+        }),
+    );
+    assert_eq!(sent[2], WsTransportMessage::Ping);
+}
+
 #[derive(Debug)]
 struct ScriptedWsTransport {
     messages: VecDeque<WsTransportMessage>,
+    sent_messages: Arc<Mutex<Vec<WsTransportMessage>>>,
 }
 
 impl ScriptedWsTransport {
     fn new(messages: Vec<WsTransportMessage>) -> Self {
         Self {
             messages: VecDeque::from(messages),
+            sent_messages: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn with_sent_messages(
+        messages: Vec<WsTransportMessage>,
+        sent_messages: Arc<Mutex<Vec<WsTransportMessage>>>,
+    ) -> Self {
+        Self {
+            messages: VecDeque::from(messages),
+            sent_messages,
         }
     }
 }
@@ -134,5 +244,26 @@ impl WsMessageSource for ScriptedWsTransport {
                 WsClientError::Transport("scripted websocket transport exhausted".to_owned())
             })
         })
+    }
+
+    fn send_message<'a>(
+        &'a mut self,
+        message: WsTransportMessage,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WsClientError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.sent_messages.lock().expect("sent lock").push(message);
+            Ok(())
+        })
+    }
+}
+
+fn assert_json_text(actual: &WsTransportMessage, expected: serde_json::Value) {
+    match actual {
+        WsTransportMessage::Text(message) => {
+            let actual_json: serde_json::Value =
+                serde_json::from_str(message).expect("transport text should be json");
+            assert_eq!(actual_json, expected);
+        }
+        other => panic!("expected JSON text message, got {other:?}"),
     }
 }

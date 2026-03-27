@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{collections::VecDeque, fmt};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -212,11 +212,22 @@ impl From<serde_json::Error> for WsParseError {
 
 #[derive(Debug, Deserialize)]
 struct MarketEnvelope {
-    event: String,
+    #[serde(default)]
+    event: Option<String>,
+    #[serde(default)]
+    event_type: Option<String>,
     #[serde(default)]
     asset_id: Option<String>,
     #[serde(default)]
     market_id: Option<String>,
+    #[serde(default, alias = "market")]
+    market: Option<String>,
+    #[serde(default)]
+    bids: Option<Vec<BookLevel>>,
+    #[serde(default)]
+    asks: Option<Vec<BookLevel>>,
+    #[serde(default)]
+    price_changes: Option<Vec<PriceChangeEntry>>,
     #[serde(default)]
     best_bid: Option<Value>,
     #[serde(default)]
@@ -231,78 +242,192 @@ struct MarketEnvelope {
     size: Option<Value>,
     #[serde(default, alias = "tick_size")]
     tick_size: Option<Value>,
-    #[serde(default, alias = "previous_tick_size")]
+    #[serde(default, alias = "previous_tick_size", alias = "old_tick_size")]
     previous_tick_size: Option<Value>,
     #[serde(default)]
     status: Option<Value>,
     #[serde(default, alias = "timestamp")]
-    ts: Option<String>,
+    ts: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BookLevel {
+    price: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct PriceChangeEntry {
+    asset_id: String,
+    price: Value,
+    #[serde(default)]
+    side: Option<Value>,
 }
 
 pub fn parse_market_message(message: &str) -> Result<MarketWsEvent, WsParseError> {
+    parse_market_messages(message)?
+        .pop_front()
+        .ok_or_else(|| WsParseError::UnknownEvent(String::new()))
+}
+
+pub fn parse_market_messages(message: &str) -> Result<VecDeque<MarketWsEvent>, WsParseError> {
+    let trimmed = message.trim();
+    if trimmed.eq_ignore_ascii_case("PING") {
+        return Ok(VecDeque::from([MarketWsEvent::Ping]));
+    }
+    if trimmed.eq_ignore_ascii_case("PONG") {
+        return Ok(VecDeque::from([MarketWsEvent::Pong]));
+    }
+
     let envelope: MarketEnvelope = serde_json::from_str(message)?;
-    match normalize_event(&envelope.event).as_str() {
-        "PING" => Ok(MarketWsEvent::Ping),
-        "PONG" => Ok(MarketWsEvent::Pong),
-        "BOOK" => Ok(MarketWsEvent::Book(MarketBookUpdate {
+    let event_type = normalized_market_event(&envelope)?;
+    let event_ts = parse_timestamp(envelope.ts)?;
+
+    match event_type.as_str() {
+        "PING" => Ok(VecDeque::from([MarketWsEvent::Ping])),
+        "PONG" => Ok(VecDeque::from([MarketWsEvent::Pong])),
+        "BOOK" | "BEST_BID_ASK" => Ok(VecDeque::from([MarketWsEvent::Book(MarketBookUpdate {
             asset_id: envelope
                 .asset_id
                 .ok_or(WsParseError::MissingField("asset_id"))?,
-            best_bid: optional_string(envelope.best_bid, "best_bid")?,
-            best_ask: optional_string(envelope.best_ask, "best_ask")?,
-            event_ts: parse_timestamp(envelope.ts)?,
-        })),
-        "PRICE_CHANGE" => Ok(MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
-            asset_id: envelope
-                .asset_id
-                .ok_or(WsParseError::MissingField("asset_id"))?,
-            price: required_value(envelope.price, "price")?,
-            side: optional_string(envelope.side, "side")?,
-            event_ts: parse_timestamp(envelope.ts)?,
-        })),
-        "LAST_TRADE_PRICE" => Ok(MarketWsEvent::LastTradePrice(MarketTradePriceUpdate {
-            asset_id: envelope
-                .asset_id
-                .ok_or(WsParseError::MissingField("asset_id"))?,
-            price: required_value(
-                envelope.last_trade_price.or(envelope.price),
-                "last_trade_price",
-            )?,
-            size: optional_string(envelope.size, "size")?,
-            event_ts: parse_timestamp(envelope.ts)?,
-        })),
-        "TICK_SIZE_CHANGE" => Ok(MarketWsEvent::TickSizeChange(MarketTickSizeChangeUpdate {
-            asset_id: envelope
-                .asset_id
-                .ok_or(WsParseError::MissingField("asset_id"))?,
-            previous_tick_size: optional_string(envelope.previous_tick_size, "previous_tick_size")?,
-            tick_size: required_value(envelope.tick_size, "tick_size")?,
-            event_ts: parse_timestamp(envelope.ts)?,
-        })),
-        "LIFECYCLE" | "STATUS" | "MARKET_STATUS" => {
-            Ok(MarketWsEvent::Lifecycle(MarketLifecycleUpdate {
+            best_bid: best_book_price(envelope.best_bid, envelope.bids, "bids")?,
+            best_ask: best_book_price(envelope.best_ask, envelope.asks, "asks")?,
+            event_ts,
+        })])),
+        "PRICE_CHANGE" => {
+            if let Some(price_changes) = envelope.price_changes {
+                let mut events = VecDeque::with_capacity(price_changes.len());
+                for change in price_changes {
+                    events.push_back(MarketWsEvent::PriceChange(MarketPriceChangeUpdate {
+                        asset_id: change.asset_id,
+                        price: required_value(Some(change.price), "price")?,
+                        side: optional_string(change.side, "side")?,
+                        event_ts,
+                    }));
+                }
+                Ok(events)
+            } else {
+                Ok(VecDeque::from([MarketWsEvent::PriceChange(
+                    MarketPriceChangeUpdate {
+                        asset_id: envelope
+                            .asset_id
+                            .ok_or(WsParseError::MissingField("asset_id"))?,
+                        price: required_value(envelope.price, "price")?,
+                        side: optional_string(envelope.side, "side")?,
+                        event_ts,
+                    },
+                )]))
+            }
+        }
+        "LAST_TRADE_PRICE" => Ok(VecDeque::from([MarketWsEvent::LastTradePrice(
+            MarketTradePriceUpdate {
+                asset_id: envelope
+                    .asset_id
+                    .ok_or(WsParseError::MissingField("asset_id"))?,
+                price: required_value(
+                    envelope.last_trade_price.or(envelope.price),
+                    "last_trade_price",
+                )?,
+                size: optional_string(envelope.size, "size")?,
+                event_ts,
+            },
+        )])),
+        "TICK_SIZE_CHANGE" => Ok(VecDeque::from([MarketWsEvent::TickSizeChange(
+            MarketTickSizeChangeUpdate {
+                asset_id: envelope
+                    .asset_id
+                    .ok_or(WsParseError::MissingField("asset_id"))?,
+                previous_tick_size: optional_string(
+                    envelope.previous_tick_size,
+                    "previous_tick_size",
+                )?,
+                tick_size: required_value(envelope.tick_size, "tick_size")?,
+                event_ts,
+            },
+        )])),
+        "LIFECYCLE" | "STATUS" | "MARKET_STATUS" => Ok(VecDeque::from([MarketWsEvent::Lifecycle(
+            MarketLifecycleUpdate {
                 market_id: envelope.market_id,
                 asset_id: envelope.asset_id,
                 status: required_value(envelope.status, "status")?,
-                event_ts: parse_timestamp(envelope.ts)?,
-            }))
-        }
+                event_ts,
+            },
+        )])),
+        "NEW_MARKET" | "MARKET_RESOLVED" => Ok(VecDeque::from([MarketWsEvent::Lifecycle(
+            MarketLifecycleUpdate {
+                market_id: envelope.market_id.or(envelope.market),
+                asset_id: envelope.asset_id,
+                status: event_type,
+                event_ts,
+            },
+        )])),
         other => Err(WsParseError::UnknownEvent(other.to_owned())),
     }
+}
+
+fn normalized_market_event(envelope: &MarketEnvelope) -> Result<String, WsParseError> {
+    envelope
+        .event
+        .as_deref()
+        .or(envelope.event_type.as_deref())
+        .map(normalize_event)
+        .ok_or(WsParseError::MissingField("event_type"))
 }
 
 fn normalize_event(value: &str) -> String {
     value.trim().to_ascii_uppercase()
 }
 
-fn parse_timestamp(value: Option<String>) -> Result<Option<DateTime<Utc>>, WsParseError> {
+fn parse_timestamp(value: Option<Value>) -> Result<Option<DateTime<Utc>>, WsParseError> {
     let Some(value) = value else {
         return Ok(None);
     };
 
-    let parsed = DateTime::parse_from_rfc3339(&value)
-        .map_err(|_| WsParseError::InvalidTimestamp(value.clone()))?;
-    Ok(Some(parsed.with_timezone(&Utc)))
+    let raw = match value {
+        Value::String(value) => value,
+        Value::Number(value) => value.to_string(),
+        other => {
+            return Err(WsParseError::InvalidField {
+                field: "timestamp",
+                value: other.to_string(),
+            });
+        }
+    };
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(&raw) {
+        return Ok(Some(parsed.with_timezone(&Utc)));
+    }
+
+    let numeric = raw
+        .parse::<i64>()
+        .map_err(|_| WsParseError::InvalidTimestamp(raw.clone()))?;
+    let parsed = if raw.len() >= 13 {
+        Utc.timestamp_millis_opt(numeric).single()
+    } else {
+        Utc.timestamp_opt(numeric, 0).single()
+    }
+    .ok_or_else(|| WsParseError::InvalidTimestamp(raw.clone()))?;
+
+    Ok(Some(parsed))
+}
+
+fn best_book_price(
+    direct: Option<Value>,
+    levels: Option<Vec<BookLevel>>,
+    field: &'static str,
+) -> Result<Option<String>, WsParseError> {
+    if direct.is_some() {
+        return optional_string(direct, field);
+    }
+
+    let Some(levels) = levels else {
+        return Ok(None);
+    };
+
+    let Some(first) = levels.into_iter().next() else {
+        return Ok(None);
+    };
+
+    optional_string(Some(first.price), field)
 }
 
 fn required_value(value: Option<Value>, field: &'static str) -> Result<String, WsParseError> {
