@@ -128,12 +128,13 @@ impl CandidateNotice {
         publication: &CandidatePublication,
         dirty_domains: impl IntoIterator<Item = DirtyDomain>,
         operator_target_revision: Option<&str>,
+        halted: bool,
     ) -> Self {
         Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
-            halted: false,
+            halted,
         }
     }
 }

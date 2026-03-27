@@ -2,9 +2,7 @@ use domain::{
     AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTarget, CandidateTargetSet,
     CandidateValidationResult, EventFamilyId, FamilyDiscoveryRecord,
 };
-use persistence::models::{
-    AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-};
+use persistence::models::{AdoptableTargetRevisionRow, CandidateTargetSetRow};
 use serde_json::json;
 use state::{CandidatePublication, DirtyDomain};
 
@@ -23,7 +21,6 @@ pub struct DiscoveryReport {
 pub struct CandidateArtifactRender {
     pub candidate: CandidateTargetSetRow,
     pub adoptable: AdoptableTargetRevisionRow,
-    pub provenance: CandidateAdoptionProvenanceRow,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -88,11 +85,6 @@ impl CandidateBridge {
                     "rendered_operator_target_revision": operator_target_revision,
                     "execution_requests": [],
                 }),
-            },
-            provenance: CandidateAdoptionProvenanceRow {
-                operator_target_revision,
-                adoptable_revision,
-                candidate_revision,
             },
         })
     }
@@ -201,6 +193,17 @@ impl DiscoverySupervisor {
             notice.halted,
             notice.operator_target_revision.as_deref(),
         )?;
+
+        if disposition != "adoptable" {
+            return Ok(DiscoveryReport {
+                candidate_revision: Some(candidate_set.target_set_id),
+                adoptable_revision: None,
+                operator_target_revision: None,
+                live_dispatch_woken: false,
+                disposition,
+            });
+        }
+
         let rendered = self
             .bridge
             .render(&candidate_set, notice.operator_target_revision.as_deref())?;
@@ -208,7 +211,7 @@ impl DiscoverySupervisor {
         Ok(DiscoveryReport {
             candidate_revision: Some(rendered.candidate.candidate_revision),
             adoptable_revision: Some(rendered.adoptable.adoptable_revision),
-            operator_target_revision: Some(rendered.provenance.operator_target_revision),
+            operator_target_revision: Some(rendered.adoptable.rendered_operator_target_revision),
             live_dispatch_woken: false,
             disposition,
         })

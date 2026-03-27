@@ -1,6 +1,6 @@
 use app_live::{
-    CandidateBridge, CandidateNotice, CandidateNoticeQueue, DiscoveryReport, DiscoverySupervisor,
-    InputTaskEvent, SnapshotDispatchQueue, SnapshotNotice,
+    CandidateArtifactRender, CandidateBridge, CandidateNotice, CandidateNoticeQueue,
+    DiscoveryReport, DiscoverySupervisor, InputTaskEvent, SnapshotDispatchQueue, SnapshotNotice,
 };
 use chrono::{TimeZone, Utc};
 use domain::{
@@ -18,6 +18,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
+        false,
     );
 
     let mut candidate_queue = CandidateNoticeQueue::default();
@@ -71,24 +72,105 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
         .render(&candidate_set, Some("targets-rev-9"))
         .expect("candidate render");
 
-    assert_eq!(render.candidate.candidate_revision, "candidate-bridge-9");
-    assert_eq!(render.candidate.snapshot_id, "snapshot-9");
-    assert_eq!(render.candidate.source_revision, "evt-9");
     assert_eq!(
-        render.adoptable.adoptable_revision,
-        "adoptable-candidate-bridge-9"
+        render,
+        CandidateArtifactRender {
+            candidate: persistence::models::CandidateTargetSetRow {
+                candidate_revision: "candidate-bridge-9".to_owned(),
+                snapshot_id: "snapshot-9".to_owned(),
+                source_revision: "evt-9".to_owned(),
+                payload: render.candidate.payload.clone(),
+            },
+            adoptable: persistence::models::AdoptableTargetRevisionRow {
+                adoptable_revision: "adoptable-candidate-bridge-9".to_owned(),
+                candidate_revision: "candidate-bridge-9".to_owned(),
+                rendered_operator_target_revision: "targets-rev-9".to_owned(),
+                payload: render.adoptable.payload.clone(),
+            },
+        }
     );
-    assert_eq!(render.adoptable.candidate_revision, "candidate-bridge-9");
+}
+
+#[test]
+fn discovery_supervisor_defers_halted_candidate_without_rendering_adoption_outputs() {
+    let publication = ready_candidate_publication();
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-operator"),
+        true,
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut live_dispatch = SnapshotDispatchQueue::default();
+    live_dispatch.push(SnapshotNotice::new(
+        publication.publication_id.clone(),
+        publication.state_version,
+        [DirtyDomain::Candidates],
+    ));
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
     assert_eq!(
-        render.adoptable.rendered_operator_target_revision,
-        "targets-rev-9"
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-7".to_owned()),
+            adoptable_revision: None,
+            operator_target_revision: None,
+            live_dispatch_woken: false,
+            disposition: "deferred".to_owned(),
+        }
     );
-    assert_eq!(render.provenance.operator_target_revision, "targets-rev-9");
+    assert!(live_dispatch.coalesced().is_empty());
+}
+
+#[test]
+fn discovery_supervisor_excludes_weak_candidate_without_rendering_adoption_outputs() {
+    let publication = ready_candidate_publication_with_family_id("   ");
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-operator"),
+        false,
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut live_dispatch = SnapshotDispatchQueue::default();
+    live_dispatch.push(SnapshotNotice::new(
+        publication.publication_id.clone(),
+        publication.state_version,
+        [DirtyDomain::Candidates],
+    ));
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
     assert_eq!(
-        render.provenance.adoptable_revision,
-        "adoptable-candidate-bridge-9"
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-weak".to_owned()),
+            adoptable_revision: None,
+            operator_target_revision: None,
+            live_dispatch_woken: false,
+            disposition: "excluded".to_owned(),
+        }
     );
-    assert_eq!(render.provenance.candidate_revision, "candidate-bridge-9");
+    assert!(live_dispatch.coalesced().is_empty());
 }
 
 #[test]
@@ -128,17 +210,21 @@ fn discovery_and_backfill_input_helpers_emit_through_ingress_path() {
 }
 
 fn ready_candidate_publication() -> CandidatePublication {
+    ready_candidate_publication_with_family_id("family-7")
+}
+
+fn ready_candidate_publication_with_family_id(family_id: &str) -> CandidatePublication {
     let discovered_at = Utc.with_ymd_and_hms(2026, 3, 28, 10, 0, 0).unwrap();
     let discovery = domain::ExternalFactEvent::family_discovery_observed(
         "metadata-refresh-1",
         "evt-7",
-        "family-7",
+        family_id,
         discovered_at,
     );
     let backfill = domain::ExternalFactEvent::family_backfill_observed(
         "metadata-refresh-1",
         "evt-8",
-        "family-7",
+        family_id,
         "cursor-7",
         true,
         discovered_at,
@@ -154,7 +240,11 @@ fn ready_candidate_publication() -> CandidatePublication {
 
     CandidatePublication::from_store(
         &store,
-        CandidateProjectionReadiness::ready("candidate-pub-7"),
+        CandidateProjectionReadiness::ready(if family_id.trim().is_empty() {
+            "candidate-pub-weak"
+        } else {
+            "candidate-pub-7"
+        }),
     )
 }
 
