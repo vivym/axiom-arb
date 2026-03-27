@@ -173,13 +173,11 @@ fn supervisor_records_bootstrap_rollout_metrics_with_explicit_provenance() {
         .iter()
         .find(|span| span.name == span_names::APP_SUPERVISOR_RESUME)
         .expect("resume span missing");
-    let expected_evidence_source =
-        format!("\"{}\"", summary.neg_risk_rollout_evidence_source.as_str());
     assert_eq!(
         completion_span
             .field(field_keys::EVIDENCE_SOURCE)
             .map(String::as_str),
-        Some(expected_evidence_source.as_str())
+        Some("\"bootstrap\"")
     );
 }
 
