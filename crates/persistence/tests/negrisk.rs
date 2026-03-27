@@ -470,6 +470,9 @@ mod negrisk {
             .expect("spawn negrisk helper")
     }
 
+    const DISABLED_REFRESH_TEST_NAME: &str =
+        "negrisk::disabled_instrumentation_skips_refresh_warning_when_latest_snapshot_is_invalid";
+
     #[tokio::test]
     async fn stores_family_validation_revision_and_explainability_fields() {
         stores_family_validation_revision_and_explainability_fields_case().await;
@@ -973,7 +976,7 @@ mod negrisk {
         }
 
         let output = spawn_helper(
-            "disabled_instrumentation_skips_refresh_warning_when_latest_snapshot_is_invalid",
+            DISABLED_REFRESH_TEST_NAME,
             "child",
         );
 
