@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use domain::{
-    ApprovalKey, ApprovalState, ConditionId, DiscoverySourceAnchor, FamilyDiscoveryRecord,
-    InventoryBucket, Order, OrderId, ResolutionState, RuntimeMode, RuntimeOverlay, RuntimePolicy,
-    StateConfidence, TokenId,
+    ApprovalKey, ApprovalState, ConditionId, FamilyDiscoveryRecord, InventoryBucket, Order,
+    OrderId, ResolutionState, RuntimeMode, RuntimeOverlay, RuntimePolicy, StateConfidence, TokenId,
 };
 use rust_decimal::Decimal;
 
@@ -463,8 +462,6 @@ impl StateStore {
         &mut self,
         family_id: &str,
         cursor: impl Into<String>,
-        source: DiscoverySourceAnchor,
-        observed_at: chrono::DateTime<chrono::Utc>,
         completed_at: Option<chrono::DateTime<chrono::Utc>>,
     ) {
         let cursor = cursor.into();
@@ -474,14 +471,18 @@ impl StateStore {
             return;
         }
 
-        let _ = (source, observed_at);
-        self.pending_family_backfills.insert(
-            family_id.to_owned(),
-            PendingFamilyBackfill {
+        self.pending_family_backfills
+            .entry(family_id.to_owned())
+            .and_modify(|pending| {
+                pending.cursor = cursor.clone();
+                if completed_at.is_some() {
+                    pending.completed_at = completed_at;
+                }
+            })
+            .or_insert(PendingFamilyBackfill {
                 cursor,
                 completed_at,
-            },
-        );
+            });
     }
 
     pub(crate) fn record_runtime_attention(&mut self, anchor: RuntimeAttentionAnchor) {

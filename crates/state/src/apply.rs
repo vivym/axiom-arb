@@ -104,17 +104,10 @@ impl<'a> StateApplier<'a> {
             FactApplyHint::FamilyBackfill {
                 family_id,
                 cursor,
-                source,
-                observed_at,
                 completed_at,
             } => {
-                self.store.record_family_backfill(
-                    family_id,
-                    cursor.clone(),
-                    source.clone(),
-                    observed_at.clone(),
-                    completed_at.clone(),
-                );
+                self.store
+                    .record_family_backfill(family_id, cursor.clone(), completed_at.clone());
                 let state_version = self.store.record_applied_fact(journal_seq, fact_key);
                 return Ok(ApplyResult::Applied {
                     journal_seq,

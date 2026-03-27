@@ -106,7 +106,8 @@ fn candidate_projection_failure_does_not_block_fullset_negrisk_publication() {
 }
 
 #[test]
-fn backfill_without_prior_discovery_does_not_create_discovered_family_or_candidate_view() {
+fn backfill_without_prior_discovery_does_not_create_discovered_family_and_ready_publication_stays_empty(
+) {
     let mut store = StateStore::new();
     apply_anchor_event(&mut store, 17);
 
@@ -183,6 +184,71 @@ fn discovery_after_backfill_preserves_backfill_metadata() {
         Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap()
     );
     assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-2"));
+    assert_eq!(
+        discoveries[0].backfill_completed_at,
+        Some(Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap())
+    );
+}
+
+#[test]
+fn backfill_completion_does_not_regress_from_complete_to_incomplete() {
+    let mut store = StateStore::new();
+    apply_anchor_event(&mut store, 17);
+
+    StateApplier::new(&mut store)
+        .apply(
+            18,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-2",
+                "family-a",
+                "cursor-2",
+                true,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-3",
+                "family-a",
+                "cursor-3",
+                false,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            20,
+            ExternalFactEvent::family_discovery_observed(
+                "session-discovery",
+                "evt-4",
+                "family-a",
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 7, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            21,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-5",
+                "family-a",
+                "cursor-4",
+                false,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 8, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let discoveries = store.family_discovery_records();
+    assert_eq!(discoveries.len(), 1);
+    assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-4"));
     assert_eq!(
         discoveries[0].backfill_completed_at,
         Some(Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap())

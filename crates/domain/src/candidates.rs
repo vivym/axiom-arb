@@ -61,7 +61,9 @@ impl FamilyDiscoveryRecord {
         completed_at: Option<DateTime<Utc>>,
     ) {
         self.backfill_cursor = Some(cursor.into());
-        self.backfill_completed_at = completed_at;
+        if completed_at.is_some() {
+            self.backfill_completed_at = completed_at;
+        }
     }
 }
 

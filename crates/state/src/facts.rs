@@ -182,13 +182,6 @@ impl StateFactInput {
                 FactApplyHint::FamilyBackfill {
                     family_id: payload.family_id.clone(),
                     cursor: payload.cursor.clone(),
-                    source: DiscoverySourceAnchor::new(
-                        fact_key.source_kind.clone(),
-                        fact_key.source_session_id.clone(),
-                        fact_key.source_event_id.clone(),
-                        fact_key.normalizer_version.clone(),
-                    ),
-                    observed_at: event.observed_at,
                     completed_at: payload.complete.then_some(event.observed_at),
                 }
             }
@@ -265,8 +258,6 @@ pub(crate) enum FactApplyHint {
     FamilyBackfill {
         family_id: String,
         cursor: String,
-        source: DiscoverySourceAnchor,
-        observed_at: DateTime<Utc>,
         completed_at: Option<DateTime<Utc>>,
     },
     PendingReconcile {
