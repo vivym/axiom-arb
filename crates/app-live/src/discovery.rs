@@ -13,6 +13,7 @@ pub struct DiscoveryReport {
     pub candidate_revision: Option<String>,
     pub adoptable_revision: Option<String>,
     pub operator_target_revision: Option<String>,
+    pub target_count: usize,
     pub live_dispatch_woken: bool,
     pub disposition: String,
 }
@@ -48,11 +49,13 @@ impl CandidateBridge {
             );
         };
         let candidate_revision = candidate_set.target_set_id.clone();
-        let adoptable_revision = candidate_set
+        let Some(adoptable_revision) = candidate_set
             .adoptable_revision
             .as_ref()
             .map(|revision| revision.revision_id.clone())
-            .unwrap_or_else(|| format!("adoptable-{candidate_revision}"));
+        else {
+            return Err("candidate bridge requires an adoptable revision".to_owned());
+        };
         let advisory = CandidatePricingEngine::default().advisory_terms(candidate_set);
 
         Ok(CandidateArtifactRender {
@@ -68,12 +71,18 @@ impl CandidateBridge {
                     "candidate_revision": candidate_revision,
                     "snapshot_id": candidate_set.source_snapshot_id.clone(),
                     "source_revision": candidate_set.discovery_record.source.source_event_id.clone(),
-                    "policy": {
-                        "name": candidate_set.policy.policy_name.clone(),
-                        "version": candidate_set.policy.policy_version.clone(),
+                    "source_anchor": {
+                        "source_kind": candidate_set.discovery_record.source.source_kind.clone(),
+                        "source_session_id": candidate_set.discovery_record.source.source_session_id.clone(),
+                        "source_event_id": candidate_set.discovery_record.source.source_event_id.clone(),
+                        "normalizer_version": candidate_set.discovery_record.source.normalizer_version.clone(),
                     },
+                    "policy_name": candidate_set.policy.policy_name.clone(),
+                    "candidate_policy_version": candidate_set.policy.policy_version.clone(),
+                    "bridge_policy_version": "bridge-policy-v1",
                     "target_count": candidate_set.targets.len(),
                     "advisory_pricing": advisory,
+                    "warnings": [],
                     "execution_requests": [],
                 }),
             },
@@ -85,6 +94,20 @@ impl CandidateBridge {
                     "adoptable_revision": adoptable_revision,
                     "candidate_revision": candidate_revision,
                     "rendered_operator_target_revision": operator_target_revision,
+                    "snapshot_id": candidate_set.source_snapshot_id.clone(),
+                    "source_anchor": {
+                        "source_kind": candidate_set.discovery_record.source.source_kind.clone(),
+                        "source_session_id": candidate_set.discovery_record.source.source_session_id.clone(),
+                        "source_event_id": candidate_set.discovery_record.source.source_event_id.clone(),
+                        "normalizer_version": candidate_set.discovery_record.source.normalizer_version.clone(),
+                    },
+                    "bridge_policy_version": "bridge-policy-v1",
+                    "candidate_policy_version": candidate_set.policy.policy_version.clone(),
+                    "compatibility": {
+                        "operator_target_revision_supplied": true,
+                        "advisory_only": true,
+                    },
+                    "warnings": [],
                     "execution_requests": [],
                 }),
             },
@@ -118,11 +141,11 @@ impl CandidateValidationEngine {
             return Err("candidate publication has no discovery records".to_owned());
         };
 
-        let disposition = candidate_disposition(&discovery_record, restriction);
-        let validation = match disposition {
+        let disposition = candidate_disposition(&view.discovery_records, restriction);
+        let validation = match disposition.as_str() {
             "adoptable" => CandidateValidationResult::Adoptable,
             "deferred" => CandidateValidationResult::Deferred {
-                reason: deferred_reason(&discovery_record, restriction),
+                reason: deferred_reason(&view.discovery_records, restriction),
             },
             "excluded" => CandidateValidationResult::Rejected {
                 reason: "candidate excluded by conservative discovery policy".to_owned(),
@@ -130,17 +153,21 @@ impl CandidateValidationEngine {
             other => return Err(format!("unsupported candidate disposition {other}")),
         };
 
-        let target_id = format!("candidate-target-{}", discovery_record.family_id.as_str());
         let mut candidate_set = CandidateTargetSet::new(
             publication.publication_id.clone(),
             publication.publication_id.clone(),
             discovery_record.clone(),
             CandidatePolicyAnchor::new("candidate-generation", "policy-v1"),
-            vec![CandidateTarget::new(
-                target_id,
-                EventFamilyId::from(discovery_record.family_id.as_str()),
-                validation,
-            )],
+            view.discovery_records
+                .iter()
+                .map(|record| {
+                    CandidateTarget::new(
+                        format!("candidate-target-{}", record.family_id.as_str()),
+                        EventFamilyId::from(record.family_id.as_str()),
+                        validation.clone(),
+                    )
+                })
+                .collect(),
         );
 
         if disposition == "adoptable" {
@@ -184,6 +211,7 @@ impl DiscoverySupervisor {
                 candidate_revision: None,
                 adoptable_revision: None,
                 operator_target_revision: notice.operator_target_revision,
+                target_count: 0,
                 live_dispatch_woken: false,
                 disposition: "ignored".to_owned(),
             });
@@ -201,6 +229,7 @@ impl DiscoverySupervisor {
                 candidate_revision: Some(candidate_set.target_set_id),
                 adoptable_revision: None,
                 operator_target_revision: None,
+                target_count: candidate_set.targets.len(),
                 live_dispatch_woken: false,
                 disposition,
             });
@@ -214,6 +243,7 @@ impl DiscoverySupervisor {
             candidate_revision: Some(rendered.candidate.candidate_revision),
             adoptable_revision: Some(rendered.adoptable.adoptable_revision),
             operator_target_revision: Some(rendered.adoptable.rendered_operator_target_revision),
+            target_count: candidate_set.targets.len(),
             live_dispatch_woken: false,
             disposition,
         })
@@ -221,27 +251,35 @@ impl DiscoverySupervisor {
 }
 
 fn candidate_disposition(
-    discovery_record: &FamilyDiscoveryRecord,
+    discovery_records: &[FamilyDiscoveryRecord],
     restriction: &CandidateRestrictionTruth,
-) -> &'static str {
+) -> String {
     if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
-        || discovery_record.backfill_completed_at.is_none()
+        || discovery_records
+            .iter()
+            .any(|record| record.backfill_completed_at.is_none())
     {
-        "deferred"
-    } else if discovery_record.family_id.as_str().trim().is_empty() {
-        "excluded"
+        "deferred".to_owned()
+    } else if discovery_records
+        .iter()
+        .any(|record| record.family_id.as_str().trim().is_empty())
+    {
+        "excluded".to_owned()
     } else {
-        "adoptable"
+        "adoptable".to_owned()
     }
 }
 
 fn deferred_reason(
-    discovery_record: &FamilyDiscoveryRecord,
+    discovery_records: &[FamilyDiscoveryRecord],
     restriction: &CandidateRestrictionTruth,
 ) -> String {
     if let Some(reason) = restriction.restriction_reason() {
         reason.to_owned()
-    } else if discovery_record.backfill_completed_at.is_none() {
+    } else if discovery_records
+        .iter()
+        .any(|record| record.backfill_completed_at.is_none())
+    {
         "candidate generation deferred until discovery backfill completes".to_owned()
     } else {
         "candidate generation deferred by conservative discovery policy".to_owned()

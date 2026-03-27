@@ -115,7 +115,7 @@ impl SnapshotDispatchQueue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateRestrictionTruth {
     Eligible,
     Restricted { reason: String },
@@ -179,13 +179,24 @@ impl CandidateNoticeQueue {
     }
 
     pub fn coalesced(&self) -> Vec<CandidateNotice> {
-        self.backlog
+        let mut coalesced = BTreeMap::new();
+        for notice in self
+            .backlog
             .iter()
             .filter(|notice| notice.dirty_domains.contains(&DirtyDomain::Candidates))
-            .max_by_key(|notice| notice.publication.state_version)
-            .cloned()
-            .into_iter()
-            .collect()
+        {
+            coalesced.insert(
+                (
+                    notice.publication.publication_id.clone(),
+                    notice.publication.state_version,
+                    notice.operator_target_revision.clone(),
+                    notice.restriction.clone(),
+                ),
+                notice.clone(),
+            );
+        }
+
+        coalesced.into_values().collect()
     }
 
     pub fn len(&self) -> usize {
