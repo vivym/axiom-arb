@@ -968,7 +968,12 @@ impl InstrumentedNegRiskFamilyRepo {
         pool: &PgPool,
         discovery_revision: i64,
     ) -> Result<()> {
-        reconcile_current_family_view_with_instrumentation(pool, discovery_revision).await
+        reconcile_current_family_view_with_instrumentation(
+            pool,
+            discovery_revision,
+            &self.instrumentation,
+        )
+        .await
     }
 }
 
@@ -1264,12 +1269,18 @@ pub async fn persist_discovery_snapshot(
 }
 
 pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i64) -> Result<()> {
-    reconcile_current_family_view_with_instrumentation(pool, discovery_revision).await
+    reconcile_current_family_view_with_instrumentation(
+        pool,
+        discovery_revision,
+        &NegRiskPersistenceInstrumentation::disabled(),
+    )
+    .await
 }
 
 async fn reconcile_current_family_view_with_instrumentation(
     pool: &PgPool,
     discovery_revision: i64,
+    instrumentation: &NegRiskPersistenceInstrumentation,
 ) -> Result<()> {
     let _ = discovery_revision;
 
@@ -1301,6 +1312,13 @@ async fn reconcile_current_family_view_with_instrumentation(
     .await?;
 
     tx.commit().await?;
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "reconcile",
+        "<current-view>",
+    )
+    .await;
     Ok(())
 }
 
@@ -1308,17 +1326,18 @@ async fn record_authoritative_neg_risk_current_view_metrics(
     pool: &PgPool,
     instrumentation: &NegRiskPersistenceInstrumentation,
 ) -> Result<()> {
-    let authoritative_family_ids = latest_discovery_snapshot(pool)
+    let Some(authoritative_family_ids) = latest_discovery_snapshot(pool)
         .await?
-        .map(|snapshot| snapshot.family_ids);
+        .map(|snapshot| snapshot.family_ids)
+    else {
+        return Ok(());
+    };
 
     let included_count =
-        count_authoritative_validation_rows(pool, authoritative_family_ids.as_ref(), "included")
-            .await?;
+        count_authoritative_validation_rows(pool, &authoritative_family_ids, "included").await?;
     let excluded_count =
-        count_authoritative_validation_rows(pool, authoritative_family_ids.as_ref(), "excluded")
-            .await?;
-    let halt_count = count_authoritative_halt_rows(pool, authoritative_family_ids.as_ref()).await?;
+        count_authoritative_validation_rows(pool, &authoritative_family_ids, "excluded").await?;
+    let halt_count = count_authoritative_halt_rows(pool, &authoritative_family_ids).await?;
 
     instrumentation.record_authoritative_current_view_counts(
         included_count as u64,
@@ -1349,65 +1368,40 @@ async fn refresh_authoritative_neg_risk_current_view_metrics_best_effort(
 
 async fn count_authoritative_validation_rows(
     pool: &PgPool,
-    authoritative_family_ids: Option<&Vec<String>>,
+    authoritative_family_ids: &[String],
     validation_status: &str,
 ) -> Result<i64> {
-    match authoritative_family_ids {
-        Some(family_ids) => sqlx::query_scalar::<_, i64>(
-            r#"
-                SELECT COUNT(*)
-                FROM neg_risk_family_validations
-                WHERE event_family_id = ANY($1)
-                  AND validation_status = $2
-                "#,
-        )
-        .bind(family_ids)
-        .bind(validation_status)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into),
-        None => sqlx::query_scalar::<_, i64>(
-            r#"
-                SELECT COUNT(*)
-                FROM neg_risk_family_validations
-                WHERE validation_status = $1
-                "#,
-        )
-        .bind(validation_status)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into),
-    }
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM neg_risk_family_validations
+        WHERE event_family_id = ANY($1)
+          AND validation_status = $2
+        "#,
+    )
+    .bind(authoritative_family_ids)
+    .bind(validation_status)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
 async fn count_authoritative_halt_rows(
     pool: &PgPool,
-    authoritative_family_ids: Option<&Vec<String>>,
+    authoritative_family_ids: &[String],
 ) -> Result<i64> {
-    match authoritative_family_ids {
-        Some(family_ids) => sqlx::query_scalar::<_, i64>(
-            r#"
-                SELECT COUNT(*)
-                FROM family_halt_settings
-                WHERE event_family_id = ANY($1)
-                  AND halted = TRUE
-                "#,
-        )
-        .bind(family_ids)
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into),
-        None => sqlx::query_scalar::<_, i64>(
-            r#"
-                SELECT COUNT(*)
-                FROM family_halt_settings
-                WHERE halted = TRUE
-                "#,
-        )
-        .fetch_one(pool)
-        .await
-        .map_err(Into::into),
-    }
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM family_halt_settings
+        WHERE event_family_id = ANY($1)
+          AND halted = TRUE
+        "#,
+    )
+    .bind(authoritative_family_ids)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
 }
 
 #[derive(Debug, Default, Clone, Copy)]

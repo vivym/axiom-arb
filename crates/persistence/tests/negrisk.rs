@@ -205,7 +205,7 @@ async fn stores_family_validation_revision_and_explainability_fields_case() {
     db.cleanup().await;
 }
 
-async fn persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case() {
+async fn persistence_reconcile_current_family_view_emits_authoritative_current_view_metrics_case() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
@@ -227,15 +227,15 @@ async fn persistence_reconcile_current_family_view_does_not_emit_current_view_me
     let snapshot = observability.registry().snapshot();
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-        None
+        Some(0.0)
     );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
-        None
+        Some(0.0)
     );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-        None
+        Some(0.0)
     );
     assert_eq!(
         snapshot.gauge(
@@ -316,6 +316,13 @@ async fn persistence_repo_instrumentation_is_instance_scoped_case() {
         NegRiskPersistenceInstrumentation::enabled(observability_b.recorder()),
     );
 
+    persist_discovery_snapshot(
+        &db.pool,
+        sample_discovery_snapshot("rev-7", vec!["family-a", "family-b"]),
+    )
+    .await
+    .unwrap();
+
     repo_a
         .upsert_validation(&db.pool, &sample_validation("family-a"))
         .await
@@ -376,14 +383,57 @@ async fn persistence_repo_instrumentation_is_instance_scoped_case() {
     db.cleanup().await;
 }
 
+async fn persistence_upserts_without_authoritative_snapshot_do_not_publish_current_view_metrics_case(
+) {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let observability = bootstrap_observability("persistence-no-snapshot-test");
+    let repo = NegRiskFamilyRepo::with_instrumentation(NegRiskPersistenceInstrumentation::enabled(
+        observability.recorder(),
+    ));
+
+    repo.upsert_validation(&db.pool, &sample_validation("family-1"))
+        .await
+        .unwrap();
+    repo.upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
+        .await
+        .unwrap();
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
+        None
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
+        None
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
+        None
+    );
+    assert_eq!(
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_family_discovered_count
+                .key()
+        ),
+        None
+    );
+
+    db.cleanup().await;
+}
+
 #[tokio::test]
 async fn stores_family_validation_revision_and_explainability_fields() {
     stores_family_validation_revision_and_explainability_fields_case().await;
 }
 
 #[tokio::test]
-async fn persistence_reconcile_current_family_view_does_not_emit_current_view_metrics() {
-    persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case().await;
+async fn persistence_reconcile_current_family_view_emits_authoritative_current_view_metrics() {
+    persistence_reconcile_current_family_view_emits_authoritative_current_view_metrics_case().await;
 }
 
 #[tokio::test]
@@ -396,6 +446,12 @@ async fn persistence_repo_instrumentation_is_instance_scoped() {
     persistence_repo_instrumentation_is_instance_scoped_case().await;
 }
 
+#[tokio::test]
+async fn persistence_upserts_without_authoritative_snapshot_do_not_publish_current_view_metrics() {
+    persistence_upserts_without_authoritative_snapshot_do_not_publish_current_view_metrics_case()
+        .await;
+}
+
 mod negrisk {
     use super::*;
 
@@ -405,8 +461,9 @@ mod negrisk {
     }
 
     #[tokio::test]
-    async fn reconcile_current_family_view_does_not_emit_current_view_metrics() {
-        persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case().await;
+    async fn reconcile_current_family_view_emits_authoritative_current_view_metrics() {
+        persistence_reconcile_current_family_view_emits_authoritative_current_view_metrics_case()
+            .await;
     }
 
     #[tokio::test]
@@ -417,6 +474,12 @@ mod negrisk {
     #[tokio::test]
     async fn repo_instrumentation_is_instance_scoped() {
         persistence_repo_instrumentation_is_instance_scoped_case().await;
+    }
+
+    #[tokio::test]
+    async fn upserts_without_authoritative_snapshot_do_not_publish_current_view_metrics() {
+        persistence_upserts_without_authoritative_snapshot_do_not_publish_current_view_metrics_case()
+            .await;
     }
 
     #[tokio::test]
@@ -568,7 +631,7 @@ mod negrisk {
         let snapshot = observability.registry().snapshot();
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-            Some(2.0)
+            Some(1.0)
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
@@ -576,7 +639,7 @@ mod negrisk {
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-            Some(2.0)
+            Some(1.0)
         );
 
         db.cleanup().await;
@@ -692,7 +755,7 @@ mod negrisk {
         let snapshot = observability.registry().snapshot();
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-            Some(1.0)
+            Some(0.0)
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
@@ -700,7 +763,7 @@ mod negrisk {
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-            Some(1.0)
+            Some(0.0)
         );
 
         db.cleanup().await;
