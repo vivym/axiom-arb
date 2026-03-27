@@ -92,6 +92,20 @@ fn runtime_metrics_expose_negrisk_live_submit_closure_signals() {
 }
 
 #[test]
+fn runtime_metrics_include_candidate_generation_keys() {
+    let metrics = RuntimeMetrics::default();
+
+    assert_eq!(
+        metrics.neg_risk_candidate_publish_total.key(),
+        MetricKey::new("axiom_neg_risk_candidate_publish_total")
+    );
+    assert_eq!(
+        metrics.neg_risk_candidate_provenance_visible_total.key(),
+        MetricKey::new("axiom_neg_risk_candidate_provenance_visible_total")
+    );
+}
+
+#[test]
 fn runtime_metrics_keep_wave1c_control_plane_contracts() {
     let metrics = RuntimeMetrics::default();
     assert_eq!(
@@ -185,6 +199,8 @@ fn runtime_metrics_recorder_updates_registry() {
     recorder.increment_neg_risk_live_submit_accepted_total(2);
     recorder.increment_neg_risk_live_submit_ambiguous_total(1);
     recorder.increment_neg_risk_rollout_parity_mismatch_count(2);
+    recorder.increment_neg_risk_candidate_publish_total(4);
+    recorder.increment_neg_risk_candidate_provenance_visible_total(1);
     recorder.record_ingress_backlog(8.0);
     recorder.record_follow_up_backlog(3.0);
     recorder.record_daemon_posture("healthy");
@@ -256,6 +272,14 @@ fn runtime_metrics_recorder_updates_registry() {
     assert_eq!(
         snapshot.counter(metrics.neg_risk_rollout_parity_mismatch_count.key()),
         Some(2)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_candidate_publish_total.key()),
+        Some(4)
+    );
+    assert_eq!(
+        snapshot.counter(metrics.neg_risk_candidate_provenance_visible_total.key()),
+        Some(1)
     );
     assert_eq!(snapshot.gauge(metrics.ingress_backlog.key()), Some(8.0));
     assert_eq!(snapshot.gauge(metrics.follow_up_backlog.key()), Some(3.0));

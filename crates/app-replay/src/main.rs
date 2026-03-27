@@ -1,10 +1,10 @@
 use std::process;
 
 use app_replay::{
-    load_neg_risk_foundation_summary_from_env, parse_args, replay_event_journal_from_env,
-    NegRiskSummaryError, SummaryReplayConsumer,
+    load_neg_risk_foundation_summary_from_env, load_negrisk_candidate_summary_from_env, parse_args,
+    replay_event_journal_from_env, NegRiskSummaryError, SummaryReplayConsumer,
 };
-use observability::{bootstrap_observability, span_names};
+use observability::{bootstrap_observability, field_keys, span_names};
 use tracing::field;
 use tracing::Instrument;
 
@@ -79,6 +79,52 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Err(NegRiskSummaryError::MissingDiscoverySnapshot) => {}
             Err(error) => {
                 tracing::warn!(error = %error, "app-replay neg-risk summary unavailable");
+            }
+        }
+
+        match load_negrisk_candidate_summary_from_env().await {
+            Ok(summary) if summary.candidate_target_set_count > 0 => {
+                let negrisk_candidates_span = tracing::info_span!(
+                    span_names::REPLAY_NEGRISK_CANDIDATES,
+                    candidate_target_set_count = summary.candidate_target_set_count,
+                    adoptable_target_revision_count = summary.adoptable_target_revision_count,
+                    adoption_provenance_count = summary.adoption_provenance_count,
+                    candidate_revision = summary.latest_candidate_revision.as_deref(),
+                    adoptable_revision = summary.latest_adoptable_revision.as_deref(),
+                    operator_target_revision = summary.operator_target_revision.as_deref(),
+                    candidate_status = if summary.operator_target_revision.is_some() {
+                        "provenance_resolved"
+                    } else if summary.latest_adoptable_revision.is_some() {
+                        "adoptable"
+                    } else {
+                        "advisory"
+                    }
+                );
+                let _negrisk_candidates_guard = negrisk_candidates_span.enter();
+                tracing::info!(
+                    candidate_target_set_count = summary.candidate_target_set_count,
+                    adoptable_target_revision_count = summary.adoptable_target_revision_count,
+                    adoption_provenance_count = summary.adoption_provenance_count,
+                    { field_keys::CANDIDATE_REVISION } =
+                        summary.latest_candidate_revision.as_deref(),
+                    { field_keys::ADOPTABLE_REVISION } =
+                        summary.latest_adoptable_revision.as_deref(),
+                    { field_keys::OPERATOR_TARGET_REVISION } =
+                        summary.operator_target_revision.as_deref(),
+                    { field_keys::CANDIDATE_STATUS } = if summary.operator_target_revision.is_some()
+                    {
+                        "provenance_resolved"
+                    } else if summary.latest_adoptable_revision.is_some() {
+                        "adoptable"
+                    } else {
+                        "advisory"
+                    },
+                    "app-replay neg-risk candidates"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "app-replay neg-risk candidate summary unavailable");
             }
         }
 
