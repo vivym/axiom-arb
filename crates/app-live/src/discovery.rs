@@ -59,7 +59,7 @@ impl CandidateBridge {
         else {
             return Err("candidate bridge requires an adoptable revision".to_owned());
         };
-        let advisory = CandidatePricingEngine::default().advisory_terms(candidate_set);
+        let advisory = CandidatePricingEngine.advisory_terms(candidate_set);
 
         Ok(CandidateArtifactRender {
             candidate: CandidateTargetSetRow {

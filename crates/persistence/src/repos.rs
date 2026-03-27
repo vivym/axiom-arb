@@ -1655,7 +1655,7 @@ impl CandidateArtifactRepo {
                     })
                 }
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -1739,7 +1739,7 @@ impl CandidateAdoptionRepo {
                     })
                 }
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err.into()),
         }
     }
 

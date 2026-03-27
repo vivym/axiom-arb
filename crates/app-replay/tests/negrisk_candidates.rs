@@ -22,9 +22,7 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn new() -> Option<Self> {
-        let Some(database_url) = std::env::var_os("DATABASE_URL") else {
-            return None;
-        };
+        let database_url = std::env::var_os("DATABASE_URL")?;
         let database_url = database_url
             .into_string()
             .expect("DATABASE_URL should be valid utf8");
