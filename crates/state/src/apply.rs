@@ -107,7 +107,7 @@ impl<'a> StateApplier<'a> {
                 completed_at,
             } => {
                 self.store
-                    .record_family_backfill(family_id, cursor.clone(), completed_at.clone());
+                    .record_family_backfill(family_id, cursor.clone(), *completed_at);
                 let state_version = self.store.record_applied_fact(journal_seq, fact_key);
                 return Ok(ApplyResult::Applied {
                     journal_seq,
