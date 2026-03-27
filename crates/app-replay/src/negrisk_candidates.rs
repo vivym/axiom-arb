@@ -1,6 +1,6 @@
 use persistence::{
     models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    PersistenceError,
+    CandidateAdoptionRepo, CandidateArtifactRepo, PersistenceError, RuntimeProgressRepo,
 };
 use sqlx::{PgPool, Row};
 
@@ -19,26 +19,20 @@ pub fn summarize_negrisk_candidate_chain(
     adoptable_target_revisions: &[AdoptableTargetRevisionRow],
     adoption_provenance: &[CandidateAdoptionProvenanceRow],
 ) -> NegRiskCandidateSummary {
-    let latest_candidate_revision = candidate_target_sets
-        .last()
-        .map(|row| row.candidate_revision.clone());
-    let latest_adoptable_revision = latest_candidate_revision.as_deref().and_then(|candidate| {
-        adoptable_target_revisions
-            .iter()
-            .rev()
-            .find(|row| row.candidate_revision == candidate)
-            .map(|row| row.adoptable_revision.clone())
-    });
-    let operator_target_revision = match (
-        latest_candidate_revision.as_deref(),
-        latest_adoptable_revision.as_deref(),
-    ) {
-        (Some(candidate), Some(adoptable)) => adoption_provenance
-            .iter()
-            .rev()
-            .find(|row| row.candidate_revision == candidate && row.adoptable_revision == adoptable)
-            .map(|row| row.operator_target_revision.clone()),
-        _ => None,
+    let (latest_candidate_revision, latest_adoptable_revision) = if candidate_target_sets.len() == 1
+    {
+        let candidate_revision = Some(candidate_target_sets[0].candidate_revision.clone());
+        let adoptable_revision = if adoptable_target_revisions.len() == 1
+            && adoptable_target_revisions[0].candidate_revision
+                == candidate_target_sets[0].candidate_revision
+        {
+            Some(adoptable_target_revisions[0].adoptable_revision.clone())
+        } else {
+            None
+        };
+        (candidate_revision, adoptable_revision)
+    } else {
+        (None, None)
     };
 
     NegRiskCandidateSummary {
@@ -47,7 +41,7 @@ pub fn summarize_negrisk_candidate_chain(
         adoption_provenance_count: adoption_provenance.len() as u64,
         latest_candidate_revision,
         latest_adoptable_revision,
-        operator_target_revision,
+        operator_target_revision: None,
     }
 }
 
@@ -139,6 +133,36 @@ pub async fn load_negrisk_candidate_summary(
     let candidate_target_sets = load_negrisk_candidate_target_sets(pool).await?;
     let adoptable_target_revisions = load_negrisk_adoptable_target_revisions(pool).await?;
     let adoption_provenance = load_negrisk_candidate_adoption_provenance(pool).await?;
+
+    if let Some(operator_target_revision) = RuntimeProgressRepo
+        .current(pool)
+        .await?
+        .and_then(|progress| progress.operator_target_revision)
+    {
+        if let Some(provenance) = CandidateAdoptionRepo
+            .get_by_operator_target_revision(pool, &operator_target_revision)
+            .await?
+        {
+            let artifacts = CandidateArtifactRepo;
+            let candidate = artifacts
+                .get_candidate_target_set(pool, &provenance.candidate_revision)
+                .await?;
+            let adoptable = artifacts
+                .get_adoptable_target_revision(pool, &provenance.adoptable_revision)
+                .await?;
+
+            if let (Some(candidate), Some(adoptable)) = (candidate, adoptable) {
+                return Ok(NegRiskCandidateSummary {
+                    candidate_target_set_count: candidate_target_sets.len() as u64,
+                    adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
+                    adoption_provenance_count: adoption_provenance.len() as u64,
+                    latest_candidate_revision: Some(candidate.candidate_revision),
+                    latest_adoptable_revision: Some(adoptable.adoptable_revision),
+                    operator_target_revision: Some(operator_target_revision),
+                });
+            }
+        }
+    }
 
     Ok(summarize_negrisk_candidate_chain(
         &candidate_target_sets,

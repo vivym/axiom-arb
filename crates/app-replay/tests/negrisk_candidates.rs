@@ -7,7 +7,7 @@ use app_replay::{
 };
 use persistence::{
     models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -173,36 +173,36 @@ async fn replay_keeps_candidate_generation_advisory_without_provenance() {
 }
 
 #[test]
-fn summary_is_anchored_to_latest_candidate_chain_only() {
+fn summary_fails_closed_for_advisory_multi_row_ambiguity() {
     let summary = summarize_negrisk_candidate_chain(
         &[
             CandidateTargetSetRow {
-                candidate_revision: "candidate-9".to_owned(),
+                candidate_revision: "candidate-a".to_owned(),
                 snapshot_id: "snapshot-9".to_owned(),
                 source_revision: "discovery-9".to_owned(),
-                payload: json!({ "candidate_revision": "candidate-9" }),
+                payload: json!({ "candidate_revision": "candidate-a" }),
             },
             CandidateTargetSetRow {
-                candidate_revision: "candidate-10".to_owned(),
+                candidate_revision: "candidate-z".to_owned(),
                 snapshot_id: "snapshot-10".to_owned(),
                 source_revision: "discovery-10".to_owned(),
-                payload: json!({ "candidate_revision": "candidate-10" }),
+                payload: json!({ "candidate_revision": "candidate-z" }),
             },
         ],
         &[AdoptableTargetRevisionRow {
-            adoptable_revision: "adoptable-9".to_owned(),
-            candidate_revision: "candidate-9".to_owned(),
-            rendered_operator_target_revision: "targets-rev-9".to_owned(),
+            adoptable_revision: "adoptable-a".to_owned(),
+            candidate_revision: "candidate-a".to_owned(),
+            rendered_operator_target_revision: "targets-rev-a".to_owned(),
             payload: json!({
-                "adoptable_revision": "adoptable-9",
-                "candidate_revision": "candidate-9",
-                "rendered_operator_target_revision": "targets-rev-9",
+                "adoptable_revision": "adoptable-a",
+                "candidate_revision": "candidate-a",
+                "rendered_operator_target_revision": "targets-rev-a",
             }),
         }],
         &[CandidateAdoptionProvenanceRow {
-            operator_target_revision: "targets-rev-9".to_owned(),
-            adoptable_revision: "adoptable-9".to_owned(),
-            candidate_revision: "candidate-9".to_owned(),
+            operator_target_revision: "targets-rev-a".to_owned(),
+            adoptable_revision: "adoptable-a".to_owned(),
+            candidate_revision: "candidate-a".to_owned(),
         }],
     );
 
@@ -212,11 +212,60 @@ fn summary_is_anchored_to_latest_candidate_chain_only() {
             candidate_target_set_count: 2,
             adoptable_target_revision_count: 1,
             adoption_provenance_count: 1,
-            latest_candidate_revision: Some("candidate-10".to_owned()),
+            latest_candidate_revision: None,
             latest_adoptable_revision: None,
             operator_target_revision: None,
         }
     );
+}
+
+#[tokio::test]
+async fn replay_summary_prefers_runtime_progress_adoption_anchor_over_revision_sorting() {
+    let Some(db) = TestDatabase::new().await else {
+        return;
+    };
+    run_migrations(&db.pool).await.unwrap();
+
+    seed_candidate_chain(&db.pool, "candidate-a", "adoptable-a", "targets-rev-a").await;
+    CandidateArtifactRepo
+        .upsert_candidate_target_set(
+            &db.pool,
+            &CandidateTargetSetRow {
+                candidate_revision: "candidate-z".to_owned(),
+                snapshot_id: "snapshot-99".to_owned(),
+                source_revision: "discovery-99".to_owned(),
+                payload: json!({
+                    "candidate_revision": "candidate-z",
+                    "snapshot_id": "snapshot-99",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-41"), Some("targets-rev-a"))
+        .await
+        .unwrap();
+
+    let summary = load_negrisk_candidate_summary(&db.pool).await.unwrap();
+
+    assert_eq!(summary.candidate_target_set_count, 2);
+    assert_eq!(summary.adoptable_target_revision_count, 1);
+    assert_eq!(summary.adoption_provenance_count, 1);
+    assert_eq!(
+        summary.latest_candidate_revision.as_deref(),
+        Some("candidate-a")
+    );
+    assert_eq!(
+        summary.latest_adoptable_revision.as_deref(),
+        Some("adoptable-a")
+    );
+    assert_eq!(
+        summary.operator_target_revision.as_deref(),
+        Some("targets-rev-a")
+    );
+
+    db.cleanup().await;
 }
 
 async fn seed_candidate_chain(
