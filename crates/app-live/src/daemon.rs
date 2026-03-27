@@ -15,6 +15,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonReport {
     pub startup_order: Vec<String>,
+    pub ticks_run: usize,
+    pub idle_reached: bool,
     pub summary: SupervisorSummary,
 }
 
@@ -50,10 +52,32 @@ impl AppDaemon {
             "state".to_owned(),
             "decision".to_owned(),
         ];
-        let summary = self.supervisor.run_once()?;
-        if max_ticks > 0 && self.supervisor.can_resume_ingest_loops() {
-            startup_order.push("ingest".to_owned());
+        let mut ticks_run = 0usize;
+        let mut idle_reached = false;
+        let mut last_summary = None;
+        let mut final_summary = None;
+
+        if max_ticks == 0 {
+            return Err(SupervisorError::new(
+                "daemon test runner requires at least one tick",
+            ));
         }
+
+        while ticks_run < max_ticks {
+            let summary = self.supervisor.run_once()?;
+            ticks_run += 1;
+            let no_more_progress_possible = last_summary.as_ref() == Some(&summary);
+            idle_reached = self.supervisor.can_resume_ingest_loops();
+            if idle_reached && !startup_order.iter().any(|step| step == "ingest") {
+                startup_order.push("ingest".to_owned());
+            }
+            final_summary = Some(summary.clone());
+            if idle_reached || no_more_progress_possible {
+                break;
+            }
+            last_summary = Some(summary);
+        }
+        let summary = final_summary.expect("max_ticks > 0 should execute at least one tick");
 
         span.record(field_keys::GLOBAL_POSTURE, summary.global_posture.as_str());
         span.record(field_keys::INGRESS_BACKLOG, summary.ingress_backlog_count);
@@ -64,6 +88,8 @@ impl AppDaemon {
 
         Ok(DaemonReport {
             startup_order,
+            ticks_run,
+            idle_reached,
             summary,
         })
     }

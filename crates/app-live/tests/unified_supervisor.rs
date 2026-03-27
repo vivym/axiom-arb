@@ -115,3 +115,20 @@ fn supervisor_summary_surfaces_candidate_restore_status() {
     );
     assert!(!summary.adoption_provenance_resolved);
 }
+
+#[test]
+fn seeded_restore_requires_durable_journal_anchor() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+
+    let err = supervisor
+        .run_once()
+        .expect_err("partial restore seed should fail closed without last_journal_seq");
+
+    assert!(
+        err.to_string()
+            .contains("durable last journal sequence is required"),
+        "{err}"
+    );
+}

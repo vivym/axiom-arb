@@ -111,7 +111,7 @@ pub struct SupervisorError {
 }
 
 impl SupervisorError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -950,7 +950,11 @@ impl AppSupervisor {
             .seed
             .committed_state_version
             .unwrap_or(self.seed.last_state_version);
-        let last_journal_seq = self.seed.last_journal_seq.unwrap_or(0);
+        let Some(last_journal_seq) = self.seed.last_journal_seq else {
+            return Err(SupervisorError::new(
+                "durable last journal sequence is required to restore seeded startup state",
+            ));
+        };
         self.runtime
             .restore_committed_anchor(committed_state_version, last_journal_seq);
 
