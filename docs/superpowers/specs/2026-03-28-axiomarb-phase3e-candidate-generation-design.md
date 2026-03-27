@@ -33,6 +33,7 @@ The recommended direction is:
 - generate conservative, replayable `CandidateTargetSet` artifacts on published snapshots
 - generate an `AdoptableTargetRevision` bridge artifact that can be explicitly adopted by operator/control-plane workflows
 - keep live execution authority unchanged: discovery generates candidates, but does not directly promote them into live trading
+- keep adoption startup-scoped and controlled-restart-scoped, matching the `Phase 3d` operator-target contract
 
 In short:
 
@@ -69,6 +70,7 @@ This design should guarantee the following:
 - candidate generation remains conservative and advisory in this phase
 - a bridge artifact exists to render candidates into an operator-adoptable target revision
 - operator adoption remains explicit and separate from candidate generation
+- adoption of an `AdoptableTargetRevision` only becomes active through startup or controlled restart, never in-process hot reload
 - future ranking and budget-aware selection can be added later without redesigning `Phase 3e` core objects
 
 ## 4. Non-Goals
@@ -225,6 +227,15 @@ The discovery pipeline must consume published snapshots and repo-owned projectio
 
 It must not consume half-applied mutable runtime state.
 
+`Phase 3e` should introduce a distinct candidate-generation dirty-domain and projection-readiness path.
+
+That means:
+
+- discovery/backfill updates may publish a candidate-specific projection such as `CandidateView`
+- `DiscoverySupervisor` consumes that candidate-specific projection and its dirty-domain notifications
+- candidate-generation updates must not directly wake `DecisionSupervisor`'s live execution scheduling path unless an existing shared trading domain truly changed
+- candidate-generation work remains route-local to the discovery pipeline until an explicit adoption event occurs
+
 ### 7.3 Bridge Flow
 
 The bridge path should be:
@@ -236,6 +247,8 @@ This boundary is intentional:
 - `CandidateTargetSet` is not a live trading input
 - `AdoptableTargetRevision` is not automatically active
 - live execution still begins only after explicit adoption into the existing operator-target surface
+- explicit adoption must remain a startup-scoped or controlled-restart-scoped action
+- in-process adoption must not hot-swap the active operator-target revision in `Phase 3e`
 
 ### 7.4 Replay And Drift Anchors
 
@@ -257,6 +270,32 @@ This keeps candidate-generation drift diagnosable:
 - validation drift
 - pricing drift
 - bridge-render drift
+
+### 7.5 Durable Materialization And Restore
+
+`CandidateTargetSet` and `AdoptableTargetRevision` must be durable, but they are not authoritative trading facts.
+
+The recommended contract is:
+
+- trading truth remains in `event_journal` plus the existing authoritative state/persistence surfaces
+- candidate-generation outputs are materialized into dedicated durable repositories or tables keyed by revision and snapshot anchor
+- those materialized candidate artifacts are replay-side derived products, not a second trading truth path
+
+At minimum, durable candidate materialization should record:
+
+- `candidate_revision`
+- `adoptable_revision` where applicable
+- `snapshot_id`
+- policy versions
+- rendered payload
+- creation timestamp
+- provenance linking the artifact back to its published snapshot and source revision
+
+Restart semantics should be:
+
+- runtime startup may restore the latest materialized candidate/adoptable artifacts for status, replay, and operator tooling
+- missing candidate artifacts must not block live runtime startup by default
+- if a later operator adoption workflow declares a particular adoptable revision as required, that workflow must fail closed when the durable artifact is missing rather than silently regenerating or guessing
 
 ## 8. Core Objects And Contracts
 
@@ -340,6 +379,7 @@ This object must be:
 - replayable
 - observable
 - explicitly separate from authoritative trading state
+- keyed by a stable durable revision anchor rather than only by in-memory generation time
 
 ### 8.5 AdoptableTargetRevision
 
@@ -357,6 +397,10 @@ It should include:
 Its role is to provide a stable render target for operator/control-plane adoption.
 
 It is not itself an execution authorization.
+
+Adopting it does not immediately mutate the in-process live target set.
+
+It only becomes the active operator-target revision through the same startup/restart-scoped activation boundary established in `Phase 3d`.
 
 ## 9. Conservative Pricing And Selection Policy
 
@@ -443,6 +487,12 @@ Replay must be able to reconstruct:
 - which candidates were included, excluded, or deferred
 - which adoptable revision was rendered from which candidate revision
 
+The replay contract should be:
+
+- deterministic regeneration of candidate artifacts from journaled inputs, published snapshot anchors, and policy versions
+- comparison of regenerated output against the persisted `CandidateTargetSet` / `AdoptableTargetRevision`
+- explicit drift reporting if persisted and regenerated candidate artifacts diverge
+
 ## 11. Testing Strategy
 
 ### 11.1 Discovery Contract Tests
@@ -476,6 +526,7 @@ Verify:
 - stable rendering from `CandidateTargetSet` to `AdoptableTargetRevision`
 - compatibility warnings are preserved
 - rendered output maps cleanly onto the existing operator-target surface
+- adoption of an adoptable revision requires startup or controlled restart rather than hot reload
 
 ### 11.5 Daemon Integration Tests
 
@@ -485,6 +536,7 @@ Verify:
 - `DiscoverySupervisor` consumes published snapshots, not mutable store state
 - candidate generation does not mutate authoritative trading truth
 - degraded runtime posture fail-closes candidate generation as appropriate
+- candidate-generation dirty domains do not spuriously wake the live execution dispatch path
 
 ### 11.6 Replay And Drift Tests
 
@@ -493,6 +545,7 @@ Verify:
 - same journal and policy versions reproduce the same `CandidateTargetSet`
 - source, validation, pricing, and bridge drift are distinguishable
 - adoption bridge revisions remain explainable and replayable
+- regenerated candidate artifacts match persisted materialized artifacts or surface explicit drift
 
 ## 12. Acceptance Criteria
 
@@ -504,6 +557,8 @@ Verify:
 - candidate generation never directly promotes targets into live trading
 - the system can render an `AdoptableTargetRevision` bridge artifact suitable for operator/control-plane adoption
 - candidate generation is durable, replayable, and observable
+- adoption remains startup-scoped / controlled-restart-scoped rather than in-process hot reload
+- candidate-generation updates do not directly perturb the existing live execution dispatch path
 - future ranking and budget-aware selection can layer on top without redesigning the `Phase 3e` objects
 
 ## 13. Follow-On Work
@@ -515,4 +570,3 @@ This phase intentionally leaves later work for follow-on plans:
 - hot-reloaded operator-target management
 - direct control-plane adoption tooling
 - future optional automation from adopted candidates into broader rollout workflows
-
