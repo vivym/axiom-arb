@@ -6,8 +6,8 @@ use venue_polymarket::{
     parse_market_message, parse_user_message, MarketBookUpdate, MarketLifecycleUpdate,
     MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
     PolymarketWsClient, UserOrderUpdate, UserTradeUpdate, UserWsEvent, WsChannelKind,
-    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsMessageSource,
-    WsParseError,
+    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsClientError,
+    WsMessageSource, WsParseError, WsTransportMessage,
 };
 
 #[test]
@@ -275,7 +275,7 @@ async fn ws_client_market_events_still_drive_existing_liveness_monitor() {
     let mut client = PolymarketWsClient::with_transports(
         Url::parse("wss://market.example/ws").expect("market url"),
         Url::parse("wss://user.example/ws").expect("user url"),
-        ScriptedWsTransport::new(vec![r#"{"event":"PING"}"#.to_owned()]),
+        ScriptedWsTransport::new(vec![WsTransportMessage::Ping]),
         ScriptedWsTransport::new(vec![]),
     );
     let monitor =
@@ -293,11 +293,11 @@ async fn ws_client_market_events_still_drive_existing_liveness_monitor() {
 
 #[derive(Debug)]
 struct ScriptedWsTransport {
-    messages: VecDeque<String>,
+    messages: VecDeque<WsTransportMessage>,
 }
 
 impl ScriptedWsTransport {
-    fn new(messages: Vec<String>) -> Self {
+    fn new(messages: Vec<WsTransportMessage>) -> Self {
         Self {
             messages: VecDeque::from(messages),
         }
@@ -307,13 +307,10 @@ impl ScriptedWsTransport {
 impl WsMessageSource for ScriptedWsTransport {
     fn next_message<'a>(
         &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<String, venue_polymarket::WsClientError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<WsTransportMessage, WsClientError>> + Send + 'a>> {
         Box::pin(async move {
             self.messages.pop_front().ok_or_else(|| {
-                venue_polymarket::WsClientError::Transport(
-                    "scripted websocket transport exhausted".to_owned(),
-                )
+                WsClientError::Transport("scripted websocket transport exhausted".to_owned())
             })
         })
     }

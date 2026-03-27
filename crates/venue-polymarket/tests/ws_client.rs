@@ -3,7 +3,7 @@ use std::{collections::VecDeque, future::Future, pin::Pin};
 use url::Url;
 use venue_polymarket::{
     MarketBookUpdate, MarketWsEvent, PolymarketWsClient, UserTradeUpdate, UserWsEvent,
-    WsMessageSource,
+    WsClientError, WsCloseFrame, WsMessageSource, WsTransportMessage,
 };
 
 #[tokio::test]
@@ -12,9 +12,11 @@ async fn market_ws_client_yields_parsed_market_events_from_scripted_messages() {
         Url::parse("wss://market.example/ws").expect("market url"),
         Url::parse("wss://user.example/ws").expect("user url"),
         ScriptedWsTransport::new(vec![
-            r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
-                .to_owned(),
-            r#"{"event":"PONG"}"#.to_owned(),
+            WsTransportMessage::Text(
+                r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
+                    .to_owned(),
+            ),
+            WsTransportMessage::Pong,
         ]),
         ScriptedWsTransport::new(vec![]),
     );
@@ -41,7 +43,8 @@ async fn user_ws_client_yields_parsed_user_events_from_scripted_messages() {
         Url::parse("wss://user.example/ws").expect("user url"),
         ScriptedWsTransport::new(vec![]),
         ScriptedWsTransport::new(vec![
-            r#"{
+            WsTransportMessage::Text(
+                r#"{
                 "event":"trade",
                 "trade_id":"trade-1",
                 "order_id":"order-1",
@@ -52,8 +55,9 @@ async fn user_ws_client_yields_parsed_user_events_from_scripted_messages() {
                 "fee_rate_bps":"15",
                 "transaction_hash":"0xtrade"
             }"#
-            .to_owned(),
-            r#"{"event":"PING"}"#.to_owned(),
+                .to_owned(),
+            ),
+            WsTransportMessage::Ping,
         ]),
     );
 
@@ -77,13 +81,44 @@ async fn user_ws_client_yields_parsed_user_events_from_scripted_messages() {
     assert_eq!(second, UserWsEvent::Ping);
 }
 
+#[tokio::test]
+async fn websocket_client_surfaces_close_frame_details_from_scripted_transport() {
+    let mut client = PolymarketWsClient::with_transports(
+        Url::parse("wss://market.example/ws").expect("market url"),
+        Url::parse("wss://user.example/ws").expect("user url"),
+        ScriptedWsTransport::new(vec![WsTransportMessage::Close(WsCloseFrame {
+            code: 1008,
+            label: "policy".to_owned(),
+            reason: "session replaced".to_owned(),
+        })]),
+        ScriptedWsTransport::new(vec![]),
+    );
+
+    let error = client
+        .next_market_event()
+        .await
+        .expect_err("close frame should fail parsing path");
+
+    match error {
+        WsClientError::Transport(message) => {
+            assert!(message.contains("1008"), "actual message: {message}");
+            assert!(message.contains("policy"), "actual message: {message}");
+            assert!(
+                message.contains("session replaced"),
+                "actual message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
 #[derive(Debug)]
 struct ScriptedWsTransport {
-    messages: VecDeque<String>,
+    messages: VecDeque<WsTransportMessage>,
 }
 
 impl ScriptedWsTransport {
-    fn new(messages: Vec<String>) -> Self {
+    fn new(messages: Vec<WsTransportMessage>) -> Self {
         Self {
             messages: VecDeque::from(messages),
         }
@@ -93,13 +128,10 @@ impl ScriptedWsTransport {
 impl WsMessageSource for ScriptedWsTransport {
     fn next_message<'a>(
         &'a mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<String, venue_polymarket::WsClientError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<WsTransportMessage, WsClientError>> + Send + 'a>> {
         Box::pin(async move {
             self.messages.pop_front().ok_or_else(|| {
-                venue_polymarket::WsClientError::Transport(
-                    "scripted websocket transport exhausted".to_owned(),
-                )
+                WsClientError::Transport("scripted websocket transport exhausted".to_owned())
             })
         })
     }

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use url::Url;
+use venue_polymarket::PolymarketUrl as Url;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {

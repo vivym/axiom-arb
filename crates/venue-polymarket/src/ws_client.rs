@@ -6,10 +6,27 @@ use url::Url;
 
 use crate::{parse_market_message, parse_user_message, MarketWsEvent, UserWsEvent, WsParseError};
 
-type WsMessageFuture<'a> = Pin<Box<dyn Future<Output = Result<String, WsClientError>> + Send + 'a>>;
+type WsMessageFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<WsTransportMessage, WsClientError>> + Send + 'a>>;
 
 pub trait WsMessageSource: Send {
     fn next_message<'a>(&'a mut self) -> WsMessageFuture<'a>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WsTransportMessage {
+    Text(String),
+    Binary(Vec<u8>),
+    Ping,
+    Pong,
+    Close(WsCloseFrame),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsCloseFrame {
+    pub code: u16,
+    pub label: String,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -71,34 +88,9 @@ impl WsMessageSource for RealWsMessageSource {
                     ));
                 };
 
-                match message? {
-                    Message::Text(text) => return Ok(text.to_string()),
-                    Message::Binary(bytes) => {
-                        return String::from_utf8(bytes.to_vec())
-                            .map_err(|err| WsClientError::Transport(err.to_string()));
-                    }
-                    Message::Ping(_) => return Ok(r#"{"event":"PING"}"#.to_owned()),
-                    Message::Pong(_) => return Ok(r#"{"event":"PONG"}"#.to_owned()),
-                    Message::Close(frame) => {
-                        let message = frame
-                            .map(|frame| {
-                                let code_number = u16::from(frame.code);
-                                let code_label = format!("{:?}", frame.code).to_lowercase();
-                                if frame.reason.is_empty() {
-                                    format!(
-                                        "websocket closed with code {code_number} ({code_label})"
-                                    )
-                                } else {
-                                    format!(
-                                        "websocket closed with code {code_number} ({code_label}): {}",
-                                        frame.reason
-                                    )
-                                }
-                            })
-                            .unwrap_or_else(|| "websocket closed".to_owned());
-                        return Err(WsClientError::Transport(message));
-                    }
-                    _ => continue,
+                match map_tungstenite_message(message?)? {
+                    Some(message) => return Ok(message),
+                    None => continue,
                 }
             }
         })
@@ -138,12 +130,67 @@ where
 
     pub async fn next_market_event(&mut self) -> Result<MarketWsEvent, WsClientError> {
         let message = self.market_transport.next_message().await?;
+        let message = transport_message_to_payload(message)?;
         parse_market_message(&message).map_err(WsClientError::from)
     }
 
     pub async fn next_user_event(&mut self) -> Result<UserWsEvent, WsClientError> {
         let message = self.user_transport.next_message().await?;
+        let message = transport_message_to_payload(message)?;
         parse_user_message(&message).map_err(WsClientError::from)
+    }
+}
+
+fn map_tungstenite_message(message: Message) -> Result<Option<WsTransportMessage>, WsClientError> {
+    Ok(match message {
+        Message::Text(text) => Some(WsTransportMessage::Text(text.to_string())),
+        Message::Binary(bytes) => Some(WsTransportMessage::Binary(bytes.to_vec())),
+        Message::Ping(_) => Some(WsTransportMessage::Ping),
+        Message::Pong(_) => Some(WsTransportMessage::Pong),
+        Message::Close(frame) => Some(WsTransportMessage::Close(
+            frame
+                .map(close_frame_from_tungstenite)
+                .unwrap_or(WsCloseFrame {
+                    code: 1005,
+                    label: "no_status".to_owned(),
+                    reason: String::new(),
+                }),
+        )),
+        _ => None,
+    })
+}
+
+fn close_frame_from_tungstenite(
+    frame: tokio_tungstenite::tungstenite::protocol::CloseFrame,
+) -> WsCloseFrame {
+    WsCloseFrame {
+        code: u16::from(frame.code),
+        label: format!("{:?}", frame.code).to_lowercase(),
+        reason: frame.reason.to_string(),
+    }
+}
+
+fn transport_message_to_payload(message: WsTransportMessage) -> Result<String, WsClientError> {
+    match message {
+        WsTransportMessage::Text(text) => Ok(text),
+        WsTransportMessage::Binary(bytes) => {
+            String::from_utf8(bytes).map_err(|err| WsClientError::Transport(err.to_string()))
+        }
+        WsTransportMessage::Ping => Ok(r#"{"event":"PING"}"#.to_owned()),
+        WsTransportMessage::Pong => Ok(r#"{"event":"PONG"}"#.to_owned()),
+        WsTransportMessage::Close(frame) => {
+            if frame.reason.is_empty() {
+                Err(WsClientError::Transport(format!(
+                    "websocket closed with code {} ({})",
+                    frame.code, frame.label
+                )))
+            } else {
+                Err(WsClientError::Transport(format!(
+                    "websocket closed with code {} ({}): {}",
+                    frame.code, frame.label, frame.reason
+                )))
+            }
+        }
     }
 }
 
@@ -151,86 +198,35 @@ where
 mod tests {
     use super::*;
 
-    use futures_util::SinkExt;
-    use tokio::net::TcpListener;
-    use tokio::time::{sleep, Duration};
-    use tokio_tungstenite::{accept_async, tungstenite::Message};
-
     #[tokio::test]
-    async fn real_ws_message_source_surfaces_ping_and_pong_control_frames() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept connection");
-            let mut ws = accept_async(stream).await.expect("accept websocket");
-
-            ws.send(Message::Ping(Vec::new().into()))
-                .await
-                .expect("send ping");
-            ws.send(Message::Pong(Vec::new().into()))
-                .await
-                .expect("send pong");
-            ws.send(Message::Text(
-                r#"{"event":"book","asset_id":"token-1"}"#.into(),
-            ))
-            .await
-            .expect("send text");
-            sleep(Duration::from_millis(250)).await;
-        });
-
-        let url = Url::parse(&format!("ws://{addr}/control")).expect("ws url");
-        let mut source = RealWsMessageSource::connect(url).await.expect("connect");
-
+    async fn map_tungstenite_message_surfaces_ping_and_pong_control_frames() {
         assert_eq!(
-            source.next_message().await.expect("ping frame"),
-            r#"{"event":"PING"}"#
+            map_tungstenite_message(Message::Ping(Vec::new().into())).expect("ping"),
+            Some(WsTransportMessage::Ping)
         );
         assert_eq!(
-            source.next_message().await.expect("pong frame"),
-            r#"{"event":"PONG"}"#
+            map_tungstenite_message(Message::Pong(Vec::new().into())).expect("pong"),
+            Some(WsTransportMessage::Pong)
         );
-
-        server.await.expect("server task");
     }
 
     #[tokio::test]
-    async fn real_ws_message_source_preserves_close_frame_details() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept connection");
-            let mut ws = accept_async(stream).await.expect("accept websocket");
-
-            ws.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+    async fn map_tungstenite_message_preserves_close_frame_details() {
+        let mapped = map_tungstenite_message(Message::Close(Some(
+            tokio_tungstenite::tungstenite::protocol::CloseFrame {
                 code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Policy,
                 reason: "session replaced".into(),
+            },
+        )))
+        .expect("close frame");
+
+        assert_eq!(
+            mapped,
+            Some(WsTransportMessage::Close(WsCloseFrame {
+                code: 1008,
+                label: "policy".to_owned(),
+                reason: "session replaced".to_owned(),
             }))
-            .await
-            .expect("close websocket");
-            sleep(Duration::from_millis(100)).await;
-        });
-
-        let url = Url::parse(&format!("ws://{addr}/close")).expect("ws url");
-        let mut source = RealWsMessageSource::connect(url).await.expect("connect");
-
-        let error = source
-            .next_message()
-            .await
-            .expect_err("close frame should error");
-
-        match error {
-            WsClientError::Transport(message) => {
-                assert!(message.contains("policy"), "actual message: {message}");
-                assert!(
-                    message.contains("session replaced"),
-                    "actual message: {message}"
-                );
-            }
-            other => panic!("unexpected error: {other}"),
-        }
-
-        server.await.expect("server task");
+        );
     }
 }
