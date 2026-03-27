@@ -275,6 +275,29 @@ pub struct RuntimeProgressRow {
     pub operator_target_revision: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateTargetSetRow {
+    pub candidate_revision: String,
+    pub snapshot_id: String,
+    pub source_revision: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptableTargetRevisionRow {
+    pub adoptable_revision: String,
+    pub candidate_revision: String,
+    pub rendered_operator_target_revision: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateAdoptionProvenanceRow {
+    pub operator_target_revision: String,
+    pub adoptable_revision: String,
+    pub candidate_revision: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotPublicationRow {
     pub snapshot_id: String,
