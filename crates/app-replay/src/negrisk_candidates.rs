@@ -14,6 +14,21 @@ pub struct NegRiskCandidateSummary {
     pub operator_target_revision: Option<String>,
 }
 
+fn fail_closed_candidate_summary(
+    candidate_target_sets: &[CandidateTargetSetRow],
+    adoptable_target_revisions: &[AdoptableTargetRevisionRow],
+    adoption_provenance: &[CandidateAdoptionProvenanceRow],
+) -> NegRiskCandidateSummary {
+    NegRiskCandidateSummary {
+        candidate_target_set_count: candidate_target_sets.len() as u64,
+        adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
+        adoption_provenance_count: adoption_provenance.len() as u64,
+        latest_candidate_revision: None,
+        latest_adoptable_revision: None,
+        operator_target_revision: None,
+    }
+}
+
 pub fn summarize_negrisk_candidate_chain(
     candidate_target_sets: &[CandidateTargetSetRow],
     adoptable_target_revisions: &[AdoptableTargetRevisionRow],
@@ -34,6 +49,8 @@ pub fn summarize_negrisk_candidate_chain(
                     let provenance = &adoption_provenance[0];
                     if provenance.candidate_revision == candidate.candidate_revision
                         && provenance.adoptable_revision == adoptable.adoptable_revision
+                        && adoptable.rendered_operator_target_revision
+                            == provenance.operator_target_revision
                     {
                         Some(provenance.operator_target_revision.clone())
                     } else {
@@ -179,6 +196,12 @@ pub async fn load_negrisk_candidate_summary(
                 });
             }
         }
+
+        return Ok(fail_closed_candidate_summary(
+            &candidate_target_sets,
+            &adoptable_target_revisions,
+            &adoption_provenance,
+        ));
     }
 
     Ok(summarize_negrisk_candidate_chain(

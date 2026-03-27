@@ -258,6 +258,45 @@ fn summary_surfaces_single_fully_aligned_chain_without_runtime_progress() {
     );
 }
 
+#[test]
+fn summary_fails_closed_when_single_chain_rendered_operator_target_mismatches_provenance() {
+    let summary = summarize_negrisk_candidate_chain(
+        &[CandidateTargetSetRow {
+            candidate_revision: "candidate-9".to_owned(),
+            snapshot_id: "snapshot-9".to_owned(),
+            source_revision: "discovery-9".to_owned(),
+            payload: json!({ "candidate_revision": "candidate-9" }),
+        }],
+        &[AdoptableTargetRevisionRow {
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+            rendered_operator_target_revision: "targets-rev-rendered".to_owned(),
+            payload: json!({
+                "adoptable_revision": "adoptable-9",
+                "candidate_revision": "candidate-9",
+                "rendered_operator_target_revision": "targets-rev-rendered",
+            }),
+        }],
+        &[CandidateAdoptionProvenanceRow {
+            operator_target_revision: "targets-rev-provenance".to_owned(),
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        NegRiskCandidateSummary {
+            candidate_target_set_count: 1,
+            adoptable_target_revision_count: 1,
+            adoption_provenance_count: 1,
+            latest_candidate_revision: Some("candidate-9".to_owned()),
+            latest_adoptable_revision: Some("adoptable-9".to_owned()),
+            operator_target_revision: None,
+        }
+    );
+}
+
 #[tokio::test]
 async fn replay_summary_prefers_runtime_progress_adoption_anchor_over_revision_sorting() {
     let Some(db) = TestDatabase::new().await else {
@@ -303,6 +342,37 @@ async fn replay_summary_prefers_runtime_progress_adoption_anchor_over_revision_s
         summary.operator_target_revision.as_deref(),
         Some("targets-rev-a")
     );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn replay_summary_fails_closed_when_runtime_progress_anchor_does_not_resolve() {
+    let Some(db) = TestDatabase::new().await else {
+        return;
+    };
+    run_migrations(&db.pool).await.unwrap();
+
+    seed_candidate_chain(&db.pool, "candidate-9", "adoptable-9", "targets-rev-9").await;
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-41"),
+            Some("targets-rev-unrelated"),
+        )
+        .await
+        .unwrap();
+
+    let summary = load_negrisk_candidate_summary(&db.pool).await.unwrap();
+
+    assert_eq!(summary.candidate_target_set_count, 1);
+    assert_eq!(summary.adoptable_target_revision_count, 1);
+    assert_eq!(summary.adoption_provenance_count, 1);
+    assert_eq!(summary.latest_candidate_revision, None);
+    assert_eq!(summary.latest_adoptable_revision, None);
+    assert_eq!(summary.operator_target_revision, None);
 
     db.cleanup().await;
 }
