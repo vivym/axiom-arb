@@ -267,10 +267,13 @@ git commit -m "feat: persist phase3d operator target revisions"
 - Modify: `crates/venue-polymarket/src/rest.rs`
 - Modify: `crates/venue-polymarket/src/heartbeat.rs`
 - Modify: `crates/venue-polymarket/src/lib.rs`
+- Modify: `crates/venue-polymarket/src/ws_market.rs`
+- Modify: `crates/venue-polymarket/src/ws_user.rs`
 - Modify: `crates/app-live/src/config.rs`
 - Test: `crates/venue-polymarket/tests/ws_client.rs`
 - Modify: `crates/venue-polymarket/tests/ws_feeds.rs`
 - Modify: `crates/venue-polymarket/tests/heartbeat.rs`
+- Modify: `crates/venue-polymarket/tests/support/mod.rs`
 - Modify: `crates/app-live/tests/config.rs`
 
 - [ ] **Step 1: Write the failing websocket and heartbeat source tests**
@@ -354,10 +357,11 @@ pub struct PolymarketSourceConfig {
 
 Rules for this task:
 
-- reuse the existing parsers and liveness monitors
+- reuse the existing liveness monitors and extend parser compatibility only as needed to accept documented `Polymarket` websocket payload shapes
 - keep tests transport-scripted; do not depend on the real upstream service
 - do not let the websocket client emit `ExternalFactEvent`s yet; that belongs in `app-live`
 - keep source configuration startup-scoped; do not add file watching or dynamic reload
+- keep `app-live` behavior limited to source-config support; websocket handshake payloads, heartbeat request bodies, and parser compatibility live inside `venue-polymarket`
 
 - [ ] **Step 4: Re-run the focused source-adapter tests**
 
