@@ -1,7 +1,8 @@
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, load_polymarket_source_config,
-    ConfigError, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
+    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
 };
+use app_live::config::load_polymarket_source_config;
 
 #[test]
 fn parses_neg_risk_live_target_config_from_env_json() {
