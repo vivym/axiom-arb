@@ -4,8 +4,8 @@ use domain::{
     SubmissionState, TokenId, VenueOrderState,
 };
 use state::{
-    NegRiskFamilyRolloutReadiness, NegRiskView, ProjectionReadiness, PublishedSnapshot,
-    StateApplier, StateStore,
+    CandidateProjectionReadiness, CandidatePublication, NegRiskFamilyRolloutReadiness, NegRiskView,
+    ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore,
 };
 
 #[test]
@@ -104,6 +104,29 @@ fn unsupported_negrisk_readiness_is_downgraded_before_publication() {
     assert!(snapshot.fullset.is_some());
     assert!(!snapshot.negrisk_ready);
     assert!(snapshot.negrisk.is_none());
+}
+
+#[test]
+fn candidate_publication_uses_separate_readiness_path_from_published_snapshot() {
+    let store = sample_store_with_anchored_fullset();
+    let snapshot = PublishedSnapshot::from_store(
+        &store,
+        ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-11"),
+    );
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::failed("candidate-pub-11", "projection timeout"),
+    );
+
+    assert!(snapshot.fullset_ready);
+    assert!(!snapshot.negrisk_ready);
+    assert_eq!(candidate_publication.publication_id, "candidate-pub-11");
+    assert!(!candidate_publication.ready);
+    assert!(candidate_publication.view.is_none());
+    assert_eq!(
+        candidate_publication.failure_reason.as_deref(),
+        Some("projection timeout")
+    );
 }
 
 #[test]

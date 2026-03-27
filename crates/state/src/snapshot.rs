@@ -28,6 +28,7 @@ pub struct PublishedSnapshot {
     pub committed_journal_seq: i64,
     pub fullset_ready: bool,
     pub negrisk_ready: bool,
+    // Candidate publication readiness is carried separately via CandidatePublication.
     pub fullset: Option<FullSetView>,
     pub negrisk: Option<NegRiskView>,
 }

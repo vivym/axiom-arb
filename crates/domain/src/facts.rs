@@ -5,9 +5,23 @@ pub struct ExternalFactPayload(Option<ExternalFactPayloadData>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExternalFactPayloadData {
+    FamilyDiscoveryObserved(FamilyDiscoveryObservedPayload),
+    FamilyBackfillObserved(FamilyBackfillObservedPayload),
     NegRiskLiveSubmitObserved(NegRiskLiveSubmitObservedPayload),
     NegRiskLiveReconcileObserved(NegRiskLiveReconcileObservedPayload),
     RuntimeAttentionObserved(RuntimeAttentionObservedPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyDiscoveryObservedPayload {
+    pub family_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyBackfillObservedPayload {
+    pub family_id: String,
+    pub cursor: String,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +49,28 @@ pub struct RuntimeAttentionObservedPayload {
 impl ExternalFactPayload {
     pub fn none() -> Self {
         Self::default()
+    }
+
+    pub fn family_discovery_observed(family_id: impl Into<String>) -> Self {
+        Self(Some(ExternalFactPayloadData::FamilyDiscoveryObserved(
+            FamilyDiscoveryObservedPayload {
+                family_id: family_id.into(),
+            },
+        )))
+    }
+
+    pub fn family_backfill_observed(
+        family_id: impl Into<String>,
+        cursor: impl Into<String>,
+        complete: bool,
+    ) -> Self {
+        Self(Some(ExternalFactPayloadData::FamilyBackfillObserved(
+            FamilyBackfillObservedPayload {
+                family_id: family_id.into(),
+                cursor: cursor.into(),
+                complete,
+            },
+        )))
     }
 
     pub fn negrisk_live_submit_observed(
@@ -88,6 +124,10 @@ impl ExternalFactPayload {
     pub fn kind(&self) -> &'static str {
         match &self.0 {
             None => "none",
+            Some(ExternalFactPayloadData::FamilyDiscoveryObserved(_)) => {
+                "family_discovery_observed"
+            }
+            Some(ExternalFactPayloadData::FamilyBackfillObserved(_)) => "family_backfill_observed",
             Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(_)) => {
                 "negrisk_live_submit_observed"
             }
@@ -151,6 +191,42 @@ impl ExternalFactEvent {
                 scope,
                 submission_ref,
             ),
+        }
+    }
+
+    pub fn family_discovery_observed(
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            source_kind: "family_discovery".to_owned(),
+            source_session_id: source_session_id.into(),
+            source_event_id: source_event_id.into(),
+            normalizer_version: "v1-family-discovery".to_owned(),
+            observed_at,
+            raw_payload_hash: None,
+            payload: ExternalFactPayload::family_discovery_observed(family_id),
+        }
+    }
+
+    pub fn family_backfill_observed(
+        source_session_id: impl Into<String>,
+        source_event_id: impl Into<String>,
+        family_id: impl Into<String>,
+        cursor: impl Into<String>,
+        complete: bool,
+        observed_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            source_kind: "family_backfill".to_owned(),
+            source_session_id: source_session_id.into(),
+            source_event_id: source_event_id.into(),
+            normalizer_version: "v1-family-backfill".to_owned(),
+            observed_at,
+            raw_payload_hash: None,
+            payload: ExternalFactPayload::family_backfill_observed(family_id, cursor, complete),
         }
     }
 

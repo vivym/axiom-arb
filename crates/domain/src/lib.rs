@@ -1,3 +1,4 @@
+mod candidates;
 mod decision;
 mod execution;
 mod facts;
@@ -8,6 +9,10 @@ mod order;
 mod resolution;
 mod runtime_mode;
 
+pub use candidates::{
+    AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTarget, CandidateTargetSet,
+    CandidateValidationResult, DiscoverySourceAnchor, FamilyDiscoveryRecord,
+};
 pub use decision::{
     ActivationDecision, DecisionInput, DecisionVerdict, ExecutionMode, IntentCandidate,
     RecoveryIntent, StateConfidence,
@@ -18,9 +23,9 @@ pub use execution::{
     PendingReconcileWork, PublishedSnapshotRef, ReconcileOutcome,
 };
 pub use facts::{
-    ExternalFactEvent, ExternalFactPayload, ExternalFactPayloadData,
-    NegRiskLiveReconcileObservedPayload, NegRiskLiveSubmitObservedPayload,
-    RuntimeAttentionObservedPayload,
+    ExternalFactEvent, ExternalFactPayload, ExternalFactPayloadData, FamilyBackfillObservedPayload,
+    FamilyDiscoveryObservedPayload, NegRiskLiveReconcileObservedPayload,
+    NegRiskLiveSubmitObservedPayload, RuntimeAttentionObservedPayload,
 };
 pub use identifiers::{
     Condition, ConditionId, Event, EventFamily, EventFamilyId, EventId, IdentifierMap,

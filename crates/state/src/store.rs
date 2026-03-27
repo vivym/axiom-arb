@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use domain::{
-    ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
-    RuntimeMode, RuntimeOverlay, RuntimePolicy, StateConfidence, TokenId,
+    ApprovalKey, ApprovalState, ConditionId, DiscoverySourceAnchor, FamilyDiscoveryRecord,
+    InventoryBucket, Order, OrderId, ResolutionState, RuntimeMode, RuntimeOverlay, RuntimePolicy,
+    StateConfidence, TokenId,
 };
 use rust_decimal::Decimal;
 
@@ -52,6 +53,7 @@ pub struct StateStore {
     first_reconcile_succeeded: bool,
     applied_fact_journal: BTreeMap<FactKey, i64>,
     consumed_journal: BTreeMap<i64, FactKey>,
+    family_discovery_records: BTreeMap<String, FamilyDiscoveryRecord>,
     pending_reconcile_anchors: BTreeMap<String, PendingReconcileAnchor>,
     runtime_attention_anchors: BTreeMap<String, RuntimeAttentionAnchor>,
     open_orders: HashMap<OrderId, Order>,
@@ -75,6 +77,7 @@ impl StateStore {
             first_reconcile_succeeded: false,
             applied_fact_journal: BTreeMap::new(),
             consumed_journal: BTreeMap::new(),
+            family_discovery_records: BTreeMap::new(),
             pending_reconcile_anchors: BTreeMap::new(),
             runtime_attention_anchors: BTreeMap::new(),
             open_orders: HashMap::new(),
@@ -186,6 +189,13 @@ impl StateStore {
 
     pub fn pending_reconcile_count(&self) -> usize {
         self.pending_reconcile_anchors.len()
+    }
+
+    pub fn family_discovery_records(&self) -> Vec<FamilyDiscoveryRecord> {
+        self.family_discovery_records
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
     }
 
     pub fn pending_reconcile_anchors(&self) -> Vec<PendingReconcileAnchor> {
@@ -423,6 +433,33 @@ impl StateStore {
     pub(crate) fn record_pending_reconcile(&mut self, anchor: PendingReconcileAnchor) {
         self.pending_reconcile_anchors
             .insert(anchor.pending_ref.clone(), anchor);
+    }
+
+    pub(crate) fn record_family_discovery(&mut self, record: FamilyDiscoveryRecord) {
+        self.family_discovery_records
+            .insert(record.family_id.as_str().to_owned(), record);
+    }
+
+    pub(crate) fn record_family_backfill(
+        &mut self,
+        family_id: &str,
+        cursor: impl Into<String>,
+        source: DiscoverySourceAnchor,
+        observed_at: chrono::DateTime<chrono::Utc>,
+        completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let cursor = cursor.into();
+
+        if let Some(record) = self.family_discovery_records.get_mut(family_id) {
+            record.record_backfill(cursor, completed_at);
+            return;
+        }
+
+        let mut record =
+            FamilyDiscoveryRecord::new(family_id.to_owned().into(), source, observed_at);
+        record.record_backfill(cursor, completed_at);
+        self.family_discovery_records
+            .insert(family_id.to_owned(), record);
     }
 
     pub(crate) fn record_runtime_attention(&mut self, anchor: RuntimeAttentionAnchor) {
