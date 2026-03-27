@@ -79,12 +79,16 @@ fn validator_records_verdict_without_emitting_discovered_family_count() {
         .find(|span| span.name == span_names::NEG_RISK_FAMILY_VALIDATION)
         .expect("validation span should be emitted");
     assert_eq!(
-        validation_span.field("validation_status").map(String::as_str),
+        validation_span
+            .field("validation_status")
+            .map(String::as_str),
         Some("\"included\"")
     );
     assert_eq!(validation_span.field("exclusion_reason"), None);
     assert_eq!(
-        validation_span.field("discovery_revision").map(String::as_str),
+        validation_span
+            .field("discovery_revision")
+            .map(String::as_str),
         Some("7")
     );
     assert_eq!(
@@ -92,6 +96,65 @@ fn validator_records_verdict_without_emitting_discovered_family_count() {
             .field("metadata_snapshot_hash")
             .map(String::as_str),
         Some("\"sha256:snapshot-7\"")
+    );
+    assert_eq!(
+        observability.registry().snapshot().gauge(
+            observability
+                .metrics()
+                .neg_risk_family_discovered_count
+                .key()
+        ),
+        None
+    );
+}
+
+#[test]
+fn validator_records_exclusion_reason_fields_for_excluded_families() {
+    let observability = bootstrap_observability("validator-excluded-test");
+    let instrumentation = NegRiskValidatorInstrumentation::enabled(observability.recorder());
+
+    let (spans, verdict) = capture_spans(|| {
+        validate_family_instrumented(
+            &sample_placeholder_family(),
+            9,
+            "sha256:snapshot-9",
+            &instrumentation,
+        )
+    });
+
+    assert_eq!(verdict.status, FamilyValidationStatus::Excluded);
+    assert_eq!(
+        verdict.reason,
+        Some(FamilyExclusionReason::PlaceholderOutcome)
+    );
+
+    let validation_span = spans
+        .iter()
+        .find(|span| span.name == span_names::NEG_RISK_FAMILY_VALIDATION)
+        .expect("validation span should be emitted");
+    assert_eq!(
+        validation_span
+            .field("validation_status")
+            .map(String::as_str),
+        Some("\"excluded\"")
+    );
+    assert_eq!(
+        validation_span
+            .field("exclusion_reason")
+            .map(String::as_str),
+        Some("\"placeholder_outcome\"")
+    );
+    assert_eq!(
+        validation_span
+            .field("discovery_revision")
+            .map(String::as_str),
+        Some("9")
+    );
+    assert_eq!(
+        validation_span
+            .field("metadata_snapshot_hash")
+            .map(String::as_str),
+        Some("\"sha256:snapshot-9\"")
     );
     assert_eq!(
         observability.registry().snapshot().gauge(

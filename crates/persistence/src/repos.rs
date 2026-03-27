@@ -1082,7 +1082,13 @@ async fn upsert_validation_with_instrumentation(
 
     tx.commit().await?;
     instrumentation.record_validation_upsert(row);
-    record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await?;
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "validation",
+        &row.event_family_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -1186,7 +1192,13 @@ async fn upsert_halt_with_instrumentation(
 
     tx.commit().await?;
     instrumentation.record_halt_upsert(row);
-    record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await?;
+    refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+        pool,
+        instrumentation,
+        "halt",
+        &row.event_family_id,
+    )
+    .await;
     Ok(())
 }
 
@@ -1296,35 +1308,17 @@ async fn record_authoritative_neg_risk_current_view_metrics(
     pool: &PgPool,
     instrumentation: &NegRiskPersistenceInstrumentation,
 ) -> Result<()> {
-    let included_count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM neg_risk_family_validations
-        WHERE validation_status = 'included'
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
+    let authoritative_family_ids = latest_discovery_snapshot(pool)
+        .await?
+        .map(|snapshot| snapshot.family_ids);
 
-    let excluded_count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM neg_risk_family_validations
-        WHERE validation_status = 'excluded'
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
-
-    let halt_count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM family_halt_settings
-        WHERE halted = TRUE
-        "#,
-    )
-    .fetch_one(pool)
-    .await?;
+    let included_count =
+        count_authoritative_validation_rows(pool, authoritative_family_ids.as_ref(), "included")
+            .await?;
+    let excluded_count =
+        count_authoritative_validation_rows(pool, authoritative_family_ids.as_ref(), "excluded")
+            .await?;
+    let halt_count = count_authoritative_halt_rows(pool, authoritative_family_ids.as_ref()).await?;
 
     instrumentation.record_authoritative_current_view_counts(
         included_count as u64,
@@ -1333,6 +1327,87 @@ async fn record_authoritative_neg_risk_current_view_metrics(
     );
 
     Ok(())
+}
+
+async fn refresh_authoritative_neg_risk_current_view_metrics_best_effort(
+    pool: &PgPool,
+    instrumentation: &NegRiskPersistenceInstrumentation,
+    update_kind: &str,
+    event_family_id: &str,
+) {
+    if let Err(err) =
+        record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await
+    {
+        tracing::warn!(
+            error = %err,
+            update_kind,
+            event_family_id,
+            "neg-risk current-view metric refresh failed after durable commit"
+        );
+    }
+}
+
+async fn count_authoritative_validation_rows(
+    pool: &PgPool,
+    authoritative_family_ids: Option<&Vec<String>>,
+    validation_status: &str,
+) -> Result<i64> {
+    match authoritative_family_ids {
+        Some(family_ids) => sqlx::query_scalar::<_, i64>(
+            r#"
+                SELECT COUNT(*)
+                FROM neg_risk_family_validations
+                WHERE event_family_id = ANY($1)
+                  AND validation_status = $2
+                "#,
+        )
+        .bind(family_ids)
+        .bind(validation_status)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+        None => sqlx::query_scalar::<_, i64>(
+            r#"
+                SELECT COUNT(*)
+                FROM neg_risk_family_validations
+                WHERE validation_status = $1
+                "#,
+        )
+        .bind(validation_status)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+    }
+}
+
+async fn count_authoritative_halt_rows(
+    pool: &PgPool,
+    authoritative_family_ids: Option<&Vec<String>>,
+) -> Result<i64> {
+    match authoritative_family_ids {
+        Some(family_ids) => sqlx::query_scalar::<_, i64>(
+            r#"
+                SELECT COUNT(*)
+                FROM family_halt_settings
+                WHERE event_family_id = ANY($1)
+                  AND halted = TRUE
+                "#,
+        )
+        .bind(family_ids)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+        None => sqlx::query_scalar::<_, i64>(
+            r#"
+                SELECT COUNT(*)
+                FROM family_halt_settings
+                WHERE halted = TRUE
+                "#,
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into),
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
