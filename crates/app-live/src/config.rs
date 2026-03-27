@@ -262,19 +262,14 @@ pub fn load_polymarket_source_config(
         })?;
 
     Ok(PolymarketSourceConfig {
-        clob_host: parse_source_url("clob_host", &raw.clob_host, &["http", "https"], json)?,
-        data_api_host: parse_source_url(
+        clob_host: parse_host_url("clob_host", &raw.clob_host, &["http", "https"], json)?,
+        data_api_host: parse_host_url(
             "data_api_host",
             &raw.data_api_host,
             &["http", "https"],
             json,
         )?,
-        relayer_host: parse_source_url(
-            "relayer_host",
-            &raw.relayer_host,
-            &["http", "https"],
-            json,
-        )?,
+        relayer_host: parse_host_url("relayer_host", &raw.relayer_host, &["http", "https"], json)?,
         market_ws_url: parse_source_url("market_ws_url", &raw.market_ws_url, &["ws", "wss"], json)?,
         user_ws_url: parse_source_url("user_ws_url", &raw.user_ws_url, &["ws", "wss"], json)?,
         heartbeat_interval_seconds: parse_positive_interval(
@@ -318,18 +313,54 @@ fn parse_source_url(
         message: format!("{field}: {error}"),
     })?;
 
-    if allowed_schemes.contains(&url.scheme()) {
-        Ok(url)
-    } else {
-        Err(ConfigError::InvalidPolymarketSourceConfig {
+    if !allowed_schemes.contains(&url.scheme()) {
+        return Err(ConfigError::InvalidPolymarketSourceConfig {
             value: raw_json.to_owned(),
             message: format!(
                 "{field}: unsupported scheme '{}', expected one of: {}",
                 url.scheme(),
                 allowed_schemes.join(", ")
             ),
-        })
+        });
     }
+
+    Ok(url)
+}
+
+fn parse_host_url(
+    field: &'static str,
+    value: &str,
+    allowed_schemes: &[&'static str],
+    raw_json: &str,
+) -> Result<Url, ConfigError> {
+    let url = parse_source_url(field, value, allowed_schemes, raw_json)?;
+
+    if url.host_str().is_none() {
+        return Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!("{field}: must include a host"),
+        });
+    }
+    if url.path() != "/" {
+        return Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!("{field}: host URL must not include a path"),
+        });
+    }
+    if url.query().is_some() {
+        return Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!("{field}: host URL must not include a query string"),
+        });
+    }
+    if url.fragment().is_some() {
+        return Err(ConfigError::InvalidPolymarketSourceConfig {
+            value: raw_json.to_owned(),
+            message: format!("{field}: host URL must not include a fragment"),
+        });
+    }
+
+    Ok(url)
 }
 
 fn parse_positive_interval(

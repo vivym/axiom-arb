@@ -79,8 +79,24 @@ impl WsMessageSource for RealWsMessageSource {
                     }
                     Message::Ping(_) => return Ok(r#"{"event":"PING"}"#.to_owned()),
                     Message::Pong(_) => return Ok(r#"{"event":"PONG"}"#.to_owned()),
-                    Message::Close(_) => {
-                        return Err(WsClientError::Transport("websocket closed".to_owned()));
+                    Message::Close(frame) => {
+                        let message = frame
+                            .map(|frame| {
+                                let code_number = u16::from(frame.code);
+                                let code_label = format!("{:?}", frame.code).to_lowercase();
+                                if frame.reason.is_empty() {
+                                    format!(
+                                        "websocket closed with code {code_number} ({code_label})"
+                                    )
+                                } else {
+                                    format!(
+                                        "websocket closed with code {code_number} ({code_label}): {}",
+                                        frame.reason
+                                    )
+                                }
+                            })
+                            .unwrap_or_else(|| "websocket closed".to_owned());
+                        return Err(WsClientError::Transport(message));
                     }
                     _ => continue,
                 }
@@ -174,6 +190,46 @@ mod tests {
             source.next_message().await.expect("pong frame"),
             r#"{"event":"PONG"}"#
         );
+
+        server.await.expect("server task");
+    }
+
+    #[tokio::test]
+    async fn real_ws_message_source_preserves_close_frame_details() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept connection");
+            let mut ws = accept_async(stream).await.expect("accept websocket");
+
+            ws.close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Policy,
+                reason: "session replaced".into(),
+            }))
+            .await
+            .expect("close websocket");
+            sleep(Duration::from_millis(100)).await;
+        });
+
+        let url = Url::parse(&format!("ws://{addr}/close")).expect("ws url");
+        let mut source = RealWsMessageSource::connect(url).await.expect("connect");
+
+        let error = source
+            .next_message()
+            .await
+            .expect_err("close frame should error");
+
+        match error {
+            WsClientError::Transport(message) => {
+                assert!(message.contains("policy"), "actual message: {message}");
+                assert!(
+                    message.contains("session replaced"),
+                    "actual message: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other}"),
+        }
 
         server.await.expect("server task");
     }
