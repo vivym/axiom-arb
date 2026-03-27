@@ -294,7 +294,8 @@ fn live_entrypoint_persists_operator_target_revision_anchor_during_startup() {
     let neg_risk_live_targets = valid_neg_risk_live_targets_json();
     let revision = load_neg_risk_live_targets(Some(neg_risk_live_targets))
         .expect("targets should parse")
-        .revision;
+        .revision()
+        .to_owned();
     let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
         Some(neg_risk_live_targets),
@@ -358,6 +359,36 @@ fn live_entrypoint_requires_matching_operator_target_revision_anchor() {
     let combined = format!("{stdout}{stderr}");
 
     assert!(combined.contains("operator target revision"), "{combined}");
+
+    database.cleanup();
+}
+
+#[test]
+fn live_entrypoint_rejects_missing_operator_target_revision_anchor() {
+    let database = TestDatabase::new();
+    database.seed_durable_live_execution_record(None);
+    let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
+        "live",
+        Some(valid_neg_risk_live_targets_json()),
+        Some("family-a"),
+        Some("family-a"),
+        Some(valid_local_signer_config_json()),
+        Some(database.database_url()),
+    );
+
+    assert!(
+        !output.status.success(),
+        "live mode should fail closed when durable follow-up work exists but the persisted operator target revision anchor is missing"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("operator target revision anchor is required"),
+        "{combined}"
+    );
 
     database.cleanup();
 }

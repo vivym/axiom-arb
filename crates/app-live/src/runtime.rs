@@ -354,7 +354,7 @@ where
         }
         None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
     };
-    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.targets);
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
         supervisor.seed_neg_risk_live_approval(&family_id);
     }
@@ -412,7 +412,7 @@ where
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
     }
-    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.targets);
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
         supervisor.seed_neg_risk_live_approval(&family_id);
     }
@@ -504,7 +504,7 @@ fn load_durable_live_startup_state(
 }
 
 fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {
-    (!targets.targets.is_empty()).then_some(targets.revision.as_str())
+    (!targets.is_empty()).then_some(targets.revision())
 }
 
 fn validate_operator_target_revision(

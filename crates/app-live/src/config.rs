@@ -6,13 +6,29 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {
-    pub revision: String,
-    pub targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    revision: String,
+    targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
 }
 
 impl NegRiskLiveTargetSet {
     pub fn empty() -> Self {
         Self::new(BTreeMap::new())
+    }
+
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
+    pub fn targets(&self) -> &BTreeMap<String, NegRiskFamilyLiveTarget> {
+        &self.targets
+    }
+
+    pub fn into_targets(self) -> BTreeMap<String, NegRiskFamilyLiveTarget> {
+        self.targets
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
     }
 
     fn new(targets: BTreeMap<String, NegRiskFamilyLiveTarget>) -> Self {

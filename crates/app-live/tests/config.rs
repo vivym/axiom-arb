@@ -18,15 +18,15 @@ fn parses_neg_risk_live_target_config_from_env_json() {
     "#;
 
     let config = load_neg_risk_live_targets(Some(json)).unwrap();
-    assert_eq!(config.targets["family-a"].members.len(), 2);
-    assert_eq!(config.targets["family-a"].members[0].token_id, "token-1");
+    assert_eq!(config.targets()["family-a"].members.len(), 2);
+    assert_eq!(config.targets()["family-a"].members[0].token_id, "token-1");
 }
 
 #[test]
 fn missing_neg_risk_live_target_config_returns_empty_map() {
     let config = load_neg_risk_live_targets(None).unwrap();
 
-    assert!(config.targets.is_empty());
+    assert!(config.is_empty());
 }
 
 #[test]
@@ -69,13 +69,16 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
     let config_a = load_neg_risk_live_targets(Some(json_a)).unwrap();
     let config_b = load_neg_risk_live_targets(Some(json_b)).unwrap();
 
-    assert_eq!(config_a.revision, config_b.revision);
-    assert!(config_a.revision.starts_with("sha256:"));
+    assert_eq!(config_a.revision(), config_b.revision());
+    assert!(config_a.revision().starts_with("sha256:"));
     assert_eq!(
-        config_a.targets.keys().cloned().collect::<Vec<_>>(),
+        config_a.targets().keys().cloned().collect::<Vec<_>>(),
         vec!["family-a".to_owned(), "family-b".to_owned()]
     );
-    assert_eq!(config_a.targets["family-a"].members[0].token_id, "token-2");
+    assert_eq!(
+        config_a.targets()["family-a"].members[0].token_id,
+        "token-2"
+    );
 }
 
 #[test]

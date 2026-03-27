@@ -146,7 +146,7 @@ fn live_neg_risk_work_requested(
     approved_families: &BTreeSet<String>,
     ready_families: &BTreeSet<String>,
 ) -> bool {
-    targets.targets.keys().any(|family_id| {
+    targets.targets().keys().any(|family_id| {
         approved_families.contains(family_id) && ready_families.contains(family_id)
     })
 }
