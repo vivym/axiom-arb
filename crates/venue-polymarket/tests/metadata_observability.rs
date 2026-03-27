@@ -27,21 +27,36 @@ async fn successful_metadata_refresh_records_revision_snapshot_and_discovered_co
             .map(String::as_str),
         Some("1")
     );
-    assert!(refresh_span
-        .field(field_keys::METADATA_SNAPSHOT_HASH)
-        .is_some());
+    assert!(
+        refresh_span
+            .field(field_keys::METADATA_SNAPSHOT_HASH)
+            .is_some()
+    );
     assert_eq!(
         refresh_span
             .field(field_keys::REFRESH_RESULT)
             .map(String::as_str),
         Some("\"success\"")
     );
-    assert!(refresh_span
-        .field(field_keys::REFRESH_DURATION_MS)
-        .is_some());
-    assert!(refresh_span
-        .field(field_keys::DISCOVERED_FAMILY_COUNT)
-        .is_some());
+    assert!(
+        refresh_span
+            .field(field_keys::REFRESH_DURATION_MS)
+            .is_some()
+    );
+    assert!(
+        refresh_span
+            .field(field_keys::DISCOVERED_FAMILY_COUNT)
+            .is_some()
+    );
+    assert_eq!(
+        observability.registry().snapshot().gauge(
+            observability
+                .metrics()
+                .neg_risk_family_discovered_count
+                .key()
+        ),
+        Some(1.0)
+    );
     assert_eq!(
         observability.registry().snapshot().counter(
             observability
@@ -72,9 +87,11 @@ async fn failed_metadata_refresh_does_not_publish_new_discovered_family_gauge() 
             .map(String::as_str),
         Some("\"failure\"")
     );
-    assert!(refresh_span
-        .field(field_keys::REFRESH_DURATION_MS)
-        .is_some());
+    assert!(
+        refresh_span
+            .field(field_keys::REFRESH_DURATION_MS)
+            .is_some()
+    );
 
     assert_eq!(
         observability.registry().snapshot().gauge(

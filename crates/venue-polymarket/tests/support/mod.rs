@@ -4,20 +4,21 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use domain::{SignatureType, WalletRoute};
 use observability::RuntimeMetricsRecorder;
 use reqwest::Url;
 use tracing::{
+    Event, Metadata, Subscriber,
     field::{Field, Visit},
     span::{Attributes, Id, Record},
-    Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
     L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext, VenueProducerInstrumentation,
@@ -437,10 +438,31 @@ pub struct ScriptedServer {
 impl ScriptedServer {
     fn spawn(scripted_responses: Vec<ScriptedResponse>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        listener
+            .set_nonblocking(true)
+            .expect("configure test server");
         let address = listener.local_addr().expect("server addr");
+        let expected_requests = scripted_responses.len();
         let handle = thread::spawn(move || {
-            for response in scripted_responses {
-                let (mut stream, _) = listener.accept().expect("accept request");
+            for (request_index, response) in scripted_responses.into_iter().enumerate() {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                panic!(
+                                    "timed out waiting for scripted request {} of {}",
+                                    request_index + 1,
+                                    expected_requests
+                                );
+                            }
+
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(err) => panic!("accept request: {err}"),
+                    }
+                };
                 let request = read_request(&mut stream);
 
                 assert!(
@@ -481,6 +503,10 @@ impl ScriptedServer {
 impl Drop for ScriptedServer {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
+            if thread::panicking() {
+                return;
+            }
+
             handle.join().expect("join scripted server thread");
         }
     }
