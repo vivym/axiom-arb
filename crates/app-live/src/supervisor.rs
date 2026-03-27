@@ -338,6 +338,7 @@ impl AppSupervisor {
     }
 
     pub fn resume_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
+        self.last_emitted_rollout_evidence = None;
         let span = tracing::info_span!(
             span_names::APP_SUPERVISOR_RESUME,
             app_mode = field::Empty,

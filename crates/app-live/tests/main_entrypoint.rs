@@ -339,6 +339,10 @@ fn live_entrypoint_persists_operator_target_revision_anchor_during_startup() {
         combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
         "{combined}"
     );
+    assert!(
+        combined.contains("evidence_source=\"bootstrap\""),
+        "{combined}"
+    );
 
     let progress = database
         .runtime_progress()
@@ -439,6 +443,10 @@ fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
     );
     assert!(
         combined.contains("neg_risk_live_state_source=\"durable_restore\""),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("evidence_source=\"snapshot\""),
         "{combined}"
     );
 }
