@@ -390,8 +390,9 @@ pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
 where
     S: BootstrapSource,
 {
-    let durable_state =
-        load_durable_live_startup_state(operator_target_revision_for(&neg_risk_live_targets))?;
+    let operator_target_revision =
+        operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
+    let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
             AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
@@ -419,7 +420,9 @@ where
         supervisor.seed_neg_risk_live_ready_family(&family_id);
     }
 
-    supervisor.run_startup().map_err(Into::into)
+    let result = supervisor.run_startup()?;
+    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    Ok(result)
 }
 
 pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
@@ -463,7 +466,6 @@ fn load_durable_live_startup_state(
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         let progress = RuntimeProgressRepo.current(&pool).await?;
-        validate_operator_target_revision(progress.as_ref(), operator_target_revision)?;
         let attempts = ExecutionAttemptRepo.list_live_attempts(&pool).await?;
         let submissions_by_attempt = LiveSubmissionRepo
             .list_for_attempts(
@@ -481,11 +483,15 @@ fn load_durable_live_startup_state(
             .collect::<Result<Vec<_>, _>>()?;
         let live_execution_records =
             durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
+        let has_durable_follow_up_work =
+            !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty();
+        validate_operator_target_revision(
+            progress.as_ref(),
+            operator_target_revision,
+            has_durable_follow_up_work,
+        )?;
         let (last_journal_seq, last_state_version, published_snapshot_id) =
-            durable_progress_anchor(
-                progress,
-                !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty(),
-            )?;
+            durable_progress_anchor(progress, has_durable_follow_up_work)?;
 
         Ok(DurableLiveStartupState {
             last_journal_seq,
@@ -504,10 +510,15 @@ fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> 
 fn validate_operator_target_revision(
     progress: Option<&RuntimeProgressRow>,
     expected_revision: Option<&str>,
+    has_durable_follow_up_work: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(expected_revision) = expected_revision else {
         return Ok(());
     };
+
+    if !has_durable_follow_up_work {
+        return Ok(());
+    }
 
     let Some(progress) = progress else {
         return Err(boxed_error(
@@ -524,6 +535,37 @@ fn validate_operator_target_revision(
             "operator target revision anchor is required when live operator targets are supplied",
         )),
     }
+}
+
+fn persist_operator_target_revision_anchor(
+    summary: &SupervisorSummary,
+    operator_target_revision: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(operator_target_revision) = operator_target_revision else {
+        return Ok(());
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        RuntimeProgressRepo
+            .record_progress(
+                &pool,
+                summary.last_journal_seq,
+                i64::try_from(summary.last_state_version).map_err(|_| {
+                    boxed_error(format!(
+                        "startup state version {} does not fit in i64",
+                        summary.last_state_version
+                    ))
+                })?,
+                summary.published_snapshot_id.as_deref(),
+                Some(operator_target_revision),
+            )
+            .await
+            .map_err(Into::into)
+    })
 }
 
 fn durable_live_execution_records(
@@ -718,6 +760,7 @@ mod tests {
                 operator_target_revision: Some("targets-rev-stale".to_owned()),
             }),
             Some("targets-rev-current"),
+            true,
         )
         .unwrap_err();
 
@@ -725,5 +768,10 @@ mod tests {
             err.to_string().contains("operator target revision"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn operator_targets_allow_missing_revision_anchor_without_follow_up_work() {
+        validate_operator_target_revision(None, Some("targets-rev-current"), false).unwrap();
     }
 }

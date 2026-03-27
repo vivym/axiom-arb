@@ -2,7 +2,7 @@ use app_live::load_neg_risk_live_targets;
 use domain::ExecutionMode;
 use observability::span_names;
 use persistence::{
-    models::{ExecutionAttemptRow, LiveSubmissionRecordRow},
+    models::{ExecutionAttemptRow, LiveSubmissionRecordRow, RuntimeProgressRow},
     run_migrations, ExecutionAttemptRepo, LiveSubmissionRepo, RuntimeProgressRepo,
 };
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -289,13 +289,12 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
 }
 
 #[test]
-fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
+fn live_entrypoint_persists_operator_target_revision_anchor_during_startup() {
     let database = TestDatabase::new();
     let neg_risk_live_targets = valid_neg_risk_live_targets_json();
     let revision = load_neg_risk_live_targets(Some(neg_risk_live_targets))
         .expect("targets should parse")
         .revision;
-    database.seed_runtime_progress(Some(revision.as_str()));
     let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
         Some(neg_risk_live_targets),
@@ -304,7 +303,6 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         Some(valid_local_signer_config_json()),
         Some(database.database_url()),
     );
-    database.cleanup();
 
     assert!(
         output.status.success(),
@@ -324,12 +322,23 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
         "{combined}"
     );
+
+    let progress = database
+        .runtime_progress()
+        .expect("startup should persist runtime progress");
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some(revision.as_str())
+    );
+    assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-0"));
+
+    database.cleanup();
 }
 
 #[test]
 fn live_entrypoint_requires_matching_operator_target_revision_anchor() {
     let database = TestDatabase::new();
-    database.seed_runtime_progress(Some("targets-rev-stale"));
+    database.seed_durable_live_execution_record(Some("targets-rev-stale"));
     let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
         Some(valid_neg_risk_live_targets_json()),
@@ -338,7 +347,6 @@ fn live_entrypoint_requires_matching_operator_target_revision_anchor() {
         Some(valid_local_signer_config_json()),
         Some(database.database_url()),
     );
-    database.cleanup();
 
     assert!(
         !output.status.success(),
@@ -350,12 +358,14 @@ fn live_entrypoint_requires_matching_operator_target_revision_anchor() {
     let combined = format!("{stdout}{stderr}");
 
     assert!(combined.contains("operator target revision"), "{combined}");
+
+    database.cleanup();
 }
 
 #[test]
 fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
     let database = TestDatabase::new();
-    database.seed_durable_live_execution_record();
+    database.seed_durable_live_execution_record(None);
     let output = app_live_output_raw_env_with_signer_and_database_url(
         "live",
         None,
@@ -663,13 +673,14 @@ impl TestDatabase {
         &self.database_url
     }
 
-    fn seed_durable_live_execution_record(&self) {
+    fn seed_durable_live_execution_record(&self, operator_target_revision: Option<&str>) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                self.seed_runtime_progress_async(None).await;
+                self.seed_runtime_progress_async(operator_target_revision)
+                    .await;
                 ExecutionAttemptRepo
                     .append(
                         &self.pool,
@@ -711,15 +722,17 @@ impl TestDatabase {
             });
     }
 
-    fn seed_runtime_progress(&self, operator_target_revision: Option<&str>) {
+    fn runtime_progress(&self) -> Option<RuntimeProgressRow> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                self.seed_runtime_progress_async(operator_target_revision)
-                    .await;
-            });
+                RuntimeProgressRepo
+                    .current(&self.pool)
+                    .await
+                    .expect("runtime progress lookup should succeed")
+            })
     }
 
     async fn seed_runtime_progress_async(&self, operator_target_revision: Option<&str>) {
