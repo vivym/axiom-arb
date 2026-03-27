@@ -968,12 +968,7 @@ impl InstrumentedNegRiskFamilyRepo {
         pool: &PgPool,
         discovery_revision: i64,
     ) -> Result<()> {
-        reconcile_current_family_view_with_instrumentation(
-            pool,
-            discovery_revision,
-            &self.instrumentation,
-        )
-        .await
+        reconcile_current_family_view_with_instrumentation(pool, discovery_revision).await
     }
 }
 
@@ -1257,18 +1252,12 @@ pub async fn persist_discovery_snapshot(
 }
 
 pub async fn reconcile_current_family_view(pool: &PgPool, discovery_revision: i64) -> Result<()> {
-    reconcile_current_family_view_with_instrumentation(
-        pool,
-        discovery_revision,
-        &NegRiskPersistenceInstrumentation::disabled(),
-    )
-    .await
+    reconcile_current_family_view_with_instrumentation(pool, discovery_revision).await
 }
 
 async fn reconcile_current_family_view_with_instrumentation(
     pool: &PgPool,
     discovery_revision: i64,
-    instrumentation: &NegRiskPersistenceInstrumentation,
 ) -> Result<()> {
     let _ = discovery_revision;
 
@@ -1300,7 +1289,6 @@ async fn reconcile_current_family_view_with_instrumentation(
     .await?;
 
     tx.commit().await?;
-    record_authoritative_neg_risk_current_view_metrics(pool, instrumentation).await?;
     Ok(())
 }
 

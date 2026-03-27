@@ -205,7 +205,7 @@ async fn stores_family_validation_revision_and_explainability_fields_case() {
     db.cleanup().await;
 }
 
-async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view_metrics_case() {
+async fn persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
@@ -213,19 +213,6 @@ async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view
     let repo = NegRiskFamilyRepo::with_instrumentation(NegRiskPersistenceInstrumentation::enabled(
         observability.recorder(),
     ));
-
-    repo.upsert_validation(&db.pool, &sample_validation("family-1"))
-        .await
-        .unwrap();
-
-    let mut excluded = sample_validation("family-2");
-    excluded.validation_status = "excluded".to_owned();
-    excluded.exclusion_reason = Some("placeholder_outcome".to_owned());
-    repo.upsert_validation(&db.pool, &excluded).await.unwrap();
-
-    repo.upsert_halt(&db.pool, &sample_halt("family-1", "sha256:snapshot-a"))
-        .await
-        .unwrap();
 
     persist_discovery_snapshot(
         &db.pool,
@@ -240,15 +227,15 @@ async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view
     let snapshot = observability.registry().snapshot();
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-        Some(1.0)
+        None
     );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
-        Some(1.0)
+        None
     );
     assert_eq!(
         snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-        Some(1.0)
+        None
     );
     assert_eq!(
         snapshot.gauge(
@@ -368,8 +355,8 @@ async fn stores_family_validation_revision_and_explainability_fields() {
 }
 
 #[tokio::test]
-async fn persistence_validation_and_halt_upserts_emit_authoritative_current_view_metrics() {
-    persistence_validation_and_halt_upserts_emit_authoritative_current_view_metrics_case().await;
+async fn persistence_reconcile_current_family_view_does_not_emit_current_view_metrics() {
+    persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case().await;
 }
 
 #[tokio::test]
@@ -388,6 +375,11 @@ mod negrisk {
     #[tokio::test]
     async fn stores_family_validation_revision_and_explainability_fields() {
         stores_family_validation_revision_and_explainability_fields_case().await;
+    }
+
+    #[tokio::test]
+    async fn reconcile_current_family_view_does_not_emit_current_view_metrics() {
+        persistence_reconcile_current_family_view_does_not_emit_current_view_metrics_case().await;
     }
 
     #[tokio::test]
@@ -549,7 +541,7 @@ mod negrisk {
         let snapshot = observability.registry().snapshot();
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-            Some(1.0)
+            Some(2.0)
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
@@ -557,7 +549,7 @@ mod negrisk {
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-            Some(1.0)
+            Some(2.0)
         );
 
         db.cleanup().await;
@@ -609,7 +601,7 @@ mod negrisk {
         let snapshot = observability.registry().snapshot();
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_included_count.key()),
-            Some(0.0)
+            Some(1.0)
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_excluded_count.key()),
@@ -617,7 +609,7 @@ mod negrisk {
         );
         assert_eq!(
             snapshot.gauge(observability.metrics().neg_risk_family_halt_count.key()),
-            Some(0.0)
+            Some(1.0)
         );
 
         db.cleanup().await;
