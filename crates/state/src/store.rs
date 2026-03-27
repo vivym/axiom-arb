@@ -42,6 +42,12 @@ pub(crate) struct FullSetAnchor {
     pub open_orders: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFamilyBackfill {
+    cursor: String,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StateStore {
     state_version: u64,
@@ -54,6 +60,7 @@ pub struct StateStore {
     applied_fact_journal: BTreeMap<FactKey, i64>,
     consumed_journal: BTreeMap<i64, FactKey>,
     family_discovery_records: BTreeMap<String, FamilyDiscoveryRecord>,
+    pending_family_backfills: BTreeMap<String, PendingFamilyBackfill>,
     pending_reconcile_anchors: BTreeMap<String, PendingReconcileAnchor>,
     runtime_attention_anchors: BTreeMap<String, RuntimeAttentionAnchor>,
     open_orders: HashMap<OrderId, Order>,
@@ -78,6 +85,7 @@ impl StateStore {
             applied_fact_journal: BTreeMap::new(),
             consumed_journal: BTreeMap::new(),
             family_discovery_records: BTreeMap::new(),
+            pending_family_backfills: BTreeMap::new(),
             pending_reconcile_anchors: BTreeMap::new(),
             runtime_attention_anchors: BTreeMap::new(),
             open_orders: HashMap::new(),
@@ -440,6 +448,12 @@ impl StateStore {
             record.backfill_cursor = existing.backfill_cursor.clone();
             record.backfill_completed_at = existing.backfill_completed_at;
         }
+        if let Some(pending_backfill) = self
+            .pending_family_backfills
+            .remove(record.family_id.as_str())
+        {
+            record.record_backfill(pending_backfill.cursor, pending_backfill.completed_at);
+        }
 
         self.family_discovery_records
             .insert(record.family_id.as_str().to_owned(), record);
@@ -460,11 +474,14 @@ impl StateStore {
             return;
         }
 
-        let mut record =
-            FamilyDiscoveryRecord::new(family_id.to_owned().into(), source, observed_at);
-        record.record_backfill(cursor, completed_at);
-        self.family_discovery_records
-            .insert(family_id.to_owned(), record);
+        let _ = (source, observed_at);
+        self.pending_family_backfills.insert(
+            family_id.to_owned(),
+            PendingFamilyBackfill {
+                cursor,
+                completed_at,
+            },
+        );
     }
 
     pub(crate) fn record_runtime_attention(&mut self, anchor: RuntimeAttentionAnchor) {

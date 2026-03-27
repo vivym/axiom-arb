@@ -106,7 +106,7 @@ fn candidate_projection_failure_does_not_block_fullset_negrisk_publication() {
 }
 
 #[test]
-fn backfill_without_prior_discovery_keeps_authoritative_fact_anchor() {
+fn backfill_without_prior_discovery_does_not_create_discovered_family_or_candidate_view() {
     let mut store = StateStore::new();
     apply_anchor_event(&mut store, 17);
 
@@ -124,20 +124,23 @@ fn backfill_without_prior_discovery_keeps_authoritative_fact_anchor() {
         )
         .unwrap();
 
-    let discoveries = store.family_discovery_records();
-    assert_eq!(discoveries.len(), 1);
-    assert_eq!(discoveries[0].source.source_kind, "family_backfill");
-    assert_eq!(discoveries[0].source.source_session_id, "session-discovery");
-    assert_eq!(discoveries[0].source.source_event_id, "evt-2");
-    assert_eq!(
-        discoveries[0].source.normalizer_version,
-        "v1-family-backfill"
+    assert!(store.family_discovery_records().is_empty());
+
+    let publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::ready("candidate-pub-18"),
     );
+
+    assert!(publication.ready);
+    assert_eq!(publication.failure_reason, None);
+    assert_eq!(publication.lag_reason, None);
     assert_eq!(
-        discoveries[0].discovered_at,
-        Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap()
+        publication
+            .view
+            .as_ref()
+            .map(|view| view.discovery_records.len()),
+        Some(0)
     );
-    assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-2"));
 }
 
 #[test]

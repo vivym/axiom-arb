@@ -130,6 +130,55 @@ fn candidate_publication_uses_separate_readiness_path_from_published_snapshot() 
 }
 
 #[test]
+fn candidate_publication_ready_materializes_candidate_view_for_discovered_families() {
+    let mut store = sample_store_with_anchored_fullset();
+    StateApplier::new(&mut store)
+        .apply(
+            18,
+            ExternalFactEvent::family_discovery_observed(
+                "session-discovery",
+                "evt-1",
+                "family-a",
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::ready("candidate-pub-12"),
+    );
+
+    assert!(candidate_publication.ready);
+    assert_eq!(candidate_publication.failure_reason, None);
+    assert_eq!(candidate_publication.lag_reason, None);
+    assert_eq!(
+        candidate_publication
+            .view
+            .as_ref()
+            .map(|view| view.discovery_records[0].family_id.as_str()),
+        Some("family-a")
+    );
+}
+
+#[test]
+fn candidate_publication_lagging_sets_lag_reason_without_materializing_view() {
+    let store = sample_store_with_anchored_fullset();
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::lagging("candidate-pub-13", "candidate projection lagging"),
+    );
+
+    assert!(!candidate_publication.ready);
+    assert_eq!(candidate_publication.failure_reason, None);
+    assert_eq!(
+        candidate_publication.lag_reason.as_deref(),
+        Some("candidate projection lagging")
+    );
+    assert!(candidate_publication.view.is_none());
+}
+
+#[test]
 fn published_snapshot_exposes_family_level_rollout_readiness() {
     let snapshot = PublishedSnapshot {
         snapshot_id: "snapshot-12".to_owned(),
