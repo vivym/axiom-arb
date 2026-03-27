@@ -61,9 +61,20 @@ impl FamilyDiscoveryRecord {
         completed_at: Option<DateTime<Utc>>,
     ) {
         self.backfill_cursor = Some(cursor.into());
-        if completed_at.is_some() {
-            self.backfill_completed_at = completed_at;
-        }
+        self.backfill_completed_at =
+            max_completion_timestamp(self.backfill_completed_at, completed_at);
+    }
+}
+
+fn max_completion_timestamp(
+    current: Option<DateTime<Utc>>,
+    candidate: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
     }
 }
 

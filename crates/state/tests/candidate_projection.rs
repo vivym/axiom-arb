@@ -255,6 +255,71 @@ fn backfill_completion_does_not_regress_from_complete_to_incomplete() {
     );
 }
 
+#[test]
+fn backfill_completion_keeps_newest_terminal_timestamp() {
+    let mut store = StateStore::new();
+    apply_anchor_event(&mut store, 17);
+
+    StateApplier::new(&mut store)
+        .apply(
+            18,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-2",
+                "family-a",
+                "cursor-2",
+                true,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            19,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-3",
+                "family-a",
+                "cursor-3",
+                true,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 5, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            20,
+            ExternalFactEvent::family_discovery_observed(
+                "session-discovery",
+                "evt-4",
+                "family-a",
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 7, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+    StateApplier::new(&mut store)
+        .apply(
+            21,
+            ExternalFactEvent::family_backfill_observed(
+                "session-discovery",
+                "evt-5",
+                "family-a",
+                "cursor-4",
+                true,
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 4, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let discoveries = store.family_discovery_records();
+    assert_eq!(discoveries.len(), 1);
+    assert_eq!(discoveries[0].backfill_cursor.as_deref(), Some("cursor-4"));
+    assert_eq!(
+        discoveries[0].backfill_completed_at,
+        Some(Utc.with_ymd_and_hms(2026, 3, 27, 9, 6, 0).unwrap())
+    );
+}
+
 fn apply_anchor_event(store: &mut StateStore, journal_seq: i64) {
     StateApplier::new(store)
         .apply(

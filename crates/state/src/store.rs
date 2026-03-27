@@ -475,9 +475,8 @@ impl StateStore {
             .entry(family_id.to_owned())
             .and_modify(|pending| {
                 pending.cursor = cursor.clone();
-                if completed_at.is_some() {
-                    pending.completed_at = completed_at;
-                }
+                pending.completed_at =
+                    merge_completion_timestamp(pending.completed_at, completed_at);
             })
             .or_insert(PendingFamilyBackfill {
                 cursor,
@@ -505,6 +504,18 @@ impl StateStore {
             committed_journal_seq,
             open_orders: self.current_open_order_ids(),
         });
+    }
+}
+
+fn merge_completion_timestamp(
+    current: Option<chrono::DateTime<chrono::Utc>>,
+    candidate: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
     }
 }
 
