@@ -14,6 +14,43 @@ pub struct NegRiskCandidateSummary {
     pub operator_target_revision: Option<String>,
 }
 
+pub fn summarize_negrisk_candidate_chain(
+    candidate_target_sets: &[CandidateTargetSetRow],
+    adoptable_target_revisions: &[AdoptableTargetRevisionRow],
+    adoption_provenance: &[CandidateAdoptionProvenanceRow],
+) -> NegRiskCandidateSummary {
+    let latest_candidate_revision = candidate_target_sets
+        .last()
+        .map(|row| row.candidate_revision.clone());
+    let latest_adoptable_revision = latest_candidate_revision.as_deref().and_then(|candidate| {
+        adoptable_target_revisions
+            .iter()
+            .rev()
+            .find(|row| row.candidate_revision == candidate)
+            .map(|row| row.adoptable_revision.clone())
+    });
+    let operator_target_revision = match (
+        latest_candidate_revision.as_deref(),
+        latest_adoptable_revision.as_deref(),
+    ) {
+        (Some(candidate), Some(adoptable)) => adoption_provenance
+            .iter()
+            .rev()
+            .find(|row| row.candidate_revision == candidate && row.adoptable_revision == adoptable)
+            .map(|row| row.operator_target_revision.clone()),
+        _ => None,
+    };
+
+    NegRiskCandidateSummary {
+        candidate_target_set_count: candidate_target_sets.len() as u64,
+        adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
+        adoption_provenance_count: adoption_provenance.len() as u64,
+        latest_candidate_revision,
+        latest_adoptable_revision,
+        operator_target_revision,
+    }
+}
+
 pub async fn load_negrisk_candidate_target_sets(
     pool: &PgPool,
 ) -> Result<Vec<CandidateTargetSetRow>, PersistenceError> {
@@ -103,18 +140,9 @@ pub async fn load_negrisk_candidate_summary(
     let adoptable_target_revisions = load_negrisk_adoptable_target_revisions(pool).await?;
     let adoption_provenance = load_negrisk_candidate_adoption_provenance(pool).await?;
 
-    Ok(NegRiskCandidateSummary {
-        candidate_target_set_count: candidate_target_sets.len() as u64,
-        adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
-        adoption_provenance_count: adoption_provenance.len() as u64,
-        latest_candidate_revision: candidate_target_sets
-            .last()
-            .map(|row| row.candidate_revision.clone()),
-        latest_adoptable_revision: adoptable_target_revisions
-            .last()
-            .map(|row| row.adoptable_revision.clone()),
-        operator_target_revision: adoption_provenance
-            .last()
-            .map(|row| row.operator_target_revision.clone()),
-    })
+    Ok(summarize_negrisk_candidate_chain(
+        &candidate_target_sets,
+        &adoptable_target_revisions,
+        &adoption_provenance,
+    ))
 }

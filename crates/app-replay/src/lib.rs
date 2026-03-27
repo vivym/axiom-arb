@@ -15,7 +15,8 @@ mod negrisk_summary;
 
 pub use negrisk_candidates::{
     load_negrisk_adoptable_target_revisions, load_negrisk_candidate_adoption_provenance,
-    load_negrisk_candidate_summary, load_negrisk_candidate_target_sets, NegRiskCandidateSummary,
+    load_negrisk_candidate_summary, load_negrisk_candidate_target_sets,
+    summarize_negrisk_candidate_chain, NegRiskCandidateSummary,
 };
 pub use negrisk_summary::{
     load_member_vector_from_journal, load_neg_risk_foundation_summary,

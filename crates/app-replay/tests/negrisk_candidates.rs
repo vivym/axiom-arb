@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use app_replay::{
     load_negrisk_adoptable_target_revisions, load_negrisk_candidate_adoption_provenance,
-    load_negrisk_candidate_summary, load_negrisk_candidate_target_sets, NegRiskCandidateSummary,
+    load_negrisk_candidate_summary, load_negrisk_candidate_target_sets,
+    summarize_negrisk_candidate_chain, NegRiskCandidateSummary,
 };
 use persistence::{
     models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
@@ -169,6 +170,53 @@ async fn replay_keeps_candidate_generation_advisory_without_provenance() {
     assert_eq!(summary.operator_target_revision, None);
 
     db.cleanup().await;
+}
+
+#[test]
+fn summary_is_anchored_to_latest_candidate_chain_only() {
+    let summary = summarize_negrisk_candidate_chain(
+        &[
+            CandidateTargetSetRow {
+                candidate_revision: "candidate-9".to_owned(),
+                snapshot_id: "snapshot-9".to_owned(),
+                source_revision: "discovery-9".to_owned(),
+                payload: json!({ "candidate_revision": "candidate-9" }),
+            },
+            CandidateTargetSetRow {
+                candidate_revision: "candidate-10".to_owned(),
+                snapshot_id: "snapshot-10".to_owned(),
+                source_revision: "discovery-10".to_owned(),
+                payload: json!({ "candidate_revision": "candidate-10" }),
+            },
+        ],
+        &[AdoptableTargetRevisionRow {
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+            rendered_operator_target_revision: "targets-rev-9".to_owned(),
+            payload: json!({
+                "adoptable_revision": "adoptable-9",
+                "candidate_revision": "candidate-9",
+                "rendered_operator_target_revision": "targets-rev-9",
+            }),
+        }],
+        &[CandidateAdoptionProvenanceRow {
+            operator_target_revision: "targets-rev-9".to_owned(),
+            adoptable_revision: "adoptable-9".to_owned(),
+            candidate_revision: "candidate-9".to_owned(),
+        }],
+    );
+
+    assert_eq!(
+        summary,
+        NegRiskCandidateSummary {
+            candidate_target_set_count: 2,
+            adoptable_target_revision_count: 1,
+            adoption_provenance_count: 1,
+            latest_candidate_revision: Some("candidate-10".to_owned()),
+            latest_adoptable_revision: None,
+            operator_target_revision: None,
+        }
+    );
 }
 
 async fn seed_candidate_chain(
