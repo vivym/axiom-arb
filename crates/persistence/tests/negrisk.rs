@@ -975,10 +975,7 @@ mod negrisk {
             return;
         }
 
-        let output = spawn_helper(
-            DISABLED_REFRESH_TEST_NAME,
-            "child",
-        );
+        let output = spawn_helper(DISABLED_REFRESH_TEST_NAME, "child");
 
         assert!(
             output.status.success(),

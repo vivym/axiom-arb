@@ -99,7 +99,10 @@ fn runtime_metrics_keep_wave1c_control_plane_contracts() {
         "axiom_neg_risk_family_discovered_count"
     );
     assert_eq!(
-        metrics.neg_risk_rollout_parity_mismatch_count.key().as_str(),
+        metrics
+            .neg_risk_rollout_parity_mismatch_count
+            .key()
+            .as_str(),
         "axiom_neg_risk_rollout_parity_mismatch_total"
     );
 }

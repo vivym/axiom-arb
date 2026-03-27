@@ -4,9 +4,8 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        mpsc,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -16,9 +15,9 @@ use domain::{SignatureType, WalletRoute};
 use observability::RuntimeMetricsRecorder;
 use reqwest::Url;
 use tracing::{
-    Event, Metadata, Subscriber,
     field::{Field, Visit},
     span::{Attributes, Id, Record},
+    Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
     L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext, VenueProducerInstrumentation,
