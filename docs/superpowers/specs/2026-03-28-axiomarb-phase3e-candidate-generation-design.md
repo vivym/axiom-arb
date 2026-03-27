@@ -235,6 +235,8 @@ That means:
 - `DiscoverySupervisor` consumes that candidate-specific projection and its dirty-domain notifications
 - candidate-generation updates must not directly wake `DecisionSupervisor`'s live execution scheduling path unless an existing shared trading domain truly changed
 - candidate-generation work remains route-local to the discovery pipeline until an explicit adoption event occurs
+- candidate projection readiness, lag, or failure must never become an additional publish barrier for the existing `PublishedSnapshot` that gates `fullset_ready` or `negrisk_ready`
+- if candidate projection materialization is stale or failed, only `DiscoverySupervisor` should degrade or fail closed; existing live execution snapshot publication and dispatch semantics remain governed by the existing route-local readiness contract
 
 ### 7.3 Bridge Flow
 
@@ -249,6 +251,8 @@ This boundary is intentional:
 - live execution still begins only after explicit adoption into the existing operator-target surface
 - explicit adoption must remain a startup-scoped or controlled-restart-scoped action
 - in-process adoption must not hot-swap the active operator-target revision in `Phase 3e`
+- once an adoptable revision is chosen for startup-scoped activation, the system must durably preserve a single provenance chain `operator_target_revision -> adoptable_revision -> candidate_revision`
+- that provenance chain must be restorable for startup, replay, and postmortem explanation; a candidate-derived operator-target revision may not become anonymously active
 
 ### 7.4 Replay And Drift Anchors
 
@@ -280,11 +284,13 @@ The recommended contract is:
 - trading truth remains in `event_journal` plus the existing authoritative state/persistence surfaces
 - candidate-generation outputs are materialized into dedicated durable repositories or tables keyed by revision and snapshot anchor
 - those materialized candidate artifacts are replay-side derived products, not a second trading truth path
+- any adopted candidate-derived operator-target revision must also produce a durable adoption-provenance record keyed by `operator_target_revision` and linking back to its `adoptable_revision` and `candidate_revision`
 
 At minimum, durable candidate materialization should record:
 
 - `candidate_revision`
 - `adoptable_revision` where applicable
+- `operator_target_revision` where adoption has occurred
 - `snapshot_id`
 - policy versions
 - rendered payload
@@ -296,12 +302,17 @@ Restart semantics should be:
 - runtime startup may restore the latest materialized candidate/adoptable artifacts for status, replay, and operator tooling
 - missing candidate artifacts must not block live runtime startup by default
 - if a later operator adoption workflow declares a particular adoptable revision as required, that workflow must fail closed when the durable artifact is missing rather than silently regenerating or guessing
+- if startup or replay encounters a candidate-derived `operator_target_revision`, the matching adoption-provenance linkage to `adoptable_revision` and `candidate_revision` must also be restorable or the adoption-aware path must fail closed
 
 ## 8. Core Objects And Contracts
 
 ### 8.1 FamilyDiscoveryRecord
 
 This is the repo-owned record of family universe discovery.
+
+It belongs to the authoritative discovery-domain projection produced from journaled discovery facts by the `StateApplier` / published-snapshot path.
+
+It is not merely a derived candidate artifact, and `CandidateTargetSet` must reference this family-universe truth rather than redefine it in a second repository-owned truth path.
 
 It should include:
 
@@ -389,6 +400,7 @@ It should include:
 
 - `candidate_revision`
 - `adoptable_revision`
+- `rendered_operator_target_revision`
 - `rendered_live_targets`
 - `rendered_at`
 - `compatibility_summary`
@@ -401,6 +413,8 @@ It is not itself an execution authorization.
 Adopting it does not immediately mutate the in-process live target set.
 
 It only becomes the active operator-target revision through the same startup/restart-scoped activation boundary established in `Phase 3d`.
+
+When adoption does occur, the persisted `operator_target_revision` must remain durably linked back to this `adoptable_revision` and its source `candidate_revision`.
 
 ## 9. Conservative Pricing And Selection Policy
 
@@ -527,6 +541,7 @@ Verify:
 - compatibility warnings are preserved
 - rendered output maps cleanly onto the existing operator-target surface
 - adoption of an adoptable revision requires startup or controlled restart rather than hot reload
+- candidate-derived `operator_target_revision` values preserve a durable provenance chain back to `adoptable_revision` and `candidate_revision`
 
 ### 11.5 Daemon Integration Tests
 
@@ -546,6 +561,7 @@ Verify:
 - source, validation, pricing, and bridge drift are distinguishable
 - adoption bridge revisions remain explainable and replayable
 - regenerated candidate artifacts match persisted materialized artifacts or surface explicit drift
+- candidate-derived startup provenance can be reconstructed from `operator_target_revision -> adoptable_revision -> candidate_revision`
 
 ## 12. Acceptance Criteria
 
@@ -558,6 +574,7 @@ Verify:
 - the system can render an `AdoptableTargetRevision` bridge artifact suitable for operator/control-plane adoption
 - candidate generation is durable, replayable, and observable
 - adoption remains startup-scoped / controlled-restart-scoped rather than in-process hot reload
+- candidate-derived active operator-target revisions preserve a durable provenance chain back to adoptable and candidate revisions
 - candidate-generation updates do not directly perturb the existing live execution dispatch path
 - future ranking and budget-aware selection can layer on top without redesigning the `Phase 3e` objects
 
