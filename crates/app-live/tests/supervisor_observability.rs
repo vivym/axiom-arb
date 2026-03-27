@@ -234,6 +234,27 @@ fn bootstrap_completion_forwarder_does_not_reemit_neg_risk_producer_metrics() {
 }
 
 #[test]
+fn bootstrap_completion_forwarder_emits_neutral_rollout_provenance_without_snapshot_claim() {
+    let observability = bootstrap_observability("app-live-test");
+    let recorder = observability.recorder();
+    let result = sample_neutral_rollout_result();
+
+    let (captured_spans, ()) =
+        capture_spans(|| emit_bootstrap_completion_observability(&recorder, &result));
+
+    let completion_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_BOOTSTRAP_COMPLETE)
+        .expect("bootstrap completion span missing");
+    assert_eq!(
+        completion_span
+            .field(field_keys::EVIDENCE_SOURCE)
+            .map(String::as_str),
+        Some("\"neutral\"")
+    );
+}
+
+#[test]
 fn flush_dispatch_records_dispatcher_backlog_from_pending_dirty_records() {
     let observability = bootstrap_observability("app-live-test");
     let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
@@ -585,6 +606,33 @@ fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
             published_snapshot_committed_journal_seq: Some(12),
             neg_risk_rollout_evidence: Some(sample_bootstrap_rollout_evidence("snapshot-7")),
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::Bootstrap,
+        },
+    }
+}
+
+fn sample_neutral_rollout_result() -> AppRunResult {
+    AppRunResult {
+        runtime: AppRuntime::new(AppRuntimeMode::Paper),
+        report: state::ReconcileReport {
+            succeeded: true,
+            promoted_from_bootstrap: false,
+            remote_applied: false,
+            attention: Vec::new(),
+        },
+        summary: SupervisorSummary {
+            fullset_mode: domain::ExecutionMode::Live,
+            negrisk_mode: domain::ExecutionMode::Shadow,
+            neg_risk_live_attempt_count: 0,
+            neg_risk_live_state_source: NegRiskLiveStateSource::DurableRestore,
+            bootstrap_status: BootstrapStatus::Ready,
+            runtime_mode: domain::RuntimeMode::Healthy,
+            pending_reconcile_count: 0,
+            last_journal_seq: 12,
+            last_state_version: 7,
+            published_snapshot_id: Some("snapshot-7".to_owned()),
+            published_snapshot_committed_journal_seq: Some(12),
+            neg_risk_rollout_evidence: Some(sample_rollout_evidence("snapshot-7")),
+            neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::Neutral,
         },
     }
 }

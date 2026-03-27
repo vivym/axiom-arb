@@ -446,7 +446,7 @@ fn live_entrypoint_restores_durable_live_state_from_non_empty_store() {
         "{combined}"
     );
     assert!(
-        combined.contains("evidence_source=\"snapshot\""),
+        combined.contains("evidence_source=\"neutral\""),
         "{combined}"
     );
 }

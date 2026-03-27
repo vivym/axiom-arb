@@ -70,6 +70,7 @@ pub enum NegRiskRolloutEvidenceSource {
     #[default]
     None,
     Bootstrap,
+    Neutral,
     Snapshot,
 }
 
@@ -78,6 +79,7 @@ impl NegRiskRolloutEvidenceSource {
         match self {
             Self::None => "none",
             Self::Bootstrap => "bootstrap",
+            Self::Neutral => "neutral",
             Self::Snapshot => "snapshot",
         }
     }
@@ -803,7 +805,7 @@ impl AppSupervisor {
                 snapshot_id: snapshot.snapshot_id.clone(),
                 ..NegRiskRolloutEvidence::default()
             },
-            NegRiskRolloutEvidenceSource::Snapshot,
+            NegRiskRolloutEvidenceSource::Neutral,
         )
     }
 

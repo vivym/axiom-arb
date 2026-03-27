@@ -36,7 +36,7 @@
 - Phase 3d upgrades `app-live` into a layered single-process daemon entrypoint with repo-owned ingress/dispatch/follow-up queues, startup-scoped operator-target revisions, daemon posture/backlog observability, and fail-closed startup ordering that restores truth before resuming ingest loops.
 - Real `Polymarket` websocket subscribe/auth/ping sends and `postHeartbeat(previous_heartbeat_id)` request wiring now exist for the daemon source adapters, but live target selection still comes from explicit operator inputs.
 - Fresh-boot promotion still depends on explicit operator inputs because the repository still does not have market-discovered `neg-risk` target generation.
-- Restart and resume require durable rollout evidence plus durable live-attempt, live-submission, and pending-reconcile anchors; they will not fabricate rebuilt readiness or rebuilt live attempts from env or in-memory sets.
+- Restart and resume still require durable live-attempt, live-submission, and pending-reconcile anchors; when durable rollout evidence is not loaded and no `negrisk` snapshot data is present, local observability now reports neutral rollout provenance instead of claiming snapshot-derived evidence.
 - `neg_risk_live_attempt_count` now counts durable bootstrap/resume live execution records.
 - `observability` now defines typed counters `axiom_neg_risk_live_submit_accepted_total` and `axiom_neg_risk_live_submit_ambiguous_total` for accepted-versus-ambiguous live submit closure accounting.
 - `observability` now also defines typed status signals `axiom_daemon_posture`, `axiom_ingress_backlog`, and `axiom_follow_up_backlog` for truthful daemon lifecycle reporting.
