@@ -1,3 +1,4 @@
+use app_live::config::load_polymarket_source_config;
 use app_live::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
     LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
@@ -18,8 +19,8 @@ fn parses_neg_risk_live_target_config_from_env_json() {
     "#;
 
     let config = load_neg_risk_live_targets(Some(json)).unwrap();
-    assert_eq!(config["family-a"].members.len(), 2);
-    assert_eq!(config["family-a"].members[0].token_id, "token-1");
+    assert_eq!(config.targets()["family-a"].members.len(), 2);
+    assert_eq!(config.targets()["family-a"].members[0].token_id, "token-1");
 }
 
 #[test]
@@ -27,6 +28,58 @@ fn missing_neg_risk_live_target_config_returns_empty_map() {
     let config = load_neg_risk_live_targets(None).unwrap();
 
     assert!(config.is_empty());
+}
+
+#[test]
+fn live_target_config_reports_stable_revision_for_startup_set() {
+    let json_a = r#"
+    [
+      {
+        "family_id": "family-b",
+        "members": [
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.4100", "quantity": "5.0" }
+        ]
+      },
+      {
+        "family_id": "family-a",
+        "members": [
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.410", "quantity": "5" },
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.4300", "quantity": "5.00" }
+        ]
+      }
+    ]
+    "#;
+    let json_b = r#"
+    [
+      {
+        "family_id": "family-a",
+        "members": [
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" },
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5.0" }
+        ]
+      },
+      {
+        "family_id": "family-b",
+        "members": [
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
+        ]
+      }
+    ]
+    "#;
+
+    let config_a = load_neg_risk_live_targets(Some(json_a)).unwrap();
+    let config_b = load_neg_risk_live_targets(Some(json_b)).unwrap();
+
+    assert_eq!(config_a.revision(), config_b.revision());
+    assert!(config_a.revision().starts_with("sha256:"));
+    assert_eq!(
+        config_a.targets().keys().cloned().collect::<Vec<_>>(),
+        vec!["family-a".to_owned(), "family-b".to_owned()]
+    );
+    assert_eq!(
+        config_a.targets()["family-a"].members[0].token_id,
+        "token-2"
+    );
 }
 
 #[test]
@@ -144,4 +197,181 @@ fn rejects_invalid_local_signer_config_json() {
         ConfigError::InvalidLocalSignerConfig { .. }
     ));
     assert!(error.to_string().contains("invalid local signer config"));
+}
+
+#[test]
+fn parses_polymarket_source_config_from_env_json() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let config = load_polymarket_source_config(Some(json)).unwrap();
+
+    assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
+    assert_eq!(
+        config.data_api_host.as_str(),
+        "https://data-api.polymarket.com/"
+    );
+    assert_eq!(
+        config.relayer_host.as_str(),
+        "https://relayer-v2.polymarket.com/"
+    );
+    assert_eq!(
+        config.market_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    );
+    assert_eq!(
+        config.user_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+    );
+    assert_eq!(config.heartbeat_interval_seconds, 15);
+    assert_eq!(config.relayer_poll_interval_seconds, 5);
+    assert_eq!(config.metadata_refresh_interval_seconds, 60);
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_non_http_hosts() {
+    let json = r#"
+    {
+      "clob_host": "ftp://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("clob_host"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_non_ws_urls() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "https://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("market_ws_url"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_zero_cadence() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 0,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("heartbeat_interval_seconds"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_non_root_host_path() {
+    let json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com/api",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let error = load_polymarket_source_config(Some(json)).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(error.to_string().contains("clob_host"));
+}
+
+#[test]
+fn rejects_polymarket_source_config_with_host_query_or_fragment() {
+    let query_json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com?foo=bar",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+    let fragment_json = r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com#fragment",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#;
+
+    let query_error = load_polymarket_source_config(Some(query_json)).unwrap_err();
+    let fragment_error = load_polymarket_source_config(Some(fragment_json)).unwrap_err();
+
+    assert!(matches!(
+        query_error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(matches!(
+        fragment_error,
+        ConfigError::InvalidPolymarketSourceConfig { .. }
+    ));
+    assert!(query_error.to_string().contains("clob_host"));
+    assert!(fragment_error.to_string().contains("data_api_host"));
 }

@@ -1276,6 +1276,7 @@ impl RuntimeProgressRepo {
         last_journal_seq: i64,
         last_state_version: i64,
         last_snapshot_id: Option<&str>,
+        operator_target_revision: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -1283,13 +1284,18 @@ impl RuntimeProgressRepo {
                 progress_key,
                 last_journal_seq,
                 last_state_version,
-                last_snapshot_id
+                last_snapshot_id,
+                operator_target_revision
             )
-            VALUES ($1, $2, $3, $4)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (progress_key) DO UPDATE
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
                 last_snapshot_id = EXCLUDED.last_snapshot_id,
+                operator_target_revision = COALESCE(
+                    EXCLUDED.operator_target_revision,
+                    runtime_apply_progress.operator_target_revision
+                ),
                 updated_at = NOW()
             "#,
         )
@@ -1297,6 +1303,7 @@ impl RuntimeProgressRepo {
         .bind(last_journal_seq)
         .bind(last_state_version)
         .bind(last_snapshot_id)
+        .bind(operator_target_revision)
         .execute(pool)
         .await?;
 
@@ -1306,7 +1313,11 @@ impl RuntimeProgressRepo {
     pub async fn current(&self, pool: &PgPool) -> Result<Option<RuntimeProgressRow>> {
         let row = sqlx::query(
             r#"
-            SELECT last_journal_seq, last_state_version, last_snapshot_id
+            SELECT
+                last_journal_seq,
+                last_state_version,
+                last_snapshot_id,
+                operator_target_revision
             FROM runtime_apply_progress
             WHERE progress_key = $1
             "#,
@@ -2173,6 +2184,7 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
         last_journal_seq: row.try_get("last_journal_seq")?,
         last_state_version: row.try_get("last_state_version")?,
         last_snapshot_id: row.try_get("last_snapshot_id")?,
+        operator_target_revision: row.try_get("operator_target_revision")?,
     })
 }
 

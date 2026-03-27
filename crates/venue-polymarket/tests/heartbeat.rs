@@ -1,5 +1,13 @@
 use chrono::{Duration, TimeZone, Utc};
-use venue_polymarket::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
+mod support;
+
+use domain::{SignatureType, WalletRoute};
+use support::MockServer;
+use url::Url;
+use venue_polymarket::{
+    HeartbeatFetchResult, HeartbeatReconcileReason, L2AuthHeaders, OrderHeartbeatMonitor,
+    OrderHeartbeatState, PolymarketRestClient, SignerContext,
+};
 
 #[test]
 fn heartbeat_missing_success_triggers_reconcile_once_and_persists_attention() {
@@ -72,6 +80,36 @@ fn heartbeat_success_updates_latest_id_and_freshness() {
 }
 
 #[test]
+fn heartbeat_invalid_fetch_result_preserves_replacement_id_for_follow_up() {
+    let monitor = OrderHeartbeatMonitor::new(Duration::seconds(30));
+    let mut state = OrderHeartbeatState {
+        heartbeat_id: Some("hb-1".to_owned()),
+        last_success_at: ts(10, 0, 0),
+        reconcile_attention_since: None,
+        reconcile_reason: None,
+        requires_reconcile_attention: false,
+    };
+
+    assert_eq!(
+        monitor.record_fetch_result(
+            &mut state,
+            &HeartbeatFetchResult {
+                heartbeat_id: "hb-2".to_owned(),
+                valid: false,
+            },
+            ts(10, 0, 10),
+        ),
+        Some(HeartbeatReconcileReason::InvalidHeartbeat)
+    );
+    assert_eq!(state.heartbeat_id.as_deref(), Some("hb-2"));
+    assert!(state.requires_reconcile_attention);
+    assert_eq!(
+        state.reconcile_reason,
+        Some(HeartbeatReconcileReason::InvalidHeartbeat)
+    );
+}
+
+#[test]
 fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
     let state = OrderHeartbeatState {
         heartbeat_id: Some("hb-1".to_owned()),
@@ -90,6 +128,78 @@ fn heartbeat_helpers_expose_status_labels_and_freshness_age() {
         HeartbeatReconcileReason::InvalidHeartbeat.as_status(),
         "invalid"
     );
+}
+
+#[tokio::test]
+async fn heartbeat_fetch_maps_success_payload_into_monitor_input() {
+    let server = MockServer::spawn("200 OK", r#"{"success":true,"heartbeat_id":"hb-42"}"#);
+    let client = sample_client(server.base_url());
+
+    let heartbeat = client
+        .post_order_heartbeat(&sample_auth(), "hb-41")
+        .await
+        .expect("heartbeat fetch should succeed");
+
+    assert_eq!(
+        heartbeat,
+        HeartbeatFetchResult {
+            heartbeat_id: "hb-42".to_owned(),
+            valid: true,
+        }
+    );
+    let request = server.finish();
+    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.contains("poly-api-key: key-1"));
+    assert!(request.contains(r#""heartbeat_id":"hb-41""#));
+}
+
+#[tokio::test]
+async fn heartbeat_invalid_response_returns_replacement_id_without_generic_http_error() {
+    let server = MockServer::spawn(
+        "400 Bad Request",
+        r#"{"success":false,"heartbeat_id":"hb-43"}"#,
+    );
+    let client = sample_client(server.base_url());
+
+    let heartbeat = client
+        .post_order_heartbeat(&sample_auth(), "hb-42")
+        .await
+        .expect("invalid heartbeat should still return replacement id");
+
+    assert_eq!(
+        heartbeat,
+        HeartbeatFetchResult {
+            heartbeat_id: "hb-43".to_owned(),
+            valid: false,
+        }
+    );
+    let request = server.finish();
+    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.contains(r#""heartbeat_id":"hb-42""#));
+}
+
+fn sample_client(base_url: Url) -> PolymarketRestClient {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("test client");
+
+    PolymarketRestClient::with_http_client(client, base_url.clone(), base_url.clone(), base_url)
+}
+
+fn sample_auth() -> L2AuthHeaders<'static> {
+    L2AuthHeaders {
+        signer: SignerContext {
+            address: "0xowner",
+            funder_address: "0xfunder",
+            signature_type: SignatureType::Eoa,
+            wallet_route: WalletRoute::Eoa,
+        },
+        api_key: "key-1",
+        passphrase: "pass-1",
+        timestamp: "1700000000",
+        signature: "0xsig",
+    }
 }
 
 fn ts(hour: u32, minute: u32, second: u32) -> chrono::DateTime<Utc> {

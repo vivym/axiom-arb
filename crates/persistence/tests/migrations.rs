@@ -223,6 +223,14 @@ async fn migrations_create_signed_order_and_resolution_tables() {
     assert!(table_exists(&db.pool, "orders").await);
     assert!(column_exists(&db.pool, "orders", "signed_order_hash").await);
     assert!(table_exists(&db.pool, "resolution_states").await);
+    assert!(
+        column_exists(
+            &db.pool,
+            "runtime_apply_progress",
+            "operator_target_revision"
+        )
+        .await
+    );
 
     db.cleanup().await;
 }

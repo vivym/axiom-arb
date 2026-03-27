@@ -272,6 +272,7 @@ pub struct RuntimeProgressRow {
     pub last_journal_seq: i64,
     pub last_state_version: i64,
     pub last_snapshot_id: Option<String>,
+    pub operator_target_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

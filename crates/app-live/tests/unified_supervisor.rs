@@ -1,4 +1,4 @@
-use app_live::AppSupervisor;
+use app_live::{AppSupervisor, SupervisorPosture};
 use domain::ExecutionMode;
 
 #[test]
@@ -80,4 +80,11 @@ fn dispatcher_stability_uses_cross_projection_ready_watermark() {
         dispatched.last_stable_snapshot_id.as_deref(),
         Some("snapshot-8")
     );
+}
+
+#[test]
+fn supervisor_starts_with_healthy_global_posture() {
+    let supervisor = AppSupervisor::for_tests();
+
+    assert_eq!(supervisor.posture(), SupervisorPosture::Healthy);
 }

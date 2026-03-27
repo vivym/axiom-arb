@@ -6,7 +6,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 pub mod models;
 pub mod repos;
 
-pub use models::StoredOrder;
+pub use models::{RuntimeProgressRow, StoredOrder};
 pub use repos::{
     persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,
     IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,

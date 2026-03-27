@@ -1,6 +1,12 @@
 use chrono::{DateTime, Duration, Utc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeartbeatFetchResult {
+    pub heartbeat_id: String,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderHeartbeatState {
     pub heartbeat_id: Option<String>,
     pub last_success_at: DateTime<Utc>,
@@ -61,6 +67,25 @@ impl OrderHeartbeatMonitor {
         at: DateTime<Utc>,
     ) -> Option<HeartbeatReconcileReason> {
         state.heartbeat_id = None;
+        self.raise_attention(state, at, HeartbeatReconcileReason::InvalidHeartbeat)
+    }
+
+    pub fn record_fetch_result(
+        &self,
+        state: &mut OrderHeartbeatState,
+        result: &HeartbeatFetchResult,
+        at: DateTime<Utc>,
+    ) -> Option<HeartbeatReconcileReason> {
+        if result.valid {
+            self.record_success(state, result.heartbeat_id.clone(), at);
+            return None;
+        }
+
+        state.heartbeat_id = if result.heartbeat_id.is_empty() {
+            None
+        } else {
+            Some(result.heartbeat_id.clone())
+        };
         self.raise_attention(state, at, HeartbeatReconcileReason::InvalidHeartbeat)
     }
 

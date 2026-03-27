@@ -20,7 +20,7 @@ use state::{
 use tracing::field;
 
 use crate::bootstrap::{self, BootstrapSource, BootstrapStatus};
-use crate::config::NegRiskFamilyLiveTarget;
+use crate::config::NegRiskLiveTargetSet;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
 use crate::negrisk_live::NegRiskLiveExecutionRecord;
@@ -94,12 +94,12 @@ pub struct AppRunResult {
 }
 
 #[derive(Debug, Clone)]
-struct DurableLiveStartupState {
-    last_journal_seq: i64,
-    last_state_version: u64,
-    published_snapshot_id: Option<String>,
-    pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
-    live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+pub(crate) struct DurableLiveStartupState {
+    pub(crate) last_journal_seq: i64,
+    pub(crate) last_state_version: u64,
+    pub(crate) published_snapshot_id: Option<String>,
+    pub(crate) pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    pub(crate) live_execution_records: Vec<NegRiskLiveExecutionRecord>,
 }
 
 impl AppRuntime {
@@ -153,6 +153,10 @@ impl AppRuntime {
     }
 
     pub fn pending_reconcile_count(&self) -> usize {
+        self.store.pending_reconcile_count()
+    }
+
+    pub fn follow_up_backlog_count(&self) -> usize {
         self.store.pending_reconcile_count()
     }
 
@@ -322,7 +326,7 @@ where
 
 pub fn run_live_with_neg_risk_live_targets<S>(
     source: &S,
-    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
 ) -> AppRunResult
@@ -341,7 +345,7 @@ where
 pub fn run_live_with_neg_risk_live_targets_instrumented<S>(
     source: &S,
     instrumentation: AppInstrumentation,
-    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
 ) -> AppRunResult
@@ -354,7 +358,7 @@ where
         }
         None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
     };
-    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
         supervisor.seed_neg_risk_live_approval(&family_id);
     }
@@ -374,7 +378,7 @@ where
     run_live_from_durable_store_with_neg_risk_live_targets_instrumented(
         source,
         instrumentation,
-        BTreeMap::new(),
+        NegRiskLiveTargetSet::empty(),
         BTreeSet::new(),
         BTreeSet::new(),
     )
@@ -383,14 +387,16 @@ where
 pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
     source: &S,
     instrumentation: AppInstrumentation,
-    neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
 ) -> Result<AppRunResult, Box<dyn std::error::Error>>
 where
     S: BootstrapSource,
 {
-    let durable_state = load_durable_live_startup_state()?;
+    let operator_target_revision =
+        operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
+    let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
             AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
@@ -410,7 +416,7 @@ where
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
     }
-    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets);
+    supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
         supervisor.seed_neg_risk_live_approval(&family_id);
     }
@@ -418,7 +424,9 @@ where
         supervisor.seed_neg_risk_live_ready_family(&family_id);
     }
 
-    supervisor.run_startup().map_err(Into::into)
+    let result = supervisor.run_startup()?;
+    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    Ok(result)
 }
 
 pub fn run_live_instrumented<S>(source: &S, instrumentation: AppInstrumentation) -> AppRunResult
@@ -453,8 +461,9 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
     }
 }
 
-fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn std::error::Error>>
-{
+pub(crate) fn load_durable_live_startup_state(
+    operator_target_revision: Option<&str>,
+) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -478,11 +487,15 @@ fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn 
             .collect::<Result<Vec<_>, _>>()?;
         let live_execution_records =
             durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
+        let has_durable_follow_up_work =
+            !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty();
+        validate_operator_target_revision(
+            progress.as_ref(),
+            operator_target_revision,
+            has_durable_follow_up_work,
+        )?;
         let (last_journal_seq, last_state_version, published_snapshot_id) =
-            durable_progress_anchor(
-                progress,
-                !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty(),
-            )?;
+            durable_progress_anchor(progress, has_durable_follow_up_work)?;
 
         Ok(DurableLiveStartupState {
             last_journal_seq,
@@ -491,6 +504,71 @@ fn load_durable_live_startup_state() -> Result<DurableLiveStartupState, Box<dyn 
             pending_reconcile_anchors,
             live_execution_records,
         })
+    })
+}
+
+pub(crate) fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {
+    (!targets.is_empty()).then_some(targets.revision())
+}
+
+fn validate_operator_target_revision(
+    progress: Option<&RuntimeProgressRow>,
+    expected_revision: Option<&str>,
+    has_durable_follow_up_work: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(expected_revision) = expected_revision else {
+        return Ok(());
+    };
+
+    if !has_durable_follow_up_work {
+        return Ok(());
+    }
+
+    let Some(progress) = progress else {
+        return Err(boxed_error(
+            "operator target revision anchor is required when live operator targets are supplied",
+        ));
+    };
+
+    match progress.operator_target_revision.as_deref() {
+        Some(actual_revision) if actual_revision == expected_revision => Ok(()),
+        Some(actual_revision) => Err(boxed_error(format!(
+            "operator target revision anchor mismatch: persisted={actual_revision} configured={expected_revision}"
+        ))),
+        None => Err(boxed_error(
+            "operator target revision anchor is required when live operator targets are supplied",
+        )),
+    }
+}
+
+pub(crate) fn persist_operator_target_revision_anchor(
+    summary: &SupervisorSummary,
+    operator_target_revision: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(operator_target_revision) = operator_target_revision else {
+        return Ok(());
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        RuntimeProgressRepo
+            .record_progress(
+                &pool,
+                summary.last_journal_seq,
+                i64::try_from(summary.last_state_version).map_err(|_| {
+                    boxed_error(format!(
+                        "startup state version {} does not fit in i64",
+                        summary.last_state_version
+                    ))
+                })?,
+                summary.published_snapshot_id.as_deref(),
+                Some(operator_target_revision),
+            )
+            .await
+            .map_err(Into::into)
     })
 }
 
@@ -607,7 +685,9 @@ mod tests {
     use domain::ExecutionMode;
     use persistence::models::{ExecutionAttemptRow, RuntimeProgressRow};
 
-    use super::{durable_live_execution_records, durable_progress_anchor};
+    use super::{
+        durable_live_execution_records, durable_progress_anchor, validate_operator_target_revision,
+    };
 
     #[test]
     fn durable_live_attempt_requires_submission_record() {
@@ -663,6 +743,7 @@ mod tests {
                 last_journal_seq: 41,
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: None,
             }),
             true,
         )
@@ -671,5 +752,30 @@ mod tests {
         assert_eq!(last_journal_seq, 41);
         assert_eq!(last_state_version, 7);
         assert_eq!(snapshot_id.as_deref(), Some("snapshot-7"));
+    }
+
+    #[test]
+    fn operator_targets_require_matching_persisted_revision_anchor() {
+        let err = validate_operator_target_revision(
+            Some(&RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-stale".to_owned()),
+            }),
+            Some("targets-rev-current"),
+            true,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("operator target revision"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn operator_targets_allow_missing_revision_anchor_without_follow_up_work() {
+        validate_operator_target_revision(None, Some("targets-rev-current"), false).unwrap();
     }
 }

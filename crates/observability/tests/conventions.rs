@@ -15,6 +15,7 @@ fn venue_producer_conventions_define_ws_and_heartbeat_fields() {
 #[test]
 fn observability_conventions_define_stable_span_names_and_field_keys() {
     assert_eq!(span_names::APP_BOOTSTRAP, "axiom.app.bootstrap");
+    assert_eq!(span_names::APP_DAEMON_RUN, "axiom.app.daemon.run");
     assert_eq!(span_names::REPLAY_RUN, "axiom.app_replay.run");
     assert_eq!(field_keys::SERVICE_NAME, "service.name");
     assert_eq!(field_keys::RUNTIME_MODE, "runtime_mode");
@@ -74,6 +75,13 @@ fn runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_r
         "axiom.app.supervisor.resume"
     );
     assert_eq!(span_names::APP_DISPATCH_FLUSH, "axiom.app.dispatch.flush");
+    assert_eq!(field_keys::GLOBAL_POSTURE, "global_posture");
+    assert_eq!(field_keys::INGRESS_BACKLOG, "ingress_backlog");
+    assert_eq!(field_keys::FOLLOW_UP_BACKLOG, "follow_up_backlog");
+    assert_eq!(
+        field_keys::OPERATOR_TARGET_REVISION,
+        "operator_target_revision"
+    );
 
     assert_eq!(field_keys::STATE_VERSION, "state_version");
     assert_eq!(field_keys::JOURNAL_SEQ, "journal_seq");

@@ -15,6 +15,7 @@ fn restart_with_empty_durable_history_rebuilds_baseline_snapshot_anchor() {
     assert_eq!(resumed.pending_reconcile_count, 0);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-0"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(0));
+    assert!(supervisor.can_resume_ingest_loops());
 }
 
 #[test]
@@ -102,6 +103,7 @@ fn restart_replays_out_of_order_user_trade_from_durable_log() {
     assert_eq!(resumed.pending_reconcile_count, 1);
     assert_eq!(resumed.published_snapshot_id.as_deref(), Some("snapshot-6"));
     assert_eq!(resumed.published_snapshot_committed_journal_seq, Some(41));
+    assert!(!supervisor.can_resume_ingest_loops());
 
     supervisor.seed_runtime_progress(
         resumed.last_journal_seq,

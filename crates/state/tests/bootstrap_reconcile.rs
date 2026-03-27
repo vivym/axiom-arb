@@ -55,6 +55,40 @@ fn restored_live_submit_work_keeps_reconcile_first_posture_through_bootstrap_rec
 }
 
 #[test]
+fn restored_runtime_attention_pending_work_keeps_reconcile_first_posture_through_bootstrap_reconcile(
+) {
+    let mut store = StateStore::new();
+
+    state::StateApplier::new(&mut store)
+        .apply(
+            19,
+            domain::ExternalFactEvent::runtime_attention_observed(
+                "heartbeat",
+                "session-live",
+                "hb-gap-1",
+                "family-a",
+                "missed_heartbeat",
+                "heartbeat freshness exceeded threshold",
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+
+    store.restore_committed_anchor(7, 41);
+
+    let report = store.reconcile(RemoteSnapshot::empty());
+
+    assert!(report.succeeded);
+    assert_eq!(store.pending_reconcile_count(), 1);
+    assert_eq!(store.mode(), RuntimeMode::Reconciling);
+    assert_eq!(store.mode_overlay(), Some(RuntimeOverlay::CancelOnly));
+    assert_eq!(
+        store.scope_confidence("family-a"),
+        StateConfidence::Uncertain
+    );
+}
+
+#[test]
 fn first_reconcile_successfully_leaves_bootstrap_cancel_only() {
     let mut store = StateStore::new();
     let order = sample_order("order-1", "hash-1");

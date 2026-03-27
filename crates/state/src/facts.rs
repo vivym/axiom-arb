@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use domain::{ExternalFactEvent, ExternalFactPayloadData};
+use domain::{ExternalFactEvent, ExternalFactPayloadData, RuntimeAttentionObservedPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DirtyDomain {
@@ -82,6 +82,48 @@ impl PendingReconcileAnchor {
             "live submit observed",
         )
     }
+
+    fn from_runtime_attention(
+        pending_ref: PendingRef,
+        payload: &RuntimeAttentionObservedPayload,
+    ) -> Self {
+        Self::from_pending_ref_and_reason(
+            pending_ref,
+            payload.scope_id.clone(),
+            payload.source.clone(),
+            payload.reason.clone(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAttentionAnchor {
+    pub attention_ref: String,
+    pub source: String,
+    pub scope_id: String,
+    pub attention_kind: String,
+    pub reason: String,
+}
+
+impl RuntimeAttentionAnchor {
+    fn from_fact_key_and_payload(
+        fact_key: &FactKey,
+        payload: &RuntimeAttentionObservedPayload,
+    ) -> Self {
+        Self {
+            attention_ref: format!(
+                "attention:{}:{}:{}:{}",
+                fact_key.source_kind,
+                fact_key.source_session_id,
+                fact_key.source_event_id,
+                fact_key.normalizer_version
+            ),
+            source: payload.source.clone(),
+            scope_id: payload.scope_id.clone(),
+            attention_kind: payload.attention_kind.clone(),
+            reason: payload.reason.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +179,22 @@ impl StateFactInput {
                     terminal: payload.terminal,
                 }
             }
+            Some(ExternalFactPayloadData::RuntimeAttentionObserved(payload)) => {
+                if payload.attention_kind == "metadata_stale" {
+                    FactApplyHint::RuntimeAttention {
+                        anchor: RuntimeAttentionAnchor::from_fact_key_and_payload(
+                            &fact_key, payload,
+                        ),
+                    }
+                } else {
+                    FactApplyHint::PendingReconcile {
+                        anchor: PendingReconcileAnchor::from_runtime_attention(
+                            PendingRef::from_fact_key(&fact_key),
+                            payload,
+                        ),
+                    }
+                }
+            }
             None => FactApplyHint::None,
         };
 
@@ -179,6 +237,9 @@ pub(crate) enum FactApplyHint {
     None,
     PendingReconcile {
         anchor: PendingReconcileAnchor,
+    },
+    RuntimeAttention {
+        anchor: RuntimeAttentionAnchor,
     },
     LiveReconcileObserved {
         pending_ref: PendingRef,

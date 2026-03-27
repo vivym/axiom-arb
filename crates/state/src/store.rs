@@ -10,7 +10,7 @@ use crate::{
     bootstrap::{
         allows_automatic_repair, bootstrap_policy, reconcile_attention_policy, reconciled_policy,
     },
-    facts::{FactKey, PendingReconcileAnchor, PendingRef},
+    facts::{FactKey, PendingReconcileAnchor, PendingRef, RuntimeAttentionAnchor},
     reconcile::{reconcile_store, ReconcileReport, RemoteSnapshot},
 };
 
@@ -53,6 +53,7 @@ pub struct StateStore {
     applied_fact_journal: BTreeMap<FactKey, i64>,
     consumed_journal: BTreeMap<i64, FactKey>,
     pending_reconcile_anchors: BTreeMap<String, PendingReconcileAnchor>,
+    runtime_attention_anchors: BTreeMap<String, RuntimeAttentionAnchor>,
     open_orders: HashMap<OrderId, Order>,
     approvals: HashMap<ApprovalKey, ApprovalState>,
     inventory: HashMap<InventoryEntry, Decimal>,
@@ -75,6 +76,7 @@ impl StateStore {
             applied_fact_journal: BTreeMap::new(),
             consumed_journal: BTreeMap::new(),
             pending_reconcile_anchors: BTreeMap::new(),
+            runtime_attention_anchors: BTreeMap::new(),
             open_orders: HashMap::new(),
             approvals: HashMap::new(),
             inventory: HashMap::new(),
@@ -191,6 +193,19 @@ impl StateStore {
             .values()
             .cloned()
             .collect::<Vec<_>>()
+    }
+
+    pub fn runtime_attention_anchors(&self) -> Vec<RuntimeAttentionAnchor> {
+        self.runtime_attention_anchors
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    pub fn has_runtime_attention(&self, scope_id: &str, attention_kind: &str) -> bool {
+        self.runtime_attention_anchors
+            .values()
+            .any(|anchor| anchor.scope_id == scope_id && anchor.attention_kind == attention_kind)
     }
 
     pub fn state_confidence(&self, scope: &str) -> StateConfidence {
@@ -408,6 +423,11 @@ impl StateStore {
     pub(crate) fn record_pending_reconcile(&mut self, anchor: PendingReconcileAnchor) {
         self.pending_reconcile_anchors
             .insert(anchor.pending_ref.clone(), anchor);
+    }
+
+    pub(crate) fn record_runtime_attention(&mut self, anchor: RuntimeAttentionAnchor) {
+        self.runtime_attention_anchors
+            .insert(anchor.attention_ref.clone(), anchor);
     }
 
     pub(crate) fn clear_pending_reconcile(

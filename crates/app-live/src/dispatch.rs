@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use state::{DirtyDomain, DirtySet, FullSetView, NegRiskView, PublishedSnapshot};
 
+use crate::queues::{fullset_domains, is_fullset_domain, negrisk_domains, SnapshotNotice};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchSummary {
     pub coalesced_versions: Vec<u64>,
@@ -91,28 +93,42 @@ impl DispatchLoop {
         fullset_ready: bool,
         negrisk_ready: bool,
     ) {
-        self.record_apply(state_version, DirtySet::new(all_domains()));
-        self.observe_snapshot(PublishedSnapshot {
-            snapshot_id: format!("snapshot-{state_version}"),
-            state_version,
-            committed_journal_seq: state_version as i64,
-            fullset_ready,
-            negrisk_ready,
-            fullset: fullset_ready.then(|| FullSetView {
-                snapshot_id: format!("snapshot-{state_version}"),
+        self.observe_notice(
+            SnapshotNotice::new(
+                format!("snapshot-{state_version}"),
                 state_version,
-                open_orders: Vec::new(),
-            }),
-            negrisk: negrisk_ready.then(|| NegRiskView {
-                snapshot_id: format!("snapshot-{state_version}"),
-                state_version,
-                families: Vec::new(),
-            }),
-        });
+                all_domains(),
+            )
+            .with_projection_readiness(fullset_ready, negrisk_ready),
+        );
     }
 
     pub fn pending_backlog_count(&self) -> usize {
         self.coalesced_dirty_records().len()
+    }
+
+    pub fn observe_notice(&mut self, notice: SnapshotNotice) {
+        self.record_apply(
+            notice.state_version,
+            DirtySet::new(notice.dirty_domains.clone()),
+        );
+        self.observe_snapshot(PublishedSnapshot {
+            snapshot_id: notice.snapshot_id.clone(),
+            state_version: notice.state_version,
+            committed_journal_seq: notice.state_version as i64,
+            fullset_ready: notice.fullset_ready,
+            negrisk_ready: notice.negrisk_ready,
+            fullset: notice.fullset_ready.then(|| FullSetView {
+                snapshot_id: notice.snapshot_id.clone(),
+                state_version: notice.state_version,
+                open_orders: Vec::new(),
+            }),
+            negrisk: notice.negrisk_ready.then(|| NegRiskView {
+                snapshot_id: notice.snapshot_id,
+                state_version: notice.state_version,
+                families: Vec::new(),
+            }),
+        });
     }
 
     fn clear_dirty_domains(
@@ -184,21 +200,6 @@ struct DirtyRecord {
     domains: BTreeSet<DirtyDomain>,
 }
 
-fn fullset_domains() -> BTreeSet<DirtyDomain> {
-    BTreeSet::from([
-        DirtyDomain::Runtime,
-        DirtyDomain::Orders,
-        DirtyDomain::Inventory,
-        DirtyDomain::Approvals,
-        DirtyDomain::Resolution,
-        DirtyDomain::Relayer,
-    ])
-}
-
-fn negrisk_domains() -> BTreeSet<DirtyDomain> {
-    BTreeSet::from([DirtyDomain::NegRiskFamilies])
-}
-
 fn all_domains() -> BTreeSet<DirtyDomain> {
     fullset_domains()
         .into_iter()
@@ -214,8 +215,4 @@ fn last_stable_state_version(
         (Some(fullset), Some(negrisk)) => Some(fullset.state_version.min(negrisk.state_version)),
         _ => None,
     }
-}
-
-fn is_fullset_domain(domain: DirtyDomain) -> bool {
-    fullset_domains().contains(&domain)
 }

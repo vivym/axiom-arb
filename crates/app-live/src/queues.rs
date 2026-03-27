@@ -1,0 +1,192 @@
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use state::DirtyDomain;
+
+use crate::input_tasks::InputTaskEvent;
+
+#[derive(Debug, Default)]
+pub struct IngressQueue {
+    backlog: VecDeque<InputTaskEvent>,
+}
+
+impl IngressQueue {
+    pub fn push(&mut self, input: InputTaskEvent) {
+        self.backlog.push_back(input);
+        self.backlog
+            .make_contiguous()
+            .sort_by_key(|entry| entry.journal_seq);
+    }
+
+    pub fn next_after(&self, last_journal_seq: Option<i64>) -> Option<InputTaskEvent> {
+        self.backlog
+            .iter()
+            .find(|entry| last_journal_seq.is_none_or(|last| entry.journal_seq > last))
+            .cloned()
+    }
+
+    pub fn remove(&mut self, input: &InputTaskEvent) -> Option<InputTaskEvent> {
+        let index = self.backlog.iter().position(|entry| entry == input)?;
+        self.backlog.remove(index)
+    }
+
+    pub fn len(&self) -> usize {
+        self.backlog.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.backlog.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotNotice {
+    pub snapshot_id: String,
+    pub state_version: u64,
+    pub dirty_domains: BTreeSet<DirtyDomain>,
+    pub fullset_ready: bool,
+    pub negrisk_ready: bool,
+}
+
+impl SnapshotNotice {
+    pub fn new(
+        snapshot_id: impl Into<String>,
+        state_version: u64,
+        dirty_domains: impl IntoIterator<Item = DirtyDomain>,
+    ) -> Self {
+        Self {
+            snapshot_id: snapshot_id.into(),
+            state_version,
+            dirty_domains: dirty_domains.into_iter().collect(),
+            fullset_ready: false,
+            negrisk_ready: false,
+        }
+    }
+
+    pub fn with_projection_readiness(mut self, fullset_ready: bool, negrisk_ready: bool) -> Self {
+        self.fullset_ready = fullset_ready;
+        self.negrisk_ready = negrisk_ready;
+        self
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SnapshotDispatchQueue {
+    notices: VecDeque<SnapshotNotice>,
+}
+
+impl SnapshotDispatchQueue {
+    pub fn push(&mut self, notice: SnapshotNotice) {
+        self.notices.push_back(notice);
+    }
+
+    pub fn coalesced(&self) -> Vec<SnapshotNotice> {
+        let latest_fullset = self
+            .notices
+            .iter()
+            .filter(|notice| {
+                notice
+                    .dirty_domains
+                    .iter()
+                    .any(|domain| is_fullset_domain(*domain))
+            })
+            .max_by_key(|notice| notice.state_version)
+            .cloned();
+        let latest_negrisk = self
+            .notices
+            .iter()
+            .filter(|notice| notice.dirty_domains.contains(&DirtyDomain::NegRiskFamilies))
+            .max_by_key(|notice| notice.state_version)
+            .cloned();
+
+        let mut coalesced = BTreeMap::<u64, SnapshotNotice>::new();
+        for notice in [latest_fullset, latest_negrisk].into_iter().flatten() {
+            coalesced.insert(notice.state_version, notice);
+        }
+
+        coalesced.into_values().collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.notices.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.notices.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FollowUpWork {
+    PendingReconcile {
+        scope_id: String,
+        pending_ref: String,
+        reason: String,
+    },
+    Recovery {
+        scope_id: String,
+        reason: String,
+    },
+}
+
+impl FollowUpWork {
+    pub fn pending_reconcile(
+        scope_id: impl Into<String>,
+        pending_ref: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::PendingReconcile {
+            scope_id: scope_id.into(),
+            pending_ref: pending_ref.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn recovery(scope_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Recovery {
+            scope_id: scope_id.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct FollowUpQueue {
+    backlog: VecDeque<FollowUpWork>,
+}
+
+impl FollowUpQueue {
+    pub fn push(&mut self, work: FollowUpWork) {
+        self.backlog.push_back(work);
+    }
+
+    pub fn pop_front(&mut self) -> Option<FollowUpWork> {
+        self.backlog.pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.backlog.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.backlog.is_empty()
+    }
+}
+
+pub(crate) fn fullset_domains() -> BTreeSet<DirtyDomain> {
+    BTreeSet::from([
+        DirtyDomain::Runtime,
+        DirtyDomain::Orders,
+        DirtyDomain::Inventory,
+        DirtyDomain::Approvals,
+        DirtyDomain::Resolution,
+        DirtyDomain::Relayer,
+    ])
+}
+
+pub(crate) fn negrisk_domains() -> BTreeSet<DirtyDomain> {
+    BTreeSet::from([DirtyDomain::NegRiskFamilies])
+}
+
+pub(crate) fn is_fullset_domain(domain: DirtyDomain) -> bool {
+    fullset_domains().contains(&domain)
+}

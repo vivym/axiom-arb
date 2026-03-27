@@ -40,6 +40,7 @@ fn startup_restores_seeded_live_execution_records_before_fresh_live_submit() {
         summary.neg_risk_live_state_source,
         NegRiskLiveStateSource::DurableRestore
     );
+    assert!(!supervisor.can_resume_ingest_loops());
 }
 
 #[test]
@@ -68,6 +69,7 @@ fn startup_restores_pending_reconcile_anchor_before_fresh_live_submit() {
     assert_eq!(summary.pending_reconcile_count, 1);
     assert_eq!(summary.neg_risk_live_attempt_count, 0);
     assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+    assert!(!supervisor.can_resume_ingest_loops());
 }
 
 fn sample_live_target(family_id: &str) -> NegRiskFamilyLiveTarget {

@@ -6,10 +6,11 @@ use std::{
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
+use crate::heartbeat::HeartbeatFetchResult;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::{
@@ -66,6 +67,14 @@ pub struct BalanceAllowanceResponse {
     pub allowance: Option<String>,
     #[serde(default)]
     pub spender: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct HeartbeatResponse {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    heartbeat_id: Option<String>,
 }
 
 impl fmt::Display for RestError {
@@ -126,6 +135,48 @@ impl PolymarketRestClient {
 
     pub async fn fetch_clob_status(&self) -> Result<VenueStatusResponse, RestError> {
         self.get_clob("status", &[]).await
+    }
+
+    pub fn build_post_heartbeat_request(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+        previous_heartbeat_id: &str,
+    ) -> Result<reqwest::Request, RestError> {
+        let headers = build_l2_auth_headers(auth)?;
+        let url = join_url(&self.clob_host, "heartbeat", &[])?;
+
+        Ok(self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(&HeartbeatPostRequest {
+                heartbeat_id: previous_heartbeat_id,
+            })
+            .build()?)
+    }
+
+    pub async fn post_order_heartbeat(
+        &self,
+        auth: &L2AuthHeaders<'_>,
+        previous_heartbeat_id: &str,
+    ) -> Result<HeartbeatFetchResult, RestError> {
+        let request = self.build_post_heartbeat_request(auth, previous_heartbeat_id)?;
+        let response = self.http.execute(request).await?;
+        let status = response.status();
+
+        if status.is_success() {
+            let heartbeat: HeartbeatResponse = response.json().await?;
+            return Ok(map_heartbeat_response(heartbeat));
+        }
+
+        let body = response.text().await?;
+        if let Ok(heartbeat) = serde_json::from_str::<HeartbeatResponse>(&body) {
+            if heartbeat.heartbeat_id.is_some() {
+                return Ok(map_heartbeat_response(heartbeat));
+            }
+        }
+
+        Err(RestError::HttpResponse { status, body })
     }
 
     pub fn build_open_orders_request(
@@ -249,6 +300,19 @@ impl PolymarketRestClient {
 
         let body = response.text().await?;
         Err(RestError::HttpResponse { status, body })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct HeartbeatPostRequest<'a> {
+    heartbeat_id: &'a str,
+}
+
+fn map_heartbeat_response(heartbeat: HeartbeatResponse) -> HeartbeatFetchResult {
+    let valid = heartbeat.success && heartbeat.heartbeat_id.is_some();
+    HeartbeatFetchResult {
+        heartbeat_id: heartbeat.heartbeat_id.unwrap_or_default(),
+        valid,
     }
 }
 

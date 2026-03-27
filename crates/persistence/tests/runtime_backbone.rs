@@ -153,7 +153,7 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"))
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
         .await
         .unwrap();
 
@@ -165,6 +165,63 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     assert_eq!(progress.last_journal_seq, 41);
     assert_eq!(progress.last_state_version, 7);
     assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(progress.operator_target_revision, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_round_trips_operator_target_revision() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.last_journal_seq, 41);
+    assert_eq!(progress.last_state_version, 7);
+    assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_preserves_operator_target_revision_when_update_omits_it() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 42, 8, Some("snapshot-8"), None)
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.last_journal_seq, 42);
+    assert_eq!(progress.last_state_version, 8);
+    assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-8"));
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
 
     db.cleanup().await;
 }

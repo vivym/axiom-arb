@@ -7,6 +7,7 @@ mod orders;
 mod relayer;
 mod rest;
 mod retry;
+mod ws_client;
 mod ws_market;
 mod ws_session;
 mod ws_user;
@@ -17,7 +18,9 @@ pub use auth::{
     L2AuthHeaders, RelayerAuth, SignerContext,
 };
 pub use domain::{MarketRoute, NegRiskVariant};
-pub use heartbeat::{HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState};
+pub use heartbeat::{
+    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
+};
 pub use instrumentation::VenueProducerInstrumentation;
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
 pub use negrisk_live::{PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider};
@@ -31,10 +34,16 @@ pub use rest::{
     VenueStatusResponse,
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
+pub use url::Url as PolymarketUrl;
+pub use ws_client::{
+    PolymarketWsClient, WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp,
+    WsTransportMessage, WsUserChannelAuth,
+};
 pub use ws_market::{
-    parse_market_message, MarketBookUpdate, MarketLifecycleUpdate, MarketPriceChangeUpdate,
-    MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent, WsChannelKind,
-    WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState, WsParseError,
+    parse_market_message, parse_market_messages, MarketBookUpdate, MarketLifecycleUpdate,
+    MarketPriceChangeUpdate, MarketTickSizeChangeUpdate, MarketTradePriceUpdate, MarketWsEvent,
+    WsChannelKind, WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState,
+    WsParseError,
 };
 pub use ws_session::{WsSessionEvent, WsSessionMonitor, WsSessionState, WsSessionStatus};
 pub use ws_user::{parse_user_message, UserOrderUpdate, UserTradeUpdate, UserWsEvent};

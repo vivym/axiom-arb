@@ -102,6 +102,15 @@ impl<'a> StateApplier<'a> {
                     reason: anchor.reason.clone(),
                 });
             }
+            FactApplyHint::RuntimeAttention { anchor } => {
+                self.store.record_runtime_attention(anchor.clone());
+                let state_version = self.store.record_applied_fact(journal_seq, fact_key);
+                return Ok(ApplyResult::Applied {
+                    journal_seq,
+                    state_version,
+                    dirty_set: DirtySet::new([DirtyDomain::Runtime, DirtyDomain::NegRiskFamilies]),
+                });
+            }
             FactApplyHint::LiveReconcileObserved {
                 pending_ref,
                 terminal,
