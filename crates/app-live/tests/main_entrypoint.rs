@@ -62,6 +62,19 @@ fn binary_entrypoint_emits_structured_bootstrap_log() {
 }
 
 #[test]
+fn binary_entrypoint_emits_structured_bootstrap_log_after_metric_removal() {
+    let output = app_live_output("paper", None);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap()
+    );
+
+    assert!(combined.contains("app-live bootstrap complete"));
+    assert!(combined.contains("neg_risk_live_attempt_count"));
+}
+
+#[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_mode() {
     let output = app_live_output("invalid-mode", None);
 

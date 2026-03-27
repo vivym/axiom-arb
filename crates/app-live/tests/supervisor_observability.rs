@@ -6,7 +6,11 @@ use std::{
     },
 };
 
-use app_live::{AppRuntimeMode, AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence};
+use app_live::{
+    bootstrap::BootstrapStatus, instrumentation::emit_bootstrap_completion_observability,
+    AppRunResult, AppRuntime, AppRuntimeMode, AppSupervisor, InputTaskEvent,
+    NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorSummary,
+};
 use chrono::Utc;
 use domain::{ConditionId, ExternalFactEvent, TokenId};
 use observability::{bootstrap_observability, field_keys, span_names};
@@ -132,6 +136,89 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
     assert_eq!(summary.global_posture.as_str(), "healthy");
     assert_eq!(summary.ingress_backlog_count, 0);
     assert_eq!(summary.follow_up_backlog_count, 0);
+}
+
+#[test]
+fn supervisor_records_bootstrap_rollout_metrics_with_explicit_provenance() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    for journal_seq in 35..=41 {
+        supervisor.seed_committed_input(sample_input_task_event(journal_seq));
+    }
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(sample_bootstrap_rollout_evidence("snapshot-7"));
+
+    let (captured_spans, summary) = capture_spans(|| supervisor.resume_once().unwrap());
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_live_ready_family_count
+                .key()
+        ),
+        Some(
+            summary
+                .neg_risk_rollout_evidence
+                .as_ref()
+                .unwrap()
+                .live_ready_family_count as f64
+        )
+    );
+    let completion_span = captured_spans
+        .iter()
+        .find(|span| span.name == span_names::APP_SUPERVISOR_RESUME)
+        .expect("resume span missing");
+    assert_eq!(
+        completion_span
+            .field(field_keys::EVIDENCE_SOURCE)
+            .map(String::as_str),
+        Some("\"bootstrap\"")
+    );
+}
+
+#[test]
+fn bootstrap_completion_forwarder_does_not_reemit_neg_risk_producer_metrics() {
+    let observability = bootstrap_observability("app-live-test");
+    let recorder = observability.recorder();
+    recorder.record_neg_risk_live_attempt_count(9.0);
+    recorder.record_neg_risk_live_ready_family_count(4.0);
+    recorder.record_neg_risk_live_gate_block_count(2.0);
+    recorder.increment_neg_risk_rollout_parity_mismatch_count(3);
+
+    let result = sample_bootstrap_result_with_rollout_evidence();
+    emit_bootstrap_completion_observability(&recorder, &result);
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_attempt_count.key()),
+        Some(9.0)
+    );
+    assert_eq!(
+        snapshot.gauge(
+            observability
+                .metrics()
+                .neg_risk_live_ready_family_count
+                .key()
+        ),
+        Some(4.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().neg_risk_live_gate_block_count.key()),
+        Some(2.0)
+    );
+    assert_eq!(
+        snapshot.counter(
+            observability
+                .metrics()
+                .neg_risk_rollout_parity_mismatch_count
+                .key()
+        ),
+        Some(3)
+    );
 }
 
 #[test]
@@ -416,5 +503,40 @@ fn sample_rollout_evidence(snapshot_id: &str) -> NegRiskRolloutEvidence {
         live_ready_family_count: 0,
         blocked_family_count: 0,
         parity_mismatch_count: 0,
+    }
+}
+
+fn sample_bootstrap_rollout_evidence(snapshot_id: &str) -> NegRiskRolloutEvidence {
+    NegRiskRolloutEvidence {
+        snapshot_id: snapshot_id.to_owned(),
+        live_ready_family_count: 0,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    }
+}
+
+fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
+    AppRunResult {
+        runtime: AppRuntime::new(AppRuntimeMode::Paper),
+        report: state::ReconcileReport {
+            succeeded: true,
+            promoted_from_bootstrap: true,
+            remote_applied: false,
+            attention: Vec::new(),
+        },
+        summary: SupervisorSummary {
+            fullset_mode: domain::ExecutionMode::Live,
+            negrisk_mode: domain::ExecutionMode::Live,
+            neg_risk_live_attempt_count: 5,
+            neg_risk_live_state_source: NegRiskLiveStateSource::SyntheticBootstrap,
+            bootstrap_status: BootstrapStatus::Ready,
+            runtime_mode: domain::RuntimeMode::Healthy,
+            pending_reconcile_count: 0,
+            last_journal_seq: 12,
+            last_state_version: 7,
+            published_snapshot_id: Some("snapshot-7".to_owned()),
+            published_snapshot_committed_journal_seq: Some(12),
+            neg_risk_rollout_evidence: Some(sample_bootstrap_rollout_evidence("snapshot-7")),
+        },
     }
 }

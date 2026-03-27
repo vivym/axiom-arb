@@ -3,6 +3,8 @@ use observability::{
 };
 use state::ReconcileAttention;
 
+use crate::runtime::AppRunResult;
+
 #[derive(Debug, Clone, Default)]
 pub struct AppInstrumentation {
     recorder: Option<RuntimeMetricsRecorder>,
@@ -63,6 +65,44 @@ impl AppInstrumentation {
             attention_kind = attention_kind,
             "recorded runtime attention fact"
         );
+    }
+}
+
+pub fn emit_bootstrap_completion_observability(
+    recorder: &RuntimeMetricsRecorder,
+    result: &AppRunResult,
+) {
+    recorder.record_runtime_mode(runtime_mode_label(result.runtime.runtime_mode()));
+
+    let completion_span = tracing::info_span!(
+        span_names::APP_BOOTSTRAP_COMPLETE,
+        app_mode = %result.runtime.app_mode().as_str(),
+        bootstrap_status = ?result.runtime.bootstrap_status(),
+        promoted_from_bootstrap = result.report.promoted_from_bootstrap,
+        runtime_mode = ?result.runtime.runtime_mode(),
+        fullset_mode = ?result.summary.fullset_mode,
+        negrisk_mode = ?result.summary.negrisk_mode,
+        neg_risk_live_attempt_count = result.summary.neg_risk_live_attempt_count,
+        neg_risk_live_state_source = result.summary.neg_risk_live_state_source.as_str(),
+        pending_reconcile_count = result.summary.pending_reconcile_count,
+        published_snapshot_id = %result
+            .summary
+            .published_snapshot_id
+            .as_deref()
+            .unwrap_or("none")
+    );
+    let _completion_guard = completion_span.enter();
+    tracing::info!("app-live bootstrap complete");
+}
+
+fn runtime_mode_label(mode: domain::RuntimeMode) -> &'static str {
+    match mode {
+        domain::RuntimeMode::Bootstrapping => "bootstrapping",
+        domain::RuntimeMode::Healthy => "healthy",
+        domain::RuntimeMode::Reconciling => "reconciling",
+        domain::RuntimeMode::Degraded => "degraded",
+        domain::RuntimeMode::NoNewRisk => "no_new_risk",
+        domain::RuntimeMode::GlobalHalt => "global_halt",
     }
 }
 

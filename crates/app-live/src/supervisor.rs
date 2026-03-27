@@ -124,6 +124,7 @@ pub struct AppSupervisor {
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
+    last_emitted_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
     neg_risk_live_state_source: NegRiskLiveStateSource,
 }
@@ -162,6 +163,7 @@ impl AppSupervisor {
             neg_risk_live_approved_families: BTreeSet::new(),
             neg_risk_live_ready_families: BTreeSet::new(),
             neg_risk_rollout_evidence: None,
+            last_emitted_rollout_evidence: None,
             neg_risk_live_execution_records: Vec::new(),
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
         }
@@ -198,6 +200,7 @@ impl AppSupervisor {
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
+        self.last_emitted_rollout_evidence = None;
         let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
             && self.has_seeded_startup_state();
         if restoring_seeded_startup {
@@ -236,6 +239,7 @@ impl AppSupervisor {
 
     pub fn run_bootstrap(self) -> AppRunResult {
         let mut supervisor = self;
+        supervisor.last_emitted_rollout_evidence = None;
         let source = StaticSnapshotSource::new(supervisor.bootstrap_snapshot.clone());
         let report = supervisor.runtime.bootstrap_once(&source);
         let allow_operator_synthesis = supervisor.allow_operator_rollout_evidence_synthesis();
@@ -345,7 +349,8 @@ impl AppSupervisor {
             pending_reconcile_count = field::Empty,
             global_posture = field::Empty,
             ingress_backlog = field::Empty,
-            follow_up_backlog = field::Empty
+            follow_up_backlog = field::Empty,
+            evidence_source = field::Empty
         );
         let _span_guard = span.enter();
         span.record(field_keys::APP_MODE, self.runtime.app_mode().as_str());
@@ -476,6 +481,10 @@ impl AppSupervisor {
         span.record(
             field_keys::FOLLOW_UP_BACKLOG,
             summary.follow_up_backlog_count,
+        );
+        span.record(
+            field_keys::EVIDENCE_SOURCE,
+            self.rollout_evidence_source(&summary),
         );
         if let Some(snapshot_id) = summary.published_snapshot_id.as_deref() {
             span.record(field_keys::SNAPSHOT_ID, snapshot_id);
@@ -847,6 +856,7 @@ impl AppSupervisor {
             runtime_instrumentation(self.metrics_recorder.as_ref()),
         );
         self.neg_risk_rollout_evidence = None;
+        self.last_emitted_rollout_evidence = None;
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
 
@@ -891,13 +901,18 @@ impl AppSupervisor {
         recorder.record_recovery_backlog_count(backlog_count as f64);
     }
 
-    fn record_rollout_evidence(&self, evidence: &NegRiskRolloutEvidence) {
+    fn record_rollout_evidence(&mut self, evidence: &NegRiskRolloutEvidence) {
         let Some(recorder) = &self.metrics_recorder else {
             return;
         };
 
         recorder.record_neg_risk_live_ready_family_count(evidence.live_ready_family_count as f64);
         recorder.record_neg_risk_live_gate_block_count(evidence.blocked_family_count as f64);
+        if self.last_emitted_rollout_evidence.as_ref() != Some(evidence) {
+            recorder
+                .increment_neg_risk_rollout_parity_mismatch_count(evidence.parity_mismatch_count);
+            self.last_emitted_rollout_evidence = Some(evidence.clone());
+        }
     }
 
     fn record_zero_rollout_evidence(&self) {
@@ -917,6 +932,20 @@ impl AppSupervisor {
         recorder.record_daemon_posture(self.posture.as_str());
         recorder.record_ingress_backlog(ingress_backlog_count as f64);
         recorder.record_follow_up_backlog(follow_up_backlog_count as f64);
+    }
+
+    fn rollout_evidence_source(&self, summary: &SupervisorSummary) -> &'static str {
+        let Some(evidence) = summary.neg_risk_rollout_evidence.as_ref() else {
+            return "none";
+        };
+
+        if self.seed.neg_risk_rollout_evidence.as_ref() == Some(evidence)
+            || self.neg_risk_live_state_source == NegRiskLiveStateSource::SyntheticBootstrap
+        {
+            "bootstrap"
+        } else {
+            "snapshot"
+        }
     }
 
     fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {
