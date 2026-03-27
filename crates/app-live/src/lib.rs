@@ -12,7 +12,7 @@ pub use bootstrap::{BootstrapSource, StaticSnapshotSource};
 pub use config::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
     LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
-    NegRiskMemberLiveTarget,
+    NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
 };
 pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;

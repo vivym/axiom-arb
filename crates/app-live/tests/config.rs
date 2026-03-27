@@ -18,15 +18,61 @@ fn parses_neg_risk_live_target_config_from_env_json() {
     "#;
 
     let config = load_neg_risk_live_targets(Some(json)).unwrap();
-    assert_eq!(config["family-a"].members.len(), 2);
-    assert_eq!(config["family-a"].members[0].token_id, "token-1");
+    assert_eq!(config.targets["family-a"].members.len(), 2);
+    assert_eq!(config.targets["family-a"].members[0].token_id, "token-1");
 }
 
 #[test]
 fn missing_neg_risk_live_target_config_returns_empty_map() {
     let config = load_neg_risk_live_targets(None).unwrap();
 
-    assert!(config.is_empty());
+    assert!(config.targets.is_empty());
+}
+
+#[test]
+fn live_target_config_reports_stable_revision_for_startup_set() {
+    let json_a = r#"
+    [
+      {
+        "family_id": "family-b",
+        "members": [
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
+        ]
+      },
+      {
+        "family_id": "family-a",
+        "members": [
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+        ]
+      }
+    ]
+    "#;
+    let json_b = r#"
+    [
+      {
+        "family_id": "family-a",
+        "members": [
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+        ]
+      },
+      {
+        "family_id": "family-b",
+        "members": [
+          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
+        ]
+      }
+    ]
+    "#;
+
+    let config_a = load_neg_risk_live_targets(Some(json_a)).unwrap();
+    let config_b = load_neg_risk_live_targets(Some(json_b)).unwrap();
+
+    assert_eq!(config_a.revision, config_b.revision);
+    assert_eq!(
+        config_a.targets.keys().cloned().collect::<Vec<_>>(),
+        vec!["family-a".to_owned(), "family-b".to_owned()]
+    );
+    assert_eq!(config_a.targets["family-a"].members[0].token_id, "token-1");
 }
 
 #[test]

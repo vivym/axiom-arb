@@ -1,9 +1,28 @@
 use std::{collections::BTreeMap, fmt};
 
 use rust_decimal::Decimal;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskLiveTargetSet {
+    pub revision: String,
+    pub targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+}
+
+impl NegRiskLiveTargetSet {
+    pub fn empty() -> Self {
+        Self::new(BTreeMap::new())
+    }
+
+    fn new(targets: BTreeMap<String, NegRiskFamilyLiveTarget>) -> Self {
+        Self {
+            revision: stable_neg_risk_live_target_revision(&targets),
+            targets,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NegRiskMemberLiveTarget {
     pub condition_id: String,
     pub token_id: String,
@@ -11,7 +30,7 @@ pub struct NegRiskMemberLiveTarget {
     pub quantity: Decimal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NegRiskFamilyLiveTarget {
     pub family_id: String,
     pub members: Vec<NegRiskMemberLiveTarget>,
@@ -90,11 +109,9 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-pub fn load_neg_risk_live_targets(
-    json: Option<&str>,
-) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, ConfigError> {
+pub fn load_neg_risk_live_targets(json: Option<&str>) -> Result<NegRiskLiveTargetSet, ConfigError> {
     let Some(json) = json else {
-        return Ok(BTreeMap::new());
+        return Ok(NegRiskLiveTargetSet::empty());
     };
 
     let families: Vec<NegRiskFamilyLiveTarget> =
@@ -111,7 +128,7 @@ pub fn load_neg_risk_live_targets(
         }
     }
 
-    Ok(targets)
+    Ok(NegRiskLiveTargetSet::new(targets))
 }
 
 pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig, ConfigError> {
@@ -123,4 +140,11 @@ pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig,
         value: json.to_owned(),
         message: error.to_string(),
     })
+}
+
+fn stable_neg_risk_live_target_revision(
+    targets: &BTreeMap<String, NegRiskFamilyLiveTarget>,
+) -> String {
+    serde_json::to_string(targets)
+        .expect("neg-risk live target config should serialize into a stable revision")
 }

@@ -1,3 +1,4 @@
+use app_live::load_neg_risk_live_targets;
 use domain::ExecutionMode;
 use observability::span_names;
 use persistence::{
@@ -290,20 +291,14 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
 #[test]
 fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agree() {
     let database = TestDatabase::new();
+    let neg_risk_live_targets = valid_neg_risk_live_targets_json();
+    let revision = load_neg_risk_live_targets(Some(neg_risk_live_targets))
+        .expect("targets should parse")
+        .revision;
+    database.seed_runtime_progress(Some(revision.as_str()));
     let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
         "live",
-        Some(
-            r#"
-            [
-              {
-                "family_id": "family-a",
-                "members": [
-                  { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
-                ]
-              }
-            ]
-            "#,
-        ),
+        Some(neg_risk_live_targets),
         Some("family-a"),
         Some("family-a"),
         Some(valid_local_signer_config_json()),
@@ -329,6 +324,32 @@ fn live_entrypoint_surfaces_live_negrisk_mode_when_explicit_operator_inputs_agre
         combined.contains("neg_risk_live_state_source=\"synthetic_bootstrap\""),
         "{combined}"
     );
+}
+
+#[test]
+fn live_entrypoint_requires_matching_operator_target_revision_anchor() {
+    let database = TestDatabase::new();
+    database.seed_runtime_progress(Some("targets-rev-stale"));
+    let output = app_live_output_with_operator_inputs_and_signer_and_database_url(
+        "live",
+        Some(valid_neg_risk_live_targets_json()),
+        Some("family-a"),
+        Some("family-a"),
+        Some(valid_local_signer_config_json()),
+        Some(database.database_url()),
+    );
+    database.cleanup();
+
+    assert!(
+        !output.status.success(),
+        "live mode should fail closed when operator targets do not match the persisted revision anchor"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("operator target revision"), "{combined}");
 }
 
 #[test]
@@ -648,10 +669,7 @@ impl TestDatabase {
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                RuntimeProgressRepo
-                    .record_progress(&self.pool, 41, 7, Some("snapshot-7"))
-                    .await
-                    .expect("runtime progress should persist");
+                self.seed_runtime_progress_async(None).await;
                 ExecutionAttemptRepo
                     .append(
                         &self.pool,
@@ -691,6 +709,30 @@ impl TestDatabase {
                     .await
                     .expect("live submission record should persist");
             });
+    }
+
+    fn seed_runtime_progress(&self, operator_target_revision: Option<&str>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                self.seed_runtime_progress_async(operator_target_revision)
+                    .await;
+            });
+    }
+
+    async fn seed_runtime_progress_async(&self, operator_target_revision: Option<&str>) {
+        RuntimeProgressRepo
+            .record_progress(
+                &self.pool,
+                41,
+                7,
+                Some("snapshot-7"),
+                operator_target_revision,
+            )
+            .await
+            .expect("runtime progress should persist");
     }
 
     fn cleanup(self) {
@@ -742,6 +784,19 @@ fn valid_local_signer_config_json() -> &'static str {
         "signature": "builder-signature-1"
       }
     }
+    "#
+}
+
+fn valid_neg_risk_live_targets_json() -> &'static str {
+    r#"
+    [
+      {
+        "family_id": "family-a",
+        "members": [
+          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
+        ]
+      }
+    ]
     "#
 }
 

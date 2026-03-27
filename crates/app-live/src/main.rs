@@ -1,13 +1,9 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    env, process,
-    str::FromStr,
-};
+use std::{collections::BTreeSet, env, process, str::FromStr};
 
 use app_live::{
     load_local_signer_config, load_neg_risk_live_targets,
     run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_paper_instrumented,
-    AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget,
+    AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskLiveTargetSet,
     StaticSnapshotSource,
 };
 use domain::RuntimeMode;
@@ -102,11 +98,10 @@ fn runtime_mode_label(mode: RuntimeMode) -> &'static str {
     }
 }
 
-fn load_neg_risk_live_targets_env(
-) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, Box<dyn std::error::Error>> {
+fn load_neg_risk_live_targets_env() -> Result<NegRiskLiveTargetSet, Box<dyn std::error::Error>> {
     match env::var(NEG_RISK_LIVE_TARGETS_ENV) {
         Ok(value) => Ok(load_neg_risk_live_targets(Some(value.as_str()))?),
-        Err(env::VarError::NotPresent) => Ok(BTreeMap::new()),
+        Err(env::VarError::NotPresent) => Ok(NegRiskLiveTargetSet::empty()),
         Err(env::VarError::NotUnicode(_)) => Err(format!(
             "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
         )
@@ -147,11 +142,11 @@ fn require_database_url_env() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn live_neg_risk_work_requested(
-    targets: &BTreeMap<String, NegRiskFamilyLiveTarget>,
+    targets: &NegRiskLiveTargetSet,
     approved_families: &BTreeSet<String>,
     ready_families: &BTreeSet<String>,
 ) -> bool {
-    targets.keys().any(|family_id| {
+    targets.targets.keys().any(|family_id| {
         approved_families.contains(family_id) && ready_families.contains(family_id)
     })
 }
