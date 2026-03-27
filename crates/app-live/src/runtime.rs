@@ -94,12 +94,12 @@ pub struct AppRunResult {
 }
 
 #[derive(Debug, Clone)]
-struct DurableLiveStartupState {
-    last_journal_seq: i64,
-    last_state_version: u64,
-    published_snapshot_id: Option<String>,
-    pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
-    live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+pub(crate) struct DurableLiveStartupState {
+    pub(crate) last_journal_seq: i64,
+    pub(crate) last_state_version: u64,
+    pub(crate) published_snapshot_id: Option<String>,
+    pub(crate) pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    pub(crate) live_execution_records: Vec<NegRiskLiveExecutionRecord>,
 }
 
 impl AppRuntime {
@@ -461,7 +461,7 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
     }
 }
 
-fn load_durable_live_startup_state(
+pub(crate) fn load_durable_live_startup_state(
     operator_target_revision: Option<&str>,
 ) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -507,7 +507,7 @@ fn load_durable_live_startup_state(
     })
 }
 
-fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {
+pub(crate) fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {
     (!targets.is_empty()).then_some(targets.revision())
 }
 
@@ -541,7 +541,7 @@ fn validate_operator_target_revision(
     }
 }
 
-fn persist_operator_target_revision_anchor(
+pub(crate) fn persist_operator_target_revision_anchor(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {

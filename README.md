@@ -15,7 +15,7 @@
 - Live-mode bootstrap skeleton: `AXIOM_MODE=live cargo run -p app-live`
 - Replay summary from the beginning of an existing journal: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo run -p app-replay -- --from-seq 0`
 
-`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, the Wave 1B observability surface is scoped to repo-owned local signals only: `execution` emits execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` emits recovery divergence signals for resume/rebuild mismatches, and `venue-polymarket` exposes relayer recent-transaction producer observability including local `relayer_pending_age`. The observability path remains local-only and OTel-compatible rather than OTel-enabled, and there is no OpenTelemetry exporter in the binary. This repository state still does not claim `unknown-order`, `broken-leg`, or collector-backed signals.
+`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, the Wave 1B observability surface is scoped to repo-owned local signals only: `execution` emits execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` emits recovery divergence signals for resume/rebuild mismatches plus daemon posture/backlog status, and `venue-polymarket` exposes relayer recent-transaction producer observability including local `relayer_pending_age`. The observability path remains local-only and OTel-compatible rather than OTel-enabled, and there is no OpenTelemetry exporter in the binary. This repository state still does not claim `unknown-order`, `broken-leg`, or collector-backed signals.
 
 ## V1b Neg-Risk Scope Status
 
@@ -33,13 +33,16 @@
 - Phase 3a does not add a new `neg-risk` pricing surface or live planner.
 - Phase 3b can plan `neg-risk` family submits, create request-bound attempts, build live artifact payloads, and materialize order-request bodies in `app-live` when explicit operator inputs provide config-backed, live-approved, and live-ready families.
 - Phase 3c closes the `bootstrap + resume` live submit loop with real signing, real venue submission, durable live submission records, durable pending-reconcile anchors, and fail-closed restart restore.
-- Fresh-boot promotion still depends on explicit operator inputs because the repository does not yet have a production `neg-risk` feed path.
+- Phase 3d upgrades `app-live` into a layered single-process daemon entrypoint with repo-owned ingress/dispatch/follow-up queues, startup-scoped operator-target revisions, daemon posture/backlog observability, and fail-closed startup ordering that restores truth before resuming ingest loops.
+- Real `Polymarket` websocket subscribe/auth/ping sends and `postHeartbeat(previous_heartbeat_id)` request wiring now exist for the daemon source adapters, but live target selection still comes from explicit operator inputs.
+- Fresh-boot promotion still depends on explicit operator inputs because the repository still does not have market-discovered `neg-risk` target generation.
 - Restart and resume require durable rollout evidence plus durable live-attempt, live-submission, and pending-reconcile anchors; they will not fabricate rebuilt readiness or rebuilt live attempts from env or in-memory sets.
 - `neg_risk_live_attempt_count` now counts durable bootstrap/resume live execution records.
 - `observability` now defines typed counters `axiom_neg_risk_live_submit_accepted_total` and `axiom_neg_risk_live_submit_ambiguous_total` for accepted-versus-ambiguous live submit closure accounting.
+- `observability` now also defines typed status signals `axiom_daemon_posture`, `axiom_ingress_backlog`, and `axiom_follow_up_backlog` for truthful daemon lifecycle reporting.
 - `neg_risk_live_state_source` distinguishes fresh operator-synthesized bootstrap promotion from durable restored live-attempt anchors during restart/resume.
 - Families may remain in `Disabled`, `Shadow`, `ReduceOnly`, or `RecoveryOnly`.
-- Continuous daemonization, market-discovered pricing, and full production feed wiring remain follow-on work beyond this repository state.
+- Market-discovered pricing, hot-reloaded operator targets, and richer continuous control-plane automation remain follow-on work beyond this repository state.
 - Phase 3 `neg-risk Live` is still not fully production-enabled by this repository state.
 - Shadow artifacts stay on isolated storage and stream paths; they do not share authoritative live sinks.
 

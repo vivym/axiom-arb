@@ -123,6 +123,18 @@ fn runtime_metrics_expose_dispatch_and_recovery_backlog_signals() {
         metrics.reconcile_attention_total.key(),
         MetricKey::new("axiom_reconcile_attention_total")
     );
+    assert_eq!(
+        metrics.ingress_backlog.key(),
+        MetricKey::new("axiom_ingress_backlog")
+    );
+    assert_eq!(
+        metrics.follow_up_backlog.key(),
+        MetricKey::new("axiom_follow_up_backlog")
+    );
+    assert_eq!(
+        metrics.daemon_posture.key(),
+        MetricKey::new("axiom_daemon_posture")
+    );
 }
 
 #[test]
@@ -157,6 +169,9 @@ fn runtime_metrics_recorder_updates_registry() {
     recorder.increment_neg_risk_live_submit_accepted_total(2);
     recorder.increment_neg_risk_live_submit_ambiguous_total(1);
     recorder.increment_neg_risk_rollout_parity_mismatch_count(2);
+    recorder.record_ingress_backlog(8.0);
+    recorder.record_follow_up_backlog(3.0);
+    recorder.record_daemon_posture("healthy");
 
     let snapshot = observability.registry().snapshot();
     assert_eq!(
@@ -226,6 +241,9 @@ fn runtime_metrics_recorder_updates_registry() {
         snapshot.counter(metrics.neg_risk_rollout_parity_mismatch_count.key()),
         Some(2)
     );
+    assert_eq!(snapshot.gauge(metrics.ingress_backlog.key()), Some(8.0));
+    assert_eq!(snapshot.gauge(metrics.follow_up_backlog.key()), Some(3.0));
+    assert_eq!(snapshot.mode(metrics.daemon_posture.key()), Some("healthy"));
 }
 
 #[test]

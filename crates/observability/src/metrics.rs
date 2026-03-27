@@ -270,11 +270,14 @@ impl ModeSample {
 pub struct RuntimeMetrics {
     pub heartbeat_freshness: GaugeHandle,
     pub runtime_mode: ModeHandle,
+    pub daemon_posture: ModeHandle,
     pub relayer_pending_age: GaugeHandle,
     pub divergence_count: CounterHandle,
     pub websocket_reconnect_total: DimensionedCounterHandle,
     pub halt_activation_total: DimensionedCounterHandle,
     pub reconcile_attention_total: DimensionedCounterHandle,
+    pub ingress_backlog: GaugeHandle,
+    pub follow_up_backlog: GaugeHandle,
     pub dispatcher_backlog_count: GaugeHandle,
     pub projection_publish_lag_count: GaugeHandle,
     pub recovery_backlog_count: GaugeHandle,
@@ -297,6 +300,7 @@ impl Default for RuntimeMetrics {
         Self {
             heartbeat_freshness: GaugeHandle::new("axiom_heartbeat_freshness_seconds"),
             runtime_mode: ModeHandle::new("axiom_runtime_mode"),
+            daemon_posture: ModeHandle::new("axiom_daemon_posture"),
             relayer_pending_age: GaugeHandle::new("axiom_relayer_pending_age_seconds"),
             divergence_count: CounterHandle::new("axiom_runtime_divergence_total"),
             websocket_reconnect_total: DimensionedCounterHandle::new(
@@ -306,6 +310,8 @@ impl Default for RuntimeMetrics {
             reconcile_attention_total: DimensionedCounterHandle::new(
                 "axiom_reconcile_attention_total",
             ),
+            ingress_backlog: GaugeHandle::new("axiom_ingress_backlog"),
+            follow_up_backlog: GaugeHandle::new("axiom_follow_up_backlog"),
             dispatcher_backlog_count: GaugeHandle::new("axiom_dispatcher_backlog_count"),
             projection_publish_lag_count: GaugeHandle::new("axiom_projection_publish_lag_count"),
             recovery_backlog_count: GaugeHandle::new("axiom_recovery_backlog_count"),
@@ -456,6 +462,11 @@ impl RuntimeMetricsRecorder {
             .record_mode(self.metrics.runtime_mode.sample(mode));
     }
 
+    pub fn record_daemon_posture(&self, posture: impl Into<String>) {
+        self.registry
+            .record_mode(self.metrics.daemon_posture.sample(posture));
+    }
+
     pub fn record_relayer_pending_age(&self, seconds: f64) {
         self.registry
             .record_gauge(self.metrics.relayer_pending_age.sample(seconds));
@@ -488,6 +499,16 @@ impl RuntimeMetricsRecorder {
                 .reconcile_attention_total
                 .increment_with_dimensions(amount, dimensions),
         );
+    }
+
+    pub fn record_ingress_backlog(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.ingress_backlog.sample(count));
+    }
+
+    pub fn record_follow_up_backlog(&self, count: f64) {
+        self.registry
+            .record_gauge(self.metrics.follow_up_backlog.sample(count));
     }
 
     pub fn record_dispatcher_backlog_count(&self, count: f64) {

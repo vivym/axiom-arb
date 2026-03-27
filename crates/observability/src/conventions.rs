@@ -1,6 +1,7 @@
 pub mod span_names {
     pub const APP_BOOTSTRAP: &str = "axiom.app.bootstrap";
     pub const APP_BOOTSTRAP_COMPLETE: &str = "axiom.app.bootstrap.complete";
+    pub const APP_DAEMON_RUN: &str = "axiom.app.daemon.run";
     pub const APP_RUNTIME_RECONCILE: &str = "axiom.app.runtime.reconcile";
     pub const APP_RUNTIME_APPLY_INPUT: &str = "axiom.app.runtime.apply_input";
     pub const APP_RUNTIME_PUBLISH_SNAPSHOT: &str = "axiom.app.runtime.publish_snapshot";
@@ -39,6 +40,10 @@ pub mod field_keys {
     pub const JOURNAL_SEQ: &str = "journal_seq";
     pub const SNAPSHOT_ID: &str = "snapshot_id";
     pub const PENDING_RECONCILE_COUNT: &str = "pending_reconcile_count";
+    pub const GLOBAL_POSTURE: &str = "global_posture";
+    pub const INGRESS_BACKLOG: &str = "ingress_backlog";
+    pub const FOLLOW_UP_BACKLOG: &str = "follow_up_backlog";
+    pub const OPERATOR_TARGET_REVISION: &str = "operator_target_revision";
     pub const ATTENTION_REASON: &str = "attention_reason";
     pub const BACKLOG_COUNT: &str = "backlog_count";
     pub const APPLY_RESULT: &str = "apply_result";

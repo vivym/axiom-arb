@@ -7,6 +7,15 @@ pub enum SupervisorPosture {
 }
 
 impl SupervisorPosture {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::DegradedIngress => "degraded_ingress",
+            Self::DegradedDispatch => "degraded_dispatch",
+            Self::GlobalHalt => "global_halt",
+        }
+    }
+
     pub const fn is_global(self) -> bool {
         true
     }

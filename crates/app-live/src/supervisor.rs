@@ -41,6 +41,9 @@ pub struct SupervisorSummary {
     pub published_snapshot_id: Option<String>,
     pub published_snapshot_committed_journal_seq: Option<i64>,
     pub neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
+    pub global_posture: SupervisorPosture,
+    pub ingress_backlog_count: usize,
+    pub follow_up_backlog_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -176,8 +179,22 @@ impl AppSupervisor {
         self.posture
     }
 
+    pub fn app_mode(&self) -> AppRuntimeMode {
+        self.runtime.app_mode()
+    }
+
     pub fn can_resume_ingest_loops(&self) -> bool {
         self.runtime.follow_up_backlog_count() == 0 && self.input_tasks.is_empty()
+    }
+
+    pub(crate) fn startup_phase_label(&self) -> &'static str {
+        let restoring_seeded_startup = self.runtime.bootstrap_status() != BootstrapStatus::Ready
+            && self.has_seeded_startup_state();
+        if restoring_seeded_startup {
+            "restore"
+        } else {
+            "bootstrap"
+        }
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
@@ -325,7 +342,10 @@ impl AppSupervisor {
             last_journal_seq = field::Empty,
             state_version = field::Empty,
             snapshot_id = field::Empty,
-            pending_reconcile_count = field::Empty
+            pending_reconcile_count = field::Empty,
+            global_posture = field::Empty,
+            ingress_backlog = field::Empty,
+            follow_up_backlog = field::Empty
         );
         let _span_guard = span.enter();
         span.record(field_keys::APP_MODE, self.runtime.app_mode().as_str());
@@ -451,6 +471,12 @@ impl AppSupervisor {
             field_keys::PENDING_RECONCILE_COUNT,
             summary.pending_reconcile_count,
         );
+        span.record(field_keys::GLOBAL_POSTURE, summary.global_posture.as_str());
+        span.record(field_keys::INGRESS_BACKLOG, summary.ingress_backlog_count);
+        span.record(
+            field_keys::FOLLOW_UP_BACKLOG,
+            summary.follow_up_backlog_count,
+        );
         if let Some(snapshot_id) = summary.published_snapshot_id.as_deref() {
             span.record(field_keys::SNAPSHOT_ID, snapshot_id);
         }
@@ -460,9 +486,12 @@ impl AppSupervisor {
 
     fn summary(&self) -> SupervisorSummary {
         let neg_risk_live_attempt_count = self.neg_risk_live_execution_records.len();
+        let ingress_backlog_count = self.input_tasks.len();
+        let follow_up_backlog_count = self.runtime.follow_up_backlog_count();
         if let Some(evidence) = self.neg_risk_rollout_evidence.as_ref() {
             self.record_rollout_evidence(evidence);
         }
+        self.record_status_surface(ingress_backlog_count, follow_up_backlog_count);
         SupervisorSummary {
             fullset_mode: ExecutionMode::Live,
             negrisk_mode: if neg_risk_live_attempt_count > 0 {
@@ -482,6 +511,9 @@ impl AppSupervisor {
                 .runtime
                 .published_snapshot_committed_journal_seq(),
             neg_risk_rollout_evidence: self.neg_risk_rollout_evidence.clone(),
+            global_posture: self.posture,
+            ingress_backlog_count,
+            follow_up_backlog_count,
         }
     }
 
@@ -875,6 +907,16 @@ impl AppSupervisor {
 
         recorder.record_neg_risk_live_ready_family_count(0.0);
         recorder.record_neg_risk_live_gate_block_count(0.0);
+    }
+
+    fn record_status_surface(&self, ingress_backlog_count: usize, follow_up_backlog_count: usize) {
+        let Some(recorder) = &self.metrics_recorder else {
+            return;
+        };
+
+        recorder.record_daemon_posture(self.posture.as_str());
+        recorder.record_ingress_backlog(ingress_backlog_count as f64);
+        recorder.record_follow_up_backlog(follow_up_backlog_count as f64);
     }
 
     fn flush_dispatch_instrumented(&mut self) -> DispatchSummary {

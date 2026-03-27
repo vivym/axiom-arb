@@ -2,9 +2,9 @@ use std::{collections::BTreeSet, env, process, str::FromStr};
 
 use app_live::{
     load_local_signer_config, load_neg_risk_live_targets,
-    run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_paper_instrumented,
-    AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig, NegRiskLiveTargetSet,
-    StaticSnapshotSource,
+    run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
+    run_paper_instrumented, AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig,
+    NegRiskLiveTargetSet, StaticSnapshotSource,
 };
 use domain::RuntimeMode;
 use observability::{bootstrap_observability, span_names};
@@ -46,7 +46,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let _local_signer_config = load_local_signer_config_env()?;
             }
             require_database_url_env()?;
-            run_live_from_durable_store_with_neg_risk_live_targets_instrumented(
+            run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
                 &source,
                 instrumentation,
                 neg_risk_live_targets,
@@ -75,6 +75,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         neg_risk_live_attempt_count = result.summary.neg_risk_live_attempt_count,
         neg_risk_live_state_source = result.summary.neg_risk_live_state_source.as_str(),
         pending_reconcile_count = result.summary.pending_reconcile_count,
+        global_posture = %result.summary.global_posture.as_str(),
+        ingress_backlog = result.summary.ingress_backlog_count,
+        follow_up_backlog = result.summary.follow_up_backlog_count,
         published_snapshot_id = %result
             .summary
             .published_snapshot_id

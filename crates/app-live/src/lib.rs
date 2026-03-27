@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod config;
+pub mod daemon;
 pub mod dispatch;
 pub mod input_tasks;
 pub mod instrumentation;
@@ -16,6 +17,10 @@ pub use config::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
     LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
     NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
+};
+pub use daemon::{
+    run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
+    run_paper_daemon_instrumented, AppDaemon, DaemonReport,
 };
 pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;

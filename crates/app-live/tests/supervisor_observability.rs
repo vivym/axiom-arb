@@ -42,6 +42,24 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
     );
     assert_eq!(
         resume_span
+            .field(field_keys::GLOBAL_POSTURE)
+            .map(String::as_str),
+        Some("\"healthy\"")
+    );
+    assert_eq!(
+        resume_span
+            .field(field_keys::INGRESS_BACKLOG)
+            .map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        resume_span
+            .field(field_keys::FOLLOW_UP_BACKLOG)
+            .map(String::as_str),
+        Some("0")
+    );
+    assert_eq!(
+        resume_span
             .field(field_keys::BACKLOG_COUNT)
             .map(String::as_str),
         Some("0")
@@ -111,6 +129,9 @@ fn resume_records_supervisor_and_dispatch_spans_with_zero_rollout_gauges() {
         Some("snapshot-7")
     );
     assert_eq!(summary.pending_reconcile_count, 0);
+    assert_eq!(summary.global_posture.as_str(), "healthy");
+    assert_eq!(summary.ingress_backlog_count, 0);
+    assert_eq!(summary.follow_up_backlog_count, 0);
 }
 
 #[test]

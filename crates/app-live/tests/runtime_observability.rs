@@ -7,8 +7,8 @@ use std::{
 };
 
 use app_live::{
-    runtime::run_live_instrumented, AppInstrumentation, AppRuntime, AppRuntimeMode, InputTaskEvent,
-    StaticSnapshotSource,
+    runtime::run_live_instrumented, AppDaemon, AppInstrumentation, AppRuntime, AppRuntimeMode,
+    AppSupervisor, InputTaskEvent, NegRiskRolloutEvidence, StaticSnapshotSource,
 };
 use chrono::Utc;
 use domain::{ConditionId, ExternalFactEvent, TokenId};
@@ -179,6 +179,46 @@ fn apply_input_records_span_identity_and_result_field() {
             .field(field_keys::APPLY_RESULT)
             .map(String::as_str),
         Some("\"reconcile_required\"")
+    );
+}
+
+#[test]
+fn daemon_runner_records_posture_and_backlog_metrics() {
+    let observability = bootstrap_observability("app-live-test");
+    let mut supervisor = AppSupervisor::for_tests_instrumented(observability.recorder());
+    supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));
+    supervisor.seed_committed_state_version(7);
+    supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(NegRiskRolloutEvidence {
+        snapshot_id: "snapshot-7".to_owned(),
+        live_ready_family_count: 0,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    });
+
+    let mut daemon = AppDaemon::for_tests(supervisor);
+    let report = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(async { daemon.run_until_idle_for_tests(3).await })
+        .expect("daemon should run");
+
+    let snapshot = observability.registry().snapshot();
+    assert_eq!(
+        report.startup_order,
+        vec!["restore", "state", "decision", "ingest"]
+    );
+    assert_eq!(
+        snapshot.mode(observability.metrics().daemon_posture.key()),
+        Some("healthy")
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().ingress_backlog.key()),
+        Some(0.0)
+    );
+    assert_eq!(
+        snapshot.gauge(observability.metrics().follow_up_backlog.key()),
+        Some(0.0)
     );
 }
 
