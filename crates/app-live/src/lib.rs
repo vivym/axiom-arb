@@ -4,6 +4,8 @@ pub mod dispatch;
 pub mod input_tasks;
 pub mod instrumentation;
 pub mod negrisk_live;
+pub mod posture;
+pub mod queues;
 pub mod runtime;
 mod snapshot_meta;
 pub mod supervisor;
@@ -18,6 +20,10 @@ pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;
 pub use instrumentation::AppInstrumentation;
 pub use negrisk_live::{NegRiskLiveArtifact, NegRiskLiveExecutionRecord};
+pub use posture::{ScopeRestriction, ScopeRestrictionKind, SupervisorPosture};
+pub use queues::{
+    FollowUpQueue, FollowUpWork, IngressQueue, SnapshotDispatchQueue, SnapshotNotice,
+};
 pub use runtime::{
     run_live, run_live_from_durable_store_instrumented,
     run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_live_instrumented,

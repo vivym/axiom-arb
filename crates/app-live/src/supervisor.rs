@@ -10,9 +10,11 @@ use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
     config::NegRiskFamilyLiveTarget,
     dispatch::{DispatchLoop, DispatchSummary},
-    input_tasks::{InputTaskEvent, InputTaskQueue},
+    input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
+    posture::SupervisorPosture,
+    queues::IngressQueue,
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
@@ -108,11 +110,12 @@ struct RuntimeSeed {
 
 pub struct AppSupervisor {
     dispatcher: DispatchLoop,
+    posture: SupervisorPosture,
     runtime: AppRuntime,
     metrics_recorder: Option<RuntimeMetricsRecorder>,
     bootstrap_snapshot: RemoteSnapshot,
     committed_log: Vec<InputTaskEvent>,
-    input_tasks: InputTaskQueue,
+    input_tasks: IngressQueue,
     seed: RuntimeSeed,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     neg_risk_live_approved_families: BTreeSet<String>,
@@ -142,6 +145,7 @@ impl AppSupervisor {
     ) -> Self {
         Self {
             dispatcher: DispatchLoop::default(),
+            posture: SupervisorPosture::Healthy,
             runtime: AppRuntime::new_instrumented(
                 app_mode,
                 runtime_instrumentation(metrics_recorder.as_ref()),
@@ -149,7 +153,7 @@ impl AppSupervisor {
             metrics_recorder,
             bootstrap_snapshot,
             committed_log: Vec::new(),
-            input_tasks: InputTaskQueue::default(),
+            input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
             neg_risk_live_targets: BTreeMap::new(),
             neg_risk_live_approved_families: BTreeSet::new(),
@@ -166,6 +170,10 @@ impl AppSupervisor {
 
     pub fn for_tests_instrumented(recorder: RuntimeMetricsRecorder) -> Self {
         Self::new_instrumented(AppRuntimeMode::Live, RemoteSnapshot::empty(), recorder)
+    }
+
+    pub fn posture(&self) -> SupervisorPosture {
+        self.posture
     }
 
     pub fn run_once(&mut self) -> Result<SupervisorSummary, SupervisorError> {
