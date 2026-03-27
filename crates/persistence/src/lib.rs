@@ -53,6 +53,15 @@ pub enum PersistenceError {
     DuplicateExecutionAttempt {
         attempt_id: String,
     },
+    ConflictingCandidateTargetSet {
+        candidate_revision: String,
+    },
+    ConflictingAdoptableTargetRevision {
+        adoptable_revision: String,
+    },
+    ConflictingCandidateAdoptionProvenance {
+        operator_target_revision: String,
+    },
     MissingCandidateAdoptionLink {
         operator_target_revision: String,
     },
@@ -129,6 +138,20 @@ impl fmt::Display for PersistenceError {
             Self::DuplicateExecutionAttempt { attempt_id } => {
                 write!(f, "execution attempt {attempt_id} already exists")
             }
+            Self::ConflictingCandidateTargetSet { candidate_revision } => write!(
+                f,
+                "candidate target set {candidate_revision} already exists with different fields"
+            ),
+            Self::ConflictingAdoptableTargetRevision { adoptable_revision } => write!(
+                f,
+                "adoptable target revision {adoptable_revision} already exists with different fields"
+            ),
+            Self::ConflictingCandidateAdoptionProvenance {
+                operator_target_revision,
+            } => write!(
+                f,
+                "candidate adoption provenance {operator_target_revision} already exists with different linkage"
+            ),
             Self::MissingCandidateAdoptionLink {
                 operator_target_revision,
             } => write!(

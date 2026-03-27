@@ -1531,6 +1531,32 @@ impl CandidateArtifactRepo {
         pool: &PgPool,
         row: &CandidateTargetSetRow,
     ) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        let existing = sqlx::query(
+            r#"
+            SELECT candidate_revision, snapshot_id, source_revision, payload
+            FROM candidate_target_sets
+            WHERE candidate_revision = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(&row.candidate_revision)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(map_candidate_target_set_row)
+        .transpose()?;
+
+        if let Some(existing) = existing {
+            if existing == *row {
+                tx.commit().await?;
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingCandidateTargetSet {
+                candidate_revision: row.candidate_revision.clone(),
+            });
+        }
+
         sqlx::query(
             r#"
             INSERT INTO candidate_target_sets (
@@ -1540,18 +1566,16 @@ impl CandidateArtifactRepo {
                 payload
             )
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (candidate_revision) DO UPDATE
-            SET snapshot_id = EXCLUDED.snapshot_id,
-                source_revision = EXCLUDED.source_revision,
-                payload = EXCLUDED.payload
             "#,
         )
         .bind(&row.candidate_revision)
         .bind(&row.snapshot_id)
         .bind(&row.source_revision)
         .bind(&row.payload)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -1580,6 +1604,36 @@ impl CandidateArtifactRepo {
         pool: &PgPool,
         row: &AdoptableTargetRevisionRow,
     ) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        let existing = sqlx::query(
+            r#"
+            SELECT
+                adoptable_revision,
+                candidate_revision,
+                rendered_operator_target_revision,
+                payload
+            FROM adoptable_target_revisions
+            WHERE adoptable_revision = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(&row.adoptable_revision)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(map_adoptable_target_revision_row)
+        .transpose()?;
+
+        if let Some(existing) = existing {
+            if existing == *row {
+                tx.commit().await?;
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingAdoptableTargetRevision {
+                adoptable_revision: row.adoptable_revision.clone(),
+            });
+        }
+
         sqlx::query(
             r#"
             INSERT INTO adoptable_target_revisions (
@@ -1589,18 +1643,16 @@ impl CandidateArtifactRepo {
                 payload
             )
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (adoptable_revision) DO UPDATE
-            SET candidate_revision = EXCLUDED.candidate_revision,
-                rendered_operator_target_revision = EXCLUDED.rendered_operator_target_revision,
-                payload = EXCLUDED.payload
             "#,
         )
         .bind(&row.adoptable_revision)
         .bind(&row.candidate_revision)
         .bind(&row.rendered_operator_target_revision)
         .bind(&row.payload)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -1638,6 +1690,32 @@ impl CandidateAdoptionRepo {
         pool: &PgPool,
         row: &CandidateAdoptionProvenanceRow,
     ) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        let existing = sqlx::query(
+            r#"
+            SELECT operator_target_revision, adoptable_revision, candidate_revision
+            FROM candidate_adoption_provenance
+            WHERE operator_target_revision = $1
+            FOR UPDATE
+            "#,
+        )
+        .bind(&row.operator_target_revision)
+        .fetch_optional(&mut *tx)
+        .await?
+        .map(map_candidate_adoption_provenance_row)
+        .transpose()?;
+
+        if let Some(existing) = existing {
+            if existing == *row {
+                tx.commit().await?;
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingCandidateAdoptionProvenance {
+                operator_target_revision: row.operator_target_revision.clone(),
+            });
+        }
+
         sqlx::query(
             r#"
             INSERT INTO candidate_adoption_provenance (
@@ -1646,16 +1724,15 @@ impl CandidateAdoptionRepo {
                 candidate_revision
             )
             VALUES ($1, $2, $3)
-            ON CONFLICT (operator_target_revision) DO UPDATE
-            SET adoptable_revision = EXCLUDED.adoptable_revision,
-                candidate_revision = EXCLUDED.candidate_revision
             "#,
         )
         .bind(&row.operator_target_revision)
         .bind(&row.adoptable_revision)
         .bind(&row.candidate_revision)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(())
     }
@@ -1675,6 +1752,7 @@ impl CandidateAdoptionRepo {
             JOIN adoptable_target_revisions AS adoptable
                 ON adoptable.adoptable_revision = provenance.adoptable_revision
                AND adoptable.candidate_revision = provenance.candidate_revision
+               AND adoptable.rendered_operator_target_revision = provenance.operator_target_revision
             JOIN candidate_target_sets AS candidate
                 ON candidate.candidate_revision = provenance.candidate_revision
             WHERE provenance.operator_target_revision = $1
