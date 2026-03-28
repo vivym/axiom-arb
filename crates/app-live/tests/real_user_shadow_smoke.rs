@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use app_live::{AppSupervisor, NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
 use domain::{ExecutionMode, RuntimeMode};
 use persistence::models::{ExecutionAttemptRow, ShadowExecutionArtifactRow};
-use serde_json::json;
 use rust_decimal::Decimal;
+use serde_json::json;
 
 #[test]
 fn smoke_guard_turns_live_eligible_family_into_shadow_attempt_and_never_live_attempt() {
@@ -20,6 +20,7 @@ fn smoke_guard_turns_live_eligible_family_into_shadow_attempt_and_never_live_att
     let summary = supervisor.run_once().unwrap();
 
     assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+    assert!(summary.real_user_shadow_smoke);
     assert_eq!(summary.neg_risk_live_attempt_count, 0);
     assert_eq!(summary.runtime_mode, RuntimeMode::Healthy);
     assert_eq!(summary.pending_reconcile_count, 0);
@@ -55,6 +56,7 @@ fn ordinary_live_startup_does_not_report_real_user_shadow_smoke() {
     let summary = supervisor.run_once().unwrap();
 
     assert_eq!(summary.negrisk_mode, ExecutionMode::Live);
+    assert!(!summary.real_user_shadow_smoke);
 }
 
 #[test]

@@ -40,6 +40,7 @@ const DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH: &str =
 pub struct SupervisorSummary {
     pub fullset_mode: ExecutionMode,
     pub negrisk_mode: ExecutionMode,
+    pub real_user_shadow_smoke: bool,
     pub neg_risk_live_attempt_count: usize,
     pub neg_risk_live_state_source: NegRiskLiveStateSource,
     pub neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
@@ -642,6 +643,7 @@ impl AppSupervisor {
             } else {
                 ExecutionMode::Shadow
             },
+            real_user_shadow_smoke: self.real_user_shadow_smoke_enabled,
             neg_risk_live_attempt_count,
             neg_risk_live_state_source: self.neg_risk_live_state_source,
             neg_risk_rollout_evidence_source: self.neg_risk_rollout_evidence_source,
@@ -1287,6 +1289,13 @@ impl AppSupervisor {
     }
 }
 
+fn runtime_instrumentation(recorder: Option<&RuntimeMetricsRecorder>) -> AppInstrumentation {
+    match recorder.cloned() {
+        Some(recorder) => AppInstrumentation::enabled(recorder),
+        None => AppInstrumentation::disabled(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -1322,12 +1331,5 @@ mod tests {
         assert_eq!(summary.neg_risk_live_attempt_count, 0);
         assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
         assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
-    }
-}
-
-fn runtime_instrumentation(recorder: Option<&RuntimeMetricsRecorder>) -> AppInstrumentation {
-    match recorder.cloned() {
-        Some(recorder) => AppInstrumentation::enabled(recorder),
-        None => AppInstrumentation::disabled(),
     }
 }

@@ -18,6 +18,7 @@ pub struct DaemonReport {
     pub startup_order: Vec<String>,
     pub ticks_run: usize,
     pub idle_reached: bool,
+    pub real_user_shadow_smoke: bool,
     pub summary: SupervisorSummary,
 }
 
@@ -91,6 +92,7 @@ impl AppDaemon {
             startup_order,
             ticks_run,
             idle_reached,
+            real_user_shadow_smoke: summary.real_user_shadow_smoke,
             summary,
         })
     }

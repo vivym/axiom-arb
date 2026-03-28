@@ -595,6 +595,7 @@ fn sample_bootstrap_result_with_rollout_evidence() -> AppRunResult {
         summary: SupervisorSummary {
             fullset_mode: domain::ExecutionMode::Live,
             negrisk_mode: domain::ExecutionMode::Live,
+            real_user_shadow_smoke: false,
             neg_risk_live_attempt_count: 5,
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
             bootstrap_status: BootstrapStatus::Ready,
@@ -629,6 +630,7 @@ fn sample_neutral_rollout_result() -> AppRunResult {
         summary: SupervisorSummary {
             fullset_mode: domain::ExecutionMode::Live,
             negrisk_mode: domain::ExecutionMode::Shadow,
+            real_user_shadow_smoke: false,
             neg_risk_live_attempt_count: 0,
             neg_risk_live_state_source: NegRiskLiveStateSource::DurableRestore,
             bootstrap_status: BootstrapStatus::Ready,

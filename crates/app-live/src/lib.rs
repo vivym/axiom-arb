@@ -12,6 +12,7 @@ pub mod queues;
 pub mod runtime;
 pub mod smoke;
 mod snapshot_meta;
+pub mod source_tasks;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -47,6 +48,9 @@ pub use runtime::{
 pub use smoke::{
     load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
     RealUserShadowSmokeConfig,
+};
+pub use source_tasks::{
+    build_real_user_shadow_smoke_sources, RealUserShadowSmokeSources, SmokeSafeStartupSource,
 };
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,
