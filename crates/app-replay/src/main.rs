@@ -1,8 +1,9 @@
 use std::process;
 
 use app_replay::{
-    load_neg_risk_foundation_summary_from_env, load_negrisk_candidate_summary_from_env, parse_args,
-    replay_event_journal_from_env, NegRiskSummaryError, SummaryReplayConsumer,
+    load_neg_risk_foundation_summary_from_env, load_negrisk_candidate_summary_from_env,
+    load_negrisk_shadow_attempt_artifacts_from_env, parse_args, replay_event_journal_from_env,
+    NegRiskSummaryError, SummaryReplayConsumer,
 };
 use observability::{bootstrap_observability, field_keys, span_names};
 use tracing::field;
@@ -125,6 +126,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(_) => {}
             Err(error) => {
                 tracing::warn!(error = %error, "app-replay neg-risk candidate summary unavailable");
+            }
+        }
+
+        match load_negrisk_shadow_attempt_artifacts_from_env().await {
+            Ok(rows) if !rows.is_empty() => {
+                let shadow_attempt_count = rows.len();
+                let shadow_artifact_count = rows.iter().map(|row| row.artifacts.len()).sum::<usize>();
+                let shadow_smoke_span = tracing::info_span!(
+                    "app-replay.negrisk_shadow_smoke",
+                    shadow_attempt_count = shadow_attempt_count,
+                    shadow_artifact_count = shadow_artifact_count,
+                );
+                let _shadow_smoke_guard = shadow_smoke_span.enter();
+                tracing::info!(
+                    shadow_attempt_count = shadow_attempt_count,
+                    shadow_artifact_count = shadow_artifact_count,
+                    "app-replay neg-risk shadow smoke"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(error = %error, "app-replay neg-risk shadow smoke unavailable");
             }
         }
 
