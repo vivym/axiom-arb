@@ -83,6 +83,7 @@ This design should guarantee the following:
 - all current repository runtime/business configuration comes from one validated schema
 - `DATABASE_URL` remains the only deployment-level environment variable
 - `app-live` and `app-replay` both load configuration through the same schema path
+- shared schema does not imply identical required sections for every binary or runtime mode
 - the current `AXIOM_*` and `POLY_*` business-config entrypoints are removed rather than kept as compatibility burden
 - large structured payloads stop being represented as JSON-in-env strings
 - schema validation is centralized and fail-closed
@@ -115,7 +116,13 @@ That crate becomes the only owner of:
 - semantic validation
 - validated configuration object construction
 
-Binary crates become consumers of a validated config object rather than owners of their own parsing logic.
+Binary crates become consumers of validated config views rather than owners of their own parsing logic.
+
+Hard rule:
+
+- one shared schema crate may expose multiple validated views
+- each view must still derive from the same TOML document and the same semantic validation ruleset
+- sharing schema must not force every binary to require every section
 
 ### 5.2 Why TOML
 
@@ -168,6 +175,14 @@ The unified file should be a single TOML document with the following top-level s
 - optional `[candidate]` only if current code truly consumes candidate-generation knobs
 
 There should not be a placeholder section for future features that the current code does not consume.
+
+Presence in the schema does not mean unconditional requiredness.
+
+Requiredness must be evaluated against:
+
+- consumer binary
+- runtime mode
+- smoke/runtime posture
 
 ### 6.2 Runtime Section
 
@@ -300,7 +315,31 @@ Examples:
 - duplicate or malformed target members
 - incompatible `signature_type` and `wallet_route`
 
-### 8.3 Missing Versus Empty
+### 8.3 Consumer-Scoped Requiredness
+
+Requiredness must be consumer-scoped and mode-scoped, not global.
+
+The schema crate should therefore expose validated views such as:
+
+- `ValidatedAppLivePaperConfig`
+- `ValidatedAppLiveLiveConfig`
+- `ValidatedAppLiveSmokeConfig`
+- `ValidatedAppReplayConfig`
+
+The exact type names are illustrative, but the contract is mandatory:
+
+- one TOML file
+- one shared schema
+- different validated required subsets depending on binary and mode
+
+For example:
+
+- `app-live` in `paper` mode must not require live signer/source/neg-risk rollout sections
+- `app-live` in `live` mode requires the live/runtime sections that current code actually consumes
+- `app-live` in real-user shadow smoke mode additionally requires smoke-safe Polymarket source and signer inputs
+- `app-replay` must not require live signer/source sections simply because they exist in the shared schema
+
+### 8.4 Missing Versus Empty
 
 The unified config should distinguish between:
 
@@ -314,7 +353,12 @@ Hard rule:
 
 This avoids the current ambiguity where missing env values may silently behave like empty sets.
 
-### 8.4 `DATABASE_URL`
+This rule must be interpreted relative to the validated view:
+
+- a section may be optional for one consumer view and required for another
+- once a section is required for a given validated view, missing fields inside that view are errors
+
+### 8.5 `DATABASE_URL`
 
 `DATABASE_URL` remains outside the TOML file, but it still belongs to the startup validation chain.
 
@@ -352,6 +396,14 @@ That means removing startup parsing of:
 `app-replay` should consume the same unified config path.
 
 Even if it only uses a subset of fields today, it should not maintain a separate configuration reality.
+
+However, `app-replay` must not be forced to load a fully populated live-trading configuration just to replay journal state.
+
+Hard rule:
+
+- `app-replay` consumes a replay-scoped validated view of the shared schema
+- replay must not require live signer/source/relayer auth sections unless replay code actually consumes them
+- a missing live-trading section in replay mode is not by itself a configuration error
 
 Recommended entrypoint:
 
@@ -409,6 +461,8 @@ Add dedicated tests for:
 - fail-fast on invalid config
 - fail-fast on missing `DATABASE_URL`
 - no fallback to legacy env business config
+- per-binary requiredness is enforced correctly
+- replay does not require live-only sections
 
 ### 11.3 Documentation Drift Tests
 
@@ -427,6 +481,8 @@ At least one integration test path should verify that a single TOML file can dri
 - real-user shadow smoke
 - `app-replay` summary startup
 
+Additionally, tests should verify that a minimal replay-scoped config can succeed without unrelated live-only sections.
+
 ## 12. Acceptance Criteria
 
 This work is complete when:
@@ -436,7 +492,7 @@ This work is complete when:
 - `app-replay` loads its configuration from `--config <path>`
 - `DATABASE_URL` is the only remaining deployment-level environment variable
 - legacy `AXIOM_*` and `POLY_*` business-config startup paths are removed
-- the new TOML schema covers current runtime/source/signer/relayer/neg-risk/smoke needs
+- the new TOML schema covers current runtime/source/signer/relayer/neg-risk/smoke needs without forcing every consumer to require every section
 - the schema crate does not contain runtime adapter construction logic
 - `.env.example`, README, runbooks, and helper scripts all reflect the new configuration model
 - no second parallel configuration truth remains in `crates/config`
