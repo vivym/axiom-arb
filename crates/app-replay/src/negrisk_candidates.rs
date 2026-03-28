@@ -173,28 +173,39 @@ pub async fn load_negrisk_candidate_summary(
         .await?
         .and_then(|progress| progress.operator_target_revision)
     {
-        if let Some(provenance) = CandidateAdoptionRepo
+        match CandidateAdoptionRepo
             .get_by_operator_target_revision(pool, &operator_target_revision)
-            .await?
+            .await
         {
-            let artifacts = CandidateArtifactRepo;
-            let candidate = artifacts
-                .get_candidate_target_set(pool, &provenance.candidate_revision)
-                .await?;
-            let adoptable = artifacts
-                .get_adoptable_target_revision(pool, &provenance.adoptable_revision)
-                .await?;
+            Ok(Some(provenance)) => {
+                let artifacts = CandidateArtifactRepo;
+                let candidate = artifacts
+                    .get_candidate_target_set(pool, &provenance.candidate_revision)
+                    .await?;
+                let adoptable = artifacts
+                    .get_adoptable_target_revision(pool, &provenance.adoptable_revision)
+                    .await?;
 
-            if let (Some(candidate), Some(adoptable)) = (candidate, adoptable) {
-                return Ok(NegRiskCandidateSummary {
-                    candidate_target_set_count: candidate_target_sets.len() as u64,
-                    adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
-                    adoption_provenance_count: adoption_provenance.len() as u64,
-                    latest_candidate_revision: Some(candidate.candidate_revision),
-                    latest_adoptable_revision: Some(adoptable.adoptable_revision),
-                    operator_target_revision: Some(operator_target_revision),
-                });
+                if let (Some(candidate), Some(adoptable)) = (candidate, adoptable) {
+                    return Ok(NegRiskCandidateSummary {
+                        candidate_target_set_count: candidate_target_sets.len() as u64,
+                        adoptable_target_revision_count: adoptable_target_revisions.len() as u64,
+                        adoption_provenance_count: adoption_provenance.len() as u64,
+                        latest_candidate_revision: Some(candidate.candidate_revision),
+                        latest_adoptable_revision: Some(adoptable.adoptable_revision),
+                        operator_target_revision: Some(operator_target_revision),
+                    });
+                }
             }
+            Err(PersistenceError::MissingCandidateAdoptionLink { .. }) => {
+                return Ok(fail_closed_candidate_summary(
+                    &candidate_target_sets,
+                    &adoptable_target_revisions,
+                    &adoption_provenance,
+                ));
+            }
+            Ok(None) => {}
+            Err(error) => return Err(error),
         }
 
         return Ok(fail_closed_candidate_summary(

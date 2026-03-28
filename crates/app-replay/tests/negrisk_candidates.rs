@@ -7,7 +7,8 @@ use app_replay::{
 };
 use persistence::{
     models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, PersistenceError,
+    RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -362,6 +363,100 @@ async fn replay_summary_fails_closed_when_runtime_progress_anchor_does_not_resol
         )
         .await
         .unwrap();
+
+    let summary = load_negrisk_candidate_summary(&db.pool).await.unwrap();
+
+    assert_eq!(summary.candidate_target_set_count, 1);
+    assert_eq!(summary.adoptable_target_revision_count, 1);
+    assert_eq!(summary.adoption_provenance_count, 1);
+    assert_eq!(summary.latest_candidate_revision, None);
+    assert_eq!(summary.latest_adoptable_revision, None);
+    assert_eq!(summary.operator_target_revision, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn replay_summary_fails_closed_when_runtime_progress_anchors_malformed_provenance() {
+    let Some(db) = TestDatabase::new().await else {
+        return;
+    };
+    run_migrations(&db.pool).await.unwrap();
+
+    let artifacts = CandidateArtifactRepo;
+    let adoption = CandidateAdoptionRepo;
+    artifacts
+        .upsert_candidate_target_set(
+            &db.pool,
+            &CandidateTargetSetRow {
+                candidate_revision: "candidate-malformed-1".to_owned(),
+                snapshot_id: "snapshot-malformed-1".to_owned(),
+                source_revision: "discovery-malformed-1".to_owned(),
+                payload: json!({
+                    "candidate_revision": "candidate-malformed-1",
+                    "snapshot_id": "snapshot-malformed-1",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    artifacts
+        .upsert_adoptable_target_revision(
+            &db.pool,
+            &AdoptableTargetRevisionRow {
+                adoptable_revision: "adoptable-malformed-1".to_owned(),
+                candidate_revision: "candidate-malformed-1".to_owned(),
+                rendered_operator_target_revision: "targets-rev-rendered".to_owned(),
+                payload: json!({
+                    "adoptable_revision": "adoptable-malformed-1",
+                    "candidate_revision": "candidate-malformed-1",
+                    "rendered_operator_target_revision": "targets-rev-rendered",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+    adoption
+        .upsert_provenance(
+            &db.pool,
+            &CandidateAdoptionProvenanceRow {
+                operator_target_revision: "targets-rev-anchor".to_owned(),
+                adoptable_revision: "adoptable-malformed-1".to_owned(),
+                candidate_revision: "candidate-malformed-1".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let anchored_provenance = adoption
+        .get_by_operator_target_revision(&db.pool, "targets-rev-anchor")
+        .await;
+    assert!(
+        matches!(
+            anchored_provenance,
+            Err(PersistenceError::MissingCandidateAdoptionLink { .. })
+        ),
+        "{anchored_provenance:?}"
+    );
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-malformed-1"),
+            Some("targets-rev-anchor"),
+        )
+        .await
+        .unwrap();
+
+    let current_progress = RuntimeProgressRepo.current(&db.pool).await.unwrap();
+    assert_eq!(
+        current_progress
+            .as_ref()
+            .and_then(|progress| progress.operator_target_revision.as_deref()),
+        Some("targets-rev-anchor")
+    );
 
     let summary = load_negrisk_candidate_summary(&db.pool).await.unwrap();
 
