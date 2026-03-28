@@ -10,9 +10,10 @@ use persistence::{
     connect_pool_from_env,
     models::{
         ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow, RuntimeProgressRow,
+        ShadowExecutionArtifactRow,
     },
     CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo, LiveSubmissionRepo,
-    PendingReconcileRepo, RuntimeProgressRepo,
+    PendingReconcileRepo, RuntimeProgressRepo, ShadowArtifactRepo,
 };
 use state::{
     ApplyError, ApplyResult, CandidateProjectionReadiness, CandidatePublication,
@@ -26,6 +27,7 @@ use crate::config::NegRiskLiveTargetSet;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
 use crate::negrisk_live::NegRiskLiveExecutionRecord;
+use crate::smoke::RealUserShadowSmokeConfig;
 use crate::supervisor::{AppSupervisor, CandidateRestoreStatus, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +104,15 @@ pub(crate) struct DurableLiveStartupState {
     pub(crate) published_snapshot_id: Option<String>,
     pub(crate) pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
     pub(crate) live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+    pub(crate) shadow_execution_attempts: Vec<ExecutionAttemptRow>,
+    pub(crate) shadow_execution_artifacts: Vec<ShadowExecutionArtifactRow>,
     pub(crate) candidate_restore_status: CandidateRestoreStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DurableShadowExecutionState {
+    pub(crate) attempts: Vec<ExecutionAttemptRow>,
+    pub(crate) artifacts: Vec<ShadowExecutionArtifactRow>,
 }
 
 impl AppRuntime {
@@ -392,6 +402,7 @@ where
         NegRiskLiveTargetSet::empty(),
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
 }
 
@@ -401,6 +412,7 @@ pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
     neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
 ) -> Result<AppRunResult, Box<dyn std::error::Error>>
 where
     S: BootstrapSource,
@@ -414,6 +426,9 @@ where
         }
         None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
     };
+    if real_user_shadow_smoke.is_some() {
+        supervisor.enable_real_user_shadow_smoke();
+    }
     supervisor.seed_runtime_progress(
         durable_state.last_journal_seq,
         durable_state.last_state_version,
@@ -443,6 +458,12 @@ where
     }
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
+    }
+    for attempt in durable_state.shadow_execution_attempts {
+        supervisor.seed_neg_risk_shadow_execution_attempt(attempt);
+    }
+    for artifact in durable_state.shadow_execution_artifacts {
+        supervisor.seed_neg_risk_shadow_execution_artifact(artifact);
     }
     supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
@@ -498,11 +519,21 @@ pub(crate) fn load_durable_live_startup_state(
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         let progress = RuntimeProgressRepo.current(&pool).await?;
-        let attempts = ExecutionAttemptRepo.list_live_attempts(&pool).await?;
+        let live_attempts = ExecutionAttemptRepo.list_live_attempts(&pool).await?;
+        let shadow_attempts = ExecutionAttemptRepo.list_shadow_attempts(&pool).await?;
         let submissions_by_attempt = LiveSubmissionRepo
             .list_for_attempts(
                 &pool,
-                &attempts
+                &live_attempts
+                    .iter()
+                    .map(|attempt| attempt.attempt_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+        let shadow_artifacts = ShadowArtifactRepo
+            .list_for_attempts(
+                &pool,
+                &shadow_attempts
                     .iter()
                     .map(|attempt| attempt.attempt_id.clone())
                     .collect::<Vec<_>>(),
@@ -514,9 +545,13 @@ pub(crate) fn load_durable_live_startup_state(
             .map(pending_reconcile_anchor_from_row)
             .collect::<Result<Vec<_>, _>>()?;
         let live_execution_records =
-            durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
+            durable_live_execution_records(live_attempts, submissions_by_attempt, &pending_rows)?;
+        let shadow_execution_state =
+            durable_shadow_execution_state(shadow_attempts, shadow_artifacts)?;
         let has_durable_follow_up_work =
-            !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty();
+            !pending_reconcile_anchors.is_empty()
+                || !live_execution_records.is_empty()
+                || !shadow_execution_state.attempts.is_empty();
         let progress_operator_target_revision = progress
             .as_ref()
             .and_then(|row| row.operator_target_revision.as_deref());
@@ -587,6 +622,8 @@ pub(crate) fn load_durable_live_startup_state(
             published_snapshot_id,
             pending_reconcile_anchors,
             live_execution_records,
+            shadow_execution_attempts: shadow_execution_state.attempts,
+            shadow_execution_artifacts: shadow_execution_state.artifacts,
             candidate_restore_status,
         })
     })
@@ -737,6 +774,48 @@ fn durable_progress_anchor(
     }
 }
 
+fn durable_shadow_execution_state(
+    attempts: Vec<ExecutionAttemptRow>,
+    artifacts: Vec<ShadowExecutionArtifactRow>,
+) -> Result<DurableShadowExecutionState, Box<dyn std::error::Error>> {
+    let known_attempt_ids = attempts
+        .iter()
+        .map(|attempt| attempt.attempt_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for artifact in &artifacts {
+        if !known_attempt_ids.contains(artifact.attempt_id.as_str()) {
+            return Err(boxed_error(format!(
+                "shadow artifact {} is missing durable shadow attempt {}",
+                artifact.stream, artifact.attempt_id
+            )));
+        }
+    }
+
+    Ok(DurableShadowExecutionState {
+        attempts,
+        artifacts,
+    })
+}
+
+pub(crate) fn persist_shadow_execution_records(
+    attempts: &[ExecutionAttemptRow],
+    artifacts: &[ShadowExecutionArtifactRow],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        for attempt in attempts {
+            ExecutionAttemptRepo.append(&pool, attempt).await?;
+        }
+        for artifact in artifacts.iter().cloned() {
+            ShadowArtifactRepo.append(&pool, artifact).await?;
+        }
+        Ok(())
+    })
+}
+
 fn pending_reconcile_anchor_from_row(
     row: &PendingReconcileRow,
 ) -> Result<PendingReconcileAnchor, Box<dyn std::error::Error>> {
@@ -768,10 +847,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use domain::ExecutionMode;
-    use persistence::models::{ExecutionAttemptRow, RuntimeProgressRow};
+    use persistence::models::{
+        ExecutionAttemptRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
+    };
 
     use super::{
-        durable_live_execution_records, durable_progress_anchor, validate_operator_target_revision,
+        durable_live_execution_records, durable_progress_anchor, durable_shadow_execution_state,
+        validate_operator_target_revision,
     };
 
     #[test]
@@ -862,5 +944,33 @@ mod tests {
     #[test]
     fn operator_targets_allow_missing_revision_anchor_without_follow_up_work() {
         validate_operator_target_revision(None, Some("targets-rev-current"), false).unwrap();
+    }
+
+    #[test]
+    fn durable_shadow_state_round_trips_attempts_and_artifacts() {
+        let attempts = vec![ExecutionAttemptRow {
+            attempt_id: "attempt-shadow-1".to_owned(),
+            plan_id: "negrisk-submit-family:family-a".to_owned(),
+            snapshot_id: "snapshot-7".to_owned(),
+            route: "neg-risk".to_owned(),
+            scope: "family-a".to_owned(),
+            matched_rule_id: Some("family-a-live".to_owned()),
+            execution_mode: ExecutionMode::Shadow,
+            attempt_no: 1,
+            idempotency_key: "idem-attempt-shadow-1".to_owned(),
+        }];
+        let artifacts = vec![ShadowExecutionArtifactRow {
+            attempt_id: "attempt-shadow-1".to_owned(),
+            stream: "neg-risk-shadow-plan".to_owned(),
+            payload: serde_json::json!({
+                "attempt_id": "attempt-shadow-1",
+                "scope": "family-a",
+            }),
+        }];
+
+        let state = durable_shadow_execution_state(attempts.clone(), artifacts.clone()).unwrap();
+
+        assert_eq!(state.attempts, attempts);
+        assert_eq!(state.artifacts, artifacts);
     }
 }

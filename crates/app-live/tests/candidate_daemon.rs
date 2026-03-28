@@ -34,6 +34,7 @@ fn daemon_restores_candidate_status_without_blocking_non_adoption_startup() {
         app_live::NegRiskLiveTargetSet::empty(),
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("ordinary startup should not fail closed when candidate artifacts are absent or advisory only");
 
@@ -71,6 +72,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
         first_targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("first explicit-operator startup should succeed");
     assert_eq!(first.summary.latest_candidate_revision, None);
@@ -85,6 +87,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
         second_targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("matching explicit operator restart should not require candidate provenance");
 
@@ -115,6 +118,7 @@ fn malformed_candidate_adoption_provenance_fails_closed_on_restore() {
         targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect_err("startup should fail closed when candidate provenance chain is malformed");
 

@@ -32,7 +32,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
     let real_user_shadow_smoke_guard = env::var_os(REAL_USER_SHADOW_SMOKE_ENV);
     let polymarket_source_config = env::var_os(POLYMARKET_SOURCE_CONFIG_ENV);
-    let _real_user_shadow_smoke = load_real_user_shadow_smoke_config_from_env(
+    let real_user_shadow_smoke = load_real_user_shadow_smoke_config_from_env(
         app_mode,
         real_user_shadow_smoke_guard.as_deref(),
         polymarket_source_config.as_deref(),
@@ -61,6 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 neg_risk_live_targets,
                 neg_risk_live_approved_families,
                 neg_risk_live_ready_families,
+                real_user_shadow_smoke,
             )?
         }
     };

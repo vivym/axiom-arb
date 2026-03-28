@@ -18,7 +18,7 @@ use crate::{
     negrisk_shadow::eligible_shadow_records,
     posture::SupervisorPosture,
     queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
-    runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
+    runtime::{persist_shadow_execution_records, AppRunResult, AppRuntime, AppRuntimeMode},
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
 use state::DirtyDomain;
@@ -136,7 +136,7 @@ impl From<state::ApplyError> for SupervisorError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 struct RuntimeSeed {
     last_journal_seq: Option<i64>,
     last_state_version: u64,
@@ -147,6 +147,8 @@ struct RuntimeSeed {
     candidate_restore_status: CandidateRestoreStatus,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+    neg_risk_shadow_execution_attempts: Vec<ExecutionAttemptRow>,
+    neg_risk_shadow_execution_artifacts: Vec<ShadowExecutionArtifactRow>,
 }
 
 pub struct AppSupervisor {
@@ -394,6 +396,17 @@ impl AppSupervisor {
         self.seed.neg_risk_live_execution_records.push(record);
     }
 
+    pub fn seed_neg_risk_shadow_execution_attempt(&mut self, attempt: ExecutionAttemptRow) {
+        self.seed.neg_risk_shadow_execution_attempts.push(attempt);
+    }
+
+    pub fn seed_neg_risk_shadow_execution_artifact(
+        &mut self,
+        artifact: ShadowExecutionArtifactRow,
+    ) {
+        self.seed.neg_risk_shadow_execution_artifacts.push(artifact);
+    }
+
     pub fn neg_risk_live_execution_records(&self) -> &[NegRiskLiveExecutionRecord] {
         &self.neg_risk_live_execution_records
     }
@@ -520,7 +533,12 @@ impl AppSupervisor {
         } else {
             NegRiskLiveStateSource::DurableRestore
         };
+        self.neg_risk_shadow_execution_attempts =
+            self.seed.neg_risk_shadow_execution_attempts.clone();
+        self.neg_risk_shadow_execution_artifacts =
+            self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
+        self.retain_current_neg_risk_shadow_execution_records();
         self.validate_rollout_evidence_anchor()?;
 
         let processed_count = self.drain_input_tasks()?;
@@ -729,6 +747,7 @@ impl AppSupervisor {
             && self.seed.pending_reconcile_anchors.is_empty()
             && self.seed.neg_risk_rollout_evidence.is_none()
             && self.seed.neg_risk_live_execution_records.is_empty()
+            && self.seed.neg_risk_shadow_execution_attempts.is_empty()
             && self.committed_log.is_empty()
             && self.runtime.last_journal_seq() == Some(0)
             && self.runtime.state_version() == 0;
@@ -739,6 +758,7 @@ impl AppSupervisor {
         self.has_seeded_startup_state()
             && self.runtime.pending_reconcile_count() == 0
             && self.neg_risk_live_execution_records.is_empty()
+            && self.neg_risk_shadow_execution_attempts.is_empty()
             && self.seed.pending_reconcile_anchors.is_empty()
             && self.seed.neg_risk_rollout_evidence.is_none()
     }
@@ -778,14 +798,20 @@ impl AppSupervisor {
                 self.metrics_recorder.clone(),
             )
             .map_err(|err| SupervisorError::new(err.to_string()))?;
-            self.neg_risk_shadow_execution_attempts = records
+            let attempts = records
                 .iter()
                 .map(|record| record.attempt.clone())
-                .collect();
-            self.neg_risk_shadow_execution_artifacts = records
+                .collect::<Vec<_>>();
+            let artifacts = records
                 .into_iter()
                 .flat_map(|record| record.artifacts)
-                .collect();
+                .collect::<Vec<_>>();
+            if std::env::var_os("DATABASE_URL").is_some() {
+                persist_shadow_execution_records(&attempts, &artifacts)
+                    .map_err(|err| SupervisorError::new(err.to_string()))?;
+            }
+            self.neg_risk_shadow_execution_attempts = attempts;
+            self.neg_risk_shadow_execution_artifacts = artifacts;
             self.neg_risk_live_execution_records.clear();
             self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
             return Ok(());
@@ -1042,6 +1068,7 @@ impl AppSupervisor {
             || self.seed.pending_reconcile_count.is_some()
             || !self.seed.pending_reconcile_anchors.is_empty()
             || !self.seed.neg_risk_live_execution_records.is_empty()
+            || !self.seed.neg_risk_shadow_execution_attempts.is_empty()
     }
 
     fn validate_seeded_startup_restore(&self) -> Result<(), SupervisorError> {
@@ -1103,7 +1130,12 @@ impl AppSupervisor {
         } else {
             NegRiskLiveStateSource::DurableRestore
         };
+        self.neg_risk_shadow_execution_attempts =
+            self.seed.neg_risk_shadow_execution_attempts.clone();
+        self.neg_risk_shadow_execution_artifacts =
+            self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
+        self.retain_current_neg_risk_shadow_execution_records();
         Ok(())
     }
 

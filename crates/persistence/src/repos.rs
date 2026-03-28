@@ -1873,6 +1873,20 @@ impl ExecutionAttemptRepo {
     }
 
     pub async fn list_live_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
+        self.list_attempts_by_mode(pool, domain::ExecutionMode::Live)
+            .await
+    }
+
+    pub async fn list_shadow_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
+        self.list_attempts_by_mode(pool, domain::ExecutionMode::Shadow)
+            .await
+    }
+
+    async fn list_attempts_by_mode(
+        &self,
+        pool: &PgPool,
+        mode: domain::ExecutionMode,
+    ) -> Result<Vec<ExecutionAttemptRow>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -1890,7 +1904,7 @@ impl ExecutionAttemptRepo {
             ORDER BY created_at, attempt_id
             "#,
         )
-        .bind(execution_mode_to_str(domain::ExecutionMode::Live))
+        .bind(execution_mode_to_str(mode))
         .fetch_all(pool)
         .await?;
 
@@ -2298,6 +2312,32 @@ impl ShadowArtifactRepo {
             })
         }
     }
+
+    pub async fn list_for_attempts(
+        &self,
+        pool: &PgPool,
+        attempt_ids: &[String],
+    ) -> Result<Vec<ShadowExecutionArtifactRow>> {
+        if attempt_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT attempt_id, stream, payload
+            FROM shadow_execution_artifacts
+            WHERE attempt_id = ANY($1)
+            ORDER BY attempt_id, stream
+            "#,
+        )
+        .bind(attempt_ids)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_shadow_execution_artifact_row)
+            .collect()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -2700,6 +2740,14 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
 
 fn map_live_execution_artifact_row(row: PgRow) -> Result<LiveExecutionArtifactRow> {
     Ok(LiveExecutionArtifactRow {
+        attempt_id: row.try_get("attempt_id")?,
+        stream: row.try_get("stream")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_shadow_execution_artifact_row(row: PgRow) -> Result<ShadowExecutionArtifactRow> {
+    Ok(ShadowExecutionArtifactRow {
         attempt_id: row.try_get("attempt_id")?,
         stream: row.try_get("stream")?,
         payload: row.try_get("payload")?,
