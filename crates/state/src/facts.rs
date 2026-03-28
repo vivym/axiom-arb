@@ -1,9 +1,14 @@
 use std::collections::BTreeSet;
 
-use domain::{ExternalFactEvent, ExternalFactPayloadData, RuntimeAttentionObservedPayload};
+use chrono::{DateTime, Utc};
+use domain::{
+    DiscoverySourceAnchor, EventFamilyId, ExternalFactEvent, ExternalFactPayloadData,
+    FamilyDiscoveryObservedPayload, FamilyDiscoveryRecord, RuntimeAttentionObservedPayload,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DirtyDomain {
+    Candidates,
     Runtime,
     Orders,
     Inventory,
@@ -168,6 +173,18 @@ impl StateFactInput {
     pub fn new(event: ExternalFactEvent) -> Self {
         let fact_key = FactKey::from_event(&event);
         let hint = match event.payload.as_ref() {
+            Some(ExternalFactPayloadData::FamilyDiscoveryObserved(payload)) => {
+                FactApplyHint::FamilyDiscovery {
+                    record: family_discovery_record(&fact_key, payload, event.observed_at),
+                }
+            }
+            Some(ExternalFactPayloadData::FamilyBackfillObserved(payload)) => {
+                FactApplyHint::FamilyBackfill {
+                    family_id: payload.family_id.clone(),
+                    cursor: payload.cursor.clone(),
+                    completed_at: payload.complete.then_some(event.observed_at),
+                }
+            }
             Some(ExternalFactPayloadData::NegRiskLiveSubmitObserved(payload)) => {
                 FactApplyHint::PendingReconcile {
                     anchor: PendingReconcileAnchor::from_live_submit(&fact_key, payload),
@@ -235,6 +252,14 @@ impl From<ExternalFactEvent> for StateFactInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactApplyHint {
     None,
+    FamilyDiscovery {
+        record: FamilyDiscoveryRecord,
+    },
+    FamilyBackfill {
+        family_id: String,
+        cursor: String,
+        completed_at: Option<DateTime<Utc>>,
+    },
     PendingReconcile {
         anchor: PendingReconcileAnchor,
     },
@@ -245,4 +270,21 @@ pub(crate) enum FactApplyHint {
         pending_ref: PendingRef,
         terminal: bool,
     },
+}
+
+fn family_discovery_record(
+    fact_key: &FactKey,
+    payload: &FamilyDiscoveryObservedPayload,
+    observed_at: DateTime<Utc>,
+) -> FamilyDiscoveryRecord {
+    FamilyDiscoveryRecord::new(
+        EventFamilyId::from(payload.family_id.clone()),
+        DiscoverySourceAnchor::new(
+            fact_key.source_kind.clone(),
+            fact_key.source_session_id.clone(),
+            fact_key.source_event_id.clone(),
+            fact_key.normalizer_version.clone(),
+        ),
+        observed_at,
+    )
 }

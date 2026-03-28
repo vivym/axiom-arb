@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod config;
 pub mod daemon;
+pub mod discovery;
 pub mod dispatch;
 pub mod input_tasks;
 pub mod instrumentation;
@@ -22,13 +23,17 @@ pub use daemon::{
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
     run_paper_daemon_instrumented, AppDaemon, DaemonReport,
 };
+pub use discovery::{
+    CandidateArtifactRender, CandidateBridge, DiscoveryReport, DiscoverySupervisor,
+};
 pub use dispatch::{DispatchLoop, DispatchSummary};
 pub use input_tasks::InputTaskEvent;
 pub use instrumentation::AppInstrumentation;
 pub use negrisk_live::{NegRiskLiveArtifact, NegRiskLiveExecutionRecord};
 pub use posture::{ScopeRestriction, ScopeRestrictionKind, SupervisorPosture};
 pub use queues::{
-    FollowUpQueue, FollowUpWork, IngressQueue, SnapshotDispatchQueue, SnapshotNotice,
+    CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth, FollowUpQueue, FollowUpWork,
+    IngressQueue, SnapshotDispatchQueue, SnapshotNotice,
 };
 pub use runtime::{
     run_live, run_live_from_durable_store_instrumented,

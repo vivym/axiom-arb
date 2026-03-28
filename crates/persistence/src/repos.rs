@@ -9,12 +9,13 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use crate::{
     instrumentation::NegRiskPersistenceInstrumentation,
     models::{
-        execution_mode_from_str, execution_mode_to_str, ApprovalStateRow, ExecutionAttemptRow,
-        FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
-        LiveExecutionArtifactRow, LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput,
-        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow, OrderRow,
-        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
-        SnapshotPublicationRow, StoredOrder,
+        execution_mode_from_str, execution_mode_to_str, AdoptableTargetRevisionRow,
+        ApprovalStateRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
+        ExecutionAttemptRow, FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow,
+        JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
+        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
+        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
+        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1522,6 +1523,272 @@ impl RuntimeProgressRepo {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct CandidateArtifactRepo;
+
+impl CandidateArtifactRepo {
+    pub async fn upsert_candidate_target_set(
+        &self,
+        pool: &PgPool,
+        row: &CandidateTargetSetRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_candidate_target_set(pool, &row.candidate_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingCandidateTargetSet {
+                candidate_revision: row.candidate_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO candidate_target_sets (
+                candidate_revision,
+                snapshot_id,
+                source_revision,
+                payload
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(&row.candidate_revision)
+        .bind(&row.snapshot_id)
+        .bind(&row.source_revision)
+        .bind(&row.payload)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("candidate_target_sets_pkey") => {
+                let existing = self
+                    .get_candidate_target_set(pool, &row.candidate_revision)
+                    .await?
+                    .expect("candidate_target_sets primary key conflict should load existing row");
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingCandidateTargetSet {
+                        candidate_revision: row.candidate_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_candidate_target_set(
+        &self,
+        pool: &PgPool,
+        candidate_revision: &str,
+    ) -> Result<Option<CandidateTargetSetRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT candidate_revision, snapshot_id, source_revision, payload
+            FROM candidate_target_sets
+            WHERE candidate_revision = $1
+            "#,
+        )
+        .bind(candidate_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_candidate_target_set_row).transpose()
+    }
+
+    pub async fn upsert_adoptable_target_revision(
+        &self,
+        pool: &PgPool,
+        row: &AdoptableTargetRevisionRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_adoptable_target_revision(pool, &row.adoptable_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingAdoptableTargetRevision {
+                adoptable_revision: row.adoptable_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO adoptable_target_revisions (
+                adoptable_revision,
+                candidate_revision,
+                rendered_operator_target_revision,
+                payload
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(&row.adoptable_revision)
+        .bind(&row.candidate_revision)
+        .bind(&row.rendered_operator_target_revision)
+        .bind(&row.payload)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("adoptable_target_revisions_pkey") => {
+                let existing = self
+                    .get_adoptable_target_revision(pool, &row.adoptable_revision)
+                    .await?
+                    .expect(
+                        "adoptable_target_revisions primary key conflict should load existing row",
+                    );
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingAdoptableTargetRevision {
+                        adoptable_revision: row.adoptable_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_adoptable_target_revision(
+        &self,
+        pool: &PgPool,
+        adoptable_revision: &str,
+    ) -> Result<Option<AdoptableTargetRevisionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                adoptable_revision,
+                candidate_revision,
+                rendered_operator_target_revision,
+                payload
+            FROM adoptable_target_revisions
+            WHERE adoptable_revision = $1
+            "#,
+        )
+        .bind(adoptable_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_adoptable_target_revision_row).transpose()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CandidateAdoptionRepo;
+
+impl CandidateAdoptionRepo {
+    pub async fn upsert_provenance(
+        &self,
+        pool: &PgPool,
+        row: &CandidateAdoptionProvenanceRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_by_operator_target_revision(pool, &row.operator_target_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingCandidateAdoptionProvenance {
+                operator_target_revision: row.operator_target_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO candidate_adoption_provenance (
+                operator_target_revision,
+                adoptable_revision,
+                candidate_revision
+            )
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(&row.operator_target_revision)
+        .bind(&row.adoptable_revision)
+        .bind(&row.candidate_revision)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("candidate_adoption_provenance_pkey") => {
+                let existing = self
+                    .get_by_operator_target_revision(pool, &row.operator_target_revision)
+                    .await?
+                    .expect(
+                        "candidate_adoption_provenance primary key conflict should load existing row",
+                    );
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingCandidateAdoptionProvenance {
+                        operator_target_revision: row.operator_target_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_by_operator_target_revision(
+        &self,
+        pool: &PgPool,
+        operator_target_revision: &str,
+    ) -> Result<Option<CandidateAdoptionProvenanceRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                provenance.operator_target_revision,
+                provenance.adoptable_revision,
+                provenance.candidate_revision
+            FROM candidate_adoption_provenance AS provenance
+            JOIN adoptable_target_revisions AS adoptable
+                ON adoptable.adoptable_revision = provenance.adoptable_revision
+               AND adoptable.candidate_revision = provenance.candidate_revision
+               AND adoptable.rendered_operator_target_revision = provenance.operator_target_revision
+            JOIN candidate_target_sets AS candidate
+                ON candidate.candidate_revision = provenance.candidate_revision
+            WHERE provenance.operator_target_revision = $1
+            "#,
+        )
+        .bind(operator_target_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(row) = row {
+            return Ok(Some(map_candidate_adoption_provenance_row(row)?));
+        }
+
+        if sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM candidate_adoption_provenance WHERE operator_target_revision = $1)",
+        )
+        .bind(operator_target_revision)
+        .fetch_one(pool)
+        .await?
+        {
+            return Err(PersistenceError::MissingCandidateAdoptionLink {
+                operator_target_revision: operator_target_revision.to_owned(),
+            });
+        }
+
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct SnapshotPublicationRepo;
 
 impl SnapshotPublicationRepo {
@@ -2367,6 +2634,32 @@ fn map_resolution_state_row(row: PgRow) -> Result<ResolutionStateRow> {
         dispute_state: row.try_get("dispute_state")?,
         redeemable_at: row.try_get("redeemable_at")?,
         updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_candidate_target_set_row(row: PgRow) -> Result<CandidateTargetSetRow> {
+    Ok(CandidateTargetSetRow {
+        candidate_revision: row.try_get("candidate_revision")?,
+        snapshot_id: row.try_get("snapshot_id")?,
+        source_revision: row.try_get("source_revision")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_adoptable_target_revision_row(row: PgRow) -> Result<AdoptableTargetRevisionRow> {
+    Ok(AdoptableTargetRevisionRow {
+        adoptable_revision: row.try_get("adoptable_revision")?,
+        candidate_revision: row.try_get("candidate_revision")?,
+        rendered_operator_target_revision: row.try_get("rendered_operator_target_revision")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_candidate_adoption_provenance_row(row: PgRow) -> Result<CandidateAdoptionProvenanceRow> {
+    Ok(CandidateAdoptionProvenanceRow {
+        operator_target_revision: row.try_get("operator_target_revision")?,
+        adoptable_revision: row.try_get("adoptable_revision")?,
+        candidate_revision: row.try_get("candidate_revision")?,
     })
 }
 

@@ -8,12 +8,15 @@ pub mod models;
 pub mod repos;
 
 pub use instrumentation::NegRiskPersistenceInstrumentation;
-pub use models::{RuntimeProgressRow, StoredOrder};
+pub use models::{
+    AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
+    RuntimeProgressRow, StoredOrder,
+};
 pub use repos::{
-    persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, ExecutionAttemptRepo,
-    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
-    NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo,
-    ShadowArtifactRepo, SnapshotPublicationRepo,
+    persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, CandidateAdoptionRepo,
+    CandidateArtifactRepo, ExecutionAttemptRepo, IdentifierRepo, InventoryRepo, JournalRepo,
+    LiveArtifactRepo, LiveSubmissionRepo, NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo,
+    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -49,6 +52,18 @@ pub enum PersistenceError {
     },
     DuplicateExecutionAttempt {
         attempt_id: String,
+    },
+    ConflictingCandidateTargetSet {
+        candidate_revision: String,
+    },
+    ConflictingAdoptableTargetRevision {
+        adoptable_revision: String,
+    },
+    ConflictingCandidateAdoptionProvenance {
+        operator_target_revision: String,
+    },
+    MissingCandidateAdoptionLink {
+        operator_target_revision: String,
     },
     DuplicatePendingReconcile {
         pending_ref: String,
@@ -123,6 +138,26 @@ impl fmt::Display for PersistenceError {
             Self::DuplicateExecutionAttempt { attempt_id } => {
                 write!(f, "execution attempt {attempt_id} already exists")
             }
+            Self::ConflictingCandidateTargetSet { candidate_revision } => write!(
+                f,
+                "candidate target set {candidate_revision} already exists with different fields"
+            ),
+            Self::ConflictingAdoptableTargetRevision { adoptable_revision } => write!(
+                f,
+                "adoptable target revision {adoptable_revision} already exists with different fields"
+            ),
+            Self::ConflictingCandidateAdoptionProvenance {
+                operator_target_revision,
+            } => write!(
+                f,
+                "candidate adoption provenance {operator_target_revision} already exists with different linkage"
+            ),
+            Self::MissingCandidateAdoptionLink {
+                operator_target_revision,
+            } => write!(
+                f,
+                "operator target revision {operator_target_revision} could not be linked back to a candidate adoption provenance chain"
+            ),
             Self::DuplicatePendingReconcile { pending_ref } => {
                 write!(f, "pending reconcile item {pending_ref} already exists")
             }

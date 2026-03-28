@@ -236,6 +236,26 @@ async fn migrations_create_signed_order_and_resolution_tables() {
 }
 
 #[tokio::test]
+async fn migrations_create_candidate_and_adoption_tables() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    assert!(table_exists(&db.pool, "candidate_target_sets").await);
+    assert!(table_exists(&db.pool, "adoptable_target_revisions").await);
+    assert!(table_exists(&db.pool, "candidate_adoption_provenance").await);
+    assert!(
+        column_exists(
+            &db.pool,
+            "candidate_adoption_provenance",
+            "operator_target_revision"
+        )
+        .await
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn persistence_repos_round_trip_runtime_foundation() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

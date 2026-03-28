@@ -10,8 +10,14 @@ use persistence::{
 };
 use sqlx::PgPool;
 
+mod negrisk_candidates;
 mod negrisk_summary;
 
+pub use negrisk_candidates::{
+    load_negrisk_adoptable_target_revisions, load_negrisk_candidate_adoption_provenance,
+    load_negrisk_candidate_summary, load_negrisk_candidate_target_sets,
+    summarize_negrisk_candidate_chain, NegRiskCandidateSummary,
+};
 pub use negrisk_summary::{
     load_member_vector_from_journal, load_neg_risk_foundation_summary,
     NegRiskFoundationFamilySummary, NegRiskFoundationSummary, NegRiskMemberVectorPath,
@@ -98,6 +104,12 @@ pub async fn load_neg_risk_foundation_summary_from_env(
         .await
         .map_err(NegRiskSummaryError::Persistence)?;
     load_neg_risk_foundation_summary(&pool).await
+}
+
+pub async fn load_negrisk_candidate_summary_from_env(
+) -> Result<NegRiskCandidateSummary, PersistenceError> {
+    let pool = connect_pool_from_env().await?;
+    load_negrisk_candidate_summary(&pool).await
 }
 
 pub trait ReplayConsumer {

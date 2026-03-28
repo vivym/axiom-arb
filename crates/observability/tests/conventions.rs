@@ -133,6 +133,30 @@ fn runtime_observability_conventions_define_runtime_spans_fields_and_reconcile_r
 }
 
 #[test]
+fn candidate_generation_observability_conventions_are_repo_owned() {
+    assert_eq!(
+        span_names::REPLAY_NEGRISK_CANDIDATES,
+        "axiom.app_replay.negrisk_candidates"
+    );
+    assert_eq!(field_keys::CANDIDATE_REVISION, "candidate_revision");
+    assert_eq!(field_keys::ADOPTABLE_REVISION, "adoptable_revision");
+    assert_eq!(field_keys::CANDIDATE_STATUS, "candidate_status");
+
+    assert_eq!(
+        metric_dimensions::CandidateStatus::Advisory.as_pair(),
+        ("candidate_status", "advisory")
+    );
+    assert_eq!(
+        metric_dimensions::CandidateStatus::Adoptable.as_pair(),
+        ("candidate_status", "adoptable")
+    );
+    assert_eq!(
+        metric_dimensions::CandidateStatus::ProvenanceResolved.as_pair(),
+        ("candidate_status", "provenance_resolved")
+    );
+}
+
+#[test]
 fn wave1c_negrisk_conventions_are_repo_owned() {
     assert_eq!(
         span_names::VENUE_METADATA_REFRESH,

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use state::DirtyDomain;
+use state::{CandidatePublication, DirtyDomain};
 
 use crate::input_tasks::InputTaskEvent;
 
@@ -112,6 +112,99 @@ impl SnapshotDispatchQueue {
 
     pub fn is_empty(&self) -> bool {
         self.notices.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CandidateRestrictionTruth {
+    Eligible,
+    Restricted { reason: String },
+}
+
+impl CandidateRestrictionTruth {
+    pub fn eligible() -> Self {
+        Self::Eligible
+    }
+
+    pub fn restricted(reason: impl Into<String>) -> Self {
+        Self::Restricted {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn restriction_reason(&self) -> Option<&str> {
+        match self {
+            Self::Eligible => None,
+            Self::Restricted { reason } => Some(reason.as_str()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateNotice {
+    pub publication: CandidatePublication,
+    pub dirty_domains: BTreeSet<DirtyDomain>,
+    pub operator_target_revision: Option<String>,
+    pub restriction: CandidateRestrictionTruth,
+}
+
+impl CandidateNotice {
+    pub fn from_publication(
+        publication: &CandidatePublication,
+        dirty_domains: impl IntoIterator<Item = DirtyDomain>,
+        operator_target_revision: Option<&str>,
+        restriction: CandidateRestrictionTruth,
+    ) -> Self {
+        Self {
+            publication: publication.clone(),
+            dirty_domains: dirty_domains.into_iter().collect(),
+            operator_target_revision: operator_target_revision.map(str::to_owned),
+            restriction,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CandidateNoticeQueue {
+    backlog: VecDeque<CandidateNotice>,
+}
+
+impl CandidateNoticeQueue {
+    pub fn push(&mut self, notice: CandidateNotice) {
+        self.backlog.push_back(notice);
+    }
+
+    pub fn pop_front(&mut self) -> Option<CandidateNotice> {
+        self.backlog.pop_front()
+    }
+
+    pub fn coalesced(&self) -> Vec<CandidateNotice> {
+        let mut coalesced = BTreeMap::new();
+        for notice in self
+            .backlog
+            .iter()
+            .filter(|notice| notice.dirty_domains.contains(&DirtyDomain::Candidates))
+        {
+            coalesced.insert(
+                (
+                    notice.publication.publication_id.clone(),
+                    notice.publication.state_version,
+                    notice.operator_target_revision.clone(),
+                    notice.restriction.clone(),
+                ),
+                notice.clone(),
+            );
+        }
+
+        coalesced.into_values().collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.backlog.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.backlog.is_empty()
     }
 }
 

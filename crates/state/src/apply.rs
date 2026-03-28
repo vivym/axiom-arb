@@ -92,6 +92,29 @@ impl<'a> StateApplier<'a> {
 
         match fact.apply_hint() {
             FactApplyHint::None => {}
+            FactApplyHint::FamilyDiscovery { record } => {
+                self.store.record_family_discovery(record.clone());
+                let state_version = self.store.record_applied_fact(journal_seq, fact_key);
+                return Ok(ApplyResult::Applied {
+                    journal_seq,
+                    state_version,
+                    dirty_set: DirtySet::new([DirtyDomain::Candidates]),
+                });
+            }
+            FactApplyHint::FamilyBackfill {
+                family_id,
+                cursor,
+                completed_at,
+            } => {
+                self.store
+                    .record_family_backfill(family_id, cursor.clone(), *completed_at);
+                let state_version = self.store.record_applied_fact(journal_seq, fact_key);
+                return Ok(ApplyResult::Applied {
+                    journal_seq,
+                    state_version,
+                    dirty_set: DirtySet::new([DirtyDomain::Candidates]),
+                });
+            }
             FactApplyHint::PendingReconcile { anchor } => {
                 self.store.record_pending_reconcile(anchor.clone());
                 self.store.mark_reconcile_required();

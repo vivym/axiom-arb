@@ -4,8 +4,8 @@ use domain::{
     SubmissionState, TokenId, VenueOrderState,
 };
 use state::{
-    NegRiskFamilyRolloutReadiness, NegRiskView, ProjectionReadiness, PublishedSnapshot,
-    StateApplier, StateStore,
+    CandidateProjectionReadiness, CandidatePublication, NegRiskFamilyRolloutReadiness, NegRiskView,
+    ProjectionReadiness, PublishedSnapshot, StateApplier, StateStore,
 };
 
 #[test]
@@ -104,6 +104,78 @@ fn unsupported_negrisk_readiness_is_downgraded_before_publication() {
     assert!(snapshot.fullset.is_some());
     assert!(!snapshot.negrisk_ready);
     assert!(snapshot.negrisk.is_none());
+}
+
+#[test]
+fn candidate_publication_uses_separate_readiness_path_from_published_snapshot() {
+    let store = sample_store_with_anchored_fullset();
+    let snapshot = PublishedSnapshot::from_store(
+        &store,
+        ProjectionReadiness::ready_fullset_pending_negrisk("snapshot-11"),
+    );
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::failed("candidate-pub-11", "projection timeout"),
+    );
+
+    assert!(snapshot.fullset_ready);
+    assert!(!snapshot.negrisk_ready);
+    assert_eq!(candidate_publication.publication_id, "candidate-pub-11");
+    assert!(!candidate_publication.ready);
+    assert!(candidate_publication.view.is_none());
+    assert_eq!(
+        candidate_publication.failure_reason.as_deref(),
+        Some("projection timeout")
+    );
+}
+
+#[test]
+fn candidate_publication_ready_materializes_candidate_view_for_discovered_families() {
+    let mut store = sample_store_with_anchored_fullset();
+    StateApplier::new(&mut store)
+        .apply(
+            18,
+            ExternalFactEvent::family_discovery_observed(
+                "session-discovery",
+                "evt-1",
+                "family-a",
+                Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 0).unwrap(),
+            ),
+        )
+        .unwrap();
+
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::ready("candidate-pub-12"),
+    );
+
+    assert!(candidate_publication.ready);
+    assert_eq!(candidate_publication.failure_reason, None);
+    assert_eq!(candidate_publication.lag_reason, None);
+    assert_eq!(
+        candidate_publication
+            .view
+            .as_ref()
+            .map(|view| view.discovery_records[0].family_id.as_str()),
+        Some("family-a")
+    );
+}
+
+#[test]
+fn candidate_publication_lagging_sets_lag_reason_without_materializing_view() {
+    let store = sample_store_with_anchored_fullset();
+    let candidate_publication = CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::lagging("candidate-pub-13", "candidate projection lagging"),
+    );
+
+    assert!(!candidate_publication.ready);
+    assert_eq!(candidate_publication.failure_reason, None);
+    assert_eq!(
+        candidate_publication.lag_reason.as_deref(),
+        Some("candidate projection lagging")
+    );
+    assert!(candidate_publication.view.is_none());
 }
 
 #[test]

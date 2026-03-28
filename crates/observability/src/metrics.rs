@@ -293,6 +293,8 @@ pub struct RuntimeMetrics {
     pub neg_risk_live_submit_accepted_total: CounterHandle,
     pub neg_risk_live_submit_ambiguous_total: CounterHandle,
     pub neg_risk_rollout_parity_mismatch_count: CounterHandle,
+    pub neg_risk_candidate_publish_total: CounterHandle,
+    pub neg_risk_candidate_provenance_visible_total: CounterHandle,
 }
 
 impl Default for RuntimeMetrics {
@@ -344,6 +346,12 @@ impl Default for RuntimeMetrics {
             ),
             neg_risk_rollout_parity_mismatch_count: CounterHandle::new(
                 "axiom_neg_risk_rollout_parity_mismatch_total",
+            ),
+            neg_risk_candidate_publish_total: CounterHandle::new(
+                "axiom_neg_risk_candidate_publish_total",
+            ),
+            neg_risk_candidate_provenance_visible_total: CounterHandle::new(
+                "axiom_neg_risk_candidate_provenance_visible_total",
             ),
         }
     }
@@ -594,6 +602,22 @@ impl RuntimeMetricsRecorder {
         self.registry.record_counter(
             self.metrics
                 .neg_risk_rollout_parity_mismatch_count
+                .increment(amount),
+        );
+    }
+
+    pub fn increment_neg_risk_candidate_publish_total(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_candidate_publish_total
+                .increment(amount),
+        );
+    }
+
+    pub fn increment_neg_risk_candidate_provenance_visible_total(&self, amount: u64) {
+        self.registry.record_counter(
+            self.metrics
+                .neg_risk_candidate_provenance_visible_total
                 .increment(amount),
         );
     }

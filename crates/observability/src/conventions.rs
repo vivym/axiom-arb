@@ -18,6 +18,7 @@ pub mod span_names {
     pub const NEG_RISK_FAMILY_VALIDATION: &str = "axiom.neg_risk.family.validation";
     pub const NEG_RISK_FAMILY_HALT: &str = "axiom.neg_risk.family.halt";
     pub const REPLAY_NEGRISK_SUMMARY: &str = "axiom.app_replay.negrisk_summary";
+    pub const REPLAY_NEGRISK_CANDIDATES: &str = "axiom.app_replay.negrisk_candidates";
 }
 
 pub mod field_keys {
@@ -48,6 +49,9 @@ pub mod field_keys {
     pub const INGRESS_BACKLOG: &str = "ingress_backlog";
     pub const FOLLOW_UP_BACKLOG: &str = "follow_up_backlog";
     pub const OPERATOR_TARGET_REVISION: &str = "operator_target_revision";
+    pub const CANDIDATE_REVISION: &str = "candidate_revision";
+    pub const ADOPTABLE_REVISION: &str = "adoptable_revision";
+    pub const CANDIDATE_STATUS: &str = "candidate_status";
     pub const ATTENTION_REASON: &str = "attention_reason";
     pub const BACKLOG_COUNT: &str = "backlog_count";
     pub const APPLY_RESULT: &str = "apply_result";
@@ -133,6 +137,23 @@ pub mod metric_dimensions {
                 Self::Family => (field_keys::SCOPE, "family"),
                 Self::Market => (field_keys::SCOPE, "market"),
                 Self::Strategy => (field_keys::SCOPE, "strategy"),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CandidateStatus {
+        Advisory,
+        Adoptable,
+        ProvenanceResolved,
+    }
+
+    impl CandidateStatus {
+        pub const fn as_pair(self) -> (&'static str, &'static str) {
+            match self {
+                Self::Advisory => (field_keys::CANDIDATE_STATUS, "advisory"),
+                Self::Adoptable => (field_keys::CANDIDATE_STATUS, "adoptable"),
+                Self::ProvenanceResolved => (field_keys::CANDIDATE_STATUS, "provenance_resolved"),
             }
         }
     }

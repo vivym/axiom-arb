@@ -11,11 +11,13 @@ use persistence::{
     models::{
         ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow, RuntimeProgressRow,
     },
-    ExecutionAttemptRepo, LiveSubmissionRepo, PendingReconcileRepo, RuntimeProgressRepo,
+    CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo, LiveSubmissionRepo,
+    PendingReconcileRepo, RuntimeProgressRepo,
 };
 use state::{
-    ApplyError, ApplyResult, PendingReconcileAnchor, PublishedSnapshot, ReconcileReport,
-    RemoteSnapshot, StateApplier, StateStore,
+    ApplyError, ApplyResult, CandidateProjectionReadiness, CandidatePublication,
+    PendingReconcileAnchor, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
+    StateStore,
 };
 use tracing::field;
 
@@ -24,7 +26,7 @@ use crate::config::NegRiskLiveTargetSet;
 use crate::input_tasks::InputTaskEvent;
 use crate::instrumentation::AppInstrumentation;
 use crate::negrisk_live::NegRiskLiveExecutionRecord;
-use crate::supervisor::{AppSupervisor, SupervisorSummary};
+use crate::supervisor::{AppSupervisor, CandidateRestoreStatus, SupervisorSummary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppRuntimeMode {
@@ -100,6 +102,7 @@ pub(crate) struct DurableLiveStartupState {
     pub(crate) published_snapshot_id: Option<String>,
     pub(crate) pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
     pub(crate) live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+    pub(crate) candidate_restore_status: CandidateRestoreStatus,
 }
 
 impl AppRuntime {
@@ -263,6 +266,14 @@ impl AppRuntime {
         Some(snapshot)
     }
 
+    pub fn candidate_publication(&self) -> Option<CandidatePublication> {
+        self.store.last_applied_journal_seq()?;
+        Some(CandidatePublication::from_store(
+            &self.store,
+            CandidateProjectionReadiness::ready(format!("candidate-pub-{}", self.state_version())),
+        ))
+    }
+
     pub fn replay_committed_history(
         &mut self,
         history: &[InputTaskEvent],
@@ -410,6 +421,23 @@ where
     );
     supervisor.seed_committed_state_version(durable_state.last_state_version);
     supervisor.seed_pending_reconcile_count(durable_state.pending_reconcile_anchors.len());
+    supervisor.seed_candidate_restore_status(
+        durable_state
+            .candidate_restore_status
+            .latest_candidate_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .latest_adoptable_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .latest_candidate_operator_target_revision
+            .as_deref(),
+        durable_state
+            .candidate_restore_status
+            .adoption_provenance_resolved,
+    );
     for anchor in durable_state.pending_reconcile_anchors {
         supervisor.seed_pending_reconcile_anchor(anchor);
     }
@@ -489,6 +517,62 @@ pub(crate) fn load_durable_live_startup_state(
             durable_live_execution_records(attempts, submissions_by_attempt, &pending_rows)?;
         let has_durable_follow_up_work =
             !pending_reconcile_anchors.is_empty() || !live_execution_records.is_empty();
+        let progress_operator_target_revision = progress
+            .as_ref()
+            .and_then(|row| row.operator_target_revision.as_deref());
+        let candidate_restore_status = if let Some(progress_operator_target_revision) =
+            progress_operator_target_revision
+        {
+            match CandidateAdoptionRepo
+                .get_by_operator_target_revision(&pool, progress_operator_target_revision)
+                .await
+            {
+                Ok(Some(provenance)) => {
+                    let artifacts = CandidateArtifactRepo;
+                    let candidate = artifacts
+                        .get_candidate_target_set(&pool, &provenance.candidate_revision)
+                        .await?
+                        .ok_or_else(|| {
+                            boxed_error(format!(
+                                "candidate adoption provenance {} could not load candidate {}",
+                                progress_operator_target_revision, provenance.candidate_revision
+                            ))
+                        })?;
+                    let adoptable = artifacts
+                        .get_adoptable_target_revision(&pool, &provenance.adoptable_revision)
+                        .await?
+                        .ok_or_else(|| {
+                            boxed_error(format!(
+                                "candidate adoption provenance {} could not load adoptable {}",
+                                progress_operator_target_revision, provenance.adoptable_revision
+                            ))
+                        })?;
+                    if adoptable.candidate_revision != provenance.candidate_revision
+                        || adoptable.rendered_operator_target_revision
+                            != progress_operator_target_revision
+                    {
+                        return Err(boxed_error(format!(
+                            "candidate adoption provenance chain mismatch for operator target revision {progress_operator_target_revision}"
+                        )));
+                    }
+
+                    CandidateRestoreStatus {
+                        latest_candidate_revision: Some(candidate.candidate_revision),
+                        latest_adoptable_revision: Some(adoptable.adoptable_revision),
+                        latest_candidate_operator_target_revision: Some(
+                            progress_operator_target_revision.to_owned(),
+                        ),
+                        adoption_provenance_resolved: true,
+                    }
+                }
+                Ok(None) => {
+                    CandidateRestoreStatus::default()
+                }
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            CandidateRestoreStatus::default()
+        };
         validate_operator_target_revision(
             progress.as_ref(),
             operator_target_revision,
@@ -503,6 +587,7 @@ pub(crate) fn load_durable_live_startup_state(
             published_snapshot_id,
             pending_reconcile_anchors,
             live_execution_records,
+            candidate_restore_status,
         })
     })
 }

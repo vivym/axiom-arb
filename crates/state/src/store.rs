@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use domain::{
-    ApprovalKey, ApprovalState, ConditionId, InventoryBucket, Order, OrderId, ResolutionState,
-    RuntimeMode, RuntimeOverlay, RuntimePolicy, StateConfidence, TokenId,
+    ApprovalKey, ApprovalState, ConditionId, FamilyDiscoveryRecord, InventoryBucket, Order,
+    OrderId, ResolutionState, RuntimeMode, RuntimeOverlay, RuntimePolicy, StateConfidence, TokenId,
 };
 use rust_decimal::Decimal;
 
@@ -41,6 +41,12 @@ pub(crate) struct FullSetAnchor {
     pub open_orders: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFamilyBackfill {
+    cursor: String,
+    completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct StateStore {
     state_version: u64,
@@ -52,6 +58,8 @@ pub struct StateStore {
     first_reconcile_succeeded: bool,
     applied_fact_journal: BTreeMap<FactKey, i64>,
     consumed_journal: BTreeMap<i64, FactKey>,
+    family_discovery_records: BTreeMap<String, FamilyDiscoveryRecord>,
+    pending_family_backfills: BTreeMap<String, PendingFamilyBackfill>,
     pending_reconcile_anchors: BTreeMap<String, PendingReconcileAnchor>,
     runtime_attention_anchors: BTreeMap<String, RuntimeAttentionAnchor>,
     open_orders: HashMap<OrderId, Order>,
@@ -75,6 +83,8 @@ impl StateStore {
             first_reconcile_succeeded: false,
             applied_fact_journal: BTreeMap::new(),
             consumed_journal: BTreeMap::new(),
+            family_discovery_records: BTreeMap::new(),
+            pending_family_backfills: BTreeMap::new(),
             pending_reconcile_anchors: BTreeMap::new(),
             runtime_attention_anchors: BTreeMap::new(),
             open_orders: HashMap::new(),
@@ -186,6 +196,13 @@ impl StateStore {
 
     pub fn pending_reconcile_count(&self) -> usize {
         self.pending_reconcile_anchors.len()
+    }
+
+    pub fn family_discovery_records(&self) -> Vec<FamilyDiscoveryRecord> {
+        self.family_discovery_records
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
     }
 
     pub fn pending_reconcile_anchors(&self) -> Vec<PendingReconcileAnchor> {
@@ -425,6 +442,48 @@ impl StateStore {
             .insert(anchor.pending_ref.clone(), anchor);
     }
 
+    pub(crate) fn record_family_discovery(&mut self, mut record: FamilyDiscoveryRecord) {
+        if let Some(existing) = self.family_discovery_records.get(record.family_id.as_str()) {
+            record.backfill_cursor = existing.backfill_cursor.clone();
+            record.backfill_completed_at = existing.backfill_completed_at;
+        }
+        if let Some(pending_backfill) = self
+            .pending_family_backfills
+            .remove(record.family_id.as_str())
+        {
+            record.record_backfill(pending_backfill.cursor, pending_backfill.completed_at);
+        }
+
+        self.family_discovery_records
+            .insert(record.family_id.as_str().to_owned(), record);
+    }
+
+    pub(crate) fn record_family_backfill(
+        &mut self,
+        family_id: &str,
+        cursor: impl Into<String>,
+        completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) {
+        let cursor = cursor.into();
+
+        if let Some(record) = self.family_discovery_records.get_mut(family_id) {
+            record.record_backfill(cursor, completed_at);
+            return;
+        }
+
+        self.pending_family_backfills
+            .entry(family_id.to_owned())
+            .and_modify(|pending| {
+                pending.cursor = cursor.clone();
+                pending.completed_at =
+                    merge_completion_timestamp(pending.completed_at, completed_at);
+            })
+            .or_insert(PendingFamilyBackfill {
+                cursor,
+                completed_at,
+            });
+    }
+
     pub(crate) fn record_runtime_attention(&mut self, anchor: RuntimeAttentionAnchor) {
         self.runtime_attention_anchors
             .insert(anchor.attention_ref.clone(), anchor);
@@ -445,6 +504,18 @@ impl StateStore {
             committed_journal_seq,
             open_orders: self.current_open_order_ids(),
         });
+    }
+}
+
+fn merge_completion_timestamp(
+    current: Option<chrono::DateTime<chrono::Utc>>,
+    candidate: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) => Some(current.max(candidate)),
+        (Some(current), None) => Some(current),
+        (None, Some(candidate)) => Some(candidate),
+        (None, None) => None,
     }
 }
 

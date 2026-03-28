@@ -8,16 +8,18 @@ use tracing::field;
 
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
-    config::NegRiskFamilyLiveTarget,
+    config::{neg_risk_live_target_revision_from_targets, NegRiskFamilyLiveTarget},
+    discovery::DiscoverySupervisor,
     dispatch::{DispatchLoop, DispatchSummary},
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
     posture::SupervisorPosture,
-    queues::IngressQueue,
+    queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
+use state::DirtyDomain;
 
 const DIVERGENCE_PENDING_RECONCILE_COUNT_MISMATCH: &str = "pending_reconcile_count_mismatch";
 const DIVERGENCE_STATE_VERSION_MISMATCH: &str = "state_version_mismatch";
@@ -41,6 +43,10 @@ pub struct SupervisorSummary {
     pub last_state_version: u64,
     pub published_snapshot_id: Option<String>,
     pub published_snapshot_committed_journal_seq: Option<i64>,
+    pub latest_candidate_revision: Option<String>,
+    pub latest_adoptable_revision: Option<String>,
+    pub latest_candidate_operator_target_revision: Option<String>,
+    pub adoption_provenance_resolved: bool,
     pub neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     pub global_posture: SupervisorPosture,
     pub ingress_backlog_count: usize,
@@ -93,13 +99,21 @@ pub struct NegRiskRolloutEvidence {
     pub parity_mismatch_count: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CandidateRestoreStatus {
+    pub latest_candidate_revision: Option<String>,
+    pub latest_adoptable_revision: Option<String>,
+    pub latest_candidate_operator_target_revision: Option<String>,
+    pub adoption_provenance_resolved: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorError {
     message: String,
 }
 
 impl SupervisorError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -128,6 +142,7 @@ struct RuntimeSeed {
     committed_state_version: Option<u64>,
     pending_reconcile_count: Option<usize>,
     pending_reconcile_anchors: Vec<PendingReconcileAnchor>,
+    candidate_restore_status: CandidateRestoreStatus,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
 }
@@ -142,11 +157,13 @@ pub struct AppSupervisor {
     input_tasks: IngressQueue,
     seed: RuntimeSeed,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
     last_emitted_rollout_evidence: Option<NegRiskRolloutEvidence>,
+    candidate_restore_status: CandidateRestoreStatus,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
     neg_risk_live_state_source: NegRiskLiveStateSource,
 }
@@ -182,11 +199,13 @@ impl AppSupervisor {
             input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
             neg_risk_live_targets: BTreeMap::new(),
+            neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
             neg_risk_live_ready_families: BTreeSet::new(),
             neg_risk_rollout_evidence: None,
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::None,
             last_emitted_rollout_evidence: None,
+            candidate_restore_status: CandidateRestoreStatus::default(),
             neg_risk_live_execution_records: Vec::new(),
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
         }
@@ -239,6 +258,8 @@ impl AppSupervisor {
         if restoring_seeded_startup {
             self.validate_seeded_startup_restore()?;
         }
+        self.drain_input_tasks()?;
+        self.validate_neg_risk_live_execution_anchor()?;
         let _ = self.flush_dispatch_instrumented();
 
         Ok(self.summary())
@@ -321,10 +342,29 @@ impl AppSupervisor {
         self.seed.neg_risk_rollout_evidence = Some(evidence);
     }
 
+    pub fn seed_candidate_restore_status(
+        &mut self,
+        latest_candidate_revision: Option<&str>,
+        latest_adoptable_revision: Option<&str>,
+        latest_candidate_operator_target_revision: Option<&str>,
+        adoption_provenance_resolved: bool,
+    ) {
+        self.seed.candidate_restore_status = CandidateRestoreStatus {
+            latest_candidate_revision: latest_candidate_revision.map(str::to_owned),
+            latest_adoptable_revision: latest_adoptable_revision.map(str::to_owned),
+            latest_candidate_operator_target_revision: latest_candidate_operator_target_revision
+                .map(str::to_owned),
+            adoption_provenance_resolved,
+        };
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
+    }
+
     pub fn seed_neg_risk_live_targets(
         &mut self,
         targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     ) {
+        self.neg_risk_live_target_revision =
+            (!targets.is_empty()).then(|| neg_risk_live_target_revision_from_targets(&targets));
         self.neg_risk_live_targets = targets;
     }
 
@@ -385,6 +425,7 @@ impl AppSupervisor {
         );
         self.neg_risk_rollout_evidence = None;
         self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
+        self.candidate_restore_status = CandidateRestoreStatus::default();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
         self.record_recovery_backlog(self.input_tasks.len());
@@ -403,6 +444,7 @@ impl AppSupervisor {
             }
         };
         self.runtime.replay_committed_history(&self.committed_log)?;
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
         match self.seed.pending_reconcile_count {
             Some(0) => self.runtime.clear_pending_reconcile_after_restore(),
             Some(expected) if self.runtime.pending_reconcile_count() != expected => {
@@ -459,31 +501,7 @@ impl AppSupervisor {
         self.retain_current_neg_risk_live_execution_records();
         self.validate_rollout_evidence_anchor()?;
 
-        let mut processed_count = 0usize;
-        while let Some(input) = self.input_tasks.next_after(self.seed.last_journal_seq) {
-            match self.runtime.apply_input(input.clone())? {
-                ApplyResult::Applied {
-                    state_version,
-                    dirty_set,
-                    ..
-                } => {
-                    self.dispatcher.record_apply(state_version, dirty_set);
-                    self.record_committed_input(input.clone());
-                    let _ = self.input_tasks.remove(&input);
-                    self.publish_current_snapshot(false);
-                    processed_count += 1;
-                    self.record_recovery_backlog(self.input_tasks.len());
-                }
-                ApplyResult::Duplicate { .. }
-                | ApplyResult::Deferred { .. }
-                | ApplyResult::ReconcileRequired { .. } => {
-                    self.record_committed_input(input.clone());
-                    let _ = self.input_tasks.remove(&input);
-                    processed_count += 1;
-                    self.record_recovery_backlog(self.input_tasks.len());
-                }
-            }
-        }
+        let processed_count = self.drain_input_tasks()?;
 
         if self.runtime.published_snapshot_id().is_none() && self.runtime.state_version() > 0 {
             self.publish_current_snapshot(false);
@@ -518,6 +536,42 @@ impl AppSupervisor {
         Ok(summary)
     }
 
+    fn drain_input_tasks(&mut self) -> Result<usize, SupervisorError> {
+        let mut processed_count = 0usize;
+        let durable_anchor = self.runtime.last_journal_seq();
+
+        while let Some(input) = self.input_tasks.next_after(durable_anchor) {
+            match self.runtime.apply_input(input.clone())? {
+                ApplyResult::Applied {
+                    state_version,
+                    dirty_set,
+                    ..
+                } => {
+                    let candidate_dirty = dirty_set.domains.contains(&DirtyDomain::Candidates);
+                    self.dispatcher.record_apply(state_version, dirty_set);
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    self.publish_current_snapshot(false);
+                    if candidate_dirty {
+                        self.materialize_candidate_artifacts();
+                    }
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+                ApplyResult::Duplicate { .. }
+                | ApplyResult::Deferred { .. }
+                | ApplyResult::ReconcileRequired { .. } => {
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+            }
+        }
+
+        Ok(processed_count)
+    }
+
     fn summary(&self) -> SupervisorSummary {
         let neg_risk_live_attempt_count = self.neg_risk_live_execution_records.len();
         let ingress_backlog_count = self.input_tasks.len();
@@ -542,6 +596,21 @@ impl AppSupervisor {
             published_snapshot_committed_journal_seq: self
                 .runtime
                 .published_snapshot_committed_journal_seq(),
+            latest_candidate_revision: self
+                .candidate_restore_status
+                .latest_candidate_revision
+                .clone(),
+            latest_adoptable_revision: self
+                .candidate_restore_status
+                .latest_adoptable_revision
+                .clone(),
+            latest_candidate_operator_target_revision: self
+                .candidate_restore_status
+                .latest_candidate_operator_target_revision
+                .clone(),
+            adoption_provenance_resolved: self
+                .candidate_restore_status
+                .adoption_provenance_resolved,
             neg_risk_rollout_evidence: self.neg_risk_rollout_evidence.clone(),
             global_posture: self.posture,
             ingress_backlog_count,
@@ -761,6 +830,36 @@ impl AppSupervisor {
         }
     }
 
+    fn materialize_candidate_artifacts(&mut self) {
+        let Some(publication) = self.runtime.candidate_publication() else {
+            return;
+        };
+        let Some(view) = publication.view.as_ref() else {
+            return;
+        };
+        if view.discovery_records.is_empty() {
+            return;
+        }
+
+        let notice = CandidateNotice::from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            self.neg_risk_live_target_revision.as_deref(),
+            CandidateRestrictionTruth::eligible(),
+        );
+        let Ok(report) = DiscoverySupervisor::persist_notice_blocking(notice) else {
+            return;
+        };
+
+        self.candidate_restore_status = CandidateRestoreStatus {
+            latest_candidate_revision: report.candidate_revision,
+            latest_adoptable_revision: report.adoptable_revision,
+            latest_candidate_operator_target_revision: report.operator_target_revision,
+            adoption_provenance_resolved: self.neg_risk_live_target_revision.is_some()
+                && report.disposition == "adoptable",
+        };
+    }
+
     fn rollout_evidence_for_snapshot(
         &self,
         snapshot: &PublishedSnapshot,
@@ -893,6 +992,7 @@ impl AppSupervisor {
         self.neg_risk_rollout_evidence = None;
         self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
         self.last_emitted_rollout_evidence = None;
+        self.candidate_restore_status = self.seed.candidate_restore_status.clone();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
 
@@ -900,7 +1000,11 @@ impl AppSupervisor {
             .seed
             .committed_state_version
             .unwrap_or(self.seed.last_state_version);
-        let last_journal_seq = self.seed.last_journal_seq.unwrap_or(0);
+        let Some(last_journal_seq) = self.seed.last_journal_seq else {
+            return Err(SupervisorError::new(
+                "durable last journal sequence is required to restore seeded startup state",
+            ));
+        };
         self.runtime
             .restore_committed_anchor(committed_state_version, last_journal_seq);
 
