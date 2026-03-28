@@ -9,6 +9,7 @@ use crate::{
         load_durable_live_startup_state, operator_target_revision_for,
         persist_operator_target_revision_anchor, AppRunResult, AppRuntimeMode,
     },
+    smoke::RealUserShadowSmokeConfig,
     AppInstrumentation, AppSupervisor, SupervisorError, SupervisorSummary,
 };
 
@@ -17,6 +18,7 @@ pub struct DaemonReport {
     pub startup_order: Vec<String>,
     pub ticks_run: usize,
     pub idle_reached: bool,
+    pub real_user_shadow_smoke: bool,
     pub summary: SupervisorSummary,
 }
 
@@ -90,6 +92,7 @@ impl AppDaemon {
             startup_order,
             ticks_run,
             idle_reached,
+            real_user_shadow_smoke: summary.real_user_shadow_smoke,
             summary,
         })
     }
@@ -152,19 +155,71 @@ pub fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumente
     neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
 ) -> Result<AppRunResult, Box<dyn Error>>
 where
     S: BootstrapSource,
 {
+    let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
-    let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
+    let durable_state =
+        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?;
+    validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
             AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
         }
         None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
     };
+    seed_live_supervisor_from_durable_state(
+        &mut supervisor,
+        durable_state,
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+        real_user_shadow_smoke,
+        true,
+    );
+
+    let result = AppDaemon::new(supervisor)
+        .run_startup()
+        .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    Ok(result)
+}
+
+fn validate_real_user_shadow_smoke_restore(
+    durable_state: &crate::runtime::DurableLiveStartupState,
+    real_user_shadow_smoke: Option<&RealUserShadowSmokeConfig>,
+) -> Result<(), Box<dyn Error>> {
+    if real_user_shadow_smoke.is_some() && !durable_state.live_execution_records.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "real-user shadow smoke cannot resume with durable live execution records",
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+fn seed_live_supervisor_from_durable_state(
+    supervisor: &mut AppSupervisor,
+    durable_state: crate::runtime::DurableLiveStartupState,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+    enable_durable_shadow_persistence: bool,
+) {
+    supervisor.enable_durable_live_persistence();
+    if real_user_shadow_smoke.is_some() {
+        supervisor.enable_real_user_shadow_smoke();
+        if enable_durable_shadow_persistence {
+            supervisor.enable_durable_shadow_persistence();
+        }
+    }
     supervisor.seed_runtime_progress(
         durable_state.last_journal_seq,
         durable_state.last_state_version,
@@ -195,6 +250,14 @@ where
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
     }
+    if real_user_shadow_smoke.is_some() {
+        for attempt in durable_state.shadow_execution_attempts {
+            supervisor.seed_neg_risk_shadow_execution_attempt(attempt);
+        }
+        for artifact in durable_state.shadow_execution_artifacts {
+            supervisor.seed_neg_risk_shadow_execution_artifact(artifact);
+        }
+    }
     supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {
         supervisor.seed_neg_risk_live_approval(&family_id);
@@ -202,10 +265,78 @@ where
     for family_id in neg_risk_live_ready_families {
         supervisor.seed_neg_risk_live_ready_family(&family_id);
     }
+}
 
-    let result = AppDaemon::new(supervisor)
-        .run_startup()
-        .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
-    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
-    Ok(result)
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use domain::ExecutionMode;
+
+    use super::seed_live_supervisor_from_durable_state;
+    use crate::{load_neg_risk_live_targets, load_real_user_shadow_smoke_config, AppSupervisor};
+
+    #[test]
+    fn smoke_config_enables_shadow_path_when_seeding_live_daemon_startup() {
+        let mut supervisor = AppSupervisor::for_tests();
+        seed_live_supervisor_from_durable_state(
+            &mut supervisor,
+            crate::runtime::DurableLiveStartupState {
+                last_journal_seq: 0,
+                last_state_version: 0,
+                published_snapshot_id: Some("snapshot-0".to_owned()),
+                pending_reconcile_anchors: Vec::new(),
+                live_execution_records: Vec::new(),
+                shadow_execution_attempts: Vec::new(),
+                shadow_execution_artifacts: Vec::new(),
+                candidate_restore_status: crate::supervisor::CandidateRestoreStatus::default(),
+            },
+            load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+                .expect("targets should parse"),
+            BTreeSet::from(["family-a".to_owned()]),
+            BTreeSet::from(["family-a".to_owned()]),
+            load_real_user_shadow_smoke_config(
+                Some("1"),
+                Some(
+                    r#"{
+                      "clob_host": "https://clob.polymarket.com",
+                      "data_api_host": "https://data-api.polymarket.com",
+                      "relayer_host": "https://relayer-v2.polymarket.com",
+                      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+                      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+                      "heartbeat_interval_seconds": 15,
+                      "relayer_poll_interval_seconds": 5,
+                      "metadata_refresh_interval_seconds": 60
+                    }"#,
+                ),
+            )
+            .expect("smoke config should parse"),
+            false,
+        );
+
+        let summary = supervisor.run_once().expect("supervisor should run");
+
+        assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+        assert_eq!(summary.neg_risk_live_attempt_count, 0);
+        assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
+        assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
+    }
+
+    fn valid_neg_risk_live_targets_json() -> &'static str {
+        r#"
+        [
+          {
+            "family_id": "family-a",
+            "members": [
+              {
+                "condition_id": "condition-1",
+                "token_id": "token-1",
+                "price": "0.45",
+                "quantity": "10"
+              }
+            ]
+          }
+        ]
+        "#
+    }
 }

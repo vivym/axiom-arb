@@ -1,11 +1,12 @@
 use std::{collections::BTreeSet, env, process, str::FromStr};
 
 use app_live::{
-    instrumentation::emit_bootstrap_completion_observability, load_local_signer_config,
-    load_neg_risk_live_targets,
+    build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
+    load_local_signer_config, load_neg_risk_live_targets,
+    load_real_user_shadow_smoke_config_from_env,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
     run_paper_instrumented, AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig,
-    NegRiskLiveTargetSet, StaticSnapshotSource,
+    NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
 };
 use observability::{bootstrap_observability, span_names};
 use persistence::PersistenceError;
@@ -14,6 +15,8 @@ const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
 const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
 const NEG_RISK_LIVE_READY_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_READY_FAMILIES";
 const LOCAL_SIGNER_CONFIG_ENV: &str = "AXIOM_LOCAL_SIGNER_CONFIG";
+const REAL_USER_SHADOW_SMOKE_ENV: &str = "AXIOM_REAL_USER_SHADOW_SMOKE";
+const POLYMARKET_SOURCE_CONFIG_ENV: &str = "AXIOM_POLYMARKET_SOURCE_CONFIG";
 
 fn main() {
     if let Err(error) = run() {
@@ -28,22 +31,58 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    let source = StaticSnapshotSource::empty();
+    let real_user_shadow_smoke_guard = env::var_os(REAL_USER_SHADOW_SMOKE_ENV);
+    let polymarket_source_config = env::var_os(POLYMARKET_SOURCE_CONFIG_ENV);
+    let real_user_shadow_smoke = load_real_user_shadow_smoke_config_from_env(
+        app_mode,
+        real_user_shadow_smoke_guard.as_deref(),
+        polymarket_source_config.as_deref(),
+    )?;
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let result = match app_mode {
-        AppRuntimeMode::Paper => run_paper_instrumented(&source, instrumentation.clone()),
+        AppRuntimeMode::Paper => {
+            let source = StaticSnapshotSource::empty();
+            run_paper_instrumented(&source, instrumentation.clone())
+        }
         AppRuntimeMode::Live => {
             let neg_risk_live_targets = load_neg_risk_live_targets_env()?;
             let neg_risk_live_approved_families =
                 load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
             let neg_risk_live_ready_families =
                 load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
+            let signer_config = if real_user_shadow_smoke.is_some()
+                || live_neg_risk_work_requested(
+                    &neg_risk_live_targets,
+                    &neg_risk_live_approved_families,
+                    &neg_risk_live_ready_families,
+                ) {
+                Some(load_local_signer_config_env()?)
+            } else {
+                None
+            };
+            let source = match real_user_shadow_smoke.as_ref() {
+                Some(smoke) => SmokeSafeStartupSource::RealUserShadowSmoke(Box::new(
+                    build_real_user_shadow_smoke_sources(
+                        smoke.source_config.clone(),
+                        signer_config
+                            .clone()
+                            .expect("smoke startup should require signer config"),
+                    )
+                    .map_err(|error| {
+                        ConfigError::InvalidPolymarketSourceConfig {
+                            value: POLYMARKET_SOURCE_CONFIG_ENV.to_owned(),
+                            message: error,
+                        }
+                    })?,
+                )),
+                None => SmokeSafeStartupSource::Static(StaticSnapshotSource::empty()),
+            };
             if live_neg_risk_work_requested(
                 &neg_risk_live_targets,
                 &neg_risk_live_approved_families,
                 &neg_risk_live_ready_families,
             ) {
-                let _local_signer_config = load_local_signer_config_env()?;
+                let _ = signer_config;
             }
             require_database_url_env()?;
             run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
@@ -52,6 +91,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 neg_risk_live_targets,
                 neg_risk_live_approved_families,
                 neg_risk_live_ready_families,
+                real_user_shadow_smoke,
             )?
         }
     };

@@ -10,6 +10,7 @@ use app_live::{
 use chrono::Utc;
 use domain::{ExecutionMode, ExternalFactEvent, RuntimeMode};
 use observability::{bootstrap_observability, field_keys, span_names};
+use persistence::models::{ExecutionAttemptRow, ShadowExecutionArtifactRow};
 use rust_decimal::Decimal;
 use serde_json::json;
 use state::PendingReconcileAnchor;
@@ -358,6 +359,33 @@ fn restored_pending_reconcile_scope_blocks_fresh_live_submit_during_startup() {
     );
 }
 
+#[test]
+fn smoke_resume_requires_durable_shadow_attempt_anchors_for_live_ready_family() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.enable_real_user_shadow_smoke();
+    supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+        "family-a".to_owned(),
+        sample_live_target("family-a"),
+    )]));
+    supervisor.seed_neg_risk_live_approval("family-a");
+    supervisor.seed_neg_risk_live_ready_family("family-a");
+    supervisor.seed_runtime_progress(0, 0, Some("snapshot-0"));
+    supervisor.seed_committed_state_version(0);
+    supervisor.seed_pending_reconcile_count(0);
+    supervisor.seed_neg_risk_rollout_evidence(NegRiskRolloutEvidence {
+        snapshot_id: "snapshot-0".to_owned(),
+        live_ready_family_count: 1,
+        blocked_family_count: 0,
+        parity_mismatch_count: 0,
+    });
+    supervisor.seed_neg_risk_shadow_execution_attempt(stale_shadow_attempt("snapshot-stale"));
+    supervisor.seed_neg_risk_shadow_execution_artifact(stale_shadow_artifact());
+
+    let err = supervisor.resume_once().unwrap_err();
+
+    assert!(err.to_string().contains("shadow execution"), "{err}");
+}
+
 fn sample_input_task_event(journal_seq: i64) -> app_live::InputTaskEvent {
     app_live::InputTaskEvent::new(
         journal_seq,
@@ -451,4 +479,30 @@ fn expected_bootstrap_artifact_payload(
         "plan_id": "negrisk-submit-family:family-a:condition-1:token-1:0.45:10",
         "requests": [order_request],
     })
+}
+
+fn stale_shadow_attempt(snapshot_id: &str) -> ExecutionAttemptRow {
+    ExecutionAttemptRow {
+        attempt_id: "shadow-attempt-family-a-1".to_owned(),
+        plan_id: "negrisk-submit-family:family-a:condition-1:token-1:0.45:10".to_owned(),
+        snapshot_id: snapshot_id.to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family-a".to_owned(),
+        matched_rule_id: Some("family-a-live".to_owned()),
+        execution_mode: ExecutionMode::Shadow,
+        attempt_no: 1,
+        idempotency_key: "idem-shadow-attempt-family-a-1".to_owned(),
+    }
+}
+
+fn stale_shadow_artifact() -> ShadowExecutionArtifactRow {
+    ShadowExecutionArtifactRow {
+        attempt_id: "shadow-attempt-family-a-1".to_owned(),
+        stream: "shadow.execution".to_owned(),
+        payload: json!({
+            "attempt_id": "shadow-attempt-family-a-1",
+            "route": "neg-risk",
+            "scope": "family-a",
+        }),
+    }
 }

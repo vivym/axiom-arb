@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::Utc;
 use domain::{ExecutionMode, RuntimeMode};
 use observability::{field_keys, span_names, RuntimeMetricsRecorder};
+use persistence::models::{ExecutionAttemptRow, ShadowExecutionArtifactRow};
 use state::{ApplyResult, PendingReconcileAnchor, PublishedSnapshot, RemoteSnapshot};
 use tracing::field;
 
@@ -14,9 +15,13 @@ use crate::{
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
+    negrisk_shadow::eligible_shadow_records,
     posture::SupervisorPosture,
     queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
-    runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
+    runtime::{
+        persist_live_execution_records, persist_shadow_execution_records, AppRunResult, AppRuntime,
+        AppRuntimeMode,
+    },
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
 use state::DirtyDomain;
@@ -28,11 +33,14 @@ const DIVERGENCE_ROLLOUT_EVIDENCE_MISMATCH: &str = "rollout_evidence_mismatch";
 const DIVERGENCE_ROLLOUT_EVIDENCE_MISSING: &str = "rollout_evidence_missing";
 const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISMATCH: &str =
     "neg_risk_live_execution_snapshot_mismatch";
+const DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH: &str =
+    "neg_risk_shadow_execution_snapshot_mismatch";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSummary {
     pub fullset_mode: ExecutionMode,
     pub negrisk_mode: ExecutionMode,
+    pub real_user_shadow_smoke: bool,
     pub neg_risk_live_attempt_count: usize,
     pub neg_risk_live_state_source: NegRiskLiveStateSource,
     pub neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
@@ -134,7 +142,7 @@ impl From<state::ApplyError> for SupervisorError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 struct RuntimeSeed {
     last_journal_seq: Option<i64>,
     last_state_version: u64,
@@ -145,6 +153,8 @@ struct RuntimeSeed {
     candidate_restore_status: CandidateRestoreStatus,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
+    neg_risk_shadow_execution_attempts: Vec<ExecutionAttemptRow>,
+    neg_risk_shadow_execution_artifacts: Vec<ShadowExecutionArtifactRow>,
 }
 
 pub struct AppSupervisor {
@@ -156,6 +166,9 @@ pub struct AppSupervisor {
     committed_log: Vec<InputTaskEvent>,
     input_tasks: IngressQueue,
     seed: RuntimeSeed,
+    real_user_shadow_smoke_enabled: bool,
+    durable_live_persistence_enabled: bool,
+    durable_shadow_persistence_enabled: bool,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
@@ -166,6 +179,8 @@ pub struct AppSupervisor {
     candidate_restore_status: CandidateRestoreStatus,
     neg_risk_live_execution_records: Vec<NegRiskLiveExecutionRecord>,
     neg_risk_live_state_source: NegRiskLiveStateSource,
+    neg_risk_shadow_execution_attempts: Vec<ExecutionAttemptRow>,
+    neg_risk_shadow_execution_artifacts: Vec<ShadowExecutionArtifactRow>,
 }
 
 impl AppSupervisor {
@@ -198,6 +213,9 @@ impl AppSupervisor {
             committed_log: Vec::new(),
             input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
+            real_user_shadow_smoke_enabled: false,
+            durable_live_persistence_enabled: false,
+            durable_shadow_persistence_enabled: false,
             neg_risk_live_targets: BTreeMap::new(),
             neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
@@ -208,6 +226,8 @@ impl AppSupervisor {
             candidate_restore_status: CandidateRestoreStatus::default(),
             neg_risk_live_execution_records: Vec::new(),
             neg_risk_live_state_source: NegRiskLiveStateSource::None,
+            neg_risk_shadow_execution_attempts: Vec::new(),
+            neg_risk_shadow_execution_artifacts: Vec::new(),
         }
     }
 
@@ -368,6 +388,18 @@ impl AppSupervisor {
         self.neg_risk_live_targets = targets;
     }
 
+    pub fn enable_real_user_shadow_smoke(&mut self) {
+        self.real_user_shadow_smoke_enabled = true;
+    }
+
+    pub fn enable_durable_shadow_persistence(&mut self) {
+        self.durable_shadow_persistence_enabled = true;
+    }
+
+    pub fn enable_durable_live_persistence(&mut self) {
+        self.durable_live_persistence_enabled = true;
+    }
+
     pub fn seed_neg_risk_live_approval(&mut self, family_id: &str) {
         self.neg_risk_live_approved_families
             .insert(family_id.to_owned());
@@ -382,8 +414,27 @@ impl AppSupervisor {
         self.seed.neg_risk_live_execution_records.push(record);
     }
 
+    pub fn seed_neg_risk_shadow_execution_attempt(&mut self, attempt: ExecutionAttemptRow) {
+        self.seed.neg_risk_shadow_execution_attempts.push(attempt);
+    }
+
+    pub fn seed_neg_risk_shadow_execution_artifact(
+        &mut self,
+        artifact: ShadowExecutionArtifactRow,
+    ) {
+        self.seed.neg_risk_shadow_execution_artifacts.push(artifact);
+    }
+
     pub fn neg_risk_live_execution_records(&self) -> &[NegRiskLiveExecutionRecord] {
         &self.neg_risk_live_execution_records
+    }
+
+    pub fn neg_risk_shadow_execution_attempts(&self) -> &[ExecutionAttemptRow] {
+        &self.neg_risk_shadow_execution_attempts
+    }
+
+    pub fn neg_risk_shadow_execution_artifacts(&self) -> &[ShadowExecutionArtifactRow] {
+        &self.neg_risk_shadow_execution_artifacts
     }
 
     pub fn seed_committed_input(&mut self, input: InputTaskEvent) {
@@ -428,6 +479,8 @@ impl AppSupervisor {
         self.candidate_restore_status = CandidateRestoreStatus::default();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
+        self.neg_risk_shadow_execution_attempts = Vec::new();
+        self.neg_risk_shadow_execution_artifacts = Vec::new();
         self.record_recovery_backlog(self.input_tasks.len());
 
         let committed_state_version = self
@@ -498,7 +551,13 @@ impl AppSupervisor {
         } else {
             NegRiskLiveStateSource::DurableRestore
         };
+        self.neg_risk_shadow_execution_attempts =
+            self.seed.neg_risk_shadow_execution_attempts.clone();
+        self.neg_risk_shadow_execution_artifacts =
+            self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
+        self.retain_current_neg_risk_shadow_execution_records();
+        self.validate_neg_risk_shadow_execution_anchor()?;
         self.validate_rollout_evidence_anchor()?;
 
         let processed_count = self.drain_input_tasks()?;
@@ -584,6 +643,7 @@ impl AppSupervisor {
             } else {
                 ExecutionMode::Shadow
             },
+            real_user_shadow_smoke: self.real_user_shadow_smoke_enabled,
             neg_risk_live_attempt_count,
             neg_risk_live_state_source: self.neg_risk_live_state_source,
             neg_risk_rollout_evidence_source: self.neg_risk_rollout_evidence_source,
@@ -629,12 +689,14 @@ impl AppSupervisor {
             self.neg_risk_rollout_evidence = Some(evidence);
             self.neg_risk_rollout_evidence_source = evidence_source;
             self.retain_current_neg_risk_live_execution_records();
+            self.retain_current_neg_risk_shadow_execution_records();
             self.dispatcher.observe_snapshot(snapshot);
         } else {
             self.record_zero_rollout_evidence();
             self.neg_risk_rollout_evidence = None;
             self.neg_risk_rollout_evidence_source = NegRiskRolloutEvidenceSource::None;
             self.retain_current_neg_risk_live_execution_records();
+            self.retain_current_neg_risk_shadow_execution_records();
         }
     }
 
@@ -705,6 +767,7 @@ impl AppSupervisor {
             && self.seed.pending_reconcile_anchors.is_empty()
             && self.seed.neg_risk_rollout_evidence.is_none()
             && self.seed.neg_risk_live_execution_records.is_empty()
+            && self.seed.neg_risk_shadow_execution_attempts.is_empty()
             && self.committed_log.is_empty()
             && self.runtime.last_journal_seq() == Some(0)
             && self.runtime.state_version() == 0;
@@ -715,6 +778,7 @@ impl AppSupervisor {
         self.has_seeded_startup_state()
             && self.runtime.pending_reconcile_count() == 0
             && self.neg_risk_live_execution_records.is_empty()
+            && self.neg_risk_shadow_execution_attempts.is_empty()
             && self.seed.pending_reconcile_anchors.is_empty()
             && self.seed.neg_risk_rollout_evidence.is_none()
     }
@@ -723,10 +787,15 @@ impl AppSupervisor {
         &mut self,
         allow_operator_synthesis: bool,
     ) -> Result<(), SupervisorError> {
-        if self.runtime.app_mode() != AppRuntimeMode::Live
-            || !allow_operator_synthesis
-            || !self.neg_risk_live_execution_records.is_empty()
-        {
+        if self.runtime.app_mode() != AppRuntimeMode::Live || !allow_operator_synthesis {
+            return Ok(());
+        }
+
+        if self.real_user_shadow_smoke_enabled {
+            if !self.neg_risk_shadow_execution_attempts.is_empty() {
+                return Ok(());
+            }
+        } else if !self.neg_risk_live_execution_records.is_empty() {
             return Ok(());
         }
 
@@ -740,6 +809,34 @@ impl AppSupervisor {
             return Ok(());
         }
 
+        if self.real_user_shadow_smoke_enabled {
+            let records = eligible_shadow_records(
+                snapshot_id,
+                &self.neg_risk_live_targets,
+                &self.neg_risk_live_approved_families,
+                &self.neg_risk_live_ready_families,
+                self.metrics_recorder.clone(),
+            )
+            .map_err(|err| SupervisorError::new(err.to_string()))?;
+            let attempts = records
+                .iter()
+                .map(|record| record.attempt.clone())
+                .collect::<Vec<_>>();
+            let artifacts = records
+                .into_iter()
+                .flat_map(|record| record.artifacts)
+                .collect::<Vec<_>>();
+            if self.durable_shadow_persistence_enabled {
+                persist_shadow_execution_records(&attempts, &artifacts)
+                    .map_err(|err| SupervisorError::new(err.to_string()))?;
+            }
+            self.neg_risk_shadow_execution_attempts = attempts;
+            self.neg_risk_shadow_execution_artifacts = artifacts;
+            self.neg_risk_live_execution_records.clear();
+            self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
+            return Ok(());
+        }
+
         let records = eligible_live_records(
             snapshot_id,
             &self.neg_risk_live_targets,
@@ -749,8 +846,15 @@ impl AppSupervisor {
         )
         .map_err(|err| SupervisorError::new(err.to_string()))?;
         let applied_record_count = self.apply_live_submit_facts(&records)?;
-        self.neg_risk_live_execution_records =
-            records.into_iter().take(applied_record_count).collect();
+        let applied_records = records
+            .into_iter()
+            .take(applied_record_count)
+            .collect::<Vec<_>>();
+        if self.durable_live_persistence_enabled {
+            persist_live_execution_records(&applied_records)
+                .map_err(|err| SupervisorError::new(err.to_string()))?;
+        }
+        self.neg_risk_live_execution_records = applied_records;
         self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {
             NegRiskLiveStateSource::None
         } else {
@@ -828,6 +932,62 @@ impl AppSupervisor {
         if self.neg_risk_live_execution_records.is_empty() {
             self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
         }
+    }
+
+    fn retain_current_neg_risk_shadow_execution_records(&mut self) {
+        let Some(snapshot_id) = self.runtime.published_snapshot_id() else {
+            self.neg_risk_shadow_execution_attempts.clear();
+            self.neg_risk_shadow_execution_artifacts.clear();
+            return;
+        };
+
+        self.neg_risk_shadow_execution_attempts
+            .retain(|attempt| attempt.snapshot_id == snapshot_id);
+        let retained_attempt_ids = self
+            .neg_risk_shadow_execution_attempts
+            .iter()
+            .map(|attempt| attempt.attempt_id.as_str())
+            .collect::<BTreeSet<_>>();
+        self.neg_risk_shadow_execution_artifacts
+            .retain(|artifact| retained_attempt_ids.contains(artifact.attempt_id.as_str()));
+    }
+
+    fn validate_neg_risk_shadow_execution_anchor(&self) -> Result<(), SupervisorError> {
+        if !self.real_user_shadow_smoke_enabled
+            || (self.seed.neg_risk_shadow_execution_attempts.is_empty()
+                && self.seed.neg_risk_shadow_execution_artifacts.is_empty())
+        {
+            return Ok(());
+        }
+
+        let Some(snapshot_id) = self.runtime.published_snapshot_id() else {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke requires a published snapshot to retain shadow execution records",
+            ));
+        };
+
+        if self.neg_risk_shadow_execution_attempts.is_empty()
+            || self.neg_risk_shadow_execution_artifacts.is_empty()
+        {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke requires retained shadow execution records after restore",
+            ));
+        }
+
+        if self
+            .neg_risk_shadow_execution_attempts
+            .iter()
+            .any(|attempt| attempt.snapshot_id != snapshot_id)
+        {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke retained shadow execution records did not match the restored snapshot",
+            ));
+        }
+
+        Ok(())
     }
 
     fn materialize_candidate_artifacts(&mut self) {
@@ -909,6 +1069,9 @@ impl AppSupervisor {
         if self.runtime.app_mode() != AppRuntimeMode::Live {
             return Ok(());
         }
+        if self.real_user_shadow_smoke_enabled {
+            return Ok(());
+        }
 
         let live_ready_count = self
             .neg_risk_rollout_evidence
@@ -970,6 +1133,7 @@ impl AppSupervisor {
             || self.seed.pending_reconcile_count.is_some()
             || !self.seed.pending_reconcile_anchors.is_empty()
             || !self.seed.neg_risk_live_execution_records.is_empty()
+            || !self.seed.neg_risk_shadow_execution_attempts.is_empty()
     }
 
     fn validate_seeded_startup_restore(&self) -> Result<(), SupervisorError> {
@@ -995,6 +1159,8 @@ impl AppSupervisor {
         self.candidate_restore_status = self.seed.candidate_restore_status.clone();
         self.neg_risk_live_execution_records = Vec::new();
         self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
+        self.neg_risk_shadow_execution_attempts = Vec::new();
+        self.neg_risk_shadow_execution_artifacts = Vec::new();
 
         let committed_state_version = self
             .seed
@@ -1029,7 +1195,13 @@ impl AppSupervisor {
         } else {
             NegRiskLiveStateSource::DurableRestore
         };
+        self.neg_risk_shadow_execution_attempts =
+            self.seed.neg_risk_shadow_execution_attempts.clone();
+        self.neg_risk_shadow_execution_artifacts =
+            self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
+        self.retain_current_neg_risk_shadow_execution_records();
+        self.validate_neg_risk_shadow_execution_anchor()?;
         Ok(())
     }
 
@@ -1121,5 +1293,43 @@ fn runtime_instrumentation(recorder: Option<&RuntimeMetricsRecorder>) -> AppInst
     match recorder.cloned() {
         Some(recorder) => AppInstrumentation::enabled(recorder),
         None => AppInstrumentation::disabled(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use domain::ExecutionMode;
+    use rust_decimal::Decimal;
+
+    use super::AppSupervisor;
+    use crate::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+
+    #[test]
+    fn smoke_supervisor_without_durable_persistence_capability_ignores_ambient_database_url() {
+        let mut supervisor = AppSupervisor::for_tests();
+        supervisor.enable_real_user_shadow_smoke();
+        supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    price: Decimal::new(45, 2),
+                    quantity: Decimal::new(10, 0),
+                }],
+            },
+        )]));
+        supervisor.seed_neg_risk_live_approval("family-a");
+        supervisor.seed_neg_risk_live_ready_family("family-a");
+
+        let summary = supervisor.run_once().expect("supervisor should run");
+
+        assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+        assert_eq!(summary.neg_risk_live_attempt_count, 0);
+        assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
+        assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
     }
 }

@@ -5,10 +5,15 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use domain::ExecutionMode;
 use observability::span_names;
 use persistence::{
-    models::{NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow},
-    persist_discovery_snapshot, run_migrations, NegRiskFamilyRepo,
+    models::{
+        ExecutionAttemptRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow, ShadowExecutionArtifactRow,
+    },
+    persist_discovery_snapshot, run_migrations, ExecutionAttemptRepo, NegRiskFamilyRepo,
+    ShadowArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -140,6 +145,45 @@ async fn app_replay_main_emits_operator_facing_negrisk_summary_without_new_metri
     assert!(combined.contains("sha256:discovery-7"), "{combined}");
 }
 
+#[tokio::test]
+async fn app_replay_main_emits_operator_facing_negrisk_shadow_smoke_summary() {
+    let Some(database_url) = std::env::var_os("DATABASE_URL") else {
+        return;
+    };
+    let database_url = database_url
+        .into_string()
+        .expect("DATABASE_URL should be valid utf8");
+    let db = TestDatabase::new(&database_url).await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_negrisk_shadow_smoke_rows(&db.pool).await;
+
+    let output = Command::new(app_replay_binary())
+        .env("DATABASE_URL", &database_url)
+        .env("PGOPTIONS", format!("-c search_path={}", db.schema))
+        .args(["--from-seq", "0", "--limit", "10"])
+        .output()
+        .expect("app-replay should run");
+
+    db.cleanup().await;
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("app-replay neg-risk shadow smoke"),
+        "{combined}"
+    );
+    assert!(combined.contains("shadow_attempt_count=1"), "{combined}");
+    assert!(combined.contains("shadow_artifact_count=2"), "{combined}");
+    assert!(
+        combined.contains("app-replay.negrisk_shadow_smoke"),
+        "{combined}"
+    );
+}
+
 fn app_replay_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-replay") {
         return PathBuf::from(path);
@@ -255,6 +299,60 @@ async fn seed_negrisk_summary_rows(pool: &PgPool) {
                 source_session_id: "validation-session-1".to_owned(),
                 source_event_id: "validation-family-1".to_owned(),
                 event_ts: ts("2026-03-24T00:00:06Z"),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+async fn seed_negrisk_shadow_smoke_rows(pool: &PgPool) {
+    ExecutionAttemptRepo
+        .append(
+            pool,
+            &ExecutionAttemptRow {
+                attempt_id: "attempt-shadow-1".to_owned(),
+                plan_id: "request-bound:5:req-1:negrisk-shadow-family:family-a".to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family:family-a".to_owned(),
+                matched_rule_id: Some("family-a-live".to_owned()),
+                execution_mode: ExecutionMode::Shadow,
+                attempt_no: 1,
+                idempotency_key: "idem-attempt-shadow-1".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+    ShadowArtifactRepo
+        .append(
+            pool,
+            ShadowExecutionArtifactRow {
+                attempt_id: "attempt-shadow-1".to_owned(),
+                stream: "neg-risk-shadow-plan".to_owned(),
+                payload: json!({
+                    "attempt_id": "attempt-shadow-1",
+                    "plan_id": "request-bound:5:req-1:negrisk-shadow-family:family-a",
+                    "snapshot_id": "snapshot-7",
+                    "route": "neg-risk",
+                    "scope": "family:family-a",
+                    "matched_rule_id": "family-a-live",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+
+    ShadowArtifactRepo
+        .append(
+            pool,
+            ShadowExecutionArtifactRow {
+                attempt_id: "attempt-shadow-1".to_owned(),
+                stream: "neg-risk-shadow-result".to_owned(),
+                payload: json!({
+                    "attempt_id": "attempt-shadow-1",
+                    "status": "shadow_recorded",
+                }),
             },
         )
         .await

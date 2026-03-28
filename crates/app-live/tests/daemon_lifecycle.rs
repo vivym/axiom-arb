@@ -70,6 +70,23 @@ fn daemon_startup_reports_seeded_candidate_restore_status() {
 }
 
 #[test]
+fn daemon_startup_reports_real_user_shadow_smoke_in_summary() {
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.enable_real_user_shadow_smoke();
+
+    let mut daemon = AppDaemon::for_tests(supervisor);
+    let report = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(async { daemon.run_until_idle_for_tests(1).await })
+        .expect("daemon should run");
+
+    assert!(report.real_user_shadow_smoke);
+    assert!(report.summary.real_user_shadow_smoke);
+    assert!(report.startup_order.contains(&"ingest".to_owned()));
+}
+
+#[test]
 fn daemon_run_until_shutdown_loops_until_no_more_progress_is_possible() {
     let mut supervisor = AppSupervisor::for_tests();
     supervisor.seed_runtime_progress(41, 7, Some("snapshot-7"));

@@ -1,8 +1,13 @@
 use app_live::config::load_polymarket_source_config;
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    load_local_signer_config, load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
+    load_real_user_shadow_smoke_config_from_env, AppRuntimeMode, ConfigError, LocalL2AuthHeaders,
+    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, RealUserShadowSmokeConfig,
 };
+use std::ffi::OsStr;
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 #[test]
 fn parses_neg_risk_live_target_config_from_env_json() {
@@ -374,4 +379,97 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
     ));
     assert!(query_error.to_string().contains("clob_host"));
     assert!(fragment_error.to_string().contains("data_api_host"));
+}
+
+#[test]
+fn parses_real_user_shadow_smoke_guard_when_enabled() {
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .unwrap()
+            .expect("smoke should be enabled");
+
+    assert_eq!(
+        smoke,
+        RealUserShadowSmokeConfig {
+            enabled: true,
+            source_config: load_polymarket_source_config(Some(
+                valid_polymarket_source_config_json()
+            ))
+            .unwrap(),
+        }
+    );
+    assert!(smoke.enabled);
+    assert_eq!(
+        smoke.source_config.market_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    );
+}
+
+#[test]
+fn enabling_real_user_shadow_smoke_requires_source_config() {
+    let error = load_real_user_shadow_smoke_config(Some("1"), None).unwrap_err();
+
+    assert!(matches!(error, ConfigError::MissingPolymarketSourceConfig));
+    assert!(error
+        .to_string()
+        .contains("missing polymarket source config"));
+}
+
+#[test]
+fn non_enabled_real_user_shadow_smoke_is_ignored() {
+    assert_eq!(
+        load_real_user_shadow_smoke_config(None, Some(valid_polymarket_source_config_json()))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        load_real_user_shadow_smoke_config(Some("0"), Some(valid_polymarket_source_config_json()))
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn paper_mode_rejects_real_user_shadow_smoke_when_enabled() {
+    let error = load_real_user_shadow_smoke_config_from_env(
+        AppRuntimeMode::Paper,
+        Some(OsStr::new("1")),
+        Some(OsStr::new(valid_polymarket_source_config_json())),
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("real-user shadow smoke is not supported in paper mode"));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_real_user_shadow_smoke_guard_is_rejected() {
+    let guard = std::ffi::OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+    let error = load_real_user_shadow_smoke_config_from_env(
+        AppRuntimeMode::Live,
+        Some(guard.as_os_str()),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("invalid value for AXIOM_REAL_USER_SHADOW_SMOKE"));
+}
+
+fn valid_polymarket_source_config_json() -> &'static str {
+    r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#
 }

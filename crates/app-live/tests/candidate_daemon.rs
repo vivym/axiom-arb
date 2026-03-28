@@ -6,14 +6,18 @@ use std::{
 };
 
 use app_live::{
-    load_neg_risk_live_targets,
+    load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented, AppDaemon,
     AppInstrumentation, AppSupervisor, InputTaskEvent, StaticSnapshotSource,
 };
 use chrono::{TimeZone, Utc};
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+    models::{
+        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
+        ExecutionAttemptRow, LiveSubmissionRecordRow,
+    },
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
+    LiveSubmissionRepo, RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -34,6 +38,7 @@ fn daemon_restores_candidate_status_without_blocking_non_adoption_startup() {
         app_live::NegRiskLiveTargetSet::empty(),
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("ordinary startup should not fail closed when candidate artifacts are absent or advisory only");
 
@@ -71,6 +76,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
         first_targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("first explicit-operator startup should succeed");
     assert_eq!(first.summary.latest_candidate_revision, None);
@@ -85,6 +91,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
         second_targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect("matching explicit operator restart should not require candidate provenance");
 
@@ -115,6 +122,7 @@ fn malformed_candidate_adoption_provenance_fails_closed_on_restore() {
         targets,
         BTreeSet::new(),
         BTreeSet::new(),
+        None,
     )
     .expect_err("startup should fail closed when candidate provenance chain is malformed");
 
@@ -208,6 +216,186 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
         .expect("provenance row should persist");
     assert_eq!(provenance.candidate_revision, "candidate-pub-2");
     assert_eq!(provenance.adoptable_revision, "adoptable-candidate-pub-2");
+
+    database.cleanup();
+}
+
+#[test]
+fn smoke_enabled_daemon_persists_shadow_rows_to_durable_store() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect("smoke daemon startup should succeed");
+
+    assert_eq!(result.summary.negrisk_mode, domain::ExecutionMode::Shadow);
+    assert_eq!(result.summary.neg_risk_live_attempt_count, 0);
+
+    let shadow_attempt = database
+        .load_single_shadow_attempt()
+        .expect("shadow attempt query should succeed")
+        .expect("shadow attempt should persist");
+    assert_eq!(shadow_attempt.0, "neg-risk");
+    assert_eq!(shadow_attempt.1, "family-a");
+    assert_eq!(shadow_attempt.2, "shadow");
+
+    let artifact = database
+        .load_single_shadow_artifact()
+        .expect("shadow artifact query should succeed")
+        .expect("shadow artifact should persist");
+    assert_eq!(artifact.0, "neg-risk-shadow-plan");
+    assert_eq!(artifact.1, shadow_attempt.3);
+
+    assert_eq!(
+        database
+            .live_attempt_count()
+            .expect("live count query should succeed"),
+        0
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn smoke_enabled_daemon_fails_closed_when_durable_live_rows_exist() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    database.seed_durable_live_execution_state(targets.revision());
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect_err("smoke startup should fail closed when durable live rows already exist");
+
+    assert!(
+        err.to_string()
+            .contains("real-user shadow smoke cannot resume with durable live execution records"),
+        "{err}"
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let smoke_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let smoke_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        smoke_targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect("smoke daemon startup should succeed");
+
+    assert_eq!(
+        smoke_result.summary.negrisk_mode,
+        domain::ExecutionMode::Shadow
+    );
+    assert_eq!(
+        database
+            .shadow_attempt_count()
+            .expect("shadow count query should succeed"),
+        1
+    );
+    assert_eq!(
+        database
+            .live_attempt_count()
+            .expect("live count query should succeed"),
+        0
+    );
+
+    let live_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let live_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        live_targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        None,
+    )
+    .expect("non-smoke startup should ignore durable shadow rows and promote live");
+
+    assert_eq!(
+        live_result.summary.negrisk_mode,
+        domain::ExecutionMode::Live
+    );
+    assert_eq!(live_result.summary.neg_risk_live_attempt_count, 1);
+    assert!(
+        database
+            .live_attempt_count()
+            .expect("live count query should succeed")
+            >= 1
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn smoke_enabled_daemon_fails_closed_when_shadow_attempt_has_no_artifact() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    database.seed_broken_shadow_execution_state(targets.revision());
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect_err("smoke restore should fail closed when a durable shadow attempt has no artifact");
+
+    assert!(
+        err.to_string()
+            .contains("missing durable shadow artifact for attempt"),
+        "{err}"
+    );
 
     database.cleanup();
 }
@@ -417,6 +605,178 @@ impl TestDatabase {
     fn cleanup(self) {
         let _ = self;
     }
+
+    fn seed_durable_live_execution_state(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        7,
+                        7,
+                        Some("snapshot-7"),
+                        Some(operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should persist");
+
+                let attempt = ExecutionAttemptRow {
+                    attempt_id: "attempt-live-1".to_owned(),
+                    plan_id: "negrisk-submit-family:family-a".to_owned(),
+                    snapshot_id: "snapshot-7".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: domain::ExecutionMode::Live,
+                    attempt_no: 1,
+                    idempotency_key: "idem-attempt-live-1".to_owned(),
+                };
+                ExecutionAttemptRepo
+                    .append(&self.pool, &attempt)
+                    .await
+                    .expect("live attempt should persist");
+
+                LiveSubmissionRepo
+                    .append(
+                        &self.pool,
+                        LiveSubmissionRecordRow {
+                            submission_ref: "submission-live-1".to_owned(),
+                            attempt_id: "attempt-live-1".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            provider: "venue-polymarket".to_owned(),
+                            state: "submitted".to_owned(),
+                            payload: json!({
+                                "submission_ref": "submission-live-1",
+                                "family_id": "family-a",
+                                "route": "neg-risk",
+                                "reason": "submitted_for_execution",
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("live submission should persist");
+            });
+    }
+
+    fn seed_broken_shadow_execution_state(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        7,
+                        7,
+                        Some("snapshot-7"),
+                        Some(operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should persist");
+
+                let attempt = ExecutionAttemptRow {
+                    attempt_id: "attempt-shadow-broken-1".to_owned(),
+                    plan_id: "negrisk-submit-family:family-a".to_owned(),
+                    snapshot_id: "snapshot-7".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: domain::ExecutionMode::Shadow,
+                    attempt_no: 1,
+                    idempotency_key: "idem-attempt-shadow-broken-1".to_owned(),
+                };
+                ExecutionAttemptRepo
+                    .append(&self.pool, &attempt)
+                    .await
+                    .expect("shadow attempt should persist");
+            });
+    }
+
+    fn load_single_shadow_attempt(
+        &self,
+    ) -> persistence::Result<Option<(String, String, String, String)>> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query_as::<_, (String, String, String, String)>(
+                    r#"
+                    SELECT route, scope, execution_mode, attempt_id
+                    FROM execution_attempts
+                    WHERE execution_mode = 'shadow'
+                    ORDER BY created_at, attempt_id
+                    LIMIT 1
+                    "#,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(Into::into)
+            })
+    }
+
+    fn load_single_shadow_artifact(&self) -> persistence::Result<Option<(String, String)>> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query_as::<_, (String, String)>(
+                    r#"
+                    SELECT stream, attempt_id
+                    FROM shadow_execution_artifacts
+                    ORDER BY attempt_id, stream
+                    LIMIT 1
+                    "#,
+                )
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(Into::into)
+            })
+    }
+
+    fn live_attempt_count(&self) -> persistence::Result<i64> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM execution_attempts
+                    WHERE execution_mode = 'live'
+                    "#,
+                )
+                .fetch_one(&self.pool)
+                .await
+                .map_err(Into::into)
+            })
+    }
+
+    fn shadow_attempt_count(&self) -> persistence::Result<i64> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM execution_attempts
+                    WHERE execution_mode = 'shadow'
+                    "#,
+                )
+                .fetch_one(&self.pool)
+                .await
+                .map_err(Into::into)
+            })
+    }
 }
 
 fn lock_env() -> std::sync::MutexGuard<'static, ()> {
@@ -455,4 +815,19 @@ fn valid_neg_risk_live_targets_json() -> &'static str {
 
 fn default_database_url_for_tests() -> &'static str {
     "postgres://axiom:axiom@localhost:5432/axiom_arb"
+}
+
+fn valid_polymarket_source_config_json() -> &'static str {
+    r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#
 }

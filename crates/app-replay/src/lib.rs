@@ -5,8 +5,10 @@ use persistence::{
     connect_pool_from_env,
     models::{
         ExecutionAttemptRow, JournalEntryRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
+        ShadowExecutionArtifactRow,
     },
     ExecutionAttemptRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo, PersistenceError,
+    ShadowArtifactRepo,
 };
 use sqlx::PgPool;
 
@@ -34,6 +36,12 @@ pub struct NegRiskLiveAttemptArtifacts {
 pub struct NegRiskLiveSubmissionRecord {
     pub attempt: ExecutionAttemptRow,
     pub submissions: Vec<LiveSubmissionRecordRow>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NegRiskShadowAttemptArtifacts {
+    pub attempt: ExecutionAttemptRow,
+    pub artifacts: Vec<ShadowExecutionArtifactRow>,
 }
 
 pub async fn load_negrisk_live_attempt_artifacts(
@@ -98,6 +106,47 @@ pub async fn load_negrisk_live_submission_records(
         .collect())
 }
 
+pub async fn load_negrisk_shadow_attempt_artifacts(
+    pool: &PgPool,
+) -> Result<Vec<NegRiskShadowAttemptArtifacts>, PersistenceError> {
+    let attempts = ExecutionAttemptRepo
+        .list_shadow_attempts(pool)
+        .await?
+        .into_iter()
+        .filter(|attempt| attempt.route == "neg-risk")
+        .collect::<Vec<_>>();
+    let artifacts_by_attempt = ShadowArtifactRepo
+        .list_for_attempts(
+            pool,
+            &attempts
+                .iter()
+                .map(|attempt| attempt.attempt_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await?;
+    let artifacts_by_attempt = artifacts_by_attempt.into_iter().fold(
+        BTreeMap::<String, Vec<ShadowExecutionArtifactRow>>::new(),
+        |mut grouped, artifact| {
+            grouped
+                .entry(artifact.attempt_id.clone())
+                .or_default()
+                .push(artifact);
+            grouped
+        },
+    );
+
+    Ok(attempts
+        .into_iter()
+        .map(|attempt| NegRiskShadowAttemptArtifacts {
+            artifacts: artifacts_by_attempt
+                .get(&attempt.attempt_id)
+                .cloned()
+                .unwrap_or_default(),
+            attempt,
+        })
+        .collect())
+}
+
 pub async fn load_neg_risk_foundation_summary_from_env(
 ) -> Result<NegRiskFoundationSummary, NegRiskSummaryError> {
     let pool = connect_pool_from_env()
@@ -110,6 +159,12 @@ pub async fn load_negrisk_candidate_summary_from_env(
 ) -> Result<NegRiskCandidateSummary, PersistenceError> {
     let pool = connect_pool_from_env().await?;
     load_negrisk_candidate_summary(&pool).await
+}
+
+pub async fn load_negrisk_shadow_attempt_artifacts_from_env(
+) -> Result<Vec<NegRiskShadowAttemptArtifacts>, PersistenceError> {
+    let pool = connect_pool_from_env().await?;
+    load_negrisk_shadow_attempt_artifacts(&pool).await
 }
 
 pub trait ReplayConsumer {

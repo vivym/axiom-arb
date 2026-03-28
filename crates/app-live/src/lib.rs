@@ -6,10 +6,13 @@ pub mod dispatch;
 pub mod input_tasks;
 pub mod instrumentation;
 pub mod negrisk_live;
+mod negrisk_shadow;
 pub mod posture;
 pub mod queues;
 pub mod runtime;
+pub mod smoke;
 mod snapshot_meta;
+pub mod source_tasks;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -41,6 +44,13 @@ pub use runtime::{
     run_live_with_neg_risk_live_targets, run_live_with_neg_risk_live_targets_instrumented,
     run_paper, run_paper_instrumented, AppRunResult, AppRuntime, AppRuntimeMode,
     ParseAppRuntimeModeError,
+};
+pub use smoke::{
+    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
+    RealUserShadowSmokeConfig,
+};
+pub use source_tasks::{
+    build_real_user_shadow_smoke_sources, RealUserShadowSmokeSources, SmokeSafeStartupSource,
 };
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,

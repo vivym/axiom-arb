@@ -174,7 +174,7 @@ fn ensure_success(receipt: &ExecutionReceipt) -> Result<(), NegRiskLiveError> {
     }
 }
 
-fn to_execution_target(target: &NegRiskFamilyLiveTarget) -> NegRiskFamilyTarget {
+pub(crate) fn to_execution_target(target: &NegRiskFamilyLiveTarget) -> NegRiskFamilyTarget {
     NegRiskFamilyTarget {
         family_id: target.family_id.clone().into(),
         members: target.members.iter().map(to_member_target).collect(),

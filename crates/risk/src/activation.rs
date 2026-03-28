@@ -10,6 +10,7 @@ pub struct ActivationPolicy {
     overlays: BTreeMap<(String, String), ExecutionMode>,
     policy_version: String,
     clamp_negrisk_live: bool,
+    clamp_negrisk_to_shadow: bool,
 }
 
 impl ActivationPolicy {
@@ -32,6 +33,7 @@ impl ActivationPolicy {
             overlays: BTreeMap::new(),
             policy_version: "phase-one-defaults".to_owned(),
             clamp_negrisk_live: true,
+            clamp_negrisk_to_shadow: false,
         }
     }
 
@@ -41,7 +43,13 @@ impl ActivationPolicy {
             overlays: BTreeMap::new(),
             policy_version: policy_version.into(),
             clamp_negrisk_live: false,
+            clamp_negrisk_to_shadow: false,
         }
+    }
+
+    pub fn with_real_user_shadow_smoke(mut self) -> Self {
+        self.clamp_negrisk_to_shadow = true;
+        self
     }
 
     pub fn with_overlay(
@@ -102,6 +110,10 @@ impl ActivationPolicy {
     }
 
     fn clamp_mode(&self, route: &str, mode: ExecutionMode) -> ExecutionMode {
+        if self.clamp_negrisk_to_shadow {
+            return clamp_real_user_shadow_smoke_mode(route, mode);
+        }
+
         if self.clamp_negrisk_live {
             return clamp_phase_one_mode(route, mode);
         }
@@ -113,6 +125,14 @@ impl ActivationPolicy {
 fn clamp_phase_one_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
     if route == crate::negrisk::ROUTE {
         return crate::negrisk::phase_one_effective_mode(mode);
+    }
+
+    mode
+}
+
+fn clamp_real_user_shadow_smoke_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
+    if route == crate::negrisk::ROUTE && mode == ExecutionMode::Live {
+        return ExecutionMode::Shadow;
     }
 
     mode
