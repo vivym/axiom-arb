@@ -2,7 +2,7 @@ mod error;
 mod raw;
 
 pub use error::ConfigSchemaError;
-pub use raw::{RawAxiomConfig, RuntimeModeToml};
+pub use raw::{RawAxiomConfig, RuntimeModeToml, RuntimeToml};
 
 pub fn load_raw_config_from_path(
     path: &std::path::Path,

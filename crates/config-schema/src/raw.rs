@@ -16,12 +16,3 @@ pub enum RuntimeModeToml {
     Paper,
     Live,
 }
-
-impl RuntimeModeToml {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Paper => "paper",
-            Self::Live => "live",
-        }
-    }
-}
