@@ -4,6 +4,7 @@ use std::{fmt, io};
 pub enum ConfigSchemaError {
     Io(io::Error),
     Toml(toml::de::Error),
+    Validation(String),
 }
 
 impl fmt::Display for ConfigSchemaError {
@@ -11,6 +12,7 @@ impl fmt::Display for ConfigSchemaError {
         match self {
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Toml(err) => write!(f, "toml parse error: {err}"),
+            Self::Validation(message) => write!(f, "config validation error: {message}"),
         }
     }
 }
