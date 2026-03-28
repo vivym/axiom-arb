@@ -158,6 +158,44 @@ fn paper_entrypoint_rejects_real_user_shadow_smoke() {
     assert!(combined.contains("real-user shadow smoke"), "{combined}");
 }
 
+#[cfg(unix)]
+#[test]
+fn paper_entrypoint_rejects_non_utf8_real_user_shadow_smoke_guard() {
+    let output = app_live_output_raw_env_with_smoke(
+        "paper",
+        Some(OsString::from_vec(vec![0xff, 0xfe, 0xfd])),
+        Some(OsString::from(valid_polymarket_source_config_json())),
+    );
+
+    assert!(
+        !output.status.success(),
+        "paper mode should reject a malformed smoke guard"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("invalid value for AXIOM_REAL_USER_SHADOW_SMOKE"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn paper_entrypoint_ignores_disabled_real_user_shadow_smoke_source_config() {
+    let output = app_live_output_with_smoke(
+        "paper",
+        Some("0"),
+        Some("{"),
+    );
+
+    assert!(
+        output.status.success(),
+        "disabled smoke should ignore malformed source config"
+    );
+}
+
 #[test]
 fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     let output = app_live_output(
@@ -712,6 +750,18 @@ fn app_live_output_with_smoke(
     app_mode: &str,
     smoke_guard: Option<&str>,
     source_config: Option<&str>,
+) -> std::process::Output {
+    app_live_output_raw_env_with_smoke(
+        app_mode,
+        smoke_guard.map(OsString::from),
+        source_config.map(OsString::from),
+    )
+}
+
+fn app_live_output_raw_env_with_smoke(
+    app_mode: &str,
+    smoke_guard: Option<OsString>,
+    source_config: Option<OsString>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
     command.env("AXIOM_MODE", app_mode);

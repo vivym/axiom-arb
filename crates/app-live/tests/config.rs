@@ -1,9 +1,14 @@
 use app_live::config::load_polymarket_source_config;
 use app_live::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    load_real_user_shadow_smoke_config, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
+    AppRuntimeMode, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
     RealUserShadowSmokeConfig,
 };
+use std::ffi::OsStr;
+
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 
 #[test]
 fn parses_neg_risk_live_target_config_from_env_json() {
@@ -426,6 +431,36 @@ fn non_enabled_real_user_shadow_smoke_is_ignored() {
             .unwrap(),
         None
     );
+}
+
+#[test]
+fn paper_mode_rejects_real_user_shadow_smoke_when_enabled() {
+    let error = load_real_user_shadow_smoke_config_from_env(
+        AppRuntimeMode::Paper,
+        Some(OsStr::new("1")),
+        Some(OsStr::new(valid_polymarket_source_config_json())),
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("real-user shadow smoke is not supported in paper mode"));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_real_user_shadow_smoke_guard_is_rejected() {
+    let guard = std::ffi::OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+    let error = load_real_user_shadow_smoke_config_from_env(
+        AppRuntimeMode::Live,
+        Some(guard.as_os_str()),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(error
+        .to_string()
+        .contains("invalid value for AXIOM_REAL_USER_SHADOW_SMOKE"));
 }
 
 fn valid_polymarket_source_config_json() -> &'static str {
