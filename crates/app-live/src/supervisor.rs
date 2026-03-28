@@ -161,6 +161,7 @@ pub struct AppSupervisor {
     input_tasks: IngressQueue,
     seed: RuntimeSeed,
     real_user_shadow_smoke_enabled: bool,
+    durable_shadow_persistence_enabled: bool,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
@@ -206,6 +207,7 @@ impl AppSupervisor {
             input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
             real_user_shadow_smoke_enabled: false,
+            durable_shadow_persistence_enabled: false,
             neg_risk_live_targets: BTreeMap::new(),
             neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
@@ -380,6 +382,10 @@ impl AppSupervisor {
 
     pub fn enable_real_user_shadow_smoke(&mut self) {
         self.real_user_shadow_smoke_enabled = true;
+    }
+
+    pub fn enable_durable_shadow_persistence(&mut self) {
+        self.durable_shadow_persistence_enabled = true;
     }
 
     pub fn seed_neg_risk_live_approval(&mut self, family_id: &str) {
@@ -806,7 +812,7 @@ impl AppSupervisor {
                 .into_iter()
                 .flat_map(|record| record.artifacts)
                 .collect::<Vec<_>>();
-            if std::env::var_os("DATABASE_URL").is_some() {
+            if self.durable_shadow_persistence_enabled {
                 persist_shadow_execution_records(&attempts, &artifacts)
                     .map_err(|err| SupervisorError::new(err.to_string()))?;
             }
@@ -1220,6 +1226,44 @@ impl AppSupervisor {
         }
 
         summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use domain::ExecutionMode;
+    use rust_decimal::Decimal;
+
+    use super::AppSupervisor;
+    use crate::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+
+    #[test]
+    fn smoke_supervisor_without_durable_persistence_capability_ignores_ambient_database_url() {
+        let mut supervisor = AppSupervisor::for_tests();
+        supervisor.enable_real_user_shadow_smoke();
+        supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    price: Decimal::new(45, 2),
+                    quantity: Decimal::new(10, 0),
+                }],
+            },
+        )]));
+        supervisor.seed_neg_risk_live_approval("family-a");
+        supervisor.seed_neg_risk_live_ready_family("family-a");
+
+        let summary = supervisor.run_once().expect("supervisor should run");
+
+        assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+        assert_eq!(summary.neg_risk_live_attempt_count, 0);
+        assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
+        assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
     }
 }
 

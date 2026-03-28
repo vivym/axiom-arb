@@ -174,6 +174,7 @@ where
         neg_risk_live_approved_families,
         neg_risk_live_ready_families,
         real_user_shadow_smoke,
+        true,
     );
 
     let result = AppDaemon::new(supervisor)
@@ -190,9 +191,13 @@ fn seed_live_supervisor_from_durable_state(
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
     real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+    enable_durable_shadow_persistence: bool,
 ) {
     if real_user_shadow_smoke.is_some() {
         supervisor.enable_real_user_shadow_smoke();
+        if enable_durable_shadow_persistence {
+            supervisor.enable_durable_shadow_persistence();
+        }
     }
     supervisor.seed_runtime_progress(
         durable_state.last_journal_seq,
@@ -283,6 +288,7 @@ mod tests {
                 ),
             )
             .expect("smoke config should parse"),
+            false,
         );
 
         let summary = supervisor.run_once().expect("supervisor should run");

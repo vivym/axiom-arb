@@ -428,6 +428,7 @@ where
     };
     if real_user_shadow_smoke.is_some() {
         supervisor.enable_real_user_shadow_smoke();
+        supervisor.enable_durable_shadow_persistence();
     }
     supervisor.seed_runtime_progress(
         durable_state.last_journal_seq,
