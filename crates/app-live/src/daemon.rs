@@ -271,10 +271,11 @@ fn seed_live_supervisor_from_durable_state(
 mod tests {
     use std::collections::BTreeSet;
 
+    use config_schema::{load_raw_config_from_str, ValidatedConfig};
     use domain::ExecutionMode;
 
     use super::seed_live_supervisor_from_durable_state;
-    use crate::{load_neg_risk_live_targets, load_real_user_shadow_smoke_config, AppSupervisor};
+    use crate::{load_real_user_shadow_smoke_config, AppSupervisor, NegRiskLiveTargetSet};
 
     #[test]
     fn smoke_config_enables_shadow_path_when_seeding_live_daemon_startup() {
@@ -291,26 +292,11 @@ mod tests {
                 shadow_execution_artifacts: Vec::new(),
                 candidate_restore_status: crate::supervisor::CandidateRestoreStatus::default(),
             },
-            load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-                .expect("targets should parse"),
+            NegRiskLiveTargetSet::try_from(&smoke_config_view()).expect("targets should parse"),
             BTreeSet::from(["family-a".to_owned()]),
             BTreeSet::from(["family-a".to_owned()]),
-            load_real_user_shadow_smoke_config(
-                Some("1"),
-                Some(
-                    r#"{
-                      "clob_host": "https://clob.polymarket.com",
-                      "data_api_host": "https://data-api.polymarket.com",
-                      "relayer_host": "https://relayer-v2.polymarket.com",
-                      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-                      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-                      "heartbeat_interval_seconds": 15,
-                      "relayer_poll_interval_seconds": 5,
-                      "metadata_refresh_interval_seconds": 60
-                    }"#,
-                ),
-            )
-            .expect("smoke config should parse"),
+            load_real_user_shadow_smoke_config(&smoke_config_view())
+                .expect("smoke config should parse"),
             false,
         );
 
@@ -322,21 +308,62 @@ mod tests {
         assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
     }
 
-    fn valid_neg_risk_live_targets_json() -> &'static str {
-        r#"
-        [
-          {
-            "family_id": "family-a",
-            "members": [
-              {
-                "condition_id": "condition-1",
-                "token_id": "token-1",
-                "price": "0.45",
-                "quantity": "10"
-              }
-            ]
-          }
-        ]
-        "#
+    fn smoke_config_view() -> config_schema::AppLiveConfigView<'static> {
+        let raw = load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.45"
+quantity = "10"
+"#,
+        )
+        .expect("config should parse");
+        let raw = Box::leak(Box::new(raw));
+        let validated = Box::leak(Box::new(
+            ValidatedConfig::new(raw.clone()).expect("config should validate"),
+        ));
+
+        validated
+            .for_app_live()
+            .expect("live config should validate")
     }
 }

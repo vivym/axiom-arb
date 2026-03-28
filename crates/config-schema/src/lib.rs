@@ -3,7 +3,11 @@ mod raw;
 mod validate;
 
 pub use error::ConfigSchemaError;
-pub use raw::{RawAxiomConfig, RuntimeModeToml, RuntimeToml};
+pub use raw::{
+    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetToml, NegRiskToml,
+    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
+    RelayerAuthKindToml, RuntimeModeToml, RuntimeToml, SignatureTypeToml, WalletRouteToml,
+};
 pub use validate::{AppLiveConfigView, AppReplayConfigView, ValidatedConfig};
 
 pub fn load_raw_config_from_str(text: &str) -> Result<RawAxiomConfig, ConfigSchemaError> {

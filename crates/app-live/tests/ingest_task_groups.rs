@@ -1,11 +1,11 @@
 use app_live::{
-    load_local_signer_config, load_real_user_shadow_smoke_config,
     source_tasks::build_real_user_shadow_smoke_sources, BootstrapSource, DecisionTaskGroup,
     FollowUpQueue, FollowUpWork, HeartbeatSource, HeartbeatTaskGroup, IngressQueue, InputTaskEvent,
-    ScopeRestriction, ScopeRestrictionKind, SnapshotDispatchQueue, SnapshotNotice,
-    StaticSnapshotSource, SupervisorPosture,
+    LocalSignerConfig, ScopeRestriction, ScopeRestrictionKind, SnapshotDispatchQueue,
+    SnapshotNotice, StaticSnapshotSource, SupervisorPosture,
 };
 use chrono::Utc;
+use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use domain::ExternalFactEvent;
 use state::DirtyDomain;
 use venue_polymarket::HeartbeatFetchResult;
@@ -118,12 +118,11 @@ fn decision_task_group_suppresses_live_expansion_while_follow_up_backlog_exists(
 
 #[test]
 fn real_user_shadow_smoke_source_bundle_carries_source_and_signer_configs() {
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .expect("smoke config should parse")
-            .expect("smoke should be enabled");
-    let signer = load_local_signer_config(Some(valid_local_signer_config_json()))
-        .expect("signer config should parse");
+    let config = live_config_view();
+    let smoke = app_live::load_real_user_shadow_smoke_config(&config)
+        .expect("smoke config should parse")
+        .expect("smoke should be enabled");
+    let signer = LocalSignerConfig::try_from(&config).expect("signer config should parse");
 
     let sources = build_real_user_shadow_smoke_sources(smoke.source_config.clone(), signer.clone())
         .expect("source bundle should build");
@@ -181,43 +180,60 @@ where
         .block_on(future)
 }
 
-fn valid_polymarket_source_config_json() -> &'static str {
-    r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#
-}
+fn live_config_view() -> config_schema::AppLiveConfigView<'static> {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
 
-fn valid_local_signer_config_json() -> &'static str {
-    r#"
-    {
-      "signer": {
-        "address": "0x1111111111111111111111111111111111111111",
-        "funder_address": "0x2222222222222222222222222222222222222222",
-        "signature_type": "Eoa",
-        "wallet_route": "Eoa"
-      },
-      "l2_auth": {
-        "api_key": "poly-api-key-1",
-        "passphrase": "poly-passphrase-1",
-        "timestamp": "1700000000",
-        "signature": "poly-signature-1"
-      },
-      "relayer_auth": {
-        "kind": "builder_api_key",
-        "api_key": "builder-api-key-1",
-        "timestamp": "1700000001",
-        "passphrase": "builder-passphrase-1",
-        "signature": "builder-signature-1"
-      }
-    }
-    "#
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    )
+    .expect("config should parse");
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw).expect("config should validate"),
+    ));
+
+    validated
+        .for_app_live()
+        .expect("live config should validate")
 }

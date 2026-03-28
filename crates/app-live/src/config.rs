@@ -1,5 +1,9 @@
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
+use config_schema::{
+    AppLiveConfigView, PolymarketRelayerAuthToml, PolymarketSourceToml, RelayerAuthKindToml,
+    SignatureTypeToml, WalletRouteToml,
+};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -147,37 +151,73 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-pub fn load_neg_risk_live_targets(json: Option<&str>) -> Result<NegRiskLiveTargetSet, ConfigError> {
-    let Some(json) = json else {
-        return Ok(NegRiskLiveTargetSet::empty());
-    };
+impl TryFrom<&AppLiveConfigView<'_>> for NegRiskLiveTargetSet {
+    type Error = ConfigError;
 
-    let families: Vec<NegRiskFamilyLiveTarget> =
-        serde_json::from_str(json).map_err(|error| ConfigError::InvalidJson {
-            value: json.to_owned(),
-            message: error.to_string(),
-        })?;
-
-    let mut targets = BTreeMap::new();
-    for family in families {
-        let family_id = family.family_id.clone();
-        if targets.insert(family_id.clone(), family).is_some() {
-            return Err(ConfigError::DuplicateFamilyId { family_id });
+    fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        let mut targets = BTreeMap::new();
+        for family in config.negrisk_targets() {
+            let members = family
+                .members
+                .iter()
+                .map(|member| {
+                    Ok(NegRiskMemberLiveTarget {
+                        condition_id: member.condition_id.clone(),
+                        token_id: member.token_id.clone(),
+                        price: parse_decimal(
+                            "negrisk.targets.members.price",
+                            &member.price,
+                            "app_live",
+                        )?,
+                        quantity: parse_decimal(
+                            "negrisk.targets.members.quantity",
+                            &member.quantity,
+                            "app_live",
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ConfigError>>()?;
+            let family_id = family.family_id.clone();
+            let family = NegRiskFamilyLiveTarget {
+                family_id: family_id.clone(),
+                members,
+            };
+            if targets.insert(family_id.clone(), family).is_some() {
+                return Err(ConfigError::DuplicateFamilyId { family_id });
+            }
         }
-    }
 
-    Ok(NegRiskLiveTargetSet::new(targets))
+        Ok(NegRiskLiveTargetSet::new(targets))
+    }
 }
 
-pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig, ConfigError> {
-    let Some(json) = json else {
-        return Err(ConfigError::MissingLocalSignerConfig);
-    };
+impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
+    type Error = ConfigError;
 
-    serde_json::from_str(json).map_err(|error| ConfigError::InvalidLocalSignerConfig {
-        value: json.to_owned(),
-        message: error.to_string(),
-    })
+    fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        let signer = config
+            .polymarket_signer()
+            .ok_or(ConfigError::MissingLocalSignerConfig)?;
+        let relayer_auth = config
+            .polymarket_relayer_auth()
+            .ok_or(ConfigError::MissingLocalSignerConfig)?;
+
+        Ok(LocalSignerConfig {
+            signer: LocalSignerIdentity {
+                address: signer.address.clone(),
+                funder_address: signer.funder_address.clone(),
+                signature_type: signature_type_label(signer.signature_type).to_owned(),
+                wallet_route: wallet_route_label(signer.wallet_route).to_owned(),
+            },
+            l2_auth: LocalL2AuthHeaders {
+                api_key: signer.api_key.clone(),
+                passphrase: signer.passphrase.clone(),
+                timestamp: signer.timestamp.clone(),
+                signature: signer.signature.clone(),
+            },
+            relayer_auth: map_relayer_auth(relayer_auth)?,
+        })
+    }
 }
 
 pub(crate) fn neg_risk_live_target_revision_from_targets(
@@ -290,6 +330,18 @@ pub fn load_polymarket_source_config(
     })
 }
 
+impl TryFrom<&AppLiveConfigView<'_>> for PolymarketSourceConfig {
+    type Error = ConfigError;
+
+    fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        let source = config
+            .polymarket_source()
+            .ok_or(ConfigError::MissingPolymarketSourceConfig)?;
+
+        source_config_from_toml(source)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RawPolymarketSourceConfig {
     clob_host: String,
@@ -375,5 +427,120 @@ fn parse_positive_interval(
             value: raw_json.to_owned(),
             message: format!("{field}: must be > 0"),
         })
+    }
+}
+
+fn source_config_from_toml(
+    source: &PolymarketSourceToml,
+) -> Result<PolymarketSourceConfig, ConfigError> {
+    Ok(PolymarketSourceConfig {
+        clob_host: parse_host_url(
+            "polymarket.source.clob_host",
+            &source.clob_host,
+            &["http", "https"],
+            "app_live",
+        )?,
+        data_api_host: parse_host_url(
+            "polymarket.source.data_api_host",
+            &source.data_api_host,
+            &["http", "https"],
+            "app_live",
+        )?,
+        relayer_host: parse_host_url(
+            "polymarket.source.relayer_host",
+            &source.relayer_host,
+            &["http", "https"],
+            "app_live",
+        )?,
+        market_ws_url: parse_source_url(
+            "polymarket.source.market_ws_url",
+            &source.market_ws_url,
+            &["ws", "wss"],
+            "app_live",
+        )?,
+        user_ws_url: parse_source_url(
+            "polymarket.source.user_ws_url",
+            &source.user_ws_url,
+            &["ws", "wss"],
+            "app_live",
+        )?,
+        heartbeat_interval_seconds: parse_positive_interval(
+            "polymarket.source.heartbeat_interval_seconds",
+            source.heartbeat_interval_seconds,
+            "app_live",
+        )?,
+        relayer_poll_interval_seconds: parse_positive_interval(
+            "polymarket.source.relayer_poll_interval_seconds",
+            source.relayer_poll_interval_seconds,
+            "app_live",
+        )?,
+        metadata_refresh_interval_seconds: parse_positive_interval(
+            "polymarket.source.metadata_refresh_interval_seconds",
+            source.metadata_refresh_interval_seconds,
+            "app_live",
+        )?,
+    })
+}
+
+fn parse_decimal(
+    field: &'static str,
+    value: &str,
+    raw_value: &str,
+) -> Result<Decimal, ConfigError> {
+    Decimal::from_str(value).map_err(|error| ConfigError::InvalidJson {
+        value: raw_value.to_owned(),
+        message: format!("{field}: {error}"),
+    })
+}
+
+fn signature_type_label(value: SignatureTypeToml) -> &'static str {
+    match value {
+        SignatureTypeToml::Eoa => "Eoa",
+        SignatureTypeToml::Proxy => "Proxy",
+        SignatureTypeToml::Safe => "Safe",
+    }
+}
+
+fn wallet_route_label(value: WalletRouteToml) -> &'static str {
+    match value {
+        WalletRouteToml::Eoa => "Eoa",
+        WalletRouteToml::Proxy => "Proxy",
+        WalletRouteToml::Safe => "Safe",
+    }
+}
+
+fn map_relayer_auth(raw: &PolymarketRelayerAuthToml) -> Result<LocalRelayerAuth, ConfigError> {
+    match raw.kind {
+        RelayerAuthKindToml::BuilderApiKey => Ok(LocalRelayerAuth::BuilderApiKey {
+            api_key: raw.api_key.clone(),
+            timestamp: raw.timestamp.clone().ok_or_else(|| {
+                ConfigError::InvalidLocalSignerConfig {
+                    value: "app_live".to_owned(),
+                    message: "polymarket.relayer_auth.timestamp is required".to_owned(),
+                }
+            })?,
+            passphrase: raw.passphrase.clone().ok_or_else(|| {
+                ConfigError::InvalidLocalSignerConfig {
+                    value: "app_live".to_owned(),
+                    message: "polymarket.relayer_auth.passphrase is required".to_owned(),
+                }
+            })?,
+            signature: raw.signature.clone().ok_or_else(|| {
+                ConfigError::InvalidLocalSignerConfig {
+                    value: "app_live".to_owned(),
+                    message: "polymarket.relayer_auth.signature is required".to_owned(),
+                }
+            })?,
+        }),
+        RelayerAuthKindToml::RelayerApiKey => Ok(LocalRelayerAuth::RelayerApiKey {
+            api_key: raw.api_key.clone(),
+            address: raw
+                .address
+                .clone()
+                .ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
+                    value: "app_live".to_owned(),
+                    message: "polymarket.relayer_auth.address is required".to_owned(),
+                })?,
+        }),
     }
 }

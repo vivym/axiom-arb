@@ -6,11 +6,12 @@ use std::{
 };
 
 use app_live::{
-    load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented, AppDaemon,
-    AppInstrumentation, AppSupervisor, InputTaskEvent, StaticSnapshotSource,
+    AppInstrumentation, AppSupervisor, InputTaskEvent, NegRiskLiveTargetSet,
+    RealUserShadowSmokeConfig, StaticSnapshotSource,
 };
 use chrono::{TimeZone, Utc};
+use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use persistence::{
     models::{
         AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
@@ -68,8 +69,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let first_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let first_targets = live_targets();
     let first = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
         AppInstrumentation::disabled(),
@@ -82,8 +82,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
     assert_eq!(first.summary.latest_candidate_revision, None);
     assert!(!first.summary.adoption_provenance_resolved);
 
-    let second_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let second_targets = live_targets();
     database.seed_candidate_artifacts(second_targets.revision(), false);
     let second = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
@@ -110,8 +109,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
 fn malformed_candidate_adoption_provenance_fails_closed_on_restore() {
     let _guard = lock_env();
     let database = TestDatabase::new();
-    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let targets = live_targets();
     database.seed_candidate_restore_state(targets.revision(), true);
     database.corrupt_candidate_provenance(targets.revision());
     env::set_var("DATABASE_URL", database.database_url());
@@ -141,8 +139,7 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let targets = live_targets();
     let operator_target_revision = targets.revision().to_owned();
     let mut supervisor = AppSupervisor::for_tests();
     supervisor.seed_neg_risk_live_targets(targets.into_targets());
@@ -226,11 +223,8 @@ fn smoke_enabled_daemon_persists_shadow_rows_to_durable_store() {
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .expect("smoke config should parse");
+    let targets = live_targets();
+    let smoke = smoke_config();
 
     let result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
@@ -276,12 +270,9 @@ fn smoke_enabled_daemon_fails_closed_when_durable_live_rows_exist() {
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let targets = live_targets();
     database.seed_durable_live_execution_state(targets.revision());
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .expect("smoke config should parse");
+    let smoke = smoke_config();
 
     let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
@@ -308,11 +299,8 @@ fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() 
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let smoke_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .expect("smoke config should parse");
+    let smoke_targets = live_targets();
+    let smoke = smoke_config();
 
     let smoke_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
@@ -341,8 +329,7 @@ fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() 
         0
     );
 
-    let live_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let live_targets = live_targets();
     let live_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
         AppInstrumentation::disabled(),
@@ -374,12 +361,9 @@ fn smoke_enabled_daemon_fails_closed_when_shadow_attempt_has_no_artifact() {
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
 
-    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
-        .expect("targets should parse");
+    let targets = live_targets();
     database.seed_broken_shadow_execution_state(targets.revision());
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .expect("smoke config should parse");
+    let smoke = smoke_config();
 
     let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
@@ -795,39 +779,78 @@ fn schema_scoped_database_url(base: &str, schema: &str) -> String {
     }
 }
 
-fn valid_neg_risk_live_targets_json() -> &'static str {
-    r#"
-    [
-      {
-        "family_id": "family-a",
-        "members": [
-          {
-            "condition_id": "condition-a",
-            "token_id": "token-a",
-            "price": "0.42",
-            "quantity": "5"
-          }
-        ]
-      }
-    ]
-    "#
-}
-
 fn default_database_url_for_tests() -> &'static str {
     "postgres://axiom:axiom@localhost:5432/axiom_arb"
 }
 
-fn valid_polymarket_source_config_json() -> &'static str {
-    r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#
+fn live_targets() -> NegRiskLiveTargetSet {
+    NegRiskLiveTargetSet::try_from(&live_config_view(false)).expect("targets should parse")
+}
+
+fn smoke_config() -> Option<RealUserShadowSmokeConfig> {
+    app_live::load_real_user_shadow_smoke_config(&live_config_view(true))
+        .expect("smoke config should parse")
+}
+
+fn live_config_view(real_user_shadow_smoke: bool) -> config_schema::AppLiveConfigView<'static> {
+    let smoke_flag = if real_user_shadow_smoke {
+        "true"
+    } else {
+        "false"
+    };
+    let raw = load_raw_config_from_str(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = {smoke_flag}
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-a"
+token_id = "token-a"
+price = "0.42"
+quantity = "5"
+"#
+    ))
+    .expect("config should parse");
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw).expect("config should validate"),
+    ));
+
+    validated
+        .for_app_live()
+        .expect("live config should validate")
 }

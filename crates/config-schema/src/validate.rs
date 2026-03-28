@@ -4,8 +4,9 @@ use url::Url;
 
 use crate::error::ConfigSchemaError;
 use crate::raw::{
-    NegRiskTargetMemberToml, PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml,
-    RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetToml, PolymarketRelayerAuthToml,
+    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
+    RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,42 @@ impl<'a> AppLiveConfigView<'a> {
             .as_ref()
             .and_then(|polymarket| polymarket.signer.as_ref())
             .is_some()
+    }
+
+    pub fn polymarket_source(&self) -> Option<&'a PolymarketSourceToml> {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.source.as_ref())
+    }
+
+    pub fn polymarket_signer(&self) -> Option<&'a PolymarketSignerToml> {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.signer.as_ref())
+    }
+
+    pub fn polymarket_relayer_auth(&self) -> Option<&'a PolymarketRelayerAuthToml> {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.relayer_auth.as_ref())
+    }
+
+    pub fn negrisk_targets(&self) -> &'a [NegRiskTargetToml] {
+        self.raw
+            .negrisk
+            .as_ref()
+            .map(|negrisk| negrisk.targets.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn negrisk_rollout(&self) -> Option<&'a NegRiskRolloutToml> {
+        self.raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.rollout.as_ref())
     }
 }
 

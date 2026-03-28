@@ -1,79 +1,30 @@
 use app_live::config::load_polymarket_source_config;
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
-    load_real_user_shadow_smoke_config_from_env, AppRuntimeMode, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, RealUserShadowSmokeConfig,
+    load_real_user_shadow_smoke_config, ConfigError, LocalL2AuthHeaders, LocalRelayerAuth,
+    LocalSignerConfig, LocalSignerIdentity, NegRiskLiveTargetSet, RealUserShadowSmokeConfig,
 };
-use std::ffi::OsStr;
-
-#[cfg(unix)]
-use std::os::unix::ffi::OsStringExt;
+use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
 #[test]
-fn parses_neg_risk_live_target_config_from_env_json() {
-    let json = r#"
-    [
-      {
-        "family_id": "family-a",
-        "members": [
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" },
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
-        ]
-      }
-    ]
-    "#;
+fn parses_neg_risk_live_target_config_from_validated_view() {
+    let config = NegRiskLiveTargetSet::try_from(&live_view(NEG_RISK_TARGETS_A)).unwrap();
 
-    let config = load_neg_risk_live_targets(Some(json)).unwrap();
     assert_eq!(config.targets()["family-a"].members.len(), 2);
-    assert_eq!(config.targets()["family-a"].members[0].token_id, "token-1");
+    assert_eq!(config.targets()["family-a"].members[0].token_id, "token-2");
 }
 
 #[test]
 fn missing_neg_risk_live_target_config_returns_empty_map() {
-    let config = load_neg_risk_live_targets(None).unwrap();
+    let config =
+        NegRiskLiveTargetSet::try_from(&paper_view("[runtime]\nmode = \"paper\"\n")).unwrap();
 
     assert!(config.is_empty());
 }
 
 #[test]
 fn live_target_config_reports_stable_revision_for_startup_set() {
-    let json_a = r#"
-    [
-      {
-        "family_id": "family-b",
-        "members": [
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.4100", "quantity": "5.0" }
-        ]
-      },
-      {
-        "family_id": "family-a",
-        "members": [
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.410", "quantity": "5" },
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.4300", "quantity": "5.00" }
-        ]
-      }
-    ]
-    "#;
-    let json_b = r#"
-    [
-      {
-        "family_id": "family-a",
-        "members": [
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" },
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5.0" }
-        ]
-      },
-      {
-        "family_id": "family-b",
-        "members": [
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
-        ]
-      }
-    ]
-    "#;
-
-    let config_a = load_neg_risk_live_targets(Some(json_a)).unwrap();
-    let config_b = load_neg_risk_live_targets(Some(json_b)).unwrap();
+    let config_a = NegRiskLiveTargetSet::try_from(&live_view(NEG_RISK_TARGETS_A)).unwrap();
+    let config_b = NegRiskLiveTargetSet::try_from(&live_view(NEG_RISK_TARGETS_B)).unwrap();
 
     assert_eq!(config_a.revision(), config_b.revision());
     assert!(config_a.revision().starts_with("sha256:"));
@@ -88,78 +39,40 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
 }
 
 #[test]
-fn blank_neg_risk_live_target_config_is_invalid() {
-    let error = load_neg_risk_live_targets(Some("")).unwrap_err();
+fn duplicate_neg_risk_family_ids_are_rejected_by_validation() {
+    let error = live_view_err(
+        r#"
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
 
-    assert!(matches!(error, ConfigError::InvalidJson { .. }));
-}
+[[negrisk.targets]]
+family_id = "family-a"
 
-#[test]
-fn rejects_invalid_neg_risk_live_target_config_json() {
-    let error = load_neg_risk_live_targets(Some("{")).unwrap_err();
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
 
-    assert!(matches!(error, ConfigError::InvalidJson { .. }));
-    assert!(error
-        .to_string()
-        .contains("invalid neg-risk live target config"));
-}
+[[negrisk.targets]]
+family_id = "family-a"
 
-#[test]
-fn rejects_duplicate_neg_risk_family_ids() {
-    let json = r#"
-    [
-      {
-        "family_id": "family-a",
-        "members": [
-          { "condition_id": "condition-1", "token_id": "token-1", "price": "0.43", "quantity": "5" }
-        ]
-      },
-      {
-        "family_id": "family-a",
-        "members": [
-          { "condition_id": "condition-2", "token_id": "token-2", "price": "0.41", "quantity": "5" }
-        ]
-      }
-    ]
-    "#;
-
-    let error = load_neg_risk_live_targets(Some(json)).unwrap_err();
-
-    assert_eq!(
-        error,
-        ConfigError::DuplicateFamilyId {
-            family_id: "family-a".to_owned()
-        }
+[[negrisk.targets.members]]
+condition_id = "condition-2"
+token_id = "token-2"
+price = "0.41"
+quantity = "5"
+"#,
     );
+
+    assert!(error.contains("duplicate negrisk.targets.family_id"));
 }
 
 #[test]
-fn parses_local_signer_config_from_env_json() {
-    let json = r#"
-    {
-      "signer": {
-        "address": "0x1111111111111111111111111111111111111111",
-        "funder_address": "0x2222222222222222222222222222222222222222",
-        "signature_type": "Eoa",
-        "wallet_route": "Eoa"
-      },
-      "l2_auth": {
-        "api_key": "poly-api-key-1",
-        "passphrase": "poly-passphrase-1",
-        "timestamp": "1700000000",
-        "signature": "poly-signature-1"
-      },
-      "relayer_auth": {
-        "kind": "builder_api_key",
-        "api_key": "builder-api-key-1",
-        "timestamp": "1700000001",
-        "passphrase": "builder-passphrase-1",
-        "signature": "builder-signature-1"
-      }
-    }
-    "#;
+fn parses_local_signer_config_from_validated_view() {
+    let config = LocalSignerConfig::try_from(&live_view("")).unwrap();
 
-    let config = load_local_signer_config(Some(json)).unwrap();
     assert_eq!(
         config,
         LocalSignerConfig {
@@ -187,39 +100,17 @@ fn parses_local_signer_config_from_env_json() {
 
 #[test]
 fn missing_local_signer_config_returns_error() {
-    let error = load_local_signer_config(None).unwrap_err();
+    let error =
+        LocalSignerConfig::try_from(&paper_view("[runtime]\nmode = \"paper\"\n")).unwrap_err();
 
     assert!(matches!(error, ConfigError::MissingLocalSignerConfig));
     assert!(error.to_string().contains("missing local signer config"));
 }
 
 #[test]
-fn rejects_invalid_local_signer_config_json() {
-    let error = load_local_signer_config(Some("{")).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ConfigError::InvalidLocalSignerConfig { .. }
-    ));
-    assert!(error.to_string().contains("invalid local signer config"));
-}
-
-#[test]
 fn parses_polymarket_source_config_from_env_json() {
-    let json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
-
-    let config = load_polymarket_source_config(Some(json)).unwrap();
+    let config =
+        load_polymarket_source_config(Some(valid_polymarket_source_config_json())).unwrap();
 
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
     assert_eq!(
@@ -383,10 +274,9 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
 
 #[test]
 fn parses_real_user_shadow_smoke_guard_when_enabled() {
-    let smoke =
-        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
-            .unwrap()
-            .expect("smoke should be enabled");
+    let smoke = load_real_user_shadow_smoke_config(&smoke_view())
+        .unwrap()
+        .expect("smoke should be enabled");
 
     assert_eq!(
         smoke,
@@ -398,65 +288,82 @@ fn parses_real_user_shadow_smoke_guard_when_enabled() {
             .unwrap(),
         }
     );
-    assert!(smoke.enabled);
-    assert_eq!(
-        smoke.source_config.market_ws_url.as_str(),
-        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-    );
-}
-
-#[test]
-fn enabling_real_user_shadow_smoke_requires_source_config() {
-    let error = load_real_user_shadow_smoke_config(Some("1"), None).unwrap_err();
-
-    assert!(matches!(error, ConfigError::MissingPolymarketSourceConfig));
-    assert!(error
-        .to_string()
-        .contains("missing polymarket source config"));
 }
 
 #[test]
 fn non_enabled_real_user_shadow_smoke_is_ignored() {
     assert_eq!(
-        load_real_user_shadow_smoke_config(None, Some(valid_polymarket_source_config_json()))
-            .unwrap(),
-        None
-    );
-    assert_eq!(
-        load_real_user_shadow_smoke_config(Some("0"), Some(valid_polymarket_source_config_json()))
-            .unwrap(),
+        load_real_user_shadow_smoke_config(&live_view("")).unwrap(),
         None
     );
 }
 
 #[test]
 fn paper_mode_rejects_real_user_shadow_smoke_when_enabled() {
-    let error = load_real_user_shadow_smoke_config_from_env(
-        AppRuntimeMode::Paper,
-        Some(OsStr::new("1")),
-        Some(OsStr::new(valid_polymarket_source_config_json())),
-    )
-    .unwrap_err();
+    let error = validated_err(
+        r#"
+[runtime]
+mode = "paper"
+real_user_shadow_smoke = true
+"#,
+    );
 
-    assert!(error
-        .to_string()
-        .contains("real-user shadow smoke is not supported in paper mode"));
+    assert!(error.contains("real_user_shadow_smoke"));
 }
 
-#[cfg(unix)]
-#[test]
-fn non_utf8_real_user_shadow_smoke_guard_is_rejected() {
-    let guard = std::ffi::OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
-    let error = load_real_user_shadow_smoke_config_from_env(
-        AppRuntimeMode::Live,
-        Some(guard.as_os_str()),
-        None,
-    )
-    .unwrap_err();
+fn paper_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(extra).expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
 
-    assert!(error
-        .to_string()
-        .contains("invalid value for AXIOM_REAL_USER_SHADOW_SMOKE"));
+    validated.for_app_live().expect("view should validate")
+}
+
+fn live_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {
+    let negrisk = if extra.contains("[negrisk.rollout]") {
+        extra.to_owned()
+    } else {
+        format!("{DEFAULT_ROLLOUT}\n{extra}")
+    };
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(&format!("{BASE_LIVE_CONFIG}\n{negrisk}"))
+            .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
+}
+
+fn smoke_view() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(BASE_SMOKE_CONFIG).expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated
+        .for_app_live()
+        .expect("smoke view should validate")
+}
+
+fn live_view_err(extra: &str) -> String {
+    validated_err(&format!("{BASE_LIVE_CONFIG}\n{extra}"))
+}
+
+fn validated_err(text: &str) -> String {
+    match load_raw_config_from_str(text) {
+        Ok(raw) => match ValidatedConfig::new(raw) {
+            Ok(validated) => validated.for_app_live().unwrap_err().to_string(),
+            Err(error) => error.to_string(),
+        },
+        Err(error) => error.to_string(),
+    }
 }
 
 fn valid_polymarket_source_config_json() -> &'static str {
@@ -473,3 +380,139 @@ fn valid_polymarket_source_config_json() -> &'static str {
     }
     "#
 }
+
+const BASE_LIVE_CONFIG: &str = r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+"#;
+
+const BASE_SMOKE_CONFIG: &str = r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#;
+
+const DEFAULT_ROLLOUT: &str = r#"
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#;
+
+const NEG_RISK_TARGETS_A: &str = r#"
+[negrisk.rollout]
+approved_families = ["family-a", "family-b"]
+ready_families = ["family-a", "family-b"]
+
+[[negrisk.targets]]
+family_id = "family-b"
+
+[[negrisk.targets.members]]
+condition_id = "condition-2"
+token_id = "token-2"
+price = "0.4100"
+quantity = "5.0"
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-2"
+token_id = "token-2"
+price = "0.410"
+quantity = "5"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.4300"
+quantity = "5.00"
+"#;
+
+const NEG_RISK_TARGETS_B: &str = r#"
+[negrisk.rollout]
+approved_families = ["family-a", "family-b"]
+ready_families = ["family-a", "family-b"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+
+[[negrisk.targets.members]]
+condition_id = "condition-2"
+token_id = "token-2"
+price = "0.41"
+quantity = "5.0"
+
+[[negrisk.targets]]
+family_id = "family-b"
+
+[[negrisk.targets.members]]
+condition_id = "condition-2"
+token_id = "token-2"
+price = "0.41"
+quantity = "5"
+"#;

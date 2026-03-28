@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4"
+clap = { version = "4.5.48", features = ["derive"] }
+config-schema = { path = "../config-schema" }
 domain = { path = "../domain" }
 execution = { path = "../execution" }
 observability = { path = "../observability" }
