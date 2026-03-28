@@ -132,7 +132,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         match load_negrisk_shadow_attempt_artifacts_from_env().await {
             Ok(rows) if !rows.is_empty() => {
                 let shadow_attempt_count = rows.len();
-                let shadow_artifact_count = rows.iter().map(|row| row.artifacts.len()).sum::<usize>();
+                let shadow_artifact_count =
+                    rows.iter().map(|row| row.artifacts.len()).sum::<usize>();
                 let shadow_smoke_span = tracing::info_span!(
                     "app-replay.negrisk_shadow_smoke",
                     shadow_attempt_count = shadow_attempt_count,

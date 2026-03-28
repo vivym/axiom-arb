@@ -184,11 +184,7 @@ fn paper_entrypoint_rejects_non_utf8_real_user_shadow_smoke_guard() {
 
 #[test]
 fn paper_entrypoint_ignores_disabled_real_user_shadow_smoke_source_config() {
-    let output = app_live_output_with_smoke(
-        "paper",
-        Some("0"),
-        Some("{"),
-    );
+    let output = app_live_output_with_smoke("paper", Some("0"), Some("{"));
 
     assert!(
         output.status.success(),

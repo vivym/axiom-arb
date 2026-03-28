@@ -57,5 +57,8 @@ pub fn load_real_user_shadow_smoke_config_from_env(
         None => None,
     };
 
-    Ok(load_real_user_shadow_smoke_config(Some(guard), source_json)?)
+    Ok(load_real_user_shadow_smoke_config(
+        Some(guard),
+        source_json,
+    )?)
 }

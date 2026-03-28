@@ -8,9 +8,7 @@ use persistence::{
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
-use app_replay::{
-    load_negrisk_shadow_attempt_artifacts, NegRiskShadowAttemptArtifacts,
-};
+use app_replay::{load_negrisk_shadow_attempt_artifacts, NegRiskShadowAttemptArtifacts};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -176,7 +174,9 @@ async fn negrisk_shadow_contract_lists_only_negrisk_shadow_attempts_with_artifac
         .await
         .unwrap();
 
-    let rows = load_negrisk_shadow_attempt_artifacts(&db.pool).await.unwrap();
+    let rows = load_negrisk_shadow_attempt_artifacts(&db.pool)
+        .await
+        .unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(

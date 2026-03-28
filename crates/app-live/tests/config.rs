@@ -1,9 +1,8 @@
 use app_live::config::load_polymarket_source_config;
 use app_live::{
-    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
-    AppRuntimeMode, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
-    RealUserShadowSmokeConfig,
+    load_local_signer_config, load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
+    load_real_user_shadow_smoke_config_from_env, AppRuntimeMode, ConfigError, LocalL2AuthHeaders,
+    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, RealUserShadowSmokeConfig,
 };
 use std::ffi::OsStr;
 
@@ -384,19 +383,19 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
 
 #[test]
 fn parses_real_user_shadow_smoke_guard_when_enabled() {
-    let smoke = load_real_user_shadow_smoke_config(
-        Some("1"),
-        Some(valid_polymarket_source_config_json()),
-    )
-    .unwrap()
-    .expect("smoke should be enabled");
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .unwrap()
+            .expect("smoke should be enabled");
 
     assert_eq!(
         smoke,
         RealUserShadowSmokeConfig {
             enabled: true,
-            source_config: load_polymarket_source_config(Some(valid_polymarket_source_config_json()))
-                .unwrap(),
+            source_config: load_polymarket_source_config(Some(
+                valid_polymarket_source_config_json()
+            ))
+            .unwrap(),
         }
     );
     assert!(smoke.enabled);
@@ -410,10 +409,7 @@ fn parses_real_user_shadow_smoke_guard_when_enabled() {
 fn enabling_real_user_shadow_smoke_requires_source_config() {
     let error = load_real_user_shadow_smoke_config(Some("1"), None).unwrap_err();
 
-    assert!(matches!(
-        error,
-        ConfigError::MissingPolymarketSourceConfig
-    ));
+    assert!(matches!(error, ConfigError::MissingPolymarketSourceConfig));
     assert!(error
         .to_string()
         .contains("missing polymarket source config"));

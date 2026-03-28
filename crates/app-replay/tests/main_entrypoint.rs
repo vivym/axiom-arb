@@ -172,10 +172,16 @@ async fn app_replay_main_emits_operator_facing_negrisk_shadow_smoke_summary() {
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     let combined = format!("{stdout}{stderr}");
 
-    assert!(combined.contains("app-replay neg-risk shadow smoke"), "{combined}");
+    assert!(
+        combined.contains("app-replay neg-risk shadow smoke"),
+        "{combined}"
+    );
     assert!(combined.contains("shadow_attempt_count=1"), "{combined}");
     assert!(combined.contains("shadow_artifact_count=2"), "{combined}");
-    assert!(combined.contains("app-replay.negrisk_shadow_smoke"), "{combined}");
+    assert!(
+        combined.contains("app-replay.negrisk_shadow_smoke"),
+        "{combined}"
+    );
 }
 
 fn app_replay_binary() -> PathBuf {
