@@ -1,7 +1,8 @@
 use app_live::config::load_polymarket_source_config;
 use app_live::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    load_real_user_shadow_smoke_config, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    RealUserShadowSmokeConfig,
 };
 
 #[test]
@@ -374,4 +375,70 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
     ));
     assert!(query_error.to_string().contains("clob_host"));
     assert!(fragment_error.to_string().contains("data_api_host"));
+}
+
+#[test]
+fn parses_real_user_shadow_smoke_guard_when_enabled() {
+    let smoke = load_real_user_shadow_smoke_config(
+        Some("1"),
+        Some(valid_polymarket_source_config_json()),
+    )
+    .unwrap()
+    .expect("smoke should be enabled");
+
+    assert_eq!(
+        smoke,
+        RealUserShadowSmokeConfig {
+            enabled: true,
+            source_config: load_polymarket_source_config(Some(valid_polymarket_source_config_json()))
+                .unwrap(),
+        }
+    );
+    assert!(smoke.enabled);
+    assert_eq!(
+        smoke.source_config.market_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    );
+}
+
+#[test]
+fn enabling_real_user_shadow_smoke_requires_source_config() {
+    let error = load_real_user_shadow_smoke_config(Some("1"), None).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::MissingPolymarketSourceConfig
+    ));
+    assert!(error
+        .to_string()
+        .contains("missing polymarket source config"));
+}
+
+#[test]
+fn non_enabled_real_user_shadow_smoke_is_ignored() {
+    assert_eq!(
+        load_real_user_shadow_smoke_config(None, Some(valid_polymarket_source_config_json()))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        load_real_user_shadow_smoke_config(Some("0"), Some(valid_polymarket_source_config_json()))
+            .unwrap(),
+        None
+    );
+}
+
+fn valid_polymarket_source_config_json() -> &'static str {
+    r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
+    "#
 }

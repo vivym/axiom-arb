@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, env, process, str::FromStr};
 
 use app_live::{
     instrumentation::emit_bootstrap_completion_observability, load_local_signer_config,
-    load_neg_risk_live_targets,
+    load_neg_risk_live_targets, load_real_user_shadow_smoke_config,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
     run_paper_instrumented, AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig,
     NegRiskLiveTargetSet, StaticSnapshotSource,
@@ -14,6 +14,8 @@ const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
 const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
 const NEG_RISK_LIVE_READY_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_READY_FAMILIES";
 const LOCAL_SIGNER_CONFIG_ENV: &str = "AXIOM_LOCAL_SIGNER_CONFIG";
+const REAL_USER_SHADOW_SMOKE_ENV: &str = "AXIOM_REAL_USER_SHADOW_SMOKE";
+const POLYMARKET_SOURCE_CONFIG_ENV: &str = "AXIOM_POLYMARKET_SOURCE_CONFIG";
 
 fn main() {
     if let Err(error) = run() {
@@ -28,6 +30,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _bootstrap_guard = bootstrap_span.enter();
     let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
     let app_mode = AppRuntimeMode::from_str(&app_mode)?;
+    let real_user_shadow_smoke_guard = load_real_user_shadow_smoke_guard();
+    if app_mode == AppRuntimeMode::Paper && real_user_shadow_smoke_guard.as_deref() == Some("1") {
+        return Err("real-user shadow smoke is not supported in paper mode".into());
+    }
+    let _real_user_shadow_smoke = load_real_user_shadow_smoke_config_env(
+        real_user_shadow_smoke_guard.as_deref(),
+    )?;
     let source = StaticSnapshotSource::empty();
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let result = match app_mode {
@@ -58,6 +67,31 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     emit_bootstrap_completion_observability(&observability.recorder(), &result);
 
     Ok(())
+}
+
+fn load_real_user_shadow_smoke_guard() -> Option<String> {
+    env::var_os(REAL_USER_SHADOW_SMOKE_ENV).and_then(|value| value.into_string().ok())
+}
+
+fn load_real_user_shadow_smoke_config_env(
+    guard: Option<&str>,
+) -> Result<Option<app_live::RealUserShadowSmokeConfig>, Box<dyn std::error::Error>> {
+    if guard != Some("1") {
+        return Ok(None);
+    }
+
+    let source_json = match env::var(POLYMARKET_SOURCE_CONFIG_ENV) {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(format!(
+                "invalid value for {POLYMARKET_SOURCE_CONFIG_ENV}: value is not valid UTF-8"
+            )
+            .into());
+        }
+    };
+
+    Ok(load_real_user_shadow_smoke_config(guard, source_json.as_deref())?)
 }
 
 fn load_neg_risk_live_targets_env() -> Result<NegRiskLiveTargetSet, Box<dyn std::error::Error>> {

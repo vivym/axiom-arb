@@ -139,6 +139,26 @@ fn paper_entrypoint_ignores_invalid_local_signer_config() {
 }
 
 #[test]
+fn paper_entrypoint_rejects_real_user_shadow_smoke() {
+    let output = app_live_output_with_smoke(
+        "paper",
+        Some("1"),
+        Some(valid_polymarket_source_config_json()),
+    );
+
+    assert!(
+        !output.status.success(),
+        "paper mode should reject real-user shadow smoke"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("real-user shadow smoke"), "{combined}");
+}
+
+#[test]
 fn live_entrypoint_rejects_invalid_neg_risk_target_config() {
     let output = app_live_output(
         "live",
@@ -302,6 +322,25 @@ fn live_entrypoint_boots_without_neg_risk_target_config() {
     let combined = format!("{stdout}{stderr}");
 
     assert!(combined.contains("DATABASE_URL"), "{combined}");
+}
+
+#[test]
+fn live_entrypoint_rejects_real_user_shadow_smoke_without_source_config() {
+    let output = app_live_output_with_smoke("live", Some("1"), None);
+
+    assert!(
+        !output.status.success(),
+        "live mode should fail closed when smoke is enabled without source config"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("missing polymarket source config"),
+        "{combined}"
+    );
 }
 
 #[test]
@@ -669,6 +708,29 @@ fn app_live_output_raw_env_with_signer_and_database_url(
     command.output().expect("app-live should run")
 }
 
+fn app_live_output_with_smoke(
+    app_mode: &str,
+    smoke_guard: Option<&str>,
+    source_config: Option<&str>,
+) -> std::process::Output {
+    let mut command = Command::new(app_live_binary());
+    command.env("AXIOM_MODE", app_mode);
+    command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
+    command.env_remove("AXIOM_NEG_RISK_LIVE_READY_FAMILIES");
+    command.env_remove("AXIOM_LOCAL_SIGNER_CONFIG");
+    command.env_remove("AXIOM_REAL_USER_SHADOW_SMOKE");
+    command.env_remove("AXIOM_POLYMARKET_SOURCE_CONFIG");
+    command.env_remove("DATABASE_URL");
+    if let Some(value) = smoke_guard {
+        command.env("AXIOM_REAL_USER_SHADOW_SMOKE", value);
+    }
+    if let Some(value) = source_config {
+        command.env("AXIOM_POLYMARKET_SOURCE_CONFIG", value);
+    }
+    command.output().expect("app-live should run")
+}
+
 fn default_test_database_url() -> &'static str {
     "postgres://axiom:axiom@localhost:5432/axiom_arb"
 }
@@ -865,6 +927,21 @@ fn valid_neg_risk_live_targets_json() -> &'static str {
         ]
       }
     ]
+    "#
+}
+
+fn valid_polymarket_source_config_json() -> &'static str {
+    r#"
+    {
+      "clob_host": "https://clob.polymarket.com",
+      "data_api_host": "https://data-api.polymarket.com",
+      "relayer_host": "https://relayer-v2.polymarket.com",
+      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+      "heartbeat_interval_seconds": 15,
+      "relayer_poll_interval_seconds": 5,
+      "metadata_refresh_interval_seconds": 60
+    }
     "#
 }
 

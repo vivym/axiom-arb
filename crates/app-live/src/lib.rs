@@ -10,6 +10,7 @@ pub mod posture;
 pub mod queues;
 pub mod runtime;
 mod snapshot_meta;
+pub mod smoke;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -19,6 +20,7 @@ pub use config::{
     LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
     NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
 };
+pub use smoke::{load_real_user_shadow_smoke_config, RealUserShadowSmokeConfig};
 pub use daemon::{
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
     run_paper_daemon_instrumented, AppDaemon, DaemonReport,
