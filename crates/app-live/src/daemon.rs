@@ -158,9 +158,11 @@ pub fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumente
 where
     S: BootstrapSource,
 {
+    let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
-    let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
+    let durable_state =
+        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?;
     validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
@@ -209,6 +211,7 @@ fn seed_live_supervisor_from_durable_state(
     real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
     enable_durable_shadow_persistence: bool,
 ) {
+    supervisor.enable_durable_live_persistence();
     if real_user_shadow_smoke.is_some() {
         supervisor.enable_real_user_shadow_smoke();
         if enable_durable_shadow_persistence {
@@ -245,11 +248,13 @@ fn seed_live_supervisor_from_durable_state(
     for record in durable_state.live_execution_records {
         supervisor.seed_neg_risk_live_execution_record(record);
     }
-    for attempt in durable_state.shadow_execution_attempts {
-        supervisor.seed_neg_risk_shadow_execution_attempt(attempt);
-    }
-    for artifact in durable_state.shadow_execution_artifacts {
-        supervisor.seed_neg_risk_shadow_execution_artifact(artifact);
+    if real_user_shadow_smoke.is_some() {
+        for attempt in durable_state.shadow_execution_attempts {
+            supervisor.seed_neg_risk_shadow_execution_attempt(attempt);
+        }
+        for artifact in durable_state.shadow_execution_artifacts {
+            supervisor.seed_neg_risk_shadow_execution_artifact(artifact);
+        }
     }
     supervisor.seed_neg_risk_live_targets(neg_risk_live_targets.into_targets());
     for family_id in neg_risk_live_approved_families {

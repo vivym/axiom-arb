@@ -302,6 +302,104 @@ fn smoke_enabled_daemon_fails_closed_when_durable_live_rows_exist() {
     database.cleanup();
 }
 
+#[test]
+fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let smoke_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let smoke_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        smoke_targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect("smoke daemon startup should succeed");
+
+    assert_eq!(
+        smoke_result.summary.negrisk_mode,
+        domain::ExecutionMode::Shadow
+    );
+    assert_eq!(
+        database
+            .shadow_attempt_count()
+            .expect("shadow count query should succeed"),
+        1
+    );
+    assert_eq!(
+        database
+            .live_attempt_count()
+            .expect("live count query should succeed"),
+        0
+    );
+
+    let live_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let live_result = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        live_targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        None,
+    )
+    .expect("non-smoke startup should ignore durable shadow rows and promote live");
+
+    assert_eq!(
+        live_result.summary.negrisk_mode,
+        domain::ExecutionMode::Live
+    );
+    assert_eq!(live_result.summary.neg_risk_live_attempt_count, 1);
+    assert!(
+        database
+            .live_attempt_count()
+            .expect("live count query should succeed")
+            >= 1
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn smoke_enabled_daemon_fails_closed_when_shadow_attempt_has_no_artifact() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    database.seed_broken_shadow_execution_state(targets.revision());
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect_err("smoke restore should fail closed when a durable shadow attempt has no artifact");
+
+    assert!(
+        err.to_string()
+            .contains("missing durable shadow artifact for attempt"),
+        "{err}"
+    );
+
+    database.cleanup();
+}
+
 struct TestDatabase {
     pool: PgPool,
     database_url: String,
@@ -564,6 +662,41 @@ impl TestDatabase {
             });
     }
 
+    fn seed_broken_shadow_execution_state(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        7,
+                        7,
+                        Some("snapshot-7"),
+                        Some(operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should persist");
+
+                let attempt = ExecutionAttemptRow {
+                    attempt_id: "attempt-shadow-broken-1".to_owned(),
+                    plan_id: "negrisk-submit-family:family-a".to_owned(),
+                    snapshot_id: "snapshot-7".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: domain::ExecutionMode::Shadow,
+                    attempt_no: 1,
+                    idempotency_key: "idem-attempt-shadow-broken-1".to_owned(),
+                };
+                ExecutionAttemptRepo
+                    .append(&self.pool, &attempt)
+                    .await
+                    .expect("shadow attempt should persist");
+            });
+    }
+
     fn load_single_shadow_attempt(
         &self,
     ) -> persistence::Result<Option<(String, String, String, String)>> {
@@ -618,6 +751,25 @@ impl TestDatabase {
                     SELECT COUNT(*)
                     FROM execution_attempts
                     WHERE execution_mode = 'live'
+                    "#,
+                )
+                .fetch_one(&self.pool)
+                .await
+                .map_err(Into::into)
+            })
+    }
+
+    fn shadow_attempt_count(&self) -> persistence::Result<i64> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query_scalar::<_, i64>(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM execution_attempts
+                    WHERE execution_mode = 'shadow'
                     "#,
                 )
                 .fetch_one(&self.pool)

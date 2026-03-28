@@ -18,7 +18,10 @@ use crate::{
     negrisk_shadow::eligible_shadow_records,
     posture::SupervisorPosture,
     queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
-    runtime::{persist_shadow_execution_records, AppRunResult, AppRuntime, AppRuntimeMode},
+    runtime::{
+        persist_live_execution_records, persist_shadow_execution_records, AppRunResult, AppRuntime,
+        AppRuntimeMode,
+    },
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
 use state::DirtyDomain;
@@ -161,6 +164,7 @@ pub struct AppSupervisor {
     input_tasks: IngressQueue,
     seed: RuntimeSeed,
     real_user_shadow_smoke_enabled: bool,
+    durable_live_persistence_enabled: bool,
     durable_shadow_persistence_enabled: bool,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     neg_risk_live_target_revision: Option<String>,
@@ -207,6 +211,7 @@ impl AppSupervisor {
             input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
             real_user_shadow_smoke_enabled: false,
+            durable_live_persistence_enabled: false,
             durable_shadow_persistence_enabled: false,
             neg_risk_live_targets: BTreeMap::new(),
             neg_risk_live_target_revision: None,
@@ -386,6 +391,10 @@ impl AppSupervisor {
 
     pub fn enable_durable_shadow_persistence(&mut self) {
         self.durable_shadow_persistence_enabled = true;
+    }
+
+    pub fn enable_durable_live_persistence(&mut self) {
+        self.durable_live_persistence_enabled = true;
     }
 
     pub fn seed_neg_risk_live_approval(&mut self, family_id: &str) {
@@ -832,8 +841,15 @@ impl AppSupervisor {
         )
         .map_err(|err| SupervisorError::new(err.to_string()))?;
         let applied_record_count = self.apply_live_submit_facts(&records)?;
-        self.neg_risk_live_execution_records =
-            records.into_iter().take(applied_record_count).collect();
+        let applied_records = records
+            .into_iter()
+            .take(applied_record_count)
+            .collect::<Vec<_>>();
+        if self.durable_live_persistence_enabled {
+            persist_live_execution_records(&applied_records)
+                .map_err(|err| SupervisorError::new(err.to_string()))?;
+        }
+        self.neg_risk_live_execution_records = applied_records;
         self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {
             NegRiskLiveStateSource::None
         } else {
