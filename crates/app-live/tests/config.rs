@@ -1,4 +1,4 @@
-use app_live::config::load_polymarket_source_config;
+use app_live::config::PolymarketSourceConfig;
 use app_live::{
     load_real_user_shadow_smoke_config, ConfigError, LocalL2AuthHeaders, LocalRelayerAuth,
     LocalSignerConfig, LocalSignerIdentity, NegRiskLiveTargetSet, RealUserShadowSmokeConfig,
@@ -108,9 +108,8 @@ fn missing_local_signer_config_returns_error() {
 }
 
 #[test]
-fn parses_polymarket_source_config_from_env_json() {
-    let config =
-        load_polymarket_source_config(Some(valid_polymarket_source_config_json())).unwrap();
+fn parses_polymarket_source_config_from_validated_view() {
+    let config = PolymarketSourceConfig::try_from(&live_view("")).unwrap();
 
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
     assert_eq!(
@@ -136,140 +135,111 @@ fn parses_polymarket_source_config_from_env_json() {
 
 #[test]
 fn rejects_polymarket_source_config_with_non_http_hosts() {
-    let json = r#"
-    {
-      "clob_host": "ftp://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
+    let error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "ftp://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
 
-    let error = load_polymarket_source_config(Some(json)).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(error.to_string().contains("clob_host"));
+    assert!(error.contains("clob_host"));
 }
 
 #[test]
 fn rejects_polymarket_source_config_with_non_ws_urls() {
-    let json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "https://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
+    let error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "https://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
 
-    let error = load_polymarket_source_config(Some(json)).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(error.to_string().contains("market_ws_url"));
+    assert!(error.contains("market_ws_url"));
 }
 
 #[test]
 fn rejects_polymarket_source_config_with_zero_cadence() {
-    let json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 0,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
+    let error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 0
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
 
-    let error = load_polymarket_source_config(Some(json)).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(error.to_string().contains("heartbeat_interval_seconds"));
+    assert!(error.contains("heartbeat_interval_seconds"));
 }
 
 #[test]
 fn rejects_polymarket_source_config_with_non_root_host_path() {
-    let json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com/api",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
+    let error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "https://clob.polymarket.com/api"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
 
-    let error = load_polymarket_source_config(Some(json)).unwrap_err();
-
-    assert!(matches!(
-        error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(error.to_string().contains("clob_host"));
+    assert!(error.contains("clob_host"));
 }
 
 #[test]
 fn rejects_polymarket_source_config_with_host_query_or_fragment() {
-    let query_json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com?foo=bar",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
-    let fragment_json = r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com#fragment",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
-    }
-    "#;
+    let query_error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "https://clob.polymarket.com?foo=bar"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
+    let fragment_error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com#fragment"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
 
-    let query_error = load_polymarket_source_config(Some(query_json)).unwrap_err();
-    let fragment_error = load_polymarket_source_config(Some(fragment_json)).unwrap_err();
-
-    assert!(matches!(
-        query_error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(matches!(
-        fragment_error,
-        ConfigError::InvalidPolymarketSourceConfig { .. }
-    ));
-    assert!(query_error.to_string().contains("clob_host"));
-    assert!(fragment_error.to_string().contains("data_api_host"));
+    assert!(query_error.contains("clob_host"));
+    assert!(fragment_error.contains("data_api_host"));
 }
 
 #[test]
@@ -282,10 +252,7 @@ fn parses_real_user_shadow_smoke_guard_when_enabled() {
         smoke,
         RealUserShadowSmokeConfig {
             enabled: true,
-            source_config: load_polymarket_source_config(Some(
-                valid_polymarket_source_config_json()
-            ))
-            .unwrap(),
+            source_config: PolymarketSourceConfig::try_from(&smoke_view()).unwrap(),
         }
     );
 }
@@ -366,19 +333,17 @@ fn validated_err(text: &str) -> String {
     }
 }
 
-fn valid_polymarket_source_config_json() -> &'static str {
-    r#"
-    {
-      "clob_host": "https://clob.polymarket.com",
-      "data_api_host": "https://data-api.polymarket.com",
-      "relayer_host": "https://relayer-v2.polymarket.com",
-      "market_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-      "user_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-      "heartbeat_interval_seconds": 15,
-      "relayer_poll_interval_seconds": 5,
-      "metadata_refresh_interval_seconds": 60
+fn source_config_err(source_table: &str) -> String {
+    let raw = load_raw_config_from_str(&format!("{BASE_LIVE_WITH_RAW_SOURCE}\n{source_table}"))
+        .expect("config should parse");
+    match ValidatedConfig::new(raw) {
+        Ok(validated) => PolymarketSourceConfig::try_from(
+            &validated.for_app_live().expect("live view should validate"),
+        )
+        .unwrap_err()
+        .to_string(),
+        Err(error) => error.to_string(),
     }
-    "#
 }
 
 const BASE_LIVE_CONFIG: &str = r#"
@@ -412,6 +377,33 @@ api_key = "builder-api-key-1"
 timestamp = "1700000001"
 passphrase = "builder-passphrase-1"
 signature = "builder-signature-1"
+"#;
+
+const BASE_LIVE_WITH_RAW_SOURCE: &str = r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
 "#;
 
 const BASE_SMOKE_CONFIG: &str = r#"

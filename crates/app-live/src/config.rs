@@ -288,48 +288,6 @@ fn normalize_decimal(value: &Decimal) -> String {
     value.normalize().to_string()
 }
 
-pub fn load_polymarket_source_config(
-    json: Option<&str>,
-) -> Result<PolymarketSourceConfig, ConfigError> {
-    let Some(json) = json else {
-        return Err(ConfigError::MissingPolymarketSourceConfig);
-    };
-
-    let raw: RawPolymarketSourceConfig =
-        serde_json::from_str(json).map_err(|error| ConfigError::InvalidPolymarketSourceConfig {
-            value: json.to_owned(),
-            message: error.to_string(),
-        })?;
-
-    Ok(PolymarketSourceConfig {
-        clob_host: parse_host_url("clob_host", &raw.clob_host, &["http", "https"], json)?,
-        data_api_host: parse_host_url(
-            "data_api_host",
-            &raw.data_api_host,
-            &["http", "https"],
-            json,
-        )?,
-        relayer_host: parse_host_url("relayer_host", &raw.relayer_host, &["http", "https"], json)?,
-        market_ws_url: parse_source_url("market_ws_url", &raw.market_ws_url, &["ws", "wss"], json)?,
-        user_ws_url: parse_source_url("user_ws_url", &raw.user_ws_url, &["ws", "wss"], json)?,
-        heartbeat_interval_seconds: parse_positive_interval(
-            "heartbeat_interval_seconds",
-            raw.heartbeat_interval_seconds,
-            json,
-        )?,
-        relayer_poll_interval_seconds: parse_positive_interval(
-            "relayer_poll_interval_seconds",
-            raw.relayer_poll_interval_seconds,
-            json,
-        )?,
-        metadata_refresh_interval_seconds: parse_positive_interval(
-            "metadata_refresh_interval_seconds",
-            raw.metadata_refresh_interval_seconds,
-            json,
-        )?,
-    })
-}
-
 impl TryFrom<&AppLiveConfigView<'_>> for PolymarketSourceConfig {
     type Error = ConfigError;
 
@@ -340,18 +298,6 @@ impl TryFrom<&AppLiveConfigView<'_>> for PolymarketSourceConfig {
 
         source_config_from_toml(source)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RawPolymarketSourceConfig {
-    clob_host: String,
-    data_api_host: String,
-    relayer_host: String,
-    market_ws_url: String,
-    user_ws_url: String,
-    heartbeat_interval_seconds: u64,
-    relayer_poll_interval_seconds: u64,
-    metadata_refresh_interval_seconds: u64,
 }
 
 fn parse_source_url(
