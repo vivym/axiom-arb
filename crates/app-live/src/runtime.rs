@@ -7,7 +7,7 @@ use std::{
 use domain::{RuntimeMode, RuntimeOverlay};
 use observability::{field_keys, span_names};
 use persistence::{
-    connect_pool_from_env,
+    append_shadow_execution_batch, connect_pool_from_env,
     models::{
         ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow, RuntimeProgressRow,
         ShadowExecutionArtifactRow,
@@ -420,6 +420,7 @@ where
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
     let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
+    validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
             AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
@@ -634,6 +635,19 @@ pub(crate) fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Op
     (!targets.is_empty()).then_some(targets.revision())
 }
 
+fn validate_real_user_shadow_smoke_restore(
+    durable_state: &DurableLiveStartupState,
+    real_user_shadow_smoke: Option<&RealUserShadowSmokeConfig>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if real_user_shadow_smoke.is_some() && !durable_state.live_execution_records.is_empty() {
+        return Err(boxed_error(
+            "real-user shadow smoke cannot resume with durable live execution records",
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_operator_target_revision(
     progress: Option<&RuntimeProgressRow>,
     expected_revision: Option<&str>,
@@ -807,12 +821,7 @@ pub(crate) fn persist_shadow_execution_records(
         .build()?;
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        for attempt in attempts {
-            ExecutionAttemptRepo.append(&pool, attempt).await?;
-        }
-        for artifact in artifacts.iter().cloned() {
-            ShadowArtifactRepo.append(&pool, artifact).await?;
-        }
+        append_shadow_execution_batch(&pool, attempts, artifacts).await?;
         Ok(())
     })
 }

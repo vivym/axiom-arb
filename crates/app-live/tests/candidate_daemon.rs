@@ -12,8 +12,12 @@ use app_live::{
 };
 use chrono::{TimeZone, Utc};
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+    models::{
+        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
+        ExecutionAttemptRow, LiveSubmissionRecordRow,
+    },
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
+    LiveSubmissionRepo, RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -266,6 +270,38 @@ fn smoke_enabled_daemon_persists_shadow_rows_to_durable_store() {
     database.cleanup();
 }
 
+#[test]
+fn smoke_enabled_daemon_fails_closed_when_durable_live_rows_exist() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    database.seed_durable_live_execution_state(targets.revision());
+    let smoke =
+        load_real_user_shadow_smoke_config(Some("1"), Some(valid_polymarket_source_config_json()))
+            .expect("smoke config should parse");
+
+    let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        targets,
+        BTreeSet::from(["family-a".to_owned()]),
+        BTreeSet::from(["family-a".to_owned()]),
+        smoke,
+    )
+    .expect_err("smoke startup should fail closed when durable live rows already exist");
+
+    assert!(
+        err.to_string()
+            .contains("real-user shadow smoke cannot resume with durable live execution records"),
+        "{err}"
+    );
+
+    database.cleanup();
+}
+
 struct TestDatabase {
     pool: PgPool,
     database_url: String,
@@ -470,6 +506,62 @@ impl TestDatabase {
 
     fn cleanup(self) {
         let _ = self;
+    }
+
+    fn seed_durable_live_execution_state(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        7,
+                        7,
+                        Some("snapshot-7"),
+                        Some(operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should persist");
+
+                let attempt = ExecutionAttemptRow {
+                    attempt_id: "attempt-live-1".to_owned(),
+                    plan_id: "negrisk-submit-family:family-a".to_owned(),
+                    snapshot_id: "snapshot-7".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: domain::ExecutionMode::Live,
+                    attempt_no: 1,
+                    idempotency_key: "idem-attempt-live-1".to_owned(),
+                };
+                ExecutionAttemptRepo
+                    .append(&self.pool, &attempt)
+                    .await
+                    .expect("live attempt should persist");
+
+                LiveSubmissionRepo
+                    .append(
+                        &self.pool,
+                        LiveSubmissionRecordRow {
+                            submission_ref: "submission-live-1".to_owned(),
+                            attempt_id: "attempt-live-1".to_owned(),
+                            route: "neg-risk".to_owned(),
+                            scope: "family-a".to_owned(),
+                            provider: "venue-polymarket".to_owned(),
+                            state: "submitted".to_owned(),
+                            payload: json!({
+                                "submission_ref": "submission-live-1",
+                                "family_id": "family-a",
+                                "route": "neg-risk",
+                                "reason": "submitted_for_execution",
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("live submission should persist");
+            });
     }
 
     fn load_single_shadow_attempt(

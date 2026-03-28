@@ -13,10 +13,11 @@ pub use models::{
     RuntimeProgressRow, StoredOrder,
 };
 pub use repos::{
-    persist_discovery_snapshot, reconcile_current_family_view, ApprovalRepo, CandidateAdoptionRepo,
-    CandidateArtifactRepo, ExecutionAttemptRepo, IdentifierRepo, InventoryRepo, JournalRepo,
-    LiveArtifactRepo, LiveSubmissionRepo, NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo,
-    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
+    append_shadow_execution_batch, persist_discovery_snapshot, reconcile_current_family_view,
+    ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
+    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
+    NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo,
+    ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;

@@ -161,6 +161,7 @@ where
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
     let durable_state = load_durable_live_startup_state(operator_target_revision.as_deref())?;
+    validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
             AppSupervisor::new_instrumented(AppRuntimeMode::Live, source.snapshot(), recorder)
@@ -182,6 +183,21 @@ where
         .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
     persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
     Ok(result)
+}
+
+fn validate_real_user_shadow_smoke_restore(
+    durable_state: &crate::runtime::DurableLiveStartupState,
+    real_user_shadow_smoke: Option<&RealUserShadowSmokeConfig>,
+) -> Result<(), Box<dyn Error>> {
+    if real_user_shadow_smoke.is_some() && !durable_state.live_execution_records.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "real-user shadow smoke cannot resume with durable live execution records",
+        )
+        .into());
+    }
+
+    Ok(())
 }
 
 fn seed_live_supervisor_from_durable_state(

@@ -5,6 +5,7 @@ use std::{
 
 use domain::ExecutionMode;
 use persistence::{
+    append_shadow_execution_batch,
     models::{
         ExecutionAttemptRow, LiveSubmissionRecordRow, PendingReconcileRow,
         ShadowExecutionArtifactRow,
@@ -276,6 +277,35 @@ async fn shadow_artifacts_reject_live_attempt_ids() {
         PersistenceError::ShadowArtifactRequiresShadowAttempt { ref attempt_id }
         if attempt_id == "attempt-live-1"
     ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn shadow_batch_persistence_is_atomic_when_artifact_insert_fails() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let attempts = vec![sample_attempt(
+        "attempt-shadow-batch-1",
+        ExecutionMode::Shadow,
+    )];
+    let artifacts = vec![sample_shadow_artifact("missing-shadow-attempt")];
+
+    let err = append_shadow_execution_batch(&db.pool, &attempts, &artifacts)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::ShadowArtifactRequiresShadowAttempt { ref attempt_id }
+        if attempt_id == "missing-shadow-attempt"
+    ));
+
+    let persisted_attempts = ExecutionAttemptRepo
+        .list_shadow_attempts(&db.pool)
+        .await
+        .unwrap();
+    assert!(persisted_attempts.is_empty());
 
     db.cleanup().await;
 }

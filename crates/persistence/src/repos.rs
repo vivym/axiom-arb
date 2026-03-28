@@ -1833,43 +1833,7 @@ pub struct ExecutionAttemptRepo;
 
 impl ExecutionAttemptRepo {
     pub async fn append(&self, pool: &PgPool, row: &ExecutionAttemptRow) -> Result<()> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO execution_attempts (
-                attempt_id,
-                plan_id,
-                snapshot_id,
-                route,
-                scope,
-                matched_rule_id,
-                execution_mode,
-                attempt_no,
-                idempotency_key
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            "#,
-        )
-        .bind(&row.attempt_id)
-        .bind(&row.plan_id)
-        .bind(&row.snapshot_id)
-        .bind(&row.route)
-        .bind(&row.scope)
-        .bind(&row.matched_rule_id)
-        .bind(execution_mode_to_str(row.execution_mode))
-        .bind(row.attempt_no)
-        .bind(&row.idempotency_key)
-        .execute(pool)
-        .await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) if constraint_name(&err) == Some("execution_attempts_pkey") => {
-                Err(PersistenceError::DuplicateExecutionAttempt {
-                    attempt_id: row.attempt_id.clone(),
-                })
-            }
-            Err(err) => Err(err.into()),
-        }
+        append_execution_attempt(pool, row).await
     }
 
     pub async fn list_live_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
@@ -2289,28 +2253,7 @@ pub struct ShadowArtifactRepo;
 
 impl ShadowArtifactRepo {
     pub async fn append(&self, pool: &PgPool, row: ShadowExecutionArtifactRow) -> Result<()> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO shadow_execution_artifacts (attempt_id, stream, payload)
-            SELECT $1, $2, $3
-            FROM execution_attempts
-            WHERE attempt_id = $1 AND execution_mode = $4
-            "#,
-        )
-        .bind(&row.attempt_id)
-        .bind(&row.stream)
-        .bind(&row.payload)
-        .bind(execution_mode_to_str(domain::ExecutionMode::Shadow))
-        .execute(pool)
-        .await?;
-
-        if result.rows_affected() == 1 {
-            Ok(())
-        } else {
-            Err(PersistenceError::ShadowArtifactRequiresShadowAttempt {
-                attempt_id: row.attempt_id,
-            })
-        }
+        append_shadow_execution_artifact(pool, row).await
     }
 
     pub async fn list_for_attempts(
@@ -2338,6 +2281,22 @@ impl ShadowArtifactRepo {
             .map(map_shadow_execution_artifact_row)
             .collect()
     }
+}
+
+pub async fn append_shadow_execution_batch(
+    pool: &PgPool,
+    attempts: &[ExecutionAttemptRow],
+    artifacts: &[ShadowExecutionArtifactRow],
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    for attempt in attempts {
+        append_execution_attempt(&mut *tx, attempt).await?;
+    }
+    for artifact in artifacts.iter().cloned() {
+        append_shadow_execution_artifact(&mut *tx, artifact).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -2601,6 +2560,80 @@ where
     .await?;
 
     map_journal_entry_row(row)
+}
+
+async fn append_execution_attempt<'e, E>(executor: E, row: &ExecutionAttemptRow) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            route,
+            scope,
+            matched_rule_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        "#,
+    )
+    .bind(&row.attempt_id)
+    .bind(&row.plan_id)
+    .bind(&row.snapshot_id)
+    .bind(&row.route)
+    .bind(&row.scope)
+    .bind(&row.matched_rule_id)
+    .bind(execution_mode_to_str(row.execution_mode))
+    .bind(row.attempt_no)
+    .bind(&row.idempotency_key)
+    .execute(executor)
+    .await;
+
+    match result {
+        Ok(_) => Ok(()),
+        Err(err) if constraint_name(&err) == Some("execution_attempts_pkey") => {
+            Err(PersistenceError::DuplicateExecutionAttempt {
+                attempt_id: row.attempt_id.clone(),
+            })
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+async fn append_shadow_execution_artifact<'e, E>(
+    executor: E,
+    row: ShadowExecutionArtifactRow,
+) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let result = sqlx::query(
+        r#"
+        INSERT INTO shadow_execution_artifacts (attempt_id, stream, payload)
+        SELECT $1, $2, $3
+        FROM execution_attempts
+        WHERE attempt_id = $1 AND execution_mode = $4
+        "#,
+    )
+    .bind(&row.attempt_id)
+    .bind(&row.stream)
+    .bind(&row.payload)
+    .bind(execution_mode_to_str(domain::ExecutionMode::Shadow))
+    .execute(executor)
+    .await?;
+
+    if result.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(PersistenceError::ShadowArtifactRequiresShadowAttempt {
+            attempt_id: row.attempt_id,
+        })
+    }
 }
 
 fn map_identifier_record_row(row: PgRow) -> Result<IdentifierRecordRow> {
