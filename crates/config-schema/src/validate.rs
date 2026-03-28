@@ -30,12 +30,48 @@ impl ValidatedConfig {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppLiveConfigView<'a> {
-    pub raw: &'a RawAxiomConfig,
+    raw: &'a RawAxiomConfig,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppReplayConfigView<'a> {
-    pub raw: &'a RawAxiomConfig,
+    raw: &'a RawAxiomConfig,
+}
+
+impl<'a> AppLiveConfigView<'a> {
+    pub fn mode(&self) -> RuntimeModeToml {
+        self.raw.runtime.mode
+    }
+
+    pub fn real_user_shadow_smoke(&self) -> bool {
+        self.raw.runtime.real_user_shadow_smoke
+    }
+
+    pub fn has_polymarket_source(&self) -> bool {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.source.as_ref())
+            .is_some()
+    }
+
+    pub fn has_polymarket_signer(&self) -> bool {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.signer.as_ref())
+            .is_some()
+    }
+}
+
+impl<'a> AppReplayConfigView<'a> {
+    pub fn mode(&self) -> RuntimeModeToml {
+        self.raw.runtime.mode
+    }
+
+    pub fn real_user_shadow_smoke(&self) -> bool {
+        self.raw.runtime.real_user_shadow_smoke
+    }
 }
 
 pub(crate) fn validate_global_invariants(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {

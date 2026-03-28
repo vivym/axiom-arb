@@ -1,19 +1,24 @@
 use std::path::{Path, PathBuf};
 
-use config_schema::{load_raw_config_from_path, load_raw_config_from_str, ValidatedConfig};
+use config_schema::{
+    load_raw_config_from_path, load_raw_config_from_str, RuntimeModeToml, ValidatedConfig,
+};
 
 #[test]
 fn replay_view_does_not_require_live_signer_or_source() {
     let raw = load_raw_config_from_path(&fixture_path("app-replay.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
 
-    validated
+    let replay = validated
         .for_app_replay()
         .expect("replay view should validate");
+
+    assert_eq!(replay.mode(), RuntimeModeToml::Live);
+    assert!(!replay.real_user_shadow_smoke());
 }
 
 #[test]
-fn smoke_view_requires_live_source_and_signer() {
+fn smoke_view_requires_live_signer() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-smoke.toml")).unwrap();
     let err = ValidatedConfig::new(raw)
         .unwrap()
@@ -21,6 +26,40 @@ fn smoke_view_requires_live_source_and_signer() {
         .expect_err("smoke fixture missing signer should fail");
 
     assert!(err.to_string().contains("polymarket.signer"));
+}
+
+#[test]
+fn smoke_view_requires_live_source() {
+    let err = validated_view_err(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    );
+
+    assert!(err.contains("polymarket.source"));
 }
 
 #[test]
@@ -81,7 +120,11 @@ fn live_view_accepts_fully_populated_live_fixture() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-live.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
 
-    validated.for_app_live().expect("live view should validate");
+    let live = validated.for_app_live().expect("live view should validate");
+    assert_eq!(live.mode(), RuntimeModeToml::Live);
+    assert!(!live.real_user_shadow_smoke());
+    assert!(live.has_polymarket_source());
+    assert!(live.has_polymarket_signer());
 }
 
 #[test]
@@ -359,6 +402,15 @@ quantity = "5"
 
     let raw = load_raw_config_from_str(&config).unwrap();
     ValidatedConfig::new(raw).unwrap_err().to_string()
+}
+
+fn validated_view_err(config: &str) -> String {
+    let raw = load_raw_config_from_str(config).unwrap();
+    ValidatedConfig::new(raw)
+        .unwrap()
+        .for_app_live()
+        .unwrap_err()
+        .to_string()
 }
 
 fn config_err(config: &str) -> String {
