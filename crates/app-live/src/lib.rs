@@ -6,11 +6,12 @@ pub mod dispatch;
 pub mod input_tasks;
 pub mod instrumentation;
 pub mod negrisk_live;
+mod negrisk_shadow;
 pub mod posture;
 pub mod queues;
 pub mod runtime;
-mod snapshot_meta;
 pub mod smoke;
+mod snapshot_meta;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -19,10 +20,6 @@ pub use config::{
     load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
     LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
     NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
-};
-pub use smoke::{
-    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
-    RealUserShadowSmokeConfig,
 };
 pub use daemon::{
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
@@ -46,6 +43,10 @@ pub use runtime::{
     run_live_with_neg_risk_live_targets, run_live_with_neg_risk_live_targets_instrumented,
     run_paper, run_paper_instrumented, AppRunResult, AppRuntime, AppRuntimeMode,
     ParseAppRuntimeModeError,
+};
+pub use smoke::{
+    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
+    RealUserShadowSmokeConfig,
 };
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,

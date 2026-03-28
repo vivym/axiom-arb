@@ -80,3 +80,29 @@ fn family_specific_live_rule_overrides_default_shadow_rule() {
     assert_eq!(activation.mode, ExecutionMode::Live);
     assert_eq!(activation.matched_rule_id.as_deref(), Some("family-a-live"));
 }
+
+#[test]
+fn real_user_shadow_smoke_forces_negrisk_shadow_without_touching_fullset() {
+    let policy = ActivationPolicy::from_rules(
+        "phase-three-rules",
+        vec![
+            RolloutRule::new("full-set", "default", ExecutionMode::Live, "fullset-live"),
+            RolloutRule::new("neg-risk", "family-a", ExecutionMode::Live, "family-a-live"),
+        ],
+    )
+    .with_real_user_shadow_smoke();
+
+    let fullset_activation = policy.activation_for("full-set", "market-a", "snapshot-12");
+    assert_eq!(fullset_activation.mode, ExecutionMode::Live);
+    assert_eq!(
+        fullset_activation.matched_rule_id.as_deref(),
+        Some("fullset-live")
+    );
+
+    let negrisk_activation = policy.activation_for("neg-risk", "family-a", "snapshot-12");
+    assert_eq!(negrisk_activation.mode, ExecutionMode::Shadow);
+    assert_eq!(
+        negrisk_activation.matched_rule_id.as_deref(),
+        Some("family-a-live")
+    );
+}
