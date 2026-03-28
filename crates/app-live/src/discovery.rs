@@ -2,11 +2,15 @@ use domain::{
     AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTarget, CandidateTargetSet,
     CandidateValidationResult, EventFamilyId, FamilyDiscoveryRecord,
 };
-use persistence::models::{AdoptableTargetRevisionRow, CandidateTargetSetRow};
+use persistence::{
+    connect_pool_from_env,
+    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
+    CandidateAdoptionRepo, CandidateArtifactRepo,
+};
 use serde_json::json;
 use state::{CandidatePublication, DirtyDomain};
 
-use crate::queues::{CandidateNoticeQueue, CandidateRestrictionTruth};
+use crate::queues::{CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryReport {
@@ -25,6 +29,14 @@ pub struct DiscoveryReport {
 pub struct CandidateArtifactRender {
     pub candidate: CandidateTargetSetRow,
     pub adoptable: AdoptableTargetRevisionRow,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DiscoveryOutcome {
+    report: DiscoveryReport,
+    candidate: Option<CandidateTargetSetRow>,
+    adoptable: Option<AdoptableTargetRevisionRow>,
+    provenance: Option<CandidateAdoptionProvenanceRow>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -59,41 +71,9 @@ impl CandidateBridge {
         else {
             return Err("candidate bridge requires an adoptable revision".to_owned());
         };
-        let advisory = CandidatePricingEngine.advisory_terms(candidate_set);
 
         Ok(CandidateArtifactRender {
-            candidate: CandidateTargetSetRow {
-                candidate_revision: candidate_revision.clone(),
-                snapshot_id: candidate_set.source_snapshot_id.clone(),
-                source_revision: candidate_set
-                    .discovery_record
-                    .source
-                    .source_event_id
-                    .clone(),
-                payload: json!({
-                    "candidate_revision": candidate_revision,
-                    "snapshot_id": candidate_set.source_snapshot_id.clone(),
-                    "source_revision": candidate_set.discovery_record.source.source_event_id.clone(),
-                    "source_anchor": {
-                        "source_kind": candidate_set.discovery_record.source.source_kind.clone(),
-                        "source_session_id": candidate_set.discovery_record.source.source_session_id.clone(),
-                        "source_event_id": candidate_set.discovery_record.source.source_event_id.clone(),
-                        "normalizer_version": candidate_set.discovery_record.source.normalizer_version.clone(),
-                    },
-                    "policy_name": candidate_set.policy.policy_name.clone(),
-                    "candidate_policy_version": candidate_set.policy.policy_version.clone(),
-                    "bridge_policy_version": "bridge-policy-v1",
-                    "target_count": candidate_set.targets.len(),
-                    "targets": candidate_set
-                        .targets
-                        .iter()
-                        .map(serialized_candidate_target)
-                        .collect::<Vec<_>>(),
-                    "advisory_pricing": advisory,
-                    "warnings": [],
-                    "execution_requests": [],
-                }),
-            },
+            candidate: self.render_candidate(candidate_set),
             adoptable: AdoptableTargetRevisionRow {
                 adoptable_revision: adoptable_revision.clone(),
                 candidate_revision: candidate_revision.clone(),
@@ -120,6 +100,43 @@ impl CandidateBridge {
                 }),
             },
         })
+    }
+
+    fn render_candidate(&self, candidate_set: &CandidateTargetSet) -> CandidateTargetSetRow {
+        let advisory = CandidatePricingEngine.advisory_terms(candidate_set);
+
+        CandidateTargetSetRow {
+            candidate_revision: candidate_set.target_set_id.clone(),
+            snapshot_id: candidate_set.source_snapshot_id.clone(),
+            source_revision: candidate_set
+                .discovery_record
+                .source
+                .source_event_id
+                .clone(),
+            payload: json!({
+                "candidate_revision": candidate_set.target_set_id.clone(),
+                "snapshot_id": candidate_set.source_snapshot_id.clone(),
+                "source_revision": candidate_set.discovery_record.source.source_event_id.clone(),
+                "source_anchor": {
+                    "source_kind": candidate_set.discovery_record.source.source_kind.clone(),
+                    "source_session_id": candidate_set.discovery_record.source.source_session_id.clone(),
+                    "source_event_id": candidate_set.discovery_record.source.source_event_id.clone(),
+                    "normalizer_version": candidate_set.discovery_record.source.normalizer_version.clone(),
+                },
+                "policy_name": candidate_set.policy.policy_name.clone(),
+                "candidate_policy_version": candidate_set.policy.policy_version.clone(),
+                "bridge_policy_version": "bridge-policy-v1",
+                "target_count": candidate_set.targets.len(),
+                "targets": candidate_set
+                    .targets
+                    .iter()
+                    .map(serialized_candidate_target)
+                    .collect::<Vec<_>>(),
+                "advisory_pricing": advisory,
+                "warnings": [],
+                "execution_requests": [],
+            }),
+        }
     }
 }
 
@@ -229,56 +246,130 @@ impl DiscoverySupervisor {
             .pop_front()
             .ok_or_else(|| "candidate notice queue is empty".to_owned())?;
 
-        if !notice.dirty_domains.contains(&DirtyDomain::Candidates) {
-            return Ok(DiscoveryReport {
-                candidate_revision: None,
-                adoptable_revision: None,
-                operator_target_revision: notice.operator_target_revision,
-                target_count: 0,
-                adoptable_target_count: 0,
-                deferred_target_count: 0,
-                excluded_target_count: 0,
-                live_dispatch_woken: false,
-                disposition: "ignored".to_owned(),
+        self.process_notice(notice).map(|outcome| outcome.report)
+    }
+
+    pub async fn persist_notice_for_runtime(
+        notice: CandidateNotice,
+    ) -> Result<DiscoveryReport, String> {
+        let outcome = Self::default().process_notice(notice)?;
+
+        if outcome.candidate.is_none()
+            && outcome.adoptable.is_none()
+            && outcome.provenance.is_none()
+        {
+            return Ok(outcome.report);
+        }
+
+        let pool = connect_pool_from_env()
+            .await
+            .map_err(|error| format!("candidate persistence pool error: {error}"))?;
+        let artifacts = CandidateArtifactRepo;
+        if let Some(candidate) = outcome.candidate.as_ref() {
+            artifacts
+                .upsert_candidate_target_set(&pool, candidate)
+                .await
+                .map_err(|error| format!("candidate persistence error: {error}"))?;
+        }
+        if let Some(adoptable) = outcome.adoptable.as_ref() {
+            artifacts
+                .upsert_adoptable_target_revision(&pool, adoptable)
+                .await
+                .map_err(|error| format!("adoptable persistence error: {error}"))?;
+        }
+        if let Some(provenance) = outcome.provenance.as_ref() {
+            CandidateAdoptionRepo
+                .upsert_provenance(&pool, provenance)
+                .await
+                .map_err(|error| format!("candidate provenance persistence error: {error}"))?;
+        }
+
+        Ok(outcome.report)
+    }
+
+    fn process_notice(&self, notice: CandidateNotice) -> Result<DiscoveryOutcome, String> {
+        let CandidateNotice {
+            publication,
+            dirty_domains,
+            operator_target_revision,
+            restriction,
+        } = notice;
+
+        if !dirty_domains.contains(&DirtyDomain::Candidates) {
+            return Ok(DiscoveryOutcome {
+                report: DiscoveryReport {
+                    candidate_revision: None,
+                    adoptable_revision: None,
+                    operator_target_revision,
+                    target_count: 0,
+                    adoptable_target_count: 0,
+                    deferred_target_count: 0,
+                    excluded_target_count: 0,
+                    live_dispatch_woken: false,
+                    disposition: "ignored".to_owned(),
+                },
+                candidate: None,
+                adoptable: None,
+                provenance: None,
             });
         }
 
         let _ = self.pricing;
         let (candidate_set, disposition, summary) =
             self.validation.candidate_set_from_publication(
-                &notice.publication,
-                &notice.restriction,
-                notice.operator_target_revision.as_deref(),
+                &publication,
+                &restriction,
+                operator_target_revision.as_deref(),
             )?;
+        let candidate = self.bridge.render_candidate(&candidate_set);
 
-        if disposition != "adoptable" || notice.operator_target_revision.is_none() {
-            return Ok(DiscoveryReport {
-                candidate_revision: Some(candidate_set.target_set_id),
-                adoptable_revision: None,
-                operator_target_revision: None,
+        if disposition != "adoptable" || operator_target_revision.is_none() {
+            return Ok(DiscoveryOutcome {
+                report: DiscoveryReport {
+                    candidate_revision: Some(candidate.candidate_revision.clone()),
+                    adoptable_revision: None,
+                    operator_target_revision: None,
+                    target_count: candidate_set.targets.len(),
+                    adoptable_target_count: summary.adoptable_count,
+                    deferred_target_count: summary.deferred_count,
+                    excluded_target_count: summary.excluded_count,
+                    live_dispatch_woken: false,
+                    disposition,
+                },
+                candidate: Some(candidate),
+                adoptable: None,
+                provenance: None,
+            });
+        }
+
+        let rendered = self
+            .bridge
+            .render(&candidate_set, operator_target_revision.as_deref())?;
+
+        Ok(DiscoveryOutcome {
+            report: DiscoveryReport {
+                candidate_revision: Some(rendered.candidate.candidate_revision.clone()),
+                adoptable_revision: Some(rendered.adoptable.adoptable_revision.clone()),
+                operator_target_revision: Some(
+                    rendered.adoptable.rendered_operator_target_revision.clone(),
+                ),
                 target_count: candidate_set.targets.len(),
                 adoptable_target_count: summary.adoptable_count,
                 deferred_target_count: summary.deferred_count,
                 excluded_target_count: summary.excluded_count,
                 live_dispatch_woken: false,
                 disposition,
-            });
-        }
-
-        let rendered = self
-            .bridge
-            .render(&candidate_set, notice.operator_target_revision.as_deref())?;
-
-        Ok(DiscoveryReport {
-            candidate_revision: Some(rendered.candidate.candidate_revision),
-            adoptable_revision: Some(rendered.adoptable.adoptable_revision),
-            operator_target_revision: Some(rendered.adoptable.rendered_operator_target_revision),
-            target_count: candidate_set.targets.len(),
-            adoptable_target_count: summary.adoptable_count,
-            deferred_target_count: summary.deferred_count,
-            excluded_target_count: summary.excluded_count,
-            live_dispatch_woken: false,
-            disposition,
+            },
+            provenance: Some(CandidateAdoptionProvenanceRow {
+                operator_target_revision: rendered
+                    .adoptable
+                    .rendered_operator_target_revision
+                    .clone(),
+                adoptable_revision: rendered.adoptable.adoptable_revision.clone(),
+                candidate_revision: rendered.candidate.candidate_revision.clone(),
+            }),
+            candidate: Some(rendered.candidate),
+            adoptable: Some(rendered.adoptable),
         })
     }
 }

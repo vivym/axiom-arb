@@ -34,7 +34,7 @@ impl NegRiskLiveTargetSet {
 
     fn new(targets: BTreeMap<String, NegRiskFamilyLiveTarget>) -> Self {
         Self {
-            revision: stable_neg_risk_live_target_revision(&targets),
+            revision: neg_risk_live_target_revision_from_targets(&targets),
             targets,
         }
     }
@@ -180,7 +180,7 @@ pub fn load_local_signer_config(json: Option<&str>) -> Result<LocalSignerConfig,
     })
 }
 
-fn stable_neg_risk_live_target_revision(
+pub(crate) fn neg_risk_live_target_revision_from_targets(
     targets: &BTreeMap<String, NegRiskFamilyLiveTarget>,
 ) -> String {
     let canonical = CanonicalNegRiskLiveTargetSet {

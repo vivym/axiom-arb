@@ -15,8 +15,9 @@ use persistence::{
     PendingReconcileRepo, RuntimeProgressRepo,
 };
 use state::{
-    ApplyError, ApplyResult, PendingReconcileAnchor, PublishedSnapshot, ReconcileReport,
-    RemoteSnapshot, StateApplier, StateStore,
+    ApplyError, ApplyResult, CandidateProjectionReadiness, CandidatePublication,
+    PendingReconcileAnchor, PublishedSnapshot, ReconcileReport, RemoteSnapshot, StateApplier,
+    StateStore,
 };
 use tracing::field;
 
@@ -263,6 +264,14 @@ impl AppRuntime {
         );
         self.published_snapshot = Some(snapshot.clone());
         Some(snapshot)
+    }
+
+    pub fn candidate_publication(&self) -> Option<CandidatePublication> {
+        self.store.last_applied_journal_seq()?;
+        Some(CandidatePublication::from_store(
+            &self.store,
+            CandidateProjectionReadiness::ready(format!("candidate-pub-{}", self.state_version())),
+        ))
     }
 
     pub fn replay_committed_history(
@@ -557,7 +566,13 @@ pub(crate) fn load_durable_live_startup_state(
                     }
                 }
                 Ok(None) => {
-                    if operator_target_revision == Some(progress_operator_target_revision) {
+                    if operator_target_revision == Some(progress_operator_target_revision)
+                        && has_candidate_adoption_evidence(
+                            &pool,
+                            progress_operator_target_revision,
+                        )
+                        .await?
+                    {
                         return Err(boxed_error(format!(
                             "candidate adoption provenance is required for operator target revision {progress_operator_target_revision}"
                         )));
@@ -589,6 +604,24 @@ pub(crate) fn load_durable_live_startup_state(
             candidate_restore_status,
         })
     })
+}
+
+async fn has_candidate_adoption_evidence(
+    pool: &sqlx::PgPool,
+    operator_target_revision: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM adoptable_target_revisions
+            WHERE rendered_operator_target_revision = $1
+        )
+        "#,
+    )
+    .bind(operator_target_revision)
+    .fetch_one(pool)
+    .await
 }
 
 pub(crate) fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {

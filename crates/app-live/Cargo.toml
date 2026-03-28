@@ -14,6 +14,7 @@ rust_decimal = { version = "1.40.0", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10.9"
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls"] }
 state = { path = "../state" }
 tokio = { version = "1.50.0", features = ["rt-multi-thread"] }
 tracing = "0.1.41"
@@ -22,7 +23,6 @@ venue-polymarket = { path = "../venue-polymarket" }
 [dev-dependencies]
 chrono = "0.4"
 domain = { path = "../domain" }
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls"] }
 state = { path = "../state" }
 
 [lib]

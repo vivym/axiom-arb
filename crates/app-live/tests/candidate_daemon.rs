@@ -8,8 +8,9 @@ use std::{
 use app_live::{
     load_neg_risk_live_targets,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented, AppInstrumentation,
-    StaticSnapshotSource,
+    AppSupervisor, InputTaskEvent, StaticSnapshotSource,
 };
+use chrono::{TimeZone, Utc};
 use persistence::{
     models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
@@ -57,6 +58,47 @@ fn daemon_restores_candidate_status_without_blocking_non_adoption_startup() {
 }
 
 #[test]
+fn explicit_operator_target_restart_succeeds_after_first_startup_without_candidate_provenance() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let first_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let first = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        first_targets,
+        BTreeSet::new(),
+        BTreeSet::new(),
+    )
+    .expect("first explicit-operator startup should succeed");
+    assert_eq!(first.summary.latest_candidate_revision, None);
+    assert!(!first.summary.adoption_provenance_resolved);
+
+    let second_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let second = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
+        &StaticSnapshotSource::empty(),
+        AppInstrumentation::disabled(),
+        second_targets,
+        BTreeSet::new(),
+        BTreeSet::new(),
+    )
+    .expect("matching explicit operator restart should not require candidate provenance");
+
+    assert_eq!(second.summary.latest_candidate_revision, None);
+    assert_eq!(second.summary.latest_adoptable_revision, None);
+    assert_eq!(
+        second.summary.latest_candidate_operator_target_revision,
+        None
+    );
+    assert!(!second.summary.adoption_provenance_resolved);
+
+    database.cleanup();
+}
+
+#[test]
 fn candidate_derived_operator_target_revision_requires_provenance_on_restore() {
     let _guard = lock_env();
     let database = TestDatabase::new();
@@ -78,6 +120,84 @@ fn candidate_derived_operator_target_revision_requires_provenance_on_restore() {
         err.to_string().contains("candidate adoption provenance"),
         "{err}"
     );
+
+    database.cleanup();
+}
+
+#[test]
+fn supervisor_resume_persists_candidate_artifacts_from_candidate_dirty_inputs() {
+    let _guard = lock_env();
+    let database = TestDatabase::new();
+    env::set_var("DATABASE_URL", database.database_url());
+
+    let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
+        .expect("targets should parse");
+    let operator_target_revision = targets.revision().to_owned();
+    let mut supervisor = AppSupervisor::for_tests();
+    supervisor.seed_neg_risk_live_targets(targets.into_targets());
+    supervisor.seed_unapplied_journal_entry(
+        18,
+        InputTaskEvent::family_discovery_observed(
+            18,
+            "session-discovery",
+            "evt-18",
+            "family-a",
+            Utc.with_ymd_and_hms(2026, 3, 28, 9, 0, 0).unwrap(),
+        ),
+    );
+    supervisor.seed_unapplied_journal_entry(
+        19,
+        InputTaskEvent::family_backfill_observed(
+            19,
+            "session-discovery",
+            "evt-19",
+            "family-a",
+            "cursor-19",
+            true,
+            Utc.with_ymd_and_hms(2026, 3, 28, 9, 5, 0).unwrap(),
+        ),
+    );
+
+    let summary = supervisor
+        .resume_once()
+        .expect("resume should process candidate dirty inputs");
+
+    assert_eq!(
+        summary.latest_candidate_revision.as_deref(),
+        Some("candidate-pub-2")
+    );
+    assert_eq!(
+        summary.latest_adoptable_revision.as_deref(),
+        Some("adoptable-candidate-pub-2")
+    );
+    assert_eq!(
+        summary.latest_candidate_operator_target_revision.as_deref(),
+        Some(operator_target_revision.as_str())
+    );
+    assert!(summary.adoption_provenance_resolved);
+
+    let candidate = database
+        .load_candidate_target_set("candidate-pub-2")
+        .expect("candidate row lookup should succeed")
+        .expect("candidate row should persist");
+    assert_eq!(candidate.snapshot_id, "candidate-pub-2");
+
+    let adoptable = database
+        .load_adoptable_target_revision("adoptable-candidate-pub-2")
+        .expect("adoptable row lookup should succeed")
+        .expect("adoptable row should persist");
+    assert_eq!(adoptable.candidate_revision, "candidate-pub-2");
+    assert_eq!(
+        adoptable.rendered_operator_target_revision,
+        operator_target_revision
+    );
+
+    let provenance = database
+        .load_candidate_provenance(&operator_target_revision)
+        .expect("provenance lookup should succeed")
+        .expect("provenance row should persist");
+    assert_eq!(provenance.candidate_revision, "candidate-pub-2");
+    assert_eq!(provenance.adoptable_revision, "adoptable-candidate-pub-2");
 
     database.cleanup();
 }
@@ -204,6 +324,51 @@ impl TestDatabase {
                         .expect("provenance should persist");
                 }
             });
+    }
+
+    fn load_candidate_target_set(
+        &self,
+        candidate_revision: &str,
+    ) -> persistence::Result<Option<CandidateTargetSetRow>> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                CandidateArtifactRepo
+                    .get_candidate_target_set(&self.pool, candidate_revision)
+                    .await
+            })
+    }
+
+    fn load_adoptable_target_revision(
+        &self,
+        adoptable_revision: &str,
+    ) -> persistence::Result<Option<AdoptableTargetRevisionRow>> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                CandidateArtifactRepo
+                    .get_adoptable_target_revision(&self.pool, adoptable_revision)
+                    .await
+            })
+    }
+
+    fn load_candidate_provenance(
+        &self,
+        operator_target_revision: &str,
+    ) -> persistence::Result<Option<CandidateAdoptionProvenanceRow>> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                CandidateAdoptionRepo
+                    .get_by_operator_target_revision(&self.pool, operator_target_revision)
+                    .await
+            })
     }
 
     fn cleanup(self) {

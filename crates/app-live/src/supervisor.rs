@@ -8,16 +8,18 @@ use tracing::field;
 
 use crate::{
     bootstrap::{BootstrapStatus, StaticSnapshotSource},
-    config::NegRiskFamilyLiveTarget,
+    config::{neg_risk_live_target_revision_from_targets, NegRiskFamilyLiveTarget},
+    discovery::DiscoverySupervisor,
     dispatch::{DispatchLoop, DispatchSummary},
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
     posture::SupervisorPosture,
-    queues::IngressQueue,
+    queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
     runtime::{AppRunResult, AppRuntime, AppRuntimeMode},
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
 };
+use state::DirtyDomain;
 
 const DIVERGENCE_PENDING_RECONCILE_COUNT_MISMATCH: &str = "pending_reconcile_count_mismatch";
 const DIVERGENCE_STATE_VERSION_MISMATCH: &str = "state_version_mismatch";
@@ -155,6 +157,7 @@ pub struct AppSupervisor {
     input_tasks: IngressQueue,
     seed: RuntimeSeed,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
@@ -196,6 +199,7 @@ impl AppSupervisor {
             input_tasks: IngressQueue::default(),
             seed: RuntimeSeed::default(),
             neg_risk_live_targets: BTreeMap::new(),
+            neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
             neg_risk_live_ready_families: BTreeSet::new(),
             neg_risk_rollout_evidence: None,
@@ -357,6 +361,8 @@ impl AppSupervisor {
         &mut self,
         targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     ) {
+        self.neg_risk_live_target_revision =
+            (!targets.is_empty()).then(|| neg_risk_live_target_revision_from_targets(&targets));
         self.neg_risk_live_targets = targets;
     }
 
@@ -501,10 +507,14 @@ impl AppSupervisor {
                     dirty_set,
                     ..
                 } => {
+                    let candidate_dirty = dirty_set.domains.contains(&DirtyDomain::Candidates);
                     self.dispatcher.record_apply(state_version, dirty_set);
                     self.record_committed_input(input.clone());
                     let _ = self.input_tasks.remove(&input);
                     self.publish_current_snapshot(false);
+                    if candidate_dirty {
+                        self.materialize_candidate_artifacts();
+                    }
                     processed_count += 1;
                     self.record_recovery_backlog(self.input_tasks.len());
                 }
@@ -808,6 +818,45 @@ impl AppSupervisor {
         if self.neg_risk_live_execution_records.is_empty() {
             self.neg_risk_live_state_source = NegRiskLiveStateSource::None;
         }
+    }
+
+    fn materialize_candidate_artifacts(&mut self) {
+        let Some(publication) = self.runtime.candidate_publication() else {
+            return;
+        };
+        let Some(view) = publication.view.as_ref() else {
+            return;
+        };
+        if view.discovery_records.is_empty() {
+            return;
+        }
+
+        let notice = CandidateNotice::from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            self.neg_risk_live_target_revision.as_deref(),
+            CandidateRestrictionTruth::eligible(),
+        );
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(_) => return,
+        };
+        let Ok(report) = runtime
+            .block_on(async { DiscoverySupervisor::persist_notice_for_runtime(notice).await })
+        else {
+            return;
+        };
+
+        self.candidate_restore_status = CandidateRestoreStatus {
+            latest_candidate_revision: report.candidate_revision,
+            latest_adoptable_revision: report.adoptable_revision,
+            latest_candidate_operator_target_revision: report.operator_target_revision,
+            adoption_provenance_resolved: self.neg_risk_live_target_revision.is_some()
+                && report.disposition == "adoptable",
+        };
     }
 
     fn rollout_evidence_for_snapshot(
