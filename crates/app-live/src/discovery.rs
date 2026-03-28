@@ -287,6 +287,18 @@ impl DiscoverySupervisor {
         Ok(outcome.report)
     }
 
+    pub fn persist_notice_blocking(notice: CandidateNotice) -> Result<DiscoveryReport, String> {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("candidate persistence runtime error: {error}"))?;
+            runtime.block_on(Self::persist_notice_for_runtime(notice))
+        })
+        .join()
+        .map_err(|_| "candidate persistence thread panicked".to_owned())?
+    }
+
     fn process_notice(&self, notice: CandidateNotice) -> Result<DiscoveryOutcome, String> {
         let CandidateNotice {
             publication,

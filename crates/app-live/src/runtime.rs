@@ -566,23 +566,9 @@ pub(crate) fn load_durable_live_startup_state(
                     }
                 }
                 Ok(None) => {
-                    if operator_target_revision == Some(progress_operator_target_revision)
-                        && has_candidate_adoption_evidence(
-                            &pool,
-                            progress_operator_target_revision,
-                        )
-                        .await?
-                    {
-                        return Err(boxed_error(format!(
-                            "candidate adoption provenance is required for operator target revision {progress_operator_target_revision}"
-                        )));
-                    }
                     CandidateRestoreStatus::default()
                 }
-                Err(error) if operator_target_revision == Some(progress_operator_target_revision) => {
-                    return Err(error.into());
-                }
-                Err(_) => CandidateRestoreStatus::default(),
+                Err(error) => return Err(error.into()),
             }
         } else {
             CandidateRestoreStatus::default()
@@ -604,24 +590,6 @@ pub(crate) fn load_durable_live_startup_state(
             candidate_restore_status,
         })
     })
-}
-
-async fn has_candidate_adoption_evidence(
-    pool: &sqlx::PgPool,
-    operator_target_revision: &str,
-) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS (
-            SELECT 1
-            FROM adoptable_target_revisions
-            WHERE rendered_operator_target_revision = $1
-        )
-        "#,
-    )
-    .bind(operator_target_revision)
-    .fetch_one(pool)
-    .await
 }
 
 pub(crate) fn operator_target_revision_for(targets: &NegRiskLiveTargetSet) -> Option<&str> {

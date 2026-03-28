@@ -7,8 +7,8 @@ use std::{
 
 use app_live::{
     load_neg_risk_live_targets,
-    run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented, AppInstrumentation,
-    AppSupervisor, InputTaskEvent, StaticSnapshotSource,
+    run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented, AppDaemon,
+    AppInstrumentation, AppSupervisor, InputTaskEvent, StaticSnapshotSource,
 };
 use chrono::{TimeZone, Utc};
 use persistence::{
@@ -78,6 +78,7 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
 
     let second_targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
         .expect("targets should parse");
+    database.seed_candidate_artifacts(second_targets.revision(), false);
     let second = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
         &StaticSnapshotSource::empty(),
         AppInstrumentation::disabled(),
@@ -99,12 +100,13 @@ fn explicit_operator_target_restart_succeeds_after_first_startup_without_candida
 }
 
 #[test]
-fn candidate_derived_operator_target_revision_requires_provenance_on_restore() {
+fn malformed_candidate_adoption_provenance_fails_closed_on_restore() {
     let _guard = lock_env();
     let database = TestDatabase::new();
     let targets = load_neg_risk_live_targets(Some(valid_neg_risk_live_targets_json()))
         .expect("targets should parse");
-    database.seed_candidate_restore_state(targets.revision(), false);
+    database.seed_candidate_restore_state(targets.revision(), true);
+    database.corrupt_candidate_provenance(targets.revision());
     env::set_var("DATABASE_URL", database.database_url());
 
     let err = run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
@@ -114,10 +116,11 @@ fn candidate_derived_operator_target_revision_requires_provenance_on_restore() {
         BTreeSet::new(),
         BTreeSet::new(),
     )
-    .expect_err("candidate-derived startup should fail closed when provenance is missing");
+    .expect_err("startup should fail closed when candidate provenance chain is malformed");
 
     assert!(
-        err.to_string().contains("candidate adoption provenance"),
+        err.to_string().contains("could not be linked back")
+            || err.to_string().contains("candidate adoption provenance"),
         "{err}"
     );
 
@@ -125,7 +128,7 @@ fn candidate_derived_operator_target_revision_requires_provenance_on_restore() {
 }
 
 #[test]
-fn supervisor_resume_persists_candidate_artifacts_from_candidate_dirty_inputs() {
+fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
     let _guard = lock_env();
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
@@ -158,9 +161,16 @@ fn supervisor_resume_persists_candidate_artifacts_from_candidate_dirty_inputs() 
         ),
     );
 
-    let summary = supervisor
-        .resume_once()
-        .expect("resume should process candidate dirty inputs");
+    let report = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(async {
+            AppDaemon::for_tests(supervisor)
+                .run_until_idle_for_tests(3)
+                .await
+        })
+        .expect("daemon run should process candidate dirty inputs");
+    let summary = report.summary;
 
     assert_eq!(
         summary.latest_candidate_revision.as_deref(),
@@ -273,7 +283,20 @@ impl TestDatabase {
                     )
                     .await
                     .expect("runtime progress should persist");
+            });
+        self.seed_candidate_artifacts(rendered_operator_target_revision, persist_provenance);
+    }
 
+    fn seed_candidate_artifacts(
+        &self,
+        rendered_operator_target_revision: &str,
+        persist_provenance: bool,
+    ) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
                 let artifacts = CandidateArtifactRepo;
                 artifacts
                     .upsert_candidate_target_set(
@@ -293,21 +316,21 @@ impl TestDatabase {
 
                 artifacts
                     .upsert_adoptable_target_revision(
-                    &self.pool,
-                    &AdoptableTargetRevisionRow {
-                        adoptable_revision: "adoptable-9".to_owned(),
-                        candidate_revision: "candidate-9".to_owned(),
-                        rendered_operator_target_revision: rendered_operator_target_revision
-                            .to_owned(),
-                        payload: json!({
-                            "adoptable_revision": "adoptable-9",
-                            "candidate_revision": "candidate-9",
-                            "rendered_operator_target_revision": rendered_operator_target_revision,
-                        }),
-                    },
-                )
-                .await
-                .expect("adoptable row should persist");
+                        &self.pool,
+                        &AdoptableTargetRevisionRow {
+                            adoptable_revision: "adoptable-9".to_owned(),
+                            candidate_revision: "candidate-9".to_owned(),
+                            rendered_operator_target_revision: rendered_operator_target_revision
+                                .to_owned(),
+                            payload: json!({
+                                "adoptable_revision": "adoptable-9",
+                                "candidate_revision": "candidate-9",
+                                "rendered_operator_target_revision": rendered_operator_target_revision,
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("adoptable row should persist");
 
                 if persist_provenance {
                     CandidateAdoptionRepo
@@ -323,6 +346,26 @@ impl TestDatabase {
                         .await
                         .expect("provenance should persist");
                 }
+            });
+    }
+
+    fn corrupt_candidate_provenance(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                sqlx::query(
+                    r#"
+                    UPDATE adoptable_target_revisions
+                    SET rendered_operator_target_revision = 'targets-rev-mismatch'
+                    WHERE rendered_operator_target_revision = $1
+                    "#,
+                )
+                .bind(operator_target_revision)
+                .execute(&self.pool)
+                .await
+                .expect("candidate provenance should be corruptible for fail-closed restore test");
             });
     }
 

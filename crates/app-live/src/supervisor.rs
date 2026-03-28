@@ -258,6 +258,8 @@ impl AppSupervisor {
         if restoring_seeded_startup {
             self.validate_seeded_startup_restore()?;
         }
+        self.drain_input_tasks()?;
+        self.validate_neg_risk_live_execution_anchor()?;
         let _ = self.flush_dispatch_instrumented();
 
         Ok(self.summary())
@@ -499,35 +501,7 @@ impl AppSupervisor {
         self.retain_current_neg_risk_live_execution_records();
         self.validate_rollout_evidence_anchor()?;
 
-        let mut processed_count = 0usize;
-        while let Some(input) = self.input_tasks.next_after(self.seed.last_journal_seq) {
-            match self.runtime.apply_input(input.clone())? {
-                ApplyResult::Applied {
-                    state_version,
-                    dirty_set,
-                    ..
-                } => {
-                    let candidate_dirty = dirty_set.domains.contains(&DirtyDomain::Candidates);
-                    self.dispatcher.record_apply(state_version, dirty_set);
-                    self.record_committed_input(input.clone());
-                    let _ = self.input_tasks.remove(&input);
-                    self.publish_current_snapshot(false);
-                    if candidate_dirty {
-                        self.materialize_candidate_artifacts();
-                    }
-                    processed_count += 1;
-                    self.record_recovery_backlog(self.input_tasks.len());
-                }
-                ApplyResult::Duplicate { .. }
-                | ApplyResult::Deferred { .. }
-                | ApplyResult::ReconcileRequired { .. } => {
-                    self.record_committed_input(input.clone());
-                    let _ = self.input_tasks.remove(&input);
-                    processed_count += 1;
-                    self.record_recovery_backlog(self.input_tasks.len());
-                }
-            }
-        }
+        let processed_count = self.drain_input_tasks()?;
 
         if self.runtime.published_snapshot_id().is_none() && self.runtime.state_version() > 0 {
             self.publish_current_snapshot(false);
@@ -560,6 +534,42 @@ impl AppSupervisor {
         }
 
         Ok(summary)
+    }
+
+    fn drain_input_tasks(&mut self) -> Result<usize, SupervisorError> {
+        let mut processed_count = 0usize;
+        let durable_anchor = self.runtime.last_journal_seq();
+
+        while let Some(input) = self.input_tasks.next_after(durable_anchor) {
+            match self.runtime.apply_input(input.clone())? {
+                ApplyResult::Applied {
+                    state_version,
+                    dirty_set,
+                    ..
+                } => {
+                    let candidate_dirty = dirty_set.domains.contains(&DirtyDomain::Candidates);
+                    self.dispatcher.record_apply(state_version, dirty_set);
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    self.publish_current_snapshot(false);
+                    if candidate_dirty {
+                        self.materialize_candidate_artifacts();
+                    }
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+                ApplyResult::Duplicate { .. }
+                | ApplyResult::Deferred { .. }
+                | ApplyResult::ReconcileRequired { .. } => {
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+            }
+        }
+
+        Ok(processed_count)
     }
 
     fn summary(&self) -> SupervisorSummary {
@@ -837,16 +847,7 @@ impl AppSupervisor {
             self.neg_risk_live_target_revision.as_deref(),
             CandidateRestrictionTruth::eligible(),
         );
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(_) => return,
-        };
-        let Ok(report) = runtime
-            .block_on(async { DiscoverySupervisor::persist_notice_for_runtime(notice).await })
-        else {
+        let Ok(report) = DiscoverySupervisor::persist_notice_blocking(notice) else {
             return;
         };
 
