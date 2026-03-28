@@ -131,7 +131,7 @@ fn clamp_phase_one_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
 }
 
 fn clamp_real_user_shadow_smoke_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
-    if route == crate::negrisk::ROUTE && mode != ExecutionMode::Disabled {
+    if route == crate::negrisk::ROUTE && mode == ExecutionMode::Live {
         return ExecutionMode::Shadow;
     }
 

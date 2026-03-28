@@ -106,3 +106,39 @@ fn real_user_shadow_smoke_forces_negrisk_shadow_without_touching_fullset() {
         Some("family-a-live")
     );
 }
+
+#[test]
+fn real_user_shadow_smoke_preserves_negrisk_restrictive_modes() {
+    let policy = ActivationPolicy::from_rules(
+        "phase-three-rules",
+        vec![
+            RolloutRule::new(
+                "neg-risk",
+                "family-a",
+                ExecutionMode::ReduceOnly,
+                "family-a-reduce",
+            ),
+            RolloutRule::new(
+                "neg-risk",
+                "family-b",
+                ExecutionMode::RecoveryOnly,
+                "family-b-recovery",
+            ),
+            RolloutRule::new("neg-risk", "family-c", ExecutionMode::Live, "family-c-live"),
+        ],
+    )
+    .with_real_user_shadow_smoke();
+
+    assert_eq!(
+        policy.mode_for_route("neg-risk", "family-a"),
+        ExecutionMode::ReduceOnly
+    );
+    assert_eq!(
+        policy.mode_for_route("neg-risk", "family-b"),
+        ExecutionMode::RecoveryOnly
+    );
+    assert_eq!(
+        policy.mode_for_route("neg-risk", "family-c"),
+        ExecutionMode::Shadow
+    );
+}

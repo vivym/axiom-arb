@@ -33,6 +33,8 @@ const DIVERGENCE_ROLLOUT_EVIDENCE_MISMATCH: &str = "rollout_evidence_mismatch";
 const DIVERGENCE_ROLLOUT_EVIDENCE_MISSING: &str = "rollout_evidence_missing";
 const DIVERGENCE_NEG_RISK_LIVE_EXECUTION_SNAPSHOT_MISMATCH: &str =
     "neg_risk_live_execution_snapshot_mismatch";
+const DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH: &str =
+    "neg_risk_shadow_execution_snapshot_mismatch";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSummary {
@@ -554,6 +556,7 @@ impl AppSupervisor {
             self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
         self.retain_current_neg_risk_shadow_execution_records();
+        self.validate_neg_risk_shadow_execution_anchor()?;
         self.validate_rollout_evidence_anchor()?;
 
         let processed_count = self.drain_input_tasks()?;
@@ -947,6 +950,44 @@ impl AppSupervisor {
             .retain(|artifact| retained_attempt_ids.contains(artifact.attempt_id.as_str()));
     }
 
+    fn validate_neg_risk_shadow_execution_anchor(&self) -> Result<(), SupervisorError> {
+        if !self.real_user_shadow_smoke_enabled
+            || (self.seed.neg_risk_shadow_execution_attempts.is_empty()
+                && self.seed.neg_risk_shadow_execution_artifacts.is_empty())
+        {
+            return Ok(());
+        }
+
+        let Some(snapshot_id) = self.runtime.published_snapshot_id() else {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke requires a published snapshot to retain shadow execution records",
+            ));
+        };
+
+        if self.neg_risk_shadow_execution_attempts.is_empty()
+            || self.neg_risk_shadow_execution_artifacts.is_empty()
+        {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke requires retained shadow execution records after restore",
+            ));
+        }
+
+        if self
+            .neg_risk_shadow_execution_attempts
+            .iter()
+            .any(|attempt| attempt.snapshot_id != snapshot_id)
+        {
+            return Err(self.divergence_error(
+                DIVERGENCE_NEG_RISK_SHADOW_EXECUTION_SNAPSHOT_MISMATCH,
+                "real-user shadow smoke retained shadow execution records did not match the restored snapshot",
+            ));
+        }
+
+        Ok(())
+    }
+
     fn materialize_candidate_artifacts(&mut self) {
         let Some(publication) = self.runtime.candidate_publication() else {
             return;
@@ -1158,6 +1199,7 @@ impl AppSupervisor {
             self.seed.neg_risk_shadow_execution_artifacts.clone();
         self.retain_current_neg_risk_live_execution_records();
         self.retain_current_neg_risk_shadow_execution_records();
+        self.validate_neg_risk_shadow_execution_anchor()?;
         Ok(())
     }
 
