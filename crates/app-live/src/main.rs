@@ -1,6 +1,7 @@
 use std::process;
 
 use app_live::cli::{AppLiveCli, AppLiveCommand};
+use app_live::commands::doctor::execute as doctor_execute;
 use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
 use clap::Parser;
@@ -15,6 +16,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = AppLiveCli::parse();
     match cli.command {
+        AppLiveCommand::Doctor(args) => doctor_execute(args),
         AppLiveCommand::Init(args) => init_execute(args),
         AppLiveCommand::Run(args) => run_execute(args),
     }

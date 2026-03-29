@@ -27,6 +27,12 @@ pub struct InitArgs {
     pub real_user_shadow_smoke: bool,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct DoctorArgs {
+    #[arg(long)]
+    pub config: PathBuf,
+}
+
 #[derive(clap::Parser, Debug)]
 pub struct AppLiveCli {
     #[command(subcommand)]
@@ -35,6 +41,7 @@ pub struct AppLiveCli {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum AppLiveCommand {
+    Doctor(DoctorArgs),
     Init(InitArgs),
     Run(RunArgs),
 }
