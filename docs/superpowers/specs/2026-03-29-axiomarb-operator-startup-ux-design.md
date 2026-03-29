@@ -267,12 +267,14 @@ Per-request relayer signatures or timestamps should be runtime-derived where the
 Expected target-source fields:
 
 - `source = "adopted"`
-- optional `adopted_revision`
+- optional `operator_target_revision`
 
 Hard rule:
 
 - `source = "adopted"` is the normal operator path
 - the operator should not be required to type concrete family/member/token identifiers to start the system
+- any adopted-target startup path must resolve to a single `operator_target_revision` before runtime start
+- `operator_target_revision` remains the durable startup and restore anchor; candidate/adoptable provenance stays contextual, not primary
 
 ### 7.4 Consumer And Mode Scoped Requiredness
 
@@ -302,8 +304,9 @@ The UX goal is to make the config file minimal for the chosen startup mode.
 
 When `target_source = "adopted"`:
 
-- `doctor` verifies that an adopted target revision exists and is loadable
-- `run` resolves the adopted target revision before runtime starts
+- `doctor` verifies that an adopted target source can resolve to exactly one `operator_target_revision`
+- `run` resolves that `operator_target_revision` before runtime starts
+- if the resolved operator target is candidate-derived, provenance must still be restorable through `operator_target_revision -> adoptable_revision -> candidate_revision`
 
 If no adopted revision is available:
 
@@ -315,6 +318,11 @@ Startup must not silently fall back to:
 - latest candidate
 - empty target set
 - hard-coded sample targets
+
+Hard rule:
+
+- restart and durable follow-up validation continue to key off `operator_target_revision`
+- UX sugar around adopted targets must not create a second startup authority separate from the existing operator-target revision anchor
 
 ## 8. `app-live init`
 
@@ -373,6 +381,30 @@ The doctor flow should report explicit check categories:
 - adopted target source availability
 - smoke safety enforcement
 
+These checks must be mode-scoped.
+
+Recommended reporting model:
+
+- `paper`
+  - run config and semantic validation
+  - run `DATABASE_URL` readiness if startup requires persistence
+  - mark live-only connectivity and target-source checks as `SKIP`
+- `live`
+  - run config and semantic validation
+  - run credential, relayer, and target-source checks
+  - run live connectivity checks needed for the configured startup mode
+- `live` with `real_user_shadow_smoke = true`
+  - run everything from standard live
+  - additionally verify real upstream connectivity and smoke safety constraints
+
+Non-applicable checks should not silently disappear.
+
+They should report as explicit `SKIP` with a short reason so operators can tell the difference between:
+
+- not required for this mode
+- failed
+- not run because an earlier prerequisite failed
+
 ### 9.3 Output Model
 
 Doctor output should be checklist-oriented, for example:
@@ -382,6 +414,7 @@ Doctor output should be checklist-oriented, for example:
 - `[FAIL] relayer auth rejected`
 - `[FAIL] no adopted target revision available`
 - `[OK] real-user shadow smoke enforces neg-risk shadow-only`
+- `[SKIP] user websocket authentication not required in paper mode`
 
 Each failure must include:
 
