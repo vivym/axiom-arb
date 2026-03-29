@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -25,9 +25,12 @@ fn binary_entrypoint_emits_structured_replay_summary() {
     let Some(database_url) = std::env::var_os("DATABASE_URL") else {
         return;
     };
+    let config = config_fixture("app-replay.toml");
 
     let output = Command::new(app_replay_binary())
         .env("DATABASE_URL", database_url)
+        .arg("--config")
+        .arg(&config)
         .args(["--from-seq", "0", "--limit", "1"])
         .output()
         .expect("app-replay should run");
@@ -58,8 +61,11 @@ fn binary_entrypoint_emits_structured_replay_summary() {
 
 #[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_database_url() {
+    let config = config_fixture("app-replay.toml");
     let output = Command::new(app_replay_binary())
         .env("DATABASE_URL", "not-a-valid-postgres-url")
+        .arg("--config")
+        .arg(&config)
         .args(["--from-seq", "0", "--limit", "1"])
         .output()
         .expect("app-replay should run");
@@ -81,7 +87,10 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_database_url() {
 
 #[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_cli_args() {
+    let config = config_fixture("app-replay.toml");
     let output = Command::new(app_replay_binary())
+        .arg("--config")
+        .arg(&config)
         .args(["--limit", "1"])
         .output()
         .expect("app-replay should run");
@@ -97,8 +106,9 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_cli_args() {
 
     assert!(combined.contains("app-replay replay failed"), "{combined}");
     assert!(combined.contains(span_names::REPLAY_RUN), "{combined}");
+    assert!(combined.contains("--from-seq <FROM_SEQ>"), "{combined}");
     assert!(
-        combined.contains("missing required argument --from-seq"),
+        combined.contains("Usage: app-replay --config <CONFIG>"),
         "{combined}"
     );
 }
@@ -114,10 +124,13 @@ async fn app_replay_main_emits_operator_facing_negrisk_summary_without_new_metri
     let db = TestDatabase::new(&database_url).await;
     run_migrations(&db.pool).await.unwrap();
     seed_negrisk_summary_rows(&db.pool).await;
+    let config = config_fixture("app-replay.toml");
 
     let output = Command::new(app_replay_binary())
         .env("DATABASE_URL", &database_url)
         .env("PGOPTIONS", format!("-c search_path={}", db.schema))
+        .arg("--config")
+        .arg(&config)
         .args(["--from-seq", "0", "--limit", "10"])
         .output()
         .expect("app-replay should run");
@@ -156,10 +169,13 @@ async fn app_replay_main_emits_operator_facing_negrisk_shadow_smoke_summary() {
     let db = TestDatabase::new(&database_url).await;
     run_migrations(&db.pool).await.unwrap();
     seed_negrisk_shadow_smoke_rows(&db.pool).await;
+    let config = config_fixture("app-replay.toml");
 
     let output = Command::new(app_replay_binary())
         .env("DATABASE_URL", &database_url)
         .env("PGOPTIONS", format!("-c search_path={}", db.schema))
+        .arg("--config")
+        .arg(&config)
         .args(["--from-seq", "0", "--limit", "10"])
         .output()
         .expect("app-replay should run");
@@ -200,6 +216,15 @@ fn app_replay_binary() -> PathBuf {
     }
 
     path
+}
+
+fn config_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("config-schema")
+        .join("tests")
+        .join("fixtures")
+        .join(name)
 }
 
 #[derive(Clone)]
