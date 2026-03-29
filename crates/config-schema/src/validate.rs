@@ -2,9 +2,10 @@ use std::collections::{BTreeSet, HashSet};
 
 use crate::error::ConfigSchemaError;
 use crate::raw::{
-    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetToml, PolymarketRelayerAuthToml,
-    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
-    RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetSourceKindToml,
+    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml,
+    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
+    RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,11 @@ pub struct AppLivePolymarketSourceView<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct AppLivePolymarketAccountView<'a> {
+    raw: &'a PolymarketAccountToml,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct AppLivePolymarketSignerView<'a> {
     raw: &'a PolymarketSignerToml,
 }
@@ -66,6 +72,11 @@ pub struct AppLiveNegRiskTargetsView<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AppLiveNegRiskRolloutView<'a> {
     raw: &'a NegRiskRolloutToml,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppLiveNegRiskTargetSourceView<'a> {
+    raw: &'a NegRiskTargetSourceToml,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,11 +111,24 @@ impl<'a> AppLiveConfigView<'a> {
         self.raw.runtime.real_user_shadow_smoke
     }
 
+    pub fn has_polymarket_account(&self) -> bool {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.account.as_ref())
+            .is_some()
+    }
+
     pub fn has_polymarket_source(&self) -> bool {
         self.raw
             .polymarket
             .as_ref()
-            .and_then(|polymarket| polymarket.source.as_ref())
+            .and_then(|polymarket| {
+                polymarket
+                    .source_overrides
+                    .as_ref()
+                    .or(polymarket.source.as_ref())
+            })
             .is_some()
     }
 
@@ -116,11 +140,32 @@ impl<'a> AppLiveConfigView<'a> {
             .is_some()
     }
 
+    pub fn has_target_source(&self) -> bool {
+        self.raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+            .is_some()
+    }
+
+    pub fn account(&self) -> Option<AppLivePolymarketAccountView<'a>> {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.account.as_ref())
+            .map(|raw| AppLivePolymarketAccountView { raw })
+    }
+
     pub fn polymarket_source(&self) -> Option<AppLivePolymarketSourceView<'a>> {
         self.raw
             .polymarket
             .as_ref()
-            .and_then(|polymarket| polymarket.source.as_ref())
+            .and_then(|polymarket| {
+                polymarket
+                    .source_overrides
+                    .as_ref()
+                    .or(polymarket.source.as_ref())
+            })
             .map(|raw| AppLivePolymarketSourceView { raw })
     }
 
@@ -138,6 +183,14 @@ impl<'a> AppLiveConfigView<'a> {
             .as_ref()
             .and_then(|polymarket| polymarket.relayer_auth.as_ref())
             .map(|raw| AppLivePolymarketRelayerAuthView { raw })
+    }
+
+    pub fn target_source(&self) -> Option<AppLiveNegRiskTargetSourceView<'a>> {
+        self.raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+            .map(|raw| AppLiveNegRiskTargetSourceView { raw })
     }
 
     pub fn negrisk_targets(&self) -> AppLiveNegRiskTargetsView<'a> {
@@ -201,6 +254,44 @@ impl<'a> AppLivePolymarketSourceView<'a> {
 
     pub fn metadata_refresh_interval_seconds(&self) -> u64 {
         self.raw.metadata_refresh_interval_seconds
+    }
+}
+
+impl<'a> AppLivePolymarketAccountView<'a> {
+    pub fn address(&self) -> &'a str {
+        &self.raw.address
+    }
+
+    pub fn funder_address(&self) -> Option<&'a str> {
+        self.raw.funder_address.as_deref()
+    }
+
+    pub fn api_key(&self) -> &'a str {
+        &self.raw.api_key
+    }
+
+    pub fn secret(&self) -> &'a str {
+        &self.raw.secret
+    }
+
+    pub fn passphrase(&self) -> &'a str {
+        &self.raw.passphrase
+    }
+
+    pub fn signature_type_label(&self) -> &'static str {
+        match self.raw.signature_type {
+            SignatureTypeToml::Eoa => "Eoa",
+            SignatureTypeToml::Proxy => "Proxy",
+            SignatureTypeToml::Safe => "Safe",
+        }
+    }
+
+    pub fn wallet_route_label(&self) -> &'static str {
+        match self.raw.wallet_route {
+            WalletRouteToml::Eoa => "Eoa",
+            WalletRouteToml::Proxy => "Proxy",
+            WalletRouteToml::Safe => "Safe",
+        }
     }
 }
 
@@ -295,6 +386,20 @@ impl<'a> AppLiveNegRiskRolloutView<'a> {
     }
 }
 
+impl<'a> AppLiveNegRiskTargetSourceView<'a> {
+    pub fn source(&self) -> NegRiskTargetSourceKindToml {
+        self.raw.source
+    }
+
+    pub fn is_adopted(&self) -> bool {
+        matches!(self.raw.source, NegRiskTargetSourceKindToml::Adopted)
+    }
+
+    pub fn operator_target_revision(&self) -> Option<&'a str> {
+        self.raw.operator_target_revision.as_deref()
+    }
+}
+
 impl<'a> AppLiveNegRiskTargetView<'a> {
     pub fn family_id(&self) -> &'a str {
         &self.raw.family_id
@@ -351,11 +456,29 @@ fn validate_app_live_requiredness(
     match raw.runtime.mode {
         RuntimeModeToml::Paper => Ok(AppLiveConfigView { raw }),
         RuntimeModeToml::Live => {
-            require_source(raw)?;
-            require_signer(raw)?;
-            require_relayer_auth(raw)?;
-            require_rollout(raw)?;
-            validate_negrisk_rollout_referential_integrity(raw)?;
+            if has_operator_facing_live_inputs(raw) {
+                let account = require_account(raw)?;
+                validate_account_view(account)?;
+
+                let relayer_auth = require_relayer_auth_view(raw)?;
+                validate_relayer_auth_view(relayer_auth)?;
+
+                let target_source = require_target_source(raw)?;
+                validate_target_source_view(target_source)?;
+
+                if raw.runtime.real_user_shadow_smoke {
+                    require_source_defaults_or_overrides(raw)?;
+                }
+            } else {
+                require_source(raw)?;
+                require_signer(raw)?;
+
+                let relayer_auth = require_relayer_auth_view(raw)?;
+                validate_relayer_auth_view(relayer_auth)?;
+
+                require_rollout(raw)?;
+                validate_negrisk_rollout_referential_integrity(raw)?;
+            }
 
             Ok(AppLiveConfigView { raw })
         }
@@ -366,6 +489,25 @@ fn validate_app_replay_requiredness(
     raw: &RawAxiomConfig,
 ) -> Result<AppReplayConfigView<'_>, ConfigSchemaError> {
     Ok(AppReplayConfigView { raw })
+}
+
+fn require_source_defaults_or_overrides(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+    if raw
+        .polymarket
+        .as_ref()
+        .and_then(|polymarket| {
+            polymarket
+                .source_overrides
+                .as_ref()
+                .or(polymarket.source.as_ref())
+        })
+        .is_none()
+    {
+        return Err(validation_error(
+            "missing required section: polymarket.source or polymarket.source_overrides",
+        ));
+    }
+    Ok(())
 }
 
 fn require_source(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
@@ -396,20 +538,6 @@ fn require_signer(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     Ok(())
 }
 
-fn require_relayer_auth(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
-    if raw
-        .polymarket
-        .as_ref()
-        .and_then(|polymarket| polymarket.relayer_auth.as_ref())
-        .is_none()
-    {
-        return Err(validation_error(
-            "missing required section: polymarket.relayer_auth",
-        ));
-    }
-    Ok(())
-}
-
 fn require_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     if raw
         .negrisk
@@ -422,6 +550,48 @@ fn require_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
         ));
     }
     Ok(())
+}
+
+fn has_operator_facing_live_inputs(raw: &RawAxiomConfig) -> bool {
+    raw.polymarket
+        .as_ref()
+        .and_then(|polymarket| polymarket.account.as_ref())
+        .is_some()
+        || raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+            .is_some()
+}
+
+fn require_account(
+    raw: &RawAxiomConfig,
+) -> Result<AppLivePolymarketAccountView<'_>, ConfigSchemaError> {
+    raw.polymarket
+        .as_ref()
+        .and_then(|polymarket| polymarket.account.as_ref())
+        .map(|raw| AppLivePolymarketAccountView { raw })
+        .ok_or_else(|| validation_error("missing required section: polymarket.account"))
+}
+
+fn require_target_source(
+    raw: &RawAxiomConfig,
+) -> Result<AppLiveNegRiskTargetSourceView<'_>, ConfigSchemaError> {
+    raw.negrisk
+        .as_ref()
+        .and_then(|negrisk| negrisk.target_source.as_ref())
+        .map(|raw| AppLiveNegRiskTargetSourceView { raw })
+        .ok_or_else(|| validation_error("missing required section: negrisk.target_source"))
+}
+
+fn require_relayer_auth_view(
+    raw: &RawAxiomConfig,
+) -> Result<AppLivePolymarketRelayerAuthView<'_>, ConfigSchemaError> {
+    raw.polymarket
+        .as_ref()
+        .and_then(|polymarket| polymarket.relayer_auth.as_ref())
+        .map(|raw| AppLivePolymarketRelayerAuthView { raw })
+        .ok_or_else(|| validation_error("missing required section: polymarket.relayer_auth"))
 }
 
 fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
@@ -452,6 +622,96 @@ fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     }
 
     Ok(())
+}
+
+fn validate_account_view(
+    raw: AppLivePolymarketAccountView<'_>,
+) -> Result<(), ConfigSchemaError> {
+    require_non_empty_local_signer_field(raw.address(), "polymarket.account.address")?;
+
+    if let Some(funder_address) = raw.funder_address() {
+        require_non_empty_local_signer_field(funder_address, "polymarket.account.funder_address")?;
+    }
+
+    require_non_empty_local_signer_field(raw.api_key(), "polymarket.account.api_key")?;
+    require_non_empty_local_signer_field(raw.secret(), "polymarket.account.secret")?;
+    require_non_empty_local_signer_field(raw.passphrase(), "polymarket.account.passphrase")?;
+
+    if raw.signature_type_label() != raw.wallet_route_label() {
+        return Err(validation_error(
+            "polymarket.account.wallet_route must match polymarket.account.signature_type",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_relayer_auth_view(
+    raw: AppLivePolymarketRelayerAuthView<'_>,
+) -> Result<(), ConfigSchemaError> {
+    require_non_empty_local_signer_field(raw.api_key(), "polymarket.relayer_auth.api_key")?;
+
+    match raw.kind() {
+        AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
+            require_non_empty_optional_local_signer_field(
+                raw.timestamp(),
+                "polymarket.relayer_auth.timestamp",
+            )?;
+            require_non_empty_optional_local_signer_field(
+                raw.passphrase(),
+                "polymarket.relayer_auth.passphrase",
+            )?;
+            require_non_empty_optional_local_signer_field(
+                raw.signature(),
+                "polymarket.relayer_auth.signature",
+            )?;
+        }
+        AppLivePolymarketRelayerAuthKind::RelayerApiKey => {
+            require_non_empty_optional_local_signer_field(
+                raw.address(),
+                "polymarket.relayer_auth.address",
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_target_source_view(
+    raw: AppLiveNegRiskTargetSourceView<'_>,
+) -> Result<(), ConfigSchemaError> {
+    if let Some(operator_target_revision) = raw.operator_target_revision() {
+        require_non_empty_local_signer_field(
+            operator_target_revision,
+            "negrisk.target_source.operator_target_revision",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn require_non_empty_local_signer_field(
+    value: &str,
+    field: &'static str,
+) -> Result<(), ConfigSchemaError> {
+    if value.trim().is_empty() {
+        Err(validation_error(format!("{field} must not be empty")))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_non_empty_optional_local_signer_field(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<String, ConfigSchemaError> {
+    let value = value.ok_or_else(|| validation_error(format!("{field} is required")))?;
+
+    if value.trim().is_empty() {
+        Err(validation_error(format!("{field} must not be empty")))
+    } else {
+        Ok(value.to_owned())
+    }
 }
 
 fn validate_negrisk_rollout_referential_integrity(

@@ -3,12 +3,16 @@ mod raw;
 mod validate;
 
 pub use error::ConfigSchemaError;
-pub use raw::{RawAxiomConfig, RuntimeModeToml};
+pub use raw::{
+    NegRiskTargetSourceKindToml, NegRiskTargetSourceToml, PolymarketAccountToml, RawAxiomConfig,
+    RuntimeModeToml,
+};
 pub use validate::{
     AppLiveConfigView, AppLiveNegRiskRolloutView, AppLiveNegRiskTargetMemberView,
-    AppLiveNegRiskTargetMembersView, AppLiveNegRiskTargetView, AppLiveNegRiskTargetsView,
-    AppLivePolymarketRelayerAuthKind, AppLivePolymarketRelayerAuthView,
-    AppLivePolymarketSignerView, AppLivePolymarketSourceView, AppReplayConfigView, ValidatedConfig,
+    AppLiveNegRiskTargetMembersView, AppLiveNegRiskTargetSourceView, AppLiveNegRiskTargetView,
+    AppLiveNegRiskTargetsView, AppLivePolymarketAccountView, AppLivePolymarketRelayerAuthKind,
+    AppLivePolymarketRelayerAuthView, AppLivePolymarketSignerView, AppLivePolymarketSourceView,
+    AppReplayConfigView, ValidatedConfig,
 };
 
 pub fn load_raw_config_from_str(text: &str) -> Result<RawAxiomConfig, ConfigSchemaError> {

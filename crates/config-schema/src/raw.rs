@@ -41,11 +41,27 @@ impl<'de> Deserialize<'de> for RuntimeModeToml {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct PolymarketToml {
     #[serde(default)]
+    pub account: Option<PolymarketAccountToml>,
+    #[serde(default)]
+    pub relayer_auth: Option<PolymarketRelayerAuthToml>,
+    #[serde(default)]
+    pub source_overrides: Option<PolymarketSourceToml>,
+    #[serde(default)]
     pub source: Option<PolymarketSourceToml>,
     #[serde(default)]
     pub signer: Option<PolymarketSignerToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct PolymarketAccountToml {
+    pub address: String,
     #[serde(default)]
-    pub relayer_auth: Option<PolymarketRelayerAuthToml>,
+    pub funder_address: Option<String>,
+    pub signature_type: SignatureTypeToml,
+    pub wallet_route: WalletRouteToml,
+    pub api_key: String,
+    pub secret: String,
+    pub passphrase: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -112,9 +128,24 @@ pub enum WalletRouteToml {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct NegRiskToml {
     #[serde(default)]
+    pub target_source: Option<NegRiskTargetSourceToml>,
+    #[serde(default)]
     pub rollout: Option<NegRiskRolloutToml>,
     #[serde(default)]
     pub targets: Vec<NegRiskTargetToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct NegRiskTargetSourceToml {
+    pub source: NegRiskTargetSourceKindToml,
+    #[serde(default)]
+    pub operator_target_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NegRiskTargetSourceKindToml {
+    Adopted,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
