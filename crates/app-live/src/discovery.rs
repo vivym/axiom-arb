@@ -358,13 +358,11 @@ impl DiscoverySupervisor {
             });
         }
 
-        let rendered = self
-            .bridge
-            .render(
-                &candidate_set,
-                operator_target_revision.as_deref(),
-                &rendered_live_targets,
-            )?;
+        let rendered = self.bridge.render(
+            &candidate_set,
+            operator_target_revision.as_deref(),
+            &rendered_live_targets,
+        )?;
 
         Ok(DiscoveryOutcome {
             report: DiscoveryReport {

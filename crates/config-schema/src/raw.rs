@@ -93,6 +93,8 @@ pub struct PolymarketRelayerAuthToml {
     pub kind: RelayerAuthKindToml,
     pub api_key: String,
     #[serde(default)]
+    pub secret: Option<String>,
+    #[serde(default)]
     pub timestamp: Option<String>,
     #[serde(default)]
     pub passphrase: Option<String>,

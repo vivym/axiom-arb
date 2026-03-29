@@ -228,16 +228,17 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
                     timestamp: signer.timestamp().to_owned(),
                     signature: signer.signature().to_owned(),
                 },
-                relayer_auth: map_relayer_auth(relayer_auth, None)?,
+                relayer_auth: map_relayer_auth(relayer_auth)?,
             });
         }
 
-        let account = config.account().ok_or(ConfigError::MissingLocalSignerConfig)?;
+        let account = config
+            .account()
+            .ok_or(ConfigError::MissingLocalSignerConfig)?;
         validate_account_view(account)?;
-        let account_secret = account.secret().to_owned();
         let derived = derive_l2_auth_material(
             account.api_key(),
-            &account_secret,
+            account.secret(),
             account.passphrase(),
             Utc::now(),
         )
@@ -254,7 +255,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
                 timestamp: derived.timestamp,
                 signature: derived.signature,
             },
-            relayer_auth: map_relayer_auth(relayer_auth, Some(&account_secret))?,
+            relayer_auth: map_relayer_auth(relayer_auth)?,
         })
     }
 }
@@ -480,7 +481,6 @@ fn parse_decimal(
 
 fn map_relayer_auth(
     raw: AppLivePolymarketRelayerAuthView<'_>,
-    secret: Option<&str>,
 ) -> Result<LocalRelayerAuth, ConfigError> {
     validate_relayer_auth_view(raw)?;
 
@@ -492,7 +492,7 @@ fn map_relayer_auth(
                 "polymarket.relayer_auth.passphrase",
             )?;
 
-            if let Some(secret) = secret {
+            if let Some(secret) = raw.secret() {
                 let derived =
                     derive_builder_relayer_auth_material(&api_key, secret, &passphrase, Utc::now())
                         .map_err(|error| ConfigError::InvalidLocalSignerConfig {
@@ -546,10 +546,7 @@ fn signer_identity_from_account(account: AppLivePolymarketAccountView<'_>) -> Lo
 fn validate_account_view(account: AppLivePolymarketAccountView<'_>) -> Result<(), ConfigError> {
     require_non_empty_local_signer_field(account.address(), "polymarket.account.address")?;
     if let Some(funder_address) = account.funder_address() {
-        require_non_empty_local_signer_field(
-            funder_address,
-            "polymarket.account.funder_address",
-        )?;
+        require_non_empty_local_signer_field(funder_address, "polymarket.account.funder_address")?;
     }
     require_non_empty_local_signer_field(account.api_key(), "polymarket.account.api_key")?;
     require_non_empty_local_signer_field(account.secret(), "polymarket.account.secret")?;
@@ -596,17 +593,24 @@ fn validate_relayer_auth_view(
     match raw.kind() {
         AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
             require_non_empty_optional_local_signer_field(
-                raw.timestamp(),
-                "polymarket.relayer_auth.timestamp",
-            )?;
-            require_non_empty_optional_local_signer_field(
                 raw.passphrase(),
                 "polymarket.relayer_auth.passphrase",
             )?;
-            require_non_empty_optional_local_signer_field(
-                raw.signature(),
-                "polymarket.relayer_auth.signature",
-            )?;
+            if raw.secret().is_some() {
+                require_non_empty_optional_local_signer_field(
+                    raw.secret(),
+                    "polymarket.relayer_auth.secret",
+                )?;
+            } else {
+                require_non_empty_optional_local_signer_field(
+                    raw.timestamp(),
+                    "polymarket.relayer_auth.timestamp",
+                )?;
+                require_non_empty_optional_local_signer_field(
+                    raw.signature(),
+                    "polymarket.relayer_auth.signature",
+                )?;
+            }
         }
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => {
             require_non_empty_optional_local_signer_field(

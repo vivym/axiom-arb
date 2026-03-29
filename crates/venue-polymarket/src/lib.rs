@@ -13,10 +13,11 @@ mod ws_session;
 mod ws_user;
 
 pub use auth::{
-    build_l2_auth_headers, build_relayer_auth_headers, signature_type_label,
-    signature_type_to_wallet_route, wallet_route_label, wallet_route_to_signature_type, AuthError,
+    build_l2_auth_headers, build_relayer_auth_headers, derive_builder_relayer_auth_material,
+    derive_l2_auth_material, signature_type_label, signature_type_to_wallet_route,
+    wallet_route_label, wallet_route_to_signature_type, AuthError,
     DerivedBuilderRelayerAuthMaterial, DerivedL2AuthMaterial, L2AuthHeaders, RelayerAuth,
-    SignerContext, derive_builder_relayer_auth_material, derive_l2_auth_material,
+    SignerContext,
 };
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use heartbeat::{

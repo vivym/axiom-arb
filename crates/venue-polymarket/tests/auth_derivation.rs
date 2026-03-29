@@ -1,7 +1,5 @@
 use chrono::{TimeZone, Utc};
-use venue_polymarket::{
-    derive_builder_relayer_auth_material, derive_l2_auth_material,
-};
+use venue_polymarket::{derive_builder_relayer_auth_material, derive_l2_auth_material};
 
 #[test]
 fn derives_l2_auth_from_long_lived_secret_and_clock() {

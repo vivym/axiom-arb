@@ -282,7 +282,9 @@ real_user_shadow_smoke = true
 fn live_view_accepts_operator_facing_live_fixture() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-ux-live.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
-    let live = validated.for_app_live().expect("operator live fixture should validate");
+    let live = validated
+        .for_app_live()
+        .expect("operator live fixture should validate");
 
     assert!(live.has_polymarket_account());
     assert!(live.has_target_source());
@@ -299,7 +301,9 @@ fn live_view_accepts_operator_facing_live_fixture() {
 fn smoke_view_accepts_operator_facing_live_fixture() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-ux-smoke.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
-    let live = validated.for_app_live().expect("operator smoke fixture should validate");
+    let live = validated
+        .for_app_live()
+        .expect("operator smoke fixture should validate");
 
     assert!(live.real_user_shadow_smoke());
     assert!(live.has_polymarket_account());

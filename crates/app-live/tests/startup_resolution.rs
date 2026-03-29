@@ -43,6 +43,25 @@ async fn adopted_target_resolution_fails_closed_when_provenance_is_missing() {
     assert!(err.to_string().contains("operator_target_revision"));
 }
 
+#[tokio::test]
+async fn adopted_target_resolution_fails_closed_when_rendered_live_targets_are_empty() {
+    let db = TestDatabase::new().await;
+    db.seed_adoptable_target_with_rendered_live_targets(
+        "adoptable-empty",
+        "candidate-empty",
+        "targets-rev-empty",
+        json!({}),
+    )
+    .await;
+
+    let err = resolve_startup_targets(&db.pool, &sample_live_view("targets-rev-empty"))
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("rendered_live_targets"));
+    assert!(err.to_string().contains("targets-rev-empty"));
+}
+
 struct TestDatabase {
     pool: PgPool,
 }

@@ -3,9 +3,9 @@ use std::collections::{BTreeSet, HashSet};
 use crate::error::ConfigSchemaError;
 use crate::raw::{
     NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetSourceKindToml,
-    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml,
-    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
-    RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml, PolymarketRelayerAuthToml,
+    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
+    RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -353,6 +353,10 @@ impl<'a> AppLivePolymarketRelayerAuthView<'a> {
         &self.raw.api_key
     }
 
+    pub fn secret(&self) -> Option<&'a str> {
+        self.raw.secret.as_deref()
+    }
+
     pub fn timestamp(&self) -> Option<&'a str> {
         self.raw.timestamp.as_deref()
     }
@@ -624,9 +628,7 @@ fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     Ok(())
 }
 
-fn validate_account_view(
-    raw: AppLivePolymarketAccountView<'_>,
-) -> Result<(), ConfigSchemaError> {
+fn validate_account_view(raw: AppLivePolymarketAccountView<'_>) -> Result<(), ConfigSchemaError> {
     require_non_empty_local_signer_field(raw.address(), "polymarket.account.address")?;
 
     if let Some(funder_address) = raw.funder_address() {
@@ -654,17 +656,24 @@ fn validate_relayer_auth_view(
     match raw.kind() {
         AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
             require_non_empty_optional_local_signer_field(
-                raw.timestamp(),
-                "polymarket.relayer_auth.timestamp",
-            )?;
-            require_non_empty_optional_local_signer_field(
                 raw.passphrase(),
                 "polymarket.relayer_auth.passphrase",
             )?;
-            require_non_empty_optional_local_signer_field(
-                raw.signature(),
-                "polymarket.relayer_auth.signature",
-            )?;
+            if raw.secret().is_some() {
+                require_non_empty_optional_local_signer_field(
+                    raw.secret(),
+                    "polymarket.relayer_auth.secret",
+                )?;
+            } else {
+                require_non_empty_optional_local_signer_field(
+                    raw.timestamp(),
+                    "polymarket.relayer_auth.timestamp",
+                )?;
+                require_non_empty_optional_local_signer_field(
+                    raw.signature(),
+                    "polymarket.relayer_auth.signature",
+                )?;
+            }
         }
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => {
             require_non_empty_optional_local_signer_field(

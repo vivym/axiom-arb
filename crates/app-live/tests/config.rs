@@ -262,10 +262,6 @@ fn signer_fields_trim_whitespace_before_validation() {
 fn relayer_auth_fields_trim_whitespace_before_validation() {
     let config = format!("{BASE_LIVE_CONFIG}\n{DEFAULT_ROLLOUT}")
         .replace("timestamp = \"1700000001\"", "timestamp = \"   \"")
-        .replace(
-            "passphrase = \"builder-passphrase-1\"",
-            "passphrase = \"   \"",
-        )
         .replace("signature = \"builder-signature-1\"", "signature = \"   \"");
     let raw = load_raw_config_from_str(&config).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
@@ -508,9 +504,8 @@ fn operator_live_view_with_builder_auth() -> config_schema::AppLiveConfigView<'s
 [polymarket.relayer_auth]
 kind = "builder_api_key"
 api_key = "builder-api-key"
-timestamp = "1700000001"
+secret = "builder-secret"
 passphrase = "builder-passphrase"
-signature = "builder-signature"
 "#,
     )
 }

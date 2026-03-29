@@ -34,6 +34,9 @@ pub enum StartupError {
     MissingRenderedLiveTargets {
         operator_target_revision: String,
     },
+    EmptyRenderedLiveTargets {
+        operator_target_revision: String,
+    },
     InvalidRenderedLiveTargets {
         operator_target_revision: String,
         message: String,
@@ -59,6 +62,12 @@ impl fmt::Display for StartupError {
             } => write!(
                 f,
                 "missing rendered_live_targets for operator_target_revision {operator_target_revision}"
+            ),
+            Self::EmptyRenderedLiveTargets {
+                operator_target_revision,
+            } => write!(
+                f,
+                "empty rendered_live_targets for operator_target_revision {operator_target_revision}"
             ),
             Self::InvalidRenderedLiveTargets {
                 operator_target_revision,
@@ -130,16 +139,24 @@ pub async fn resolve_startup_targets(
             operator_target_revision: operator_target_revision.clone(),
         })?
         .clone();
-    let targets = serde_json::from_value::<BTreeMap<String, NegRiskFamilyLiveTarget>>(
-        rendered_live_targets,
-    )
-    .map_err(|error| StartupError::InvalidRenderedLiveTargets {
-        operator_target_revision: operator_target_revision.clone(),
-        message: error.to_string(),
-    })?;
+    let targets =
+        serde_json::from_value::<BTreeMap<String, NegRiskFamilyLiveTarget>>(rendered_live_targets)
+            .map_err(|error| StartupError::InvalidRenderedLiveTargets {
+                operator_target_revision: operator_target_revision.clone(),
+                message: error.to_string(),
+            })?;
+
+    if targets.is_empty() {
+        return Err(StartupError::EmptyRenderedLiveTargets {
+            operator_target_revision,
+        });
+    }
 
     Ok(ResolvedTargets {
-        targets: NegRiskLiveTargetSet::from_targets_with_revision(operator_target_revision.clone(), targets),
+        targets: NegRiskLiveTargetSet::from_targets_with_revision(
+            operator_target_revision.clone(),
+            targets,
+        ),
         operator_target_revision: Some(operator_target_revision),
     })
 }
