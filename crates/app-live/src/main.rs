@@ -97,14 +97,14 @@ fn require_database_url_env() -> Result<(), Box<dyn std::error::Error>> {
 fn rollout_approved_families(config: &config_schema::AppLiveConfigView<'_>) -> BTreeSet<String> {
     config
         .negrisk_rollout()
-        .map(|rollout| rollout.approved_families.iter().cloned().collect())
+        .map(|rollout| rollout.approved_families().iter().cloned().collect())
         .unwrap_or_default()
 }
 
 fn rollout_ready_families(config: &config_schema::AppLiveConfigView<'_>) -> BTreeSet<String> {
     config
         .negrisk_rollout()
-        .map(|rollout| rollout.ready_families.iter().cloned().collect())
+        .map(|rollout| rollout.ready_families().iter().cloned().collect())
         .unwrap_or_default()
 }
 

@@ -66,6 +66,11 @@ pub struct AppLiveNegRiskTargetsView<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct AppLiveNegRiskRolloutView<'a> {
+    raw: &'a NegRiskRolloutToml,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct AppLiveNegRiskTargetView<'a> {
     raw: &'a NegRiskTargetToml,
 }
@@ -148,11 +153,12 @@ impl<'a> AppLiveConfigView<'a> {
         }
     }
 
-    pub fn negrisk_rollout(&self) -> Option<&'a NegRiskRolloutToml> {
+    pub fn negrisk_rollout(&self) -> Option<AppLiveNegRiskRolloutView<'a>> {
         self.raw
             .negrisk
             .as_ref()
             .and_then(|negrisk| negrisk.rollout.as_ref())
+            .map(|raw| AppLiveNegRiskRolloutView { raw })
     }
 }
 
@@ -278,6 +284,16 @@ impl<'a> AppLivePolymarketRelayerAuthView<'a> {
 impl<'a> AppLiveNegRiskTargetsView<'a> {
     pub fn iter(&self) -> impl Iterator<Item = AppLiveNegRiskTargetView<'a>> + 'a {
         self.raw.iter().map(|raw| AppLiveNegRiskTargetView { raw })
+    }
+}
+
+impl<'a> AppLiveNegRiskRolloutView<'a> {
+    pub fn approved_families(&self) -> &'a [String] {
+        &self.raw.approved_families
+    }
+
+    pub fn ready_families(&self) -> &'a [String] {
+        &self.raw.ready_families
     }
 }
 
