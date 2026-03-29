@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 
 use config_schema::{
     AppLiveConfigView, AppLivePolymarketRelayerAuthKind, AppLivePolymarketRelayerAuthView,
-    AppLivePolymarketSourceView,
+    AppLivePolymarketSignerView, AppLivePolymarketSourceView,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -201,6 +201,8 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
         let relayer_auth = config
             .polymarket_relayer_auth()
             .ok_or(ConfigError::MissingLocalSignerConfig)?;
+
+        validate_local_signer_view(signer)?;
 
         Ok(LocalSignerConfig {
             signer: LocalSignerIdentity {
@@ -442,40 +444,116 @@ fn parse_decimal(
 fn map_relayer_auth(
     raw: AppLivePolymarketRelayerAuthView<'_>,
 ) -> Result<LocalRelayerAuth, ConfigError> {
+    validate_relayer_auth_view(raw)?;
+
     match raw.kind() {
         AppLivePolymarketRelayerAuthKind::BuilderApiKey => Ok(LocalRelayerAuth::BuilderApiKey {
             api_key: raw.api_key().to_owned(),
-            timestamp: raw
-                .timestamp()
-                .ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
-                    value: "app_live".to_owned(),
-                    message: "polymarket.relayer_auth.timestamp is required".to_owned(),
-                })?
-                .to_owned(),
-            passphrase: raw
-                .passphrase()
-                .ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
-                    value: "app_live".to_owned(),
-                    message: "polymarket.relayer_auth.passphrase is required".to_owned(),
-                })?
-                .to_owned(),
-            signature: raw
-                .signature()
-                .ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
-                    value: "app_live".to_owned(),
-                    message: "polymarket.relayer_auth.signature is required".to_owned(),
-                })?
-                .to_owned(),
+            timestamp: require_non_empty_optional_local_signer_field(
+                raw.timestamp(),
+                "polymarket.relayer_auth.timestamp",
+            )?,
+            passphrase: require_non_empty_optional_local_signer_field(
+                raw.passphrase(),
+                "polymarket.relayer_auth.passphrase",
+            )?,
+            signature: require_non_empty_optional_local_signer_field(
+                raw.signature(),
+                "polymarket.relayer_auth.signature",
+            )?,
         }),
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => Ok(LocalRelayerAuth::RelayerApiKey {
             api_key: raw.api_key().to_owned(),
-            address: raw
-                .address()
-                .ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
-                    value: "app_live".to_owned(),
-                    message: "polymarket.relayer_auth.address is required".to_owned(),
-                })?
-                .to_owned(),
+            address: require_non_empty_optional_local_signer_field(
+                raw.address(),
+                "polymarket.relayer_auth.address",
+            )?,
         }),
+    }
+}
+
+fn validate_local_signer_view(signer: AppLivePolymarketSignerView<'_>) -> Result<(), ConfigError> {
+    require_non_empty_local_signer_field(signer.address(), "polymarket.signer.address")?;
+    require_non_empty_local_signer_field(
+        signer.funder_address(),
+        "polymarket.signer.funder_address",
+    )?;
+    require_non_empty_local_signer_field(signer.api_key(), "polymarket.signer.api_key")?;
+    require_non_empty_local_signer_field(signer.passphrase(), "polymarket.signer.passphrase")?;
+    require_non_empty_local_signer_field(signer.timestamp(), "polymarket.signer.timestamp")?;
+    require_non_empty_local_signer_field(signer.signature(), "polymarket.signer.signature")?;
+
+    if signer.signature_type_label() != signer.wallet_route_label() {
+        return Err(ConfigError::InvalidLocalSignerConfig {
+            value: "app_live".to_owned(),
+            message: "polymarket.signer.wallet_route must match polymarket.signer.signature_type"
+                .to_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_relayer_auth_view(
+    raw: AppLivePolymarketRelayerAuthView<'_>,
+) -> Result<(), ConfigError> {
+    require_non_empty_local_signer_field(raw.api_key(), "polymarket.relayer_auth.api_key")?;
+
+    match raw.kind() {
+        AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
+            require_non_empty_optional_local_signer_field(
+                raw.timestamp(),
+                "polymarket.relayer_auth.timestamp",
+            )?;
+            require_non_empty_optional_local_signer_field(
+                raw.passphrase(),
+                "polymarket.relayer_auth.passphrase",
+            )?;
+            require_non_empty_optional_local_signer_field(
+                raw.signature(),
+                "polymarket.relayer_auth.signature",
+            )?;
+        }
+        AppLivePolymarketRelayerAuthKind::RelayerApiKey => {
+            require_non_empty_optional_local_signer_field(
+                raw.address(),
+                "polymarket.relayer_auth.address",
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn require_non_empty_local_signer_field(
+    value: &str,
+    field: &'static str,
+) -> Result<(), ConfigError> {
+    if value.is_empty() {
+        Err(ConfigError::InvalidLocalSignerConfig {
+            value: "app_live".to_owned(),
+            message: format!("{field} must not be empty"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn require_non_empty_optional_local_signer_field(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<String, ConfigError> {
+    let value = value.ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
+        value: "app_live".to_owned(),
+        message: format!("{field} is required"),
+    })?;
+
+    if value.is_empty() {
+        Err(ConfigError::InvalidLocalSignerConfig {
+            value: "app_live".to_owned(),
+            message: format!("{field} must not be empty"),
+        })
+    } else {
+        Ok(value.to_owned())
     }
 }

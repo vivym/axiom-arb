@@ -40,7 +40,7 @@ fn live_target_config_reports_stable_revision_for_startup_set() {
 
 #[test]
 fn duplicate_neg_risk_family_ids_are_rejected_by_validation() {
-    let error = live_view_err(
+    let error = NegRiskLiveTargetSet::try_from(&live_view(
         r#"
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -64,9 +64,11 @@ token_id = "token-2"
 price = "0.41"
 quantity = "5"
 "#,
-    );
+    ))
+    .unwrap_err()
+    .to_string();
 
-    assert!(error.contains("duplicate negrisk.targets.family_id"));
+    assert!(error.contains("duplicate neg-risk family_id in live target config"));
 }
 
 #[test]
@@ -317,10 +319,6 @@ fn smoke_view() -> config_schema::AppLiveConfigView<'static> {
     validated
         .for_app_live()
         .expect("smoke view should validate")
-}
-
-fn live_view_err(extra: &str) -> String {
-    validated_err(&format!("{BASE_LIVE_CONFIG}\n{extra}"))
 }
 
 fn validated_err(text: &str) -> String {

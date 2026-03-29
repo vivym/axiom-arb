@@ -60,6 +60,31 @@ fn binary_entrypoint_emits_structured_replay_summary() {
 }
 
 #[test]
+fn binary_entrypoint_runs_with_malformed_live_only_config_sections() {
+    let Some(database_url) = std::env::var_os("DATABASE_URL") else {
+        return;
+    };
+    let config = config_fixture("app-replay-malformed-live.toml");
+
+    let output = Command::new(app_replay_binary())
+        .env("DATABASE_URL", database_url)
+        .arg("--config")
+        .arg(&config)
+        .args(["--from-seq", "0", "--limit", "1"])
+        .output()
+        .expect("app-replay should run");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains(span_names::REPLAY_RUN), "{combined}");
+    assert!(combined.contains("app-replay summary"), "{combined}");
+}
+
+#[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_database_url() {
     let config = config_fixture("app-replay.toml");
     let output = Command::new(app_replay_binary())
