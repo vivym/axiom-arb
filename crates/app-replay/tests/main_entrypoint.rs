@@ -86,6 +86,31 @@ fn binary_entrypoint_emits_structured_error_log_for_invalid_database_url() {
 }
 
 #[test]
+fn binary_entrypoint_rejects_missing_database_url_even_with_valid_config() {
+    let config = config_fixture("app-replay.toml");
+    let output = Command::new(app_replay_binary())
+        .env_remove("DATABASE_URL")
+        .arg("--config")
+        .arg(&config)
+        .args(["--from-seq", "0", "--limit", "1"])
+        .output()
+        .expect("app-replay should run");
+
+    assert!(
+        !output.status.success(),
+        "binary should fail when DATABASE_URL is missing"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(combined.contains("app-replay replay failed"), "{combined}");
+    assert!(combined.contains(span_names::REPLAY_RUN), "{combined}");
+    assert!(combined.contains("DATABASE_URL"), "{combined}");
+}
+
+#[test]
 fn binary_entrypoint_emits_structured_error_log_for_invalid_cli_args() {
     let config = config_fixture("app-replay.toml");
     let output = Command::new(app_replay_binary())
