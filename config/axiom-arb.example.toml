@@ -12,32 +12,25 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0xYOUR_ADDRESS"
 funder_address = "0xYOUR_FUNDER_ADDRESS"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "YOUR_API_KEY"
+secret = "YOUR_API_SECRET"
 passphrase = "YOUR_PASSPHRASE"
-timestamp = "1700000000"
-signature = "YOUR_L2_SIGNATURE"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
 api_key = "YOUR_BUILDER_API_KEY"
-timestamp = "1700000001"
+secret = "YOUR_BUILDER_SECRET"
 passphrase = "YOUR_BUILDER_PASSPHRASE"
-signature = "YOUR_BUILDER_SIGNATURE"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "YOUR_OPERATOR_TARGET_REVISION"
 
 [negrisk.rollout]
-approved_families = ["family-a"]
-ready_families = ["family-a"]
-
-[[negrisk.targets]]
-family_id = "family-a"
-
-[[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
-price = "0.43"
-quantity = "5"
+approved_families = ["YOUR_FAMILY_ID"]
+ready_families = ["YOUR_FAMILY_ID"]
