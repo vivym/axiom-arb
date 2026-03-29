@@ -1,9 +1,14 @@
 use config_schema::{load_raw_config_from_path, ValidatedConfig};
 use observability::span_names;
 use persistence::{models::RuntimeProgressRow, run_migrations, RuntimeProgressRepo};
+use persistence::{
+    models::{ExecutionAttemptRow, LiveSubmissionRecordRow},
+    ExecutionAttemptRepo, LiveSubmissionRepo,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -62,6 +67,17 @@ fn live_config_requires_database_url_after_config_parse() {
 }
 
 #[test]
+fn live_config_rejects_mismatched_signature_fields_through_binary() {
+    let config_path = temp_config_fixture_path("fixtures/app-live-live.toml", |config| {
+        config.replace("wallet_route = \"eoa\"", "wallet_route = \"safe\"")
+    });
+    let output = app_live_output_with_config_path(&config_path, None);
+
+    assert!(!output.status.success());
+    assert!(combined(&output).contains("wallet_route"));
+}
+
+#[test]
 fn smoke_config_surfaces_validated_config_error_before_database_bootstrap() {
     let output = app_live_output_with_config_and_database("fixtures/app-live-smoke.toml", None);
 
@@ -110,6 +126,22 @@ fn live_config_persists_operator_target_revision_anchor_during_startup() {
     database.cleanup();
 }
 
+#[test]
+fn live_config_fails_when_restored_operator_target_revision_anchor_is_stale() {
+    let database = TestDatabase::new();
+    database.seed_live_execution_state("targets-rev-stale");
+
+    let output = app_live_output_with_config_and_database(
+        "fixtures/app-live-live.toml",
+        Some(database.database_url()),
+    );
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    assert!(combined(&output).contains("operator target revision anchor mismatch"));
+
+    database.cleanup();
+}
+
 fn app_live_output_with_config(config_fixture: &str) -> std::process::Output {
     app_live_output_with_config_and_database(config_fixture, Some(default_test_database_url()))
 }
@@ -118,10 +150,15 @@ fn app_live_output_with_config_and_database(
     config_fixture: &str,
     database_url: Option<&str>,
 ) -> std::process::Output {
+    app_live_output_with_config_path(&config_fixture_path(config_fixture), database_url)
+}
+
+fn app_live_output_with_config_path(
+    config_path: &Path,
+    database_url: Option<&str>,
+) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
-    command
-        .arg("--config")
-        .arg(config_fixture_path(config_fixture));
+    command.arg("--config").arg(config_path);
     command.env_remove("AXIOM_MODE");
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");
@@ -204,6 +241,60 @@ impl TestDatabase {
             })
     }
 
+    fn seed_live_execution_state(&self, operator_target_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        41,
+                        7,
+                        Some("snapshot-7"),
+                        Some(operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should seed");
+
+                let attempt = ExecutionAttemptRow {
+                    attempt_id: "attempt-live-entrypoint-1".to_owned(),
+                    plan_id: "negrisk-submit-family:family-a".to_owned(),
+                    snapshot_id: "snapshot-7".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: domain::ExecutionMode::Live,
+                    attempt_no: 1,
+                    idempotency_key: "idem-attempt-live-entrypoint-1".to_owned(),
+                };
+                ExecutionAttemptRepo
+                    .append(&self.pool, &attempt)
+                    .await
+                    .expect("live attempt should seed");
+
+                let submission = LiveSubmissionRecordRow {
+                    submission_ref: "submission-ref-entrypoint-1".to_owned(),
+                    attempt_id: attempt.attempt_id.clone(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    provider: "venue-polymarket".to_owned(),
+                    state: "pending_reconcile".to_owned(),
+                    payload: serde_json::json!({
+                        "submission_ref": "submission-ref-entrypoint-1",
+                        "family_id": "family-a",
+                        "route": "neg-risk",
+                        "reason": "ambiguous_attempt",
+                    }),
+                };
+                LiveSubmissionRepo
+                    .append(&self.pool, submission)
+                    .await
+                    .expect("live submission should seed");
+            });
+    }
+
     fn cleanup(self) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -242,6 +333,22 @@ fn config_fixture_path(name: &str) -> PathBuf {
         .join("config-schema")
         .join("tests")
         .join(name)
+}
+
+fn temp_config_fixture_path(
+    fixture_name: &str,
+    transform: impl FnOnce(String) -> String,
+) -> PathBuf {
+    let original =
+        fs::read_to_string(config_fixture_path(fixture_name)).expect("fixture should exist");
+    let transformed = transform(original);
+    let path = std::env::temp_dir().join(format!(
+        "app-live-entrypoint-{}-{}.toml",
+        std::process::id(),
+        NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, transformed).expect("temporary config fixture should write");
+    path
 }
 
 fn default_test_database_url() -> &'static str {

@@ -128,6 +128,44 @@ fn live_view_accepts_fully_populated_live_fixture() {
 }
 
 #[test]
+fn live_view_exposes_consumer_scoped_wrappers() {
+    let raw = load_raw_config_from_path(&fixture_path("app-live-live.toml")).unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().expect("live view should validate");
+
+    let source = live
+        .polymarket_source()
+        .expect("live fixture should include source");
+    assert_eq!(source.clob_host(), "https://clob.polymarket.com");
+    assert_eq!(source.heartbeat_interval_seconds(), 15);
+
+    let signer = live
+        .polymarket_signer()
+        .expect("live fixture should include signer");
+    assert_eq!(signer.signature_type_label(), "Eoa");
+    assert_eq!(signer.wallet_route_label(), "Eoa");
+
+    let relayer_auth = live
+        .polymarket_relayer_auth()
+        .expect("live fixture should include relayer auth");
+    assert!(relayer_auth.is_builder_api_key());
+    assert_eq!(relayer_auth.api_key(), "builder-api-key-1");
+
+    let targets = live.negrisk_targets();
+    let family = targets
+        .iter()
+        .next()
+        .expect("live fixture should include targets");
+    assert_eq!(family.family_id(), "family-a");
+    let member = family
+        .members()
+        .iter()
+        .next()
+        .expect("family should include members");
+    assert_eq!(member.token_id(), "token-1");
+}
+
+#[test]
 fn approved_and_ready_families_must_exist_in_targets() {
     let err = validated_err(
         r#"

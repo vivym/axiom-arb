@@ -8,7 +8,12 @@ pub use raw::{
     PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
     RelayerAuthKindToml, RuntimeModeToml, RuntimeToml, SignatureTypeToml, WalletRouteToml,
 };
-pub use validate::{AppLiveConfigView, AppReplayConfigView, ValidatedConfig};
+pub use validate::{
+    AppLiveConfigView, AppLiveNegRiskTargetMemberView, AppLiveNegRiskTargetMembersView,
+    AppLiveNegRiskTargetView, AppLiveNegRiskTargetsView, AppLivePolymarketRelayerAuthKind,
+    AppLivePolymarketRelayerAuthView, AppLivePolymarketSignerView, AppLivePolymarketSourceView,
+    AppReplayConfigView, ValidatedConfig,
+};
 
 pub fn load_raw_config_from_str(text: &str) -> Result<RawAxiomConfig, ConfigSchemaError> {
     Ok(toml::from_str(text)?)

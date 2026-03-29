@@ -2,7 +2,7 @@ use crate::{
     config::{ConfigError, PolymarketSourceConfig},
     runtime::AppRuntimeMode,
 };
-use config_schema::{AppLiveConfigView, RuntimeModeToml};
+use config_schema::AppLiveConfigView;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealUserShadowSmokeConfig {
@@ -25,9 +25,10 @@ pub fn load_real_user_shadow_smoke_config(
     }))
 }
 
-pub fn app_runtime_mode_from_config(mode: RuntimeModeToml) -> AppRuntimeMode {
-    match mode {
-        RuntimeModeToml::Paper => AppRuntimeMode::Paper,
-        RuntimeModeToml::Live => AppRuntimeMode::Live,
+pub fn app_runtime_mode_from_config(config: &AppLiveConfigView<'_>) -> AppRuntimeMode {
+    if config.is_live() {
+        AppRuntimeMode::Live
+    } else {
+        AppRuntimeMode::Paper
     }
 }
