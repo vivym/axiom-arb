@@ -1,22 +1,16 @@
-use std::{collections::BTreeSet, env, process, str::FromStr};
+use std::{collections::BTreeSet, process};
 
 use app_live::{
-    build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
-    load_local_signer_config, load_neg_risk_live_targets,
-    load_real_user_shadow_smoke_config_from_env,
+    build_real_user_shadow_smoke_sources, cli::AppLiveCli,
+    instrumentation::emit_bootstrap_completion_observability,
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
-    run_paper_instrumented, AppInstrumentation, AppRuntimeMode, ConfigError, LocalSignerConfig,
+    run_paper_instrumented, AppInstrumentation, ConfigError, LocalSignerConfig,
     NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
 };
+use clap::Parser;
+use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 use observability::{bootstrap_observability, span_names};
 use persistence::PersistenceError;
-
-const NEG_RISK_LIVE_TARGETS_ENV: &str = "AXIOM_NEG_RISK_LIVE_TARGETS";
-const NEG_RISK_LIVE_APPROVED_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES";
-const NEG_RISK_LIVE_READY_FAMILIES_ENV: &str = "AXIOM_NEG_RISK_LIVE_READY_FAMILIES";
-const LOCAL_SIGNER_CONFIG_ENV: &str = "AXIOM_LOCAL_SIGNER_CONFIG";
-const REAL_USER_SHADOW_SMOKE_ENV: &str = "AXIOM_REAL_USER_SHADOW_SMOKE";
-const POLYMARKET_SOURCE_CONFIG_ENV: &str = "AXIOM_POLYMARKET_SOURCE_CONFIG";
 
 fn main() {
     if let Err(error) = run() {
@@ -26,40 +20,35 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = AppLiveCli::parse();
     let observability = bootstrap_observability("app-live");
     let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
     let _bootstrap_guard = bootstrap_span.enter();
-    let app_mode = env::var("AXIOM_MODE").unwrap_or_else(|_| "paper".to_owned());
-    let app_mode = AppRuntimeMode::from_str(&app_mode)?;
-    let real_user_shadow_smoke_guard = env::var_os(REAL_USER_SHADOW_SMOKE_ENV);
-    let polymarket_source_config = env::var_os(POLYMARKET_SOURCE_CONFIG_ENV);
-    let real_user_shadow_smoke = load_real_user_shadow_smoke_config_from_env(
-        app_mode,
-        real_user_shadow_smoke_guard.as_deref(),
-        polymarket_source_config.as_deref(),
-    )?;
+    let raw = load_raw_config_from_path(&cli.config)?;
+    let validated = ValidatedConfig::new(raw)?;
+    let config = validated.for_app_live()?;
+    let real_user_shadow_smoke = app_live::load_real_user_shadow_smoke_config(&config)?;
+    let neg_risk_live_targets = NegRiskLiveTargetSet::try_from(&config)?;
+    let neg_risk_live_approved_families = rollout_approved_families(&config);
+    let neg_risk_live_ready_families = rollout_ready_families(&config);
+    let signer_config = if real_user_shadow_smoke.is_some()
+        || live_neg_risk_work_requested(
+            &neg_risk_live_targets,
+            &neg_risk_live_approved_families,
+            &neg_risk_live_ready_families,
+        ) {
+        Some(LocalSignerConfig::try_from(&config)?)
+    } else {
+        None
+    };
+    require_database_url_env()?;
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
-    let result = match app_mode {
-        AppRuntimeMode::Paper => {
+    let result = match config.mode() {
+        RuntimeModeToml::Paper => {
             let source = StaticSnapshotSource::empty();
             run_paper_instrumented(&source, instrumentation.clone())
         }
-        AppRuntimeMode::Live => {
-            let neg_risk_live_targets = load_neg_risk_live_targets_env()?;
-            let neg_risk_live_approved_families =
-                load_family_scope_env(NEG_RISK_LIVE_APPROVED_FAMILIES_ENV)?;
-            let neg_risk_live_ready_families =
-                load_family_scope_env(NEG_RISK_LIVE_READY_FAMILIES_ENV)?;
-            let signer_config = if real_user_shadow_smoke.is_some()
-                || live_neg_risk_work_requested(
-                    &neg_risk_live_targets,
-                    &neg_risk_live_approved_families,
-                    &neg_risk_live_ready_families,
-                ) {
-                Some(load_local_signer_config_env()?)
-            } else {
-                None
-            };
+        RuntimeModeToml::Live => {
             let source = match real_user_shadow_smoke.as_ref() {
                 Some(smoke) => SmokeSafeStartupSource::RealUserShadowSmoke(Box::new(
                     build_real_user_shadow_smoke_sources(
@@ -70,7 +59,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )
                     .map_err(|error| {
                         ConfigError::InvalidPolymarketSourceConfig {
-                            value: POLYMARKET_SOURCE_CONFIG_ENV.to_owned(),
+                            value: cli.config.display().to_string(),
                             message: error,
                         }
                     })?,
@@ -84,7 +73,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 let _ = signer_config;
             }
-            require_database_url_env()?;
             run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
                 &source,
                 instrumentation,
@@ -100,47 +88,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn load_neg_risk_live_targets_env() -> Result<NegRiskLiveTargetSet, Box<dyn std::error::Error>> {
-    match env::var(NEG_RISK_LIVE_TARGETS_ENV) {
-        Ok(value) => Ok(load_neg_risk_live_targets(Some(value.as_str()))?),
-        Err(env::VarError::NotPresent) => Ok(NegRiskLiveTargetSet::empty()),
-        Err(env::VarError::NotUnicode(_)) => Err(format!(
-            "invalid value for {NEG_RISK_LIVE_TARGETS_ENV}: value is not valid UTF-8"
-        )
-        .into()),
-    }
-}
-
-fn load_family_scope_env(var_name: &str) -> Result<BTreeSet<String>, Box<dyn std::error::Error>> {
-    match env::var(var_name) {
-        Ok(value) => Ok(value
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .collect()),
-        Err(env::VarError::NotPresent) => Ok(BTreeSet::new()),
-        Err(env::VarError::NotUnicode(_)) => {
-            Err(format!("invalid value for {var_name}: value is not valid UTF-8").into())
-        }
-    }
-}
-
-fn load_local_signer_config_env() -> Result<LocalSignerConfig, Box<dyn std::error::Error>> {
-    match env::var(LOCAL_SIGNER_CONFIG_ENV) {
-        Ok(value) => Ok(load_local_signer_config(Some(value.as_str()))?),
-        Err(env::VarError::NotPresent) => Err(ConfigError::MissingLocalSignerConfig.into()),
-        Err(env::VarError::NotUnicode(_)) => Err(format!(
-            "invalid value for {LOCAL_SIGNER_CONFIG_ENV}: value is not valid UTF-8"
-        )
-        .into()),
-    }
-}
-
 fn require_database_url_env() -> Result<(), Box<dyn std::error::Error>> {
     std::env::var("DATABASE_URL")
         .map(|_| ())
         .map_err(|_| PersistenceError::MissingDatabaseUrl.into())
+}
+
+fn rollout_approved_families(config: &config_schema::AppLiveConfigView<'_>) -> BTreeSet<String> {
+    config
+        .negrisk_rollout()
+        .map(|rollout| rollout.approved_families().iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn rollout_ready_families(config: &config_schema::AppLiveConfigView<'_>) -> BTreeSet<String> {
+    config
+        .negrisk_rollout()
+        .map(|rollout| rollout.ready_families().iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn live_neg_risk_work_requested(

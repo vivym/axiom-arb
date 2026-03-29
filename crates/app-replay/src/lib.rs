@@ -15,6 +15,8 @@ use sqlx::PgPool;
 mod negrisk_candidates;
 mod negrisk_summary;
 
+pub mod cli;
+
 pub use negrisk_candidates::{
     load_negrisk_adoptable_target_revisions, load_negrisk_candidate_adoption_provenance,
     load_negrisk_candidate_summary, load_negrisk_candidate_target_sets,

@@ -75,7 +75,7 @@ impl fmt::Display for ParseAppRuntimeModeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "unsupported AXIOM_MODE '{}'; expected 'paper' or 'live'",
+            "unsupported runtime mode '{}'; expected 'paper' or 'live'",
             self.received
         )
     }

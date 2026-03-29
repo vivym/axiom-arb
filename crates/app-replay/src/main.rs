@@ -1,11 +1,14 @@
 use std::process;
 
 use app_replay::{
-    load_neg_risk_foundation_summary_from_env, load_negrisk_candidate_summary_from_env,
-    load_negrisk_shadow_attempt_artifacts_from_env, parse_args, replay_event_journal_from_env,
-    NegRiskSummaryError, SummaryReplayConsumer,
+    cli::AppReplayCli, load_neg_risk_foundation_summary_from_env,
+    load_negrisk_candidate_summary_from_env, load_negrisk_shadow_attempt_artifacts_from_env,
+    replay_event_journal_from_env, NegRiskSummaryError, ReplayRange, SummaryReplayConsumer,
 };
+use clap::Parser;
+use config_schema::{load_raw_config_from_path, ValidatedConfig};
 use observability::{bootstrap_observability, field_keys, span_names};
+use persistence::PersistenceError;
 use tracing::field;
 use tracing::Instrument;
 
@@ -22,10 +25,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let run_span_for_record = run_span.clone();
 
     async move {
-        let range = parse_args(std::env::args()).map_err(|error| {
+        let cli = AppReplayCli::try_parse().map_err(|error| {
             tracing::error!(error = %error, "app-replay replay failed");
             Box::<dyn std::error::Error>::from(error)
         })?;
+        let raw = load_raw_config_from_path(&cli.config).map_err(|error| {
+            tracing::error!(error = %error, "app-replay replay failed");
+            Box::<dyn std::error::Error>::from(error)
+        })?;
+        let validated = ValidatedConfig::new(raw).map_err(|error| {
+            tracing::error!(error = %error, "app-replay replay failed");
+            Box::<dyn std::error::Error>::from(error)
+        })?;
+        validated.for_app_replay().map_err(|error| {
+            tracing::error!(error = %error, "app-replay replay failed");
+            Box::<dyn std::error::Error>::from(error)
+        })?;
+        require_database_url_env().map_err(|error| {
+            tracing::error!(error = %error, "app-replay replay failed");
+            Box::<dyn std::error::Error>::from(error)
+        })?;
+
+        let range = ReplayRange::new(cli.from_seq, cli.limit);
         run_span_for_record.record("after_seq", range.after_seq);
 
         let mut consumer = SummaryReplayConsumer::default();
@@ -156,4 +177,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     .instrument(run_span)
     .await
+}
+
+fn require_database_url_env() -> Result<(), PersistenceError> {
+    std::env::var("DATABASE_URL")
+        .map(|_| ())
+        .map_err(|_| PersistenceError::MissingDatabaseUrl)
 }

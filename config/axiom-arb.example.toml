@@ -1,0 +1,43 @@
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0xYOUR_ADDRESS"
+funder_address = "0xYOUR_FUNDER_ADDRESS"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "YOUR_API_KEY"
+passphrase = "YOUR_PASSPHRASE"
+timestamp = "1700000000"
+signature = "YOUR_L2_SIGNATURE"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "YOUR_BUILDER_API_KEY"
+timestamp = "1700000001"
+passphrase = "YOUR_BUILDER_PASSPHRASE"
+signature = "YOUR_BUILDER_SIGNATURE"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"

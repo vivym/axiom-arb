@@ -1,0 +1,12 @@
+[package]
+name = "config-schema"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.8.22"
+url = "2.5.7"
+
+[lib]
+path = "src/lib.rs"

@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod discovery;
@@ -18,9 +19,8 @@ pub mod task_groups;
 
 pub use bootstrap::{BootstrapSource, StaticSnapshotSource};
 pub use config::{
-    load_local_signer_config, load_neg_risk_live_targets, ConfigError, LocalL2AuthHeaders,
-    LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
-    NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
+    ConfigError, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
+    NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
 };
 pub use daemon::{
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
@@ -46,8 +46,7 @@ pub use runtime::{
     ParseAppRuntimeModeError,
 };
 pub use smoke::{
-    load_real_user_shadow_smoke_config, load_real_user_shadow_smoke_config_from_env,
-    RealUserShadowSmokeConfig,
+    app_runtime_mode_from_config, load_real_user_shadow_smoke_config, RealUserShadowSmokeConfig,
 };
 pub use source_tasks::{
     build_real_user_shadow_smoke_sources, RealUserShadowSmokeSources, SmokeSafeStartupSource,

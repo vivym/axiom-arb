@@ -2,13 +2,25 @@
 
 This runbook covers the bootstrap policy and launch gates for the `v1a` live candidate.
 
-At current `HEAD`, `app-live` only exercises a local bootstrap skeleton:
+At current `HEAD`, `app-live` is launched from the unified TOML passed with `--config` and uses `DATABASE_URL` for persistence.
 
-- select `paper` or `live` via `AXIOM_MODE`
-- run one bootstrap/reconcile pass over `StaticSnapshotSource::empty()`
-- print the resulting runtime status line
+`DATABASE_URL` remains the only deployment env var. Operator business config now lives in a TOML file such as `config/axiom-arb.example.toml`.
 
-The binary entrypoint does not yet connect to Postgres, Polymarket feeds, or order heartbeat. The sequence below is the required operational target for the live candidate, not a claim that local `cargo run -p app-live` already performs the full venue-facing workflow.
+## Local Commands
+
+Run `app-live` against a selected config file:
+
+```bash
+cargo run -p app-live -- --config config/axiom-arb.example.toml
+```
+
+Run replay against the same config file:
+
+```bash
+cargo run -p app-replay -- --config config/axiom-arb.example.toml --from-seq 0 --limit 1000
+```
+
+The sequence below is the operational posture to preserve during launch and ramp. Use it as the runbook for bringing the daemon up safely, validating reconcile truth first, and deciding when a session is clean enough to widen risk.
 
 ## Target Bootstrap Sequence
 
@@ -19,7 +31,7 @@ The binary entrypoint does not yet connect to Postgres, Polymarket feeds, or ord
 5. Stay in `Bootstrapping` with `CancelOnly` until the first reconcile succeeds.
 6. Promote to `Healthy` only after the reconcile is clean.
 
-Target state: paper mode should exercise the same bootstrap, journal, replay, and reconcile path as live, but without real-money exposure. Until that wiring lands, local paper runs only validate the bootstrap mode transition and reconcile skeleton.
+Target state: paper mode should exercise the same bootstrap, journal, replay, and reconcile path as live, but without real-money exposure.
 
 If the first reconcile fails or any materially relevant order becomes `Unknown`, keep the engine in `NoNewRisk` or `GlobalHalt` and resolve the divergence before resuming.
 

@@ -1,0 +1,43 @@
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = ""
+data_api_host = ""
+relayer_host = ""
+market_ws_url = ""
+user_ws_url = ""
+heartbeat_interval_seconds = 0
+relayer_poll_interval_seconds = 0
+metadata_refresh_interval_seconds = 0
+
+[polymarket.signer]
+address = ""
+funder_address = ""
+signature_type = "eoa"
+wallet_route = "proxy"
+api_key = ""
+passphrase = ""
+timestamp = ""
+signature = ""
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = ""
+timestamp = ""
+passphrase = ""
+signature = ""
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
