@@ -1,3 +1,5 @@
+use std::collections::{BTreeSet, HashSet};
+
 use crate::error::ConfigSchemaError;
 use crate::raw::{
     NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetToml, PolymarketRelayerAuthToml,
@@ -338,6 +340,8 @@ pub(crate) fn validate_global_invariants(raw: &RawAxiomConfig) -> Result<(), Con
         ));
     }
 
+    validate_negrisk(raw)?;
+
     Ok(())
 }
 
@@ -415,6 +419,71 @@ fn require_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
         return Err(validation_error(
             "missing required section: negrisk.rollout",
         ));
+    }
+    Ok(())
+}
+
+fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+    let Some(negrisk) = raw.negrisk.as_ref() else {
+        return Ok(());
+    };
+
+    let mut family_ids = BTreeSet::new();
+    for target in &negrisk.targets {
+        require_non_empty("negrisk.targets.family_id", &target.family_id)?;
+        if !family_ids.insert(target.family_id.as_str()) {
+            return Err(validation_error(format!(
+                "duplicate negrisk.targets.family_id: {}",
+                target.family_id
+            )));
+        }
+
+        let mut members = HashSet::new();
+        for member in &target.members {
+            validate_target_member(member)?;
+            if !members.insert((member.condition_id.as_str(), member.token_id.as_str())) {
+                return Err(validation_error(format!(
+                    "duplicate negrisk.targets.members token_id for family {} condition {} token {}",
+                    target.family_id, member.condition_id, member.token_id
+                )));
+            }
+        }
+    }
+
+    if let Some(rollout) = negrisk.rollout.as_ref() {
+        for family_id in &rollout.approved_families {
+            require_non_empty("negrisk.rollout.approved_families", family_id)?;
+            if !family_ids.contains(family_id.as_str()) {
+                return Err(validation_error(format!(
+                    "negrisk.rollout.approved_families references missing family_id: {family_id}"
+                )));
+            }
+        }
+
+        for family_id in &rollout.ready_families {
+            require_non_empty("negrisk.rollout.ready_families", family_id)?;
+            if !family_ids.contains(family_id.as_str()) {
+                return Err(validation_error(format!(
+                    "negrisk.rollout.ready_families references missing family_id: {family_id}"
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_target_member(member: &NegRiskTargetMemberToml) -> Result<(), ConfigSchemaError> {
+    require_non_empty("negrisk.targets.members.condition_id", &member.condition_id)?;
+    require_non_empty("negrisk.targets.members.token_id", &member.token_id)?;
+    require_non_empty("negrisk.targets.members.price", &member.price)?;
+    require_non_empty("negrisk.targets.members.quantity", &member.quantity)?;
+    Ok(())
+}
+
+fn require_non_empty(field: &str, value: &str) -> Result<(), ConfigSchemaError> {
+    if value.trim().is_empty() {
+        return Err(validation_error(format!("{field} must not be empty")));
     }
     Ok(())
 }

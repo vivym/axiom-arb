@@ -30,6 +30,31 @@ fn replay_view_accepts_malformed_live_only_sections() {
 }
 
 #[test]
+fn approved_and_ready_families_must_exist_in_targets() {
+    let err = validated_err(
+        r#"
+[runtime]
+mode = "live"
+
+[negrisk.rollout]
+approved_families = ["family-a", "family-missing"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    );
+
+    assert!(err.contains("approved_families references missing family_id"));
+}
+
+#[test]
 fn smoke_view_requires_live_signer() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-smoke.toml")).unwrap();
     let err = ValidatedConfig::new(raw)

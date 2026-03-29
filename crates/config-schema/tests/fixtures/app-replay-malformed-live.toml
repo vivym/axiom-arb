@@ -30,14 +30,14 @@ passphrase = ""
 signature = ""
 
 [negrisk.rollout]
-approved_families = ["missing-family"]
-ready_families = ["missing-family"]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
 
 [[negrisk.targets]]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = ""
-token_id = ""
-price = ""
-quantity = ""
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
