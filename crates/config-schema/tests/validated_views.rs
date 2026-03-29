@@ -242,8 +242,7 @@ fn live_view_exposes_consumer_scoped_wrappers() {
 }
 
 fn validated_err(extra: &str) -> String {
-    let config = format!(
-        r#"
+    let config = r#"
 [runtime]
 mode = "live"
 real_user_shadow_smoke = false
@@ -288,7 +287,7 @@ token_id = "token-1"
 price = "0.43"
 quantity = "5"
 "#
-    );
+    .to_string();
 
     let config = if extra.contains("[runtime]") {
         extra.to_owned()
