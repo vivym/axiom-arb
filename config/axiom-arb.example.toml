@@ -1,6 +1,6 @@
 [runtime]
 mode = "live"
-real_user_shadow_smoke = true
+real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"

@@ -15,11 +15,26 @@ require_config_placeholders_replaced() {
   fi
 }
 
+require_smoke_mode_config() {
+  local config_path="$1"
+
+  if ! rg -n '^mode = "live"$' "$config_path" >/dev/null; then
+    echo "error: smoke config must set runtime.mode = \"live\" in $config_path" >&2
+    exit 1
+  fi
+
+  if ! rg -n '^real_user_shadow_smoke = true$' "$config_path" >/dev/null; then
+    echo "error: smoke config must set runtime.real_user_shadow_smoke = true in $config_path" >&2
+    exit 1
+  fi
+}
+
 CONFIG_PATH="${1:-config/axiom-arb.example.toml}"
 
 export DATABASE_URL="${DATABASE_URL:-postgres://axiom:axiom@localhost:5432/axiom_arb}"
 
 require_config_placeholders_replaced "$CONFIG_PATH"
+require_smoke_mode_config "$CONFIG_PATH"
 
 echo "== app-live real-user shadow smoke =="
 cargo run -p app-live -- --config "$CONFIG_PATH"
