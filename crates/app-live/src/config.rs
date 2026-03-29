@@ -529,7 +529,7 @@ fn require_non_empty_local_signer_field(
     value: &str,
     field: &'static str,
 ) -> Result<(), ConfigError> {
-    if value.is_empty() {
+    if value.trim().is_empty() {
         Err(ConfigError::InvalidLocalSignerConfig {
             value: "app_live".to_owned(),
             message: format!("{field} must not be empty"),
@@ -548,7 +548,7 @@ fn require_non_empty_optional_local_signer_field(
         message: format!("{field} is required"),
     })?;
 
-    if value.is_empty() {
+    if value.trim().is_empty() {
         Err(ConfigError::InvalidLocalSignerConfig {
             value: "app_live".to_owned(),
             message: format!("{field} must not be empty"),

@@ -73,6 +73,67 @@ quantity = "5"
 }
 
 #[test]
+fn live_view_rejects_invalid_rollout_references() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-a", "family-missing"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).expect("global validation should allow rollout refs");
+    let error = validated
+        .for_app_live()
+        .expect_err("live view should reject invalid rollout references");
+
+    assert!(error
+        .to_string()
+        .contains("approved_families references missing family_id"));
+}
+
+#[test]
 fn parses_local_signer_config_from_validated_view() {
     let config = LocalSignerConfig::try_from(&live_view("")).unwrap();
 
@@ -108,6 +169,41 @@ fn missing_local_signer_config_returns_error() {
 
     assert!(matches!(error, ConfigError::MissingLocalSignerConfig));
     assert!(error.to_string().contains("missing local signer config"));
+}
+
+#[test]
+fn signer_fields_trim_whitespace_before_validation() {
+    let config = format!("{BASE_LIVE_CONFIG}\n{DEFAULT_ROLLOUT}").replace(
+        "address = \"0x1111111111111111111111111111111111111111\"",
+        "address = \"   \"",
+    );
+    let raw = load_raw_config_from_str(&config).unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+
+    let error = LocalSignerConfig::try_from(&validated.for_app_live().unwrap())
+        .expect_err("whitespace-only signer fields should be rejected");
+
+    assert!(error.to_string().contains("polymarket.signer.address"));
+}
+
+#[test]
+fn relayer_auth_fields_trim_whitespace_before_validation() {
+    let config = format!("{BASE_LIVE_CONFIG}\n{DEFAULT_ROLLOUT}")
+        .replace("timestamp = \"1700000001\"", "timestamp = \"   \"")
+        .replace(
+            "passphrase = \"builder-passphrase-1\"",
+            "passphrase = \"   \"",
+        )
+        .replace("signature = \"builder-signature-1\"", "signature = \"   \"");
+    let raw = load_raw_config_from_str(&config).unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+
+    let error = LocalSignerConfig::try_from(&validated.for_app_live().unwrap())
+        .expect_err("whitespace-only relayer auth fields should be rejected");
+
+    assert!(error
+        .to_string()
+        .contains("polymarket.relayer_auth.timestamp"));
 }
 
 #[test]

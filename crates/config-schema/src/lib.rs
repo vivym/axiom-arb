@@ -5,11 +5,10 @@ mod validate;
 pub use error::ConfigSchemaError;
 pub use raw::{RawAxiomConfig, RuntimeModeToml};
 pub use validate::{
-    AppLiveConfigView, AppLiveNegRiskTargetMemberView, AppLiveNegRiskTargetMembersView,
-    AppLiveNegRiskRolloutView, AppLiveNegRiskTargetView, AppLiveNegRiskTargetsView,
+    AppLiveConfigView, AppLiveNegRiskRolloutView, AppLiveNegRiskTargetMemberView,
+    AppLiveNegRiskTargetMembersView, AppLiveNegRiskTargetView, AppLiveNegRiskTargetsView,
     AppLivePolymarketRelayerAuthKind, AppLivePolymarketRelayerAuthView,
-    AppLivePolymarketSignerView, AppLivePolymarketSourceView, AppReplayConfigView,
-    ValidatedConfig,
+    AppLivePolymarketSignerView, AppLivePolymarketSourceView, AppReplayConfigView, ValidatedConfig,
 };
 
 pub fn load_raw_config_from_str(text: &str) -> Result<RawAxiomConfig, ConfigSchemaError> {

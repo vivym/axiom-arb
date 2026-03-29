@@ -355,6 +355,7 @@ fn validate_app_live_requiredness(
             require_signer(raw)?;
             require_relayer_auth(raw)?;
             require_rollout(raw)?;
+            validate_negrisk_rollout_referential_integrity(raw)?;
 
             Ok(AppLiveConfigView { raw })
         }
@@ -450,23 +451,40 @@ fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
         }
     }
 
-    if let Some(rollout) = negrisk.rollout.as_ref() {
-        for family_id in &rollout.approved_families {
-            require_non_empty("negrisk.rollout.approved_families", family_id)?;
-            if !family_ids.contains(family_id.as_str()) {
-                return Err(validation_error(format!(
-                    "negrisk.rollout.approved_families references missing family_id: {family_id}"
-                )));
-            }
-        }
+    Ok(())
+}
 
-        for family_id in &rollout.ready_families {
-            require_non_empty("negrisk.rollout.ready_families", family_id)?;
-            if !family_ids.contains(family_id.as_str()) {
-                return Err(validation_error(format!(
-                    "negrisk.rollout.ready_families references missing family_id: {family_id}"
-                )));
-            }
+fn validate_negrisk_rollout_referential_integrity(
+    raw: &RawAxiomConfig,
+) -> Result<(), ConfigSchemaError> {
+    let Some(negrisk) = raw.negrisk.as_ref() else {
+        return Ok(());
+    };
+    let Some(rollout) = negrisk.rollout.as_ref() else {
+        return Ok(());
+    };
+
+    let family_ids = negrisk
+        .targets
+        .iter()
+        .map(|target| target.family_id.as_str())
+        .collect::<HashSet<_>>();
+
+    for family_id in &rollout.approved_families {
+        require_non_empty("negrisk.rollout.approved_families", family_id)?;
+        if !family_ids.contains(family_id.as_str()) {
+            return Err(validation_error(format!(
+                "negrisk.rollout.approved_families references missing family_id: {family_id}"
+            )));
+        }
+    }
+
+    for family_id in &rollout.ready_families {
+        require_non_empty("negrisk.rollout.ready_families", family_id)?;
+        if !family_ids.contains(family_id.as_str()) {
+            return Err(validation_error(format!(
+                "negrisk.rollout.ready_families references missing family_id: {family_id}"
+            )));
         }
     }
 
