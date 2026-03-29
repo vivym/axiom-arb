@@ -4,29 +4,34 @@ Use this only for a manual operator smoke. It is shadow-only for `neg-risk` and 
 
 ## Preflight
 
-Set the same database that `app-live` and `app-replay` will read.
+Set the same database that `app-live` and `app-replay` will read. `DATABASE_URL` remains the only deployment env var.
 
 ```bash
 export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
-export AXIOM_MODE=live
-export AXIOM_REAL_USER_SHADOW_SMOKE=1
-export AXIOM_POLYMARKET_SOURCE_CONFIG='{"...":"replace-with-operator-source-config"}'
 ```
 
-The source config must be the real operator payload for the smoke. Do not use paper mode.
+Prepare a config file for the smoke, for example by copying `config/axiom-arb.example.toml` and replacing the placeholder signer, relayer auth, and target values. The smoke config must set:
+
+```toml
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+```
+
+Do not use paper mode.
 
 ## Run
 
-Start `app-live` with the smoke guard enabled:
+Start `app-live` with the smoke config:
 
 ```bash
-cargo run -p app-live
+cargo run -p app-live -- --config config/axiom-arb.example.toml
 ```
 
 If you need to capture replay-visible state after the smoke, run:
 
 ```bash
-cargo run -p app-replay -- --from-seq 0 --limit 1000
+cargo run -p app-replay -- --config config/axiom-arb.example.toml --from-seq 0 --limit 1000
 ```
 
 ## SQL Checks
@@ -78,4 +83,3 @@ Fail if any of the following happen:
 - any `neg-risk` row is recorded as `live`
 - shadow artifacts exist without a matching shadow attempt
 - the replay summary does not report the smoke rows
-

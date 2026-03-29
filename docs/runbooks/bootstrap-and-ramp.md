@@ -4,9 +4,25 @@ This runbook covers the bootstrap policy and launch gates for the `v1a` live can
 
 At current `HEAD`, `app-live` only exercises a local bootstrap skeleton:
 
-- select `paper` or `live` via `AXIOM_MODE`
+- select `paper` or `live` in the TOML passed with `--config`
 - run one bootstrap/reconcile pass over `StaticSnapshotSource::empty()`
 - print the resulting runtime status line
+
+`DATABASE_URL` remains the only deployment env var. Operator business config now lives in a TOML file such as `config/axiom-arb.example.toml`.
+
+## Local Commands
+
+Run `app-live` against a selected config file:
+
+```bash
+cargo run -p app-live -- --config config/axiom-arb.example.toml
+```
+
+Run replay against the same config file:
+
+```bash
+cargo run -p app-replay -- --config config/axiom-arb.example.toml --from-seq 0 --limit 1000
+```
 
 The binary entrypoint does not yet connect to Postgres, Polymarket feeds, or order heartbeat. The sequence below is the required operational target for the live candidate, not a claim that local `cargo run -p app-live` already performs the full venue-facing workflow.
 

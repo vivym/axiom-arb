@@ -6,17 +6,18 @@
 
 1. Start local Postgres with `make db-up` or `docker compose up -d postgres`.
 2. Set `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb`.
-3. Run `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test --workspace` once the database is available.
-4. Treat `app-replay` as a consumer of existing journal rows. It does not run migrations or seed `event_journal` for you.
+3. Copy `config/axiom-arb.example.toml` to an operator-local path and replace the placeholder signer, relayer auth, and target values.
+4. Select `runtime.mode = "paper"` or `runtime.mode = "live"` in that TOML file as needed.
+5. Run `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test --workspace` once the database is available.
+6. Treat `app-replay` as a consumer of existing journal rows. It does not run migrations or seed `event_journal` for you.
 
 ## Running The Binaries
 
-- Paper-mode bootstrap skeleton: `AXIOM_MODE=paper cargo run -p app-live`
-- Live-mode bootstrap skeleton: `AXIOM_MODE=live cargo run -p app-live`
-- Real-user shadow smoke: manual operator workflow only; `AXIOM_MODE=live AXIOM_REAL_USER_SHADOW_SMOKE=1` requires a real `AXIOM_POLYMARKET_SOURCE_CONFIG` payload and keeps `neg-risk` on the shadow path with no live-submit claim. See [`docs/runbooks/real-user-shadow-smoke.md`](docs/runbooks/real-user-shadow-smoke.md).
-- Replay summary from the beginning of an existing journal: `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo run -p app-replay -- --from-seq 0`
+- `app-live`: `cargo run -p app-live -- --config config/axiom-arb.example.toml`
+- `app-replay` from the beginning of an existing journal: `cargo run -p app-replay -- --config config/axiom-arb.example.toml --from-seq 0`
+- Real-user shadow smoke remains a manual operator workflow. Set `runtime.mode = "live"` and `runtime.real_user_shadow_smoke = true` in the TOML used for the run so `neg-risk` stays on the shadow path with no live-submit claim. See [`docs/runbooks/real-user-shadow-smoke.md`](docs/runbooks/real-user-shadow-smoke.md).
 
-`app-live` is driven by `AXIOM_MODE` today, not a `--mode` CLI flag. At current `HEAD`, the observability surface is still scoped to repo-owned local signals only: Wave 1A/1B covers execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` recovery divergence signals for resume/rebuild mismatches plus daemon posture/backlog status, and `venue-polymarket` relayer recent-transaction producer observability including local `relayer_pending_age`; Wave 1C adds local `neg-risk` control-plane producer signals in `app-live` plus the `app-replay` neg-risk replay summary span. The observability path remains local-only and OTel-compatible rather than OTel-enabled: there is no OpenTelemetry exporter in the binaries, no collector-backed pipeline, and no collector/OTel deployment claimed by this repository state. This repository state still does not claim a connected production `neg-risk` feed path, dashboards, alerts, `unknown-order`, `broken-leg`, or other collector-backed signals.
+`DATABASE_URL` remains the only deployment env var. Business configuration is loaded from the TOML passed with `--config`. At current `HEAD`, the observability surface is still scoped to repo-owned local signals only: Wave 1A/1B covers execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` recovery divergence signals for resume/rebuild mismatches plus daemon posture/backlog status, and `venue-polymarket` relayer recent-transaction producer observability including local `relayer_pending_age`; Wave 1C adds local `neg-risk` control-plane producer signals in `app-live` plus the `app-replay` neg-risk replay summary span. The observability path remains local-only and OTel-compatible rather than OTel-enabled: there is no OpenTelemetry exporter in the binaries, no collector-backed pipeline, and no collector/OTel deployment claimed by this repository state. This repository state still does not claim a connected production `neg-risk` feed path, dashboards, alerts, `unknown-order`, `broken-leg`, or other collector-backed signals.
 
 ## V1b Neg-Risk Scope Status
 
