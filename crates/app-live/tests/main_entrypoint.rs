@@ -32,6 +32,34 @@ fn binary_entrypoint_rejects_missing_config_path() {
 }
 
 #[test]
+fn legacy_business_env_vars_alone_do_not_start_app_live() {
+    let output = Command::new(app_live_binary())
+        .env("AXIOM_MODE", "live")
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(combined(&output).contains("--config"));
+}
+
+#[test]
+fn workspace_metadata_no_longer_includes_legacy_config_crate() {
+    let output = Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .expect("cargo metadata should run");
+
+    assert!(output.status.success(), "cargo metadata should succeed");
+
+    let stdout = String::from_utf8(output.stdout).expect("metadata should be utf8");
+    assert!(
+        !stdout.contains("\"name\":\"config\",\"version\""),
+        "legacy config crate should not remain in the workspace metadata"
+    );
+}
+
+#[test]
 fn paper_mode_still_requires_database_url_after_config_load() {
     let output = app_live_output_with_config_and_database("fixtures/app-live-paper.toml", None);
 

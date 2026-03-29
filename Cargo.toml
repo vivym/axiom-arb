@@ -2,7 +2,6 @@
 members = [
   "crates/app-live",
   "crates/app-replay",
-  "crates/config",
   "crates/config-schema",
   "crates/domain",
   "crates/journal",
