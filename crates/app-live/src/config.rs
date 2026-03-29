@@ -1,13 +1,16 @@
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
+use chrono::Utc;
 use config_schema::{
-    AppLiveConfigView, AppLivePolymarketRelayerAuthKind, AppLivePolymarketRelayerAuthView,
-    AppLivePolymarketSignerView, AppLivePolymarketSourceView,
+    AppLiveConfigView, AppLivePolymarketAccountView, AppLivePolymarketRelayerAuthKind,
+    AppLivePolymarketRelayerAuthView, AppLivePolymarketSignerView, AppLivePolymarketSourceView,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use venue_polymarket::PolymarketUrl as Url;
+use venue_polymarket::{
+    derive_builder_relayer_auth_material, derive_l2_auth_material, PolymarketUrl as Url,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskLiveTargetSet {
@@ -18,6 +21,16 @@ pub struct NegRiskLiveTargetSet {
 impl NegRiskLiveTargetSet {
     pub fn empty() -> Self {
         Self::new(BTreeMap::new())
+    }
+
+    pub fn from_targets_with_revision(
+        revision: impl Into<String>,
+        targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+    ) -> Self {
+        Self {
+            revision: revision.into(),
+            targets,
+        }
     }
 
     pub fn revision(&self) -> &str {
@@ -195,29 +208,53 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
     type Error = ConfigError;
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
-        let signer = config
-            .polymarket_signer()
-            .ok_or(ConfigError::MissingLocalSignerConfig)?;
         let relayer_auth = config
             .polymarket_relayer_auth()
             .ok_or(ConfigError::MissingLocalSignerConfig)?;
 
-        validate_local_signer_view(signer)?;
+        if let Some(signer) = config.polymarket_signer() {
+            validate_local_signer_view(signer)?;
+
+            return Ok(LocalSignerConfig {
+                signer: LocalSignerIdentity {
+                    address: signer.address().to_owned(),
+                    funder_address: signer.funder_address().to_owned(),
+                    signature_type: signer.signature_type_label().to_owned(),
+                    wallet_route: signer.wallet_route_label().to_owned(),
+                },
+                l2_auth: LocalL2AuthHeaders {
+                    api_key: signer.api_key().to_owned(),
+                    passphrase: signer.passphrase().to_owned(),
+                    timestamp: signer.timestamp().to_owned(),
+                    signature: signer.signature().to_owned(),
+                },
+                relayer_auth: map_relayer_auth(relayer_auth, None)?,
+            });
+        }
+
+        let account = config.account().ok_or(ConfigError::MissingLocalSignerConfig)?;
+        validate_account_view(account)?;
+        let account_secret = account.secret().to_owned();
+        let derived = derive_l2_auth_material(
+            account.api_key(),
+            &account_secret,
+            account.passphrase(),
+            Utc::now(),
+        )
+        .map_err(|error| ConfigError::InvalidLocalSignerConfig {
+            value: "app_live".to_owned(),
+            message: error.to_string(),
+        })?;
 
         Ok(LocalSignerConfig {
-            signer: LocalSignerIdentity {
-                address: signer.address().to_owned(),
-                funder_address: signer.funder_address().to_owned(),
-                signature_type: signer.signature_type_label().to_owned(),
-                wallet_route: signer.wallet_route_label().to_owned(),
-            },
+            signer: signer_identity_from_account(account),
             l2_auth: LocalL2AuthHeaders {
-                api_key: signer.api_key().to_owned(),
-                passphrase: signer.passphrase().to_owned(),
-                timestamp: signer.timestamp().to_owned(),
-                signature: signer.signature().to_owned(),
+                api_key: derived.api_key,
+                passphrase: derived.passphrase,
+                timestamp: derived.timestamp,
+                signature: derived.signature,
             },
-            relayer_auth: map_relayer_auth(relayer_auth)?,
+            relayer_auth: map_relayer_auth(relayer_auth, Some(&account_secret))?,
         })
     }
 }
@@ -443,25 +480,47 @@ fn parse_decimal(
 
 fn map_relayer_auth(
     raw: AppLivePolymarketRelayerAuthView<'_>,
+    secret: Option<&str>,
 ) -> Result<LocalRelayerAuth, ConfigError> {
     validate_relayer_auth_view(raw)?;
 
     match raw.kind() {
-        AppLivePolymarketRelayerAuthKind::BuilderApiKey => Ok(LocalRelayerAuth::BuilderApiKey {
-            api_key: raw.api_key().to_owned(),
-            timestamp: require_non_empty_optional_local_signer_field(
-                raw.timestamp(),
-                "polymarket.relayer_auth.timestamp",
-            )?,
-            passphrase: require_non_empty_optional_local_signer_field(
+        AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
+            let api_key = raw.api_key().to_owned();
+            let passphrase = require_non_empty_optional_local_signer_field(
                 raw.passphrase(),
                 "polymarket.relayer_auth.passphrase",
-            )?,
-            signature: require_non_empty_optional_local_signer_field(
-                raw.signature(),
-                "polymarket.relayer_auth.signature",
-            )?,
-        }),
+            )?;
+
+            if let Some(secret) = secret {
+                let derived =
+                    derive_builder_relayer_auth_material(&api_key, secret, &passphrase, Utc::now())
+                        .map_err(|error| ConfigError::InvalidLocalSignerConfig {
+                            value: "app_live".to_owned(),
+                            message: error.to_string(),
+                        })?;
+
+                Ok(LocalRelayerAuth::BuilderApiKey {
+                    api_key: derived.api_key,
+                    timestamp: derived.timestamp,
+                    passphrase: derived.passphrase,
+                    signature: derived.signature,
+                })
+            } else {
+                Ok(LocalRelayerAuth::BuilderApiKey {
+                    api_key,
+                    timestamp: require_non_empty_optional_local_signer_field(
+                        raw.timestamp(),
+                        "polymarket.relayer_auth.timestamp",
+                    )?,
+                    passphrase,
+                    signature: require_non_empty_optional_local_signer_field(
+                        raw.signature(),
+                        "polymarket.relayer_auth.signature",
+                    )?,
+                })
+            }
+        }
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => Ok(LocalRelayerAuth::RelayerApiKey {
             api_key: raw.api_key().to_owned(),
             address: require_non_empty_optional_local_signer_field(
@@ -470,6 +529,41 @@ fn map_relayer_auth(
             )?,
         }),
     }
+}
+
+fn signer_identity_from_account(account: AppLivePolymarketAccountView<'_>) -> LocalSignerIdentity {
+    LocalSignerIdentity {
+        address: account.address().to_owned(),
+        funder_address: account
+            .funder_address()
+            .unwrap_or(account.address())
+            .to_owned(),
+        signature_type: account.signature_type_label().to_owned(),
+        wallet_route: account.wallet_route_label().to_owned(),
+    }
+}
+
+fn validate_account_view(account: AppLivePolymarketAccountView<'_>) -> Result<(), ConfigError> {
+    require_non_empty_local_signer_field(account.address(), "polymarket.account.address")?;
+    if let Some(funder_address) = account.funder_address() {
+        require_non_empty_local_signer_field(
+            funder_address,
+            "polymarket.account.funder_address",
+        )?;
+    }
+    require_non_empty_local_signer_field(account.api_key(), "polymarket.account.api_key")?;
+    require_non_empty_local_signer_field(account.secret(), "polymarket.account.secret")?;
+    require_non_empty_local_signer_field(account.passphrase(), "polymarket.account.passphrase")?;
+
+    if account.signature_type_label() != account.wallet_route_label() {
+        return Err(ConfigError::InvalidLocalSignerConfig {
+            value: "app_live".to_owned(),
+            message: "polymarket.account.wallet_route must match polymarket.account.signature_type"
+                .to_owned(),
+        });
+    }
+
+    Ok(())
 }
 
 fn validate_local_signer_view(signer: AppLivePolymarketSignerView<'_>) -> Result<(), ConfigError> {

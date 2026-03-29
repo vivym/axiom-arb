@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use app_live::{
     CandidateArtifactRender, CandidateBridge, CandidateNotice, CandidateNoticeQueue,
     CandidateRestrictionTruth, DiscoveryReport, DiscoverySupervisor, InputTaskEvent,
-    SnapshotDispatchQueue, SnapshotNotice,
+    NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget, SnapshotDispatchQueue, SnapshotNotice,
 };
 use chrono::{TimeZone, Utc};
 use domain::{
@@ -20,6 +22,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -80,7 +83,11 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
     ));
 
     let render = bridge
-        .render(&candidate_set, Some("targets-rev-9"))
+        .render(
+            &candidate_set,
+            Some("targets-rev-9"),
+            &sample_rendered_live_targets(),
+        )
         .expect("candidate render");
 
     assert_eq!(
@@ -136,6 +143,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
                         "operator_target_revision_supplied": true,
                         "advisory_only": true,
                     },
+                    "rendered_live_targets": sample_rendered_live_targets(),
                     "warnings": [],
                     "execution_requests": [],
                 }),
@@ -183,7 +191,11 @@ fn candidate_bridge_serializes_per_family_target_validations_for_mixed_candidate
     ));
 
     let render = bridge
-        .render(&candidate_set, Some("targets-rev-mixed"))
+        .render(
+            &candidate_set,
+            Some("targets-rev-mixed"),
+            &sample_rendered_live_targets(),
+        )
         .expect("candidate render");
 
     assert_eq!(
@@ -224,7 +236,11 @@ fn candidate_bridge_rejects_non_adoptable_candidate_set_even_with_operator_targe
     );
 
     let err = bridge
-        .render(&candidate_set, Some("targets-rev-10"))
+        .render(
+            &candidate_set,
+            Some("targets-rev-10"),
+            &sample_rendered_live_targets(),
+        )
         .expect_err("non-adoptable candidate set should be rejected");
 
     assert!(err.contains("adoptable revision"));
@@ -238,6 +254,7 @@ fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_o
         &publication,
         [DirtyDomain::Candidates],
         None,
+        BTreeMap::new(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -275,6 +292,7 @@ fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_o
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::restricted("candidate generation halted by validation truth"),
     );
 
@@ -320,6 +338,7 @@ fn discovery_supervisor_excludes_weak_candidate_without_rendering_adoption_outpu
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-operator"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -365,6 +384,7 @@ fn discovery_supervisor_keeps_all_discovery_records_in_candidate_targets() {
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-multi"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -402,6 +422,7 @@ fn discovery_supervisor_preserves_per_family_validation_for_mixed_publication() 
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-mixed"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -440,18 +461,21 @@ fn candidate_notice_queue_coalesced_keeps_distinct_operator_or_restriction_varia
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-a"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     ));
     queue.push(CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-b"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     ));
     queue.push(CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
         Some("targets-rev-a"),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::restricted("validation hold"),
     ));
 
@@ -557,4 +581,19 @@ where
         .build()
         .expect("test runtime")
         .block_on(future)
+}
+
+fn sample_rendered_live_targets() -> BTreeMap<String, NegRiskFamilyLiveTarget> {
+    BTreeMap::from([(
+        "family-a".to_owned(),
+        NegRiskFamilyLiveTarget {
+            family_id: "family-a".to_owned(),
+            members: vec![NegRiskMemberLiveTarget {
+                condition_id: "condition-1".to_owned(),
+                token_id: "token-1".to_owned(),
+                price: rust_decimal::Decimal::new(43, 2),
+                quantity: rust_decimal::Decimal::new(5, 0),
+            }],
+        },
+    )])
 }

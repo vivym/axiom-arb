@@ -1,7 +1,9 @@
 use std::fmt;
 
+use chrono::{DateTime, Utc};
 use domain::{SignatureType, WalletRoute};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use sha2::{Digest, Sha256};
 
 const POLY_ADDRESS: HeaderName = HeaderName::from_static("poly-address");
 const POLY_API_KEY: HeaderName = HeaderName::from_static("poly-api-key");
@@ -45,6 +47,22 @@ pub enum RelayerAuth<'a> {
         api_key: &'a str,
         address: &'a str,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedL2AuthMaterial {
+    pub api_key: String,
+    pub passphrase: String,
+    pub timestamp: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DerivedBuilderRelayerAuthMaterial {
+    pub api_key: String,
+    pub passphrase: String,
+    pub timestamp: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +214,48 @@ pub fn build_relayer_auth_headers(auth: &RelayerAuth<'_>) -> Result<HeaderMap, A
     Ok(map)
 }
 
+pub fn derive_l2_auth_material(
+    api_key: &str,
+    secret: &str,
+    passphrase: &str,
+    now: DateTime<Utc>,
+) -> Result<DerivedL2AuthMaterial, AuthError> {
+    ensure_field("api_key", api_key)?;
+    ensure_field("secret", secret)?;
+    ensure_field("passphrase", passphrase)?;
+
+    let timestamp = now.timestamp().to_string();
+    let signature = derive_signature(secret, &timestamp, passphrase);
+
+    Ok(DerivedL2AuthMaterial {
+        api_key: api_key.to_owned(),
+        passphrase: passphrase.to_owned(),
+        timestamp,
+        signature,
+    })
+}
+
+pub fn derive_builder_relayer_auth_material(
+    api_key: &str,
+    secret: &str,
+    passphrase: &str,
+    now: DateTime<Utc>,
+) -> Result<DerivedBuilderRelayerAuthMaterial, AuthError> {
+    ensure_field("api_key", api_key)?;
+    ensure_field("secret", secret)?;
+    ensure_field("passphrase", passphrase)?;
+
+    let timestamp = now.timestamp().to_string();
+    let signature = derive_signature(secret, &timestamp, passphrase);
+
+    Ok(DerivedBuilderRelayerAuthMaterial {
+        api_key: api_key.to_owned(),
+        passphrase: passphrase.to_owned(),
+        timestamp,
+        signature,
+    })
+}
+
 fn insert_header(
     map: &mut HeaderMap,
     name: HeaderName,
@@ -216,4 +276,9 @@ fn ensure_field(field: &'static str, value: &str) -> Result<(), AuthError> {
     }
 
     Ok(())
+}
+
+fn derive_signature(secret: &str, timestamp: &str, passphrase: &str) -> String {
+    let digest = Sha256::digest(format!("{secret}:{timestamp}:{passphrase}").as_bytes());
+    format!("{digest:x}")
 }

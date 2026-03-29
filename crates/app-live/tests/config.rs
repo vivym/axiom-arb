@@ -1,9 +1,13 @@
+use std::collections::BTreeMap;
+
 use app_live::config::PolymarketSourceConfig;
 use app_live::{
     load_real_user_shadow_smoke_config, ConfigError, LocalL2AuthHeaders, LocalRelayerAuth,
-    LocalSignerConfig, LocalSignerIdentity, NegRiskLiveTargetSet, RealUserShadowSmokeConfig,
+    LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet,
+    NegRiskMemberLiveTarget, RealUserShadowSmokeConfig,
 };
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
+use rust_decimal::Decimal;
 
 #[test]
 fn parses_neg_risk_live_target_config_from_validated_view() {
@@ -163,6 +167,74 @@ fn parses_local_signer_config_from_validated_view() {
 }
 
 #[test]
+fn operator_facing_account_derives_local_signer_config() {
+    let config = LocalSignerConfig::try_from(&operator_live_view()).unwrap();
+
+    assert_eq!(
+        config.signer,
+        LocalSignerIdentity {
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+            funder_address: "0x2222222222222222222222222222222222222222".to_owned(),
+            signature_type: "Eoa".to_owned(),
+            wallet_route: "Eoa".to_owned(),
+        }
+    );
+    assert_eq!(config.l2_auth.api_key, "poly-api-key");
+    assert_eq!(config.l2_auth.passphrase, "poly-passphrase");
+    assert!(!config.l2_auth.timestamp.is_empty());
+    assert!(!config.l2_auth.signature.is_empty());
+    assert_eq!(
+        config.relayer_auth,
+        LocalRelayerAuth::RelayerApiKey {
+            api_key: "relay-key".to_owned(),
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn operator_facing_account_derives_builder_relayer_auth() {
+    let config = LocalSignerConfig::try_from(&operator_live_view_with_builder_auth()).unwrap();
+
+    match config.relayer_auth {
+        LocalRelayerAuth::BuilderApiKey {
+            api_key,
+            timestamp,
+            passphrase,
+            signature,
+        } => {
+            assert_eq!(api_key, "builder-api-key");
+            assert_eq!(passphrase, "builder-passphrase");
+            assert!(!timestamp.is_empty());
+            assert!(!signature.is_empty());
+        }
+        other => panic!("expected builder auth, got {other:?}"),
+    }
+}
+
+#[test]
+fn from_targets_with_revision_preserves_external_revision() {
+    let config = NegRiskLiveTargetSet::from_targets_with_revision(
+        "targets-rev-9",
+        BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    price: Decimal::new(43, 2),
+                    quantity: Decimal::new(5, 0),
+                }],
+            },
+        )]),
+    );
+
+    assert_eq!(config.revision(), "targets-rev-9");
+    assert_eq!(config.targets()["family-a"].members.len(), 1);
+}
+
+#[test]
 fn missing_local_signer_config_returns_error() {
     let error =
         LocalSignerConfig::try_from(&paper_view("[runtime]\nmode = \"paper\"\n")).unwrap_err();
@@ -198,7 +270,8 @@ fn relayer_auth_fields_trim_whitespace_before_validation() {
     let raw = load_raw_config_from_str(&config).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
 
-    let error = LocalSignerConfig::try_from(&validated.for_app_live().unwrap())
+    let error = validated
+        .for_app_live()
         .expect_err("whitespace-only relayer auth fields should be rejected");
 
     assert!(error
@@ -416,6 +489,73 @@ fn smoke_view() -> config_schema::AppLiveConfigView<'static> {
     validated
         .for_app_live()
         .expect("smoke view should validate")
+}
+
+fn operator_live_view() -> config_schema::AppLiveConfigView<'static> {
+    operator_live_view_from(
+        r#"
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+}
+
+fn operator_live_view_with_builder_auth() -> config_schema::AppLiveConfigView<'static> {
+    operator_live_view_from(
+        r#"
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key"
+timestamp = "1700000001"
+passphrase = "builder-passphrase"
+signature = "builder-signature"
+"#,
+    )
+}
+
+fn operator_live_view_from(relayer_auth: &str) -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(&format!(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+{relayer_auth}
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+        ))
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
 }
 
 fn validated_err(text: &str) -> String {
