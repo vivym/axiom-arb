@@ -29,7 +29,7 @@ require_smoke_mode_config() {
   fi
 }
 
-CONFIG_PATH="${1:-config/axiom-arb.example.toml}"
+CONFIG_PATH="${1:-config/axiom-arb.local.toml}"
 
 export DATABASE_URL="${DATABASE_URL:-postgres://axiom:axiom@localhost:5432/axiom_arb}"
 
@@ -37,7 +37,10 @@ require_config_placeholders_replaced "$CONFIG_PATH"
 require_smoke_mode_config "$CONFIG_PATH"
 
 echo "== app-live real-user shadow smoke =="
-cargo run -p app-live -- --config "$CONFIG_PATH"
+cargo run -p app-live -- doctor --config "$CONFIG_PATH"
+
+echo
+cargo run -p app-live -- run --config "$CONFIG_PATH"
 
 echo
 echo "== replay summary =="

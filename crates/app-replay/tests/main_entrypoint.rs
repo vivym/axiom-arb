@@ -60,6 +60,24 @@ fn binary_entrypoint_emits_structured_replay_summary() {
 }
 
 #[test]
+fn replay_binary_still_accepts_the_new_shared_config_fixture() {
+    let Some(database_url) = std::env::var_os("DATABASE_URL") else {
+        return;
+    };
+    let config = config_fixture("app-replay-ux.toml");
+
+    let output = Command::new(app_replay_binary())
+        .env("DATABASE_URL", database_url)
+        .arg("--config")
+        .arg(&config)
+        .args(["--from-seq", "0", "--limit", "1"])
+        .output()
+        .expect("app-replay should run");
+
+    assert!(output.status.success());
+}
+
+#[test]
 fn binary_entrypoint_runs_with_malformed_live_only_config_sections() {
     let Some(database_url) = std::env::var_os("DATABASE_URL") else {
         return;
