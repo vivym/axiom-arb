@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use config_schema::{load_raw_config_from_path, RuntimeModeToml};
 
 #[test]
-fn load_raw_config_from_path_parses_minimal_paper_fixture() {
-    let fixture = fixture_path("app-live-paper.toml");
+fn load_raw_config_from_path_parses_minimal_operator_paper_fixture() {
+    let fixture = fixture_path("app-live-ux-paper.toml");
     let raw = load_raw_config_from_path(&fixture).expect("fixture should parse");
 
     assert_eq!(raw.runtime.mode, RuntimeModeToml::Paper);

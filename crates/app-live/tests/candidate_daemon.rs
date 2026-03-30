@@ -206,6 +206,10 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
         adoptable.rendered_operator_target_revision,
         operator_target_revision
     );
+    assert_eq!(
+        adoptable.payload["rendered_live_targets"]["family-a"]["family_id"],
+        json!("family-a")
+    );
 
     let provenance = database
         .load_candidate_provenance(&operator_target_revision)

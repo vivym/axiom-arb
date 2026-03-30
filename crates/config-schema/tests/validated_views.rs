@@ -5,6 +5,63 @@ use config_schema::{
 };
 
 #[test]
+fn live_view_accepts_account_and_target_source_without_raw_targets() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+    assert_eq!(
+        live.target_source()
+            .expect("live fixture should include target source")
+            .operator_target_revision(),
+        Some("targets-rev-9")
+    );
+}
+
+#[test]
+fn paper_view_does_not_require_live_sections() {
+    let raw = load_raw_config_from_str("[runtime]\nmode = \"paper\"\n").unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+    assert!(live.is_paper());
+}
+
+#[test]
+fn replay_view_accepts_new_operator_facing_schema_without_live_only_sections() {
+    let raw = load_raw_config_from_path(&fixture_path("app-replay-ux.toml")).unwrap();
+    assert!(raw.polymarket.is_none());
+    assert!(raw.negrisk.is_none());
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let replay = validated.for_app_replay().unwrap();
+    assert_eq!(replay.mode(), RuntimeModeToml::Live);
+    assert!(!replay.real_user_shadow_smoke());
+}
+
+#[test]
 fn replay_view_does_not_require_live_signer_or_source() {
     let raw = load_raw_config_from_path(&fixture_path("app-replay.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
@@ -168,6 +225,36 @@ ready_families = []
 }
 
 #[test]
+fn operator_facing_smoke_view_requires_source_defaults_or_overrides() {
+    let err = validated_view_err(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+    );
+
+    assert!(err.contains("polymarket.source"));
+}
+
+#[test]
 fn invalid_toml_and_invalid_fields_fail_closed() {
     assert!(load_raw_config_from_str("runtime = [").is_err());
     assert!(config_err(
@@ -189,6 +276,50 @@ real_user_shadow_smoke = true
     );
 
     assert!(err.contains("real_user_shadow_smoke"));
+}
+
+#[test]
+fn live_view_accepts_operator_facing_live_fixture() {
+    let raw = load_raw_config_from_path(&fixture_path("app-live-ux-live.toml")).unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated
+        .for_app_live()
+        .expect("operator live fixture should validate");
+
+    assert!(live.has_polymarket_account());
+    assert!(live.has_target_source());
+    assert_eq!(
+        live.target_source()
+            .expect("operator live fixture should include target source")
+            .operator_target_revision(),
+        Some("targets-rev-9")
+    );
+    assert!(!live.has_polymarket_source());
+}
+
+#[test]
+fn smoke_view_accepts_operator_facing_live_fixture() {
+    let raw = load_raw_config_from_path(&fixture_path("app-live-ux-smoke.toml")).unwrap();
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated
+        .for_app_live()
+        .expect("operator smoke fixture should validate");
+
+    assert!(live.real_user_shadow_smoke());
+    assert!(live.has_polymarket_account());
+    assert!(live.has_polymarket_source());
+    assert_eq!(
+        live.target_source()
+            .expect("operator smoke fixture should include target source")
+            .operator_target_revision(),
+        Some("targets-rev-9")
+    );
+    assert_eq!(
+        live.polymarket_source()
+            .expect("operator smoke fixture should include source settings")
+            .clob_host(),
+        "https://clob.polymarket.com"
+    );
 }
 
 #[test]

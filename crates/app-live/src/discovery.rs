@@ -10,6 +10,7 @@ use persistence::{
 use serde_json::json;
 use state::{CandidatePublication, DirtyDomain};
 
+use crate::config::NegRiskFamilyLiveTarget;
 use crate::queues::{CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,7 @@ impl CandidateBridge {
         &self,
         candidate_set: &CandidateTargetSet,
         operator_target_revision: Option<&str>,
+        rendered_live_targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
     ) -> Result<CandidateArtifactRender, String> {
         let Some(operator_target_revision) = operator_target_revision.map(str::to_owned) else {
             return Err(
@@ -95,6 +97,7 @@ impl CandidateBridge {
                         "operator_target_revision_supplied": true,
                         "advisory_only": true,
                     },
+                    "rendered_live_targets": rendered_live_targets,
                     "warnings": [],
                     "execution_requests": [],
                 }),
@@ -304,6 +307,7 @@ impl DiscoverySupervisor {
             publication,
             dirty_domains,
             operator_target_revision,
+            rendered_live_targets,
             restriction,
         } = notice;
 
@@ -354,9 +358,11 @@ impl DiscoverySupervisor {
             });
         }
 
-        let rendered = self
-            .bridge
-            .render(&candidate_set, operator_target_revision.as_deref())?;
+        let rendered = self.bridge.render(
+            &candidate_set,
+            operator_target_revision.as_deref(),
+            &rendered_live_targets,
+        )?;
 
         Ok(DiscoveryOutcome {
             report: DiscoveryReport {

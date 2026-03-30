@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use state::{CandidatePublication, DirtyDomain};
 
+use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 
 #[derive(Debug, Default)]
@@ -145,6 +146,7 @@ pub struct CandidateNotice {
     pub publication: CandidatePublication,
     pub dirty_domains: BTreeSet<DirtyDomain>,
     pub operator_target_revision: Option<String>,
+    pub rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     pub restriction: CandidateRestrictionTruth,
 }
 
@@ -153,12 +155,14 @@ impl CandidateNotice {
         publication: &CandidatePublication,
         dirty_domains: impl IntoIterator<Item = DirtyDomain>,
         operator_target_revision: Option<&str>,
+        rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
         restriction: CandidateRestrictionTruth,
     ) -> Self {
         Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
+            rendered_live_targets,
             restriction,
         }
     }

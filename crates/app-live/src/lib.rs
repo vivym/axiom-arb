@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod discovery;
@@ -14,6 +15,7 @@ pub mod runtime;
 pub mod smoke;
 mod snapshot_meta;
 pub mod source_tasks;
+pub mod startup;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -51,6 +53,7 @@ pub use smoke::{
 pub use source_tasks::{
     build_real_user_shadow_smoke_sources, RealUserShadowSmokeSources, SmokeSafeStartupSource,
 };
+pub use startup::{resolve_startup_targets, ResolvedTargets, StartupBundle, StartupError};
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,
     SupervisorSummary,

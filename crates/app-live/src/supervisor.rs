@@ -1005,6 +1005,7 @@ impl AppSupervisor {
             &publication,
             [DirtyDomain::Candidates],
             self.neg_risk_live_target_revision.as_deref(),
+            self.neg_risk_live_targets.clone(),
             CandidateRestrictionTruth::eligible(),
         );
         let Ok(report) = DiscoverySupervisor::persist_notice_blocking(notice) else {

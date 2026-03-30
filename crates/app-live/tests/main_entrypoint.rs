@@ -24,11 +24,11 @@ fn binary_entrypoint_reads_paper_mode_from_config_file() {
 }
 
 #[test]
-fn binary_entrypoint_rejects_missing_config_path() {
+fn binary_entrypoint_requires_a_subcommand() {
     let output = Command::new(app_live_binary()).output().unwrap();
 
     assert!(!output.status.success());
-    assert!(combined(&output).contains("--config"));
+    assert!(combined(&output).contains("Usage: app-live <COMMAND>"));
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn legacy_business_env_vars_alone_do_not_start_app_live() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(combined(&output).contains("--config"));
+    assert!(combined(&output).contains("Usage: app-live <COMMAND>"));
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn live_config_rejects_mismatched_signature_fields_through_binary() {
     let config_path = temp_config_fixture_path("fixtures/app-live-live.toml", |config| {
         config.replace("wallet_route = \"eoa\"", "wallet_route = \"safe\"")
     });
-    let output = app_live_output_with_config_path(&config_path, None);
+    let output = app_live_output_with_config_path(&config_path, Some(default_test_database_url()));
 
     assert!(!output.status.success());
     assert!(combined(&output).contains("wallet_route"));
@@ -186,7 +186,7 @@ fn app_live_output_with_config_path(
     database_url: Option<&str>,
 ) -> std::process::Output {
     let mut command = Command::new(app_live_binary());
-    command.arg("--config").arg(config_path);
+    command.arg("run").arg("--config").arg(config_path);
     command.env_remove("AXIOM_MODE");
     command.env_remove("AXIOM_NEG_RISK_LIVE_TARGETS");
     command.env_remove("AXIOM_NEG_RISK_LIVE_APPROVED_FAMILIES");

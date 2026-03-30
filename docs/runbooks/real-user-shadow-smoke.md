@@ -1,6 +1,6 @@
 # Real-User Shadow Smoke Runbook
 
-Use this only for a manual operator smoke. It is shadow-only for `neg-risk` and does not represent production readiness.
+Use this only for a manual operator smoke. The smoke path is shadow-only for `neg-risk` and does not represent production readiness or live-submit readiness.
 
 ## Preflight
 
@@ -10,7 +10,7 @@ Set the same database that `app-live` and `app-replay` will read. `DATABASE_URL`
 export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
 ```
 
-Prepare a config file for the smoke, for example by copying `config/axiom-arb.example.toml` and replacing the placeholder signer, relayer auth, and target values. The smoke config must set:
+Prepare a config file for the smoke by running `app-live init --config <path> --defaults --mode live --real-user-shadow-smoke` or by copying `config/axiom-arb.example.toml` and then reviewing the long-lived operator settings. The smoke config must set:
 
 ```toml
 [runtime]
@@ -18,15 +18,18 @@ mode = "live"
 real_user_shadow_smoke = true
 ```
 
-Do not use paper mode.
+Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision.
 
 ## Run
 
-Start `app-live` with the smoke config:
+Preflight the smoke config, then start `app-live` with the smoke config:
 
 ```bash
-cargo run -p app-live -- --config config/axiom-arb.example.toml
+cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
+cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
+
+`doctor` must pass before `run`. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode.
 
 If you need to capture replay-visible state after the smoke, run:
 
