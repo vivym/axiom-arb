@@ -4,6 +4,7 @@ use app_live::cli::{AppLiveCli, AppLiveCommand};
 use app_live::commands::doctor::execute as doctor_execute;
 use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
+use app_live::commands::targets::execute as targets_execute;
 use clap::Parser;
 
 fn main() {
@@ -19,5 +20,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         AppLiveCommand::Doctor(args) => doctor_execute(args),
         AppLiveCommand::Init(args) => init_execute(args),
         AppLiveCommand::Run(args) => run_execute(args),
+        AppLiveCommand::Targets(args) => targets_execute(args),
     }
 }

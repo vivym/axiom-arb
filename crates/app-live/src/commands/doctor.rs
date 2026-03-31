@@ -1,9 +1,10 @@
 use std::{error::Error, fmt};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
-use persistence::connect_pool_from_env;
+use persistence::{connect_pool_from_env, RuntimeProgressRepo};
 
 use crate::cli::DoctorArgs;
+use crate::commands::targets::state::load_target_control_plane_state;
 use crate::{load_real_user_shadow_smoke_config, startup::resolve_startup_targets};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,20 +81,89 @@ pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(async {
-                let pool = connect_pool_from_env().await.map_err(|error| {
+            let pool = runtime.block_on(async {
+                connect_pool_from_env().await.map_err(|error| {
                     emit_check(CheckStatus::Fail, "DatabaseError", &error.to_string());
                     DoctorFailure::new("DatabaseError", error.to_string())
-                })?;
-                resolve_startup_targets(&pool, &config)
-                    .await
-                    .map_err(|error| {
-                        emit_check(CheckStatus::Fail, "TargetSourceError", &error.to_string());
-                        DoctorFailure::new("TargetSourceError", error.to_string())
-                    })
+                })
             })?;
+            let resolved_targets = runtime
+                .block_on(resolve_startup_targets(&pool, &config))
+                .map_err(|error| {
+                    emit_check(CheckStatus::Fail, "TargetSourceError", &error.to_string());
+                    DoctorFailure::new("TargetSourceError", error.to_string())
+                })?;
 
             emit_check(CheckStatus::Ok, "target source resolved", "");
+
+            if config.target_source().is_some() {
+                let target_state = runtime
+                    .block_on(load_target_control_plane_state(&pool, &args.config))
+                    .map_err(|error| {
+                        emit_check(CheckStatus::Fail, "TargetStateError", &error.to_string());
+                        DoctorFailure::new("TargetStateError", error.to_string())
+                    })?;
+
+                match target_state.restart_needed {
+                    Some(true) => emit_check(
+                        CheckStatus::Ok,
+                        "restart required for configured target revision to become active",
+                        "",
+                    ),
+                    Some(false) => emit_check(
+                        CheckStatus::Ok,
+                        "configured target revision matches active runtime state",
+                        "",
+                    ),
+                    None => emit_check(
+                        CheckStatus::Ok,
+                        "active runtime target state unavailable",
+                        "",
+                    ),
+                }
+            } else {
+                let active_operator_target_revision = runtime
+                    .block_on(RuntimeProgressRepo.current(&pool))
+                    .map_err(|error| {
+                        emit_check(CheckStatus::Fail, "TargetStateError", &error.to_string());
+                        DoctorFailure::new("TargetStateError", error.to_string())
+                    })?
+                    .map(|row| {
+                        row.operator_target_revision.ok_or_else(|| {
+                            DoctorFailure::new(
+                                "TargetStateError",
+                                "runtime progress row exists without operator_target_revision anchor",
+                            )
+                        })
+                    })
+                    .transpose()?;
+
+                match (
+                    resolved_targets.operator_target_revision.as_deref(),
+                    active_operator_target_revision.as_deref(),
+                ) {
+                    (Some(configured), Some(active)) if configured != active => emit_check(
+                        CheckStatus::Ok,
+                        "restart required for configured target revision to become active",
+                        "",
+                    ),
+                    (Some(_), Some(_)) => emit_check(
+                        CheckStatus::Ok,
+                        "configured target revision matches active runtime state",
+                        "",
+                    ),
+                    _ => emit_check(
+                        CheckStatus::Ok,
+                        "active runtime target state unavailable",
+                        "",
+                    ),
+                }
+                emit_check(
+                    CheckStatus::Skip,
+                    "control-plane checks not required for explicit targets",
+                    "",
+                );
+            }
             Ok(())
         }
     }

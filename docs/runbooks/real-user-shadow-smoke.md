@@ -20,6 +20,16 @@ real_user_shadow_smoke = true
 
 Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision.
 
+Before running the smoke, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
+
+```bash
+cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
+cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
+```
+
+`targets status` and `targets show-current` should tell you whether the configured revision is already active or whether the smoke run still needs a controlled restart to pick up the new startup-scoped target revision.
+
 ## Run
 
 Preflight the smoke config, then start `app-live` with the smoke config:
@@ -30,6 +40,14 @@ cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
 
 `doctor` must pass before `run`. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode.
+
+If the wrong target revision was adopted for the smoke, revert it with:
+
+```bash
+cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
+```
+
+Adopt and rollback only rewrite the configured `operator_target_revision` in the TOML. They do not hot-reload the running daemon.
 
 If you need to capture replay-visible state after the smoke, run:
 

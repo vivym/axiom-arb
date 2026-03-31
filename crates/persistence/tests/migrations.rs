@@ -8,8 +8,9 @@ use domain::{
 };
 use persistence::{
     models::{InventoryBucketRow, JournalEntryInput, NewOrderRow, PendingReconcileRow},
-    run_migrations, ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo, OrderRepo,
-    PendingReconcileRepo, PersistenceError, ResolutionRepo,
+    run_migrations, ApprovalRepo, IdentifierRepo, InventoryRepo, JournalRepo,
+    OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo, PersistenceError,
+    ResolutionRepo,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -116,6 +117,15 @@ async fn column_exists(pool: &PgPool, table_name: &str, column_name: &str) -> bo
     .await
     .expect("column lookup should succeed")
     .get("exists")
+}
+
+async fn assert_has_columns(pool: &PgPool, table_name: &str, column_names: &[&str]) {
+    for column_name in column_names {
+        assert!(
+            column_exists(pool, table_name, column_name).await,
+            "expected column {column_name} on {table_name}"
+        );
+    }
 }
 
 fn identifier_record(
@@ -251,6 +261,125 @@ async fn migrations_create_candidate_and_adoption_tables() {
         )
         .await
     );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn migrations_create_operator_target_adoption_history_table() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    assert!(table_exists(&db.pool, "operator_target_adoption_history").await);
+    assert_has_columns(
+        &db.pool,
+        "operator_target_adoption_history",
+        &[
+            "history_seq",
+            "adoption_id",
+            "action_kind",
+            "operator_target_revision",
+            "previous_operator_target_revision",
+            "adoptable_revision",
+            "candidate_revision",
+            "adopted_at",
+        ],
+    )
+    .await;
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn migration_0013_backfills_history_seq_using_legacy_latest_order() {
+    let db = TestDatabase::new().await;
+    apply_migration_file(&db.pool, "0012_operator_target_adoption_history.sql")
+        .await
+        .unwrap();
+
+    insert_legacy_adoption_history_row(
+        &db.pool,
+        "z-first",
+        "adopt",
+        "targets-rev-10",
+        Some("targets-rev-9"),
+        Some("adoptable-10"),
+        Some("candidate-10"),
+        "2026-03-30T10:00:00Z",
+    )
+    .await;
+    insert_legacy_adoption_history_row(
+        &db.pool,
+        "a-second",
+        "adopt",
+        "targets-rev-11",
+        Some("targets-rev-10"),
+        Some("adoptable-11"),
+        Some("candidate-11"),
+        "2026-03-30T10:00:00Z",
+    )
+    .await;
+
+    apply_migration_file(
+        &db.pool,
+        "0013_operator_target_adoption_history_constraints.sql",
+    )
+    .await
+    .unwrap();
+
+    let latest = OperatorTargetAdoptionHistoryRepo
+        .latest(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.adoption_id, "z-first");
+    assert_eq!(latest.operator_target_revision, "targets-rev-10");
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn migration_0013_backfills_history_seq_using_legacy_previous_distinct_order() {
+    let db = TestDatabase::new().await;
+    apply_migration_file(&db.pool, "0012_operator_target_adoption_history.sql")
+        .await
+        .unwrap();
+
+    insert_legacy_adoption_history_row(
+        &db.pool,
+        "z-first",
+        "adopt",
+        "targets-rev-12",
+        Some("targets-rev-10"),
+        Some("adoptable-12-a"),
+        Some("candidate-12-a"),
+        "2026-03-30T10:10:00Z",
+    )
+    .await;
+    insert_legacy_adoption_history_row(
+        &db.pool,
+        "a-second",
+        "adopt",
+        "targets-rev-12",
+        Some("targets-rev-11"),
+        Some("adoptable-12-b"),
+        Some("candidate-12-b"),
+        "2026-03-30T10:10:00Z",
+    )
+    .await;
+
+    apply_migration_file(
+        &db.pool,
+        "0013_operator_target_adoption_history_constraints.sql",
+    )
+    .await
+    .unwrap();
+
+    let previous = OperatorTargetAdoptionHistoryRepo
+        .previous_distinct_revision(&db.pool, "targets-rev-12")
+        .await
+        .unwrap();
+    assert_eq!(previous.as_deref(), Some("targets-rev-10"));
 
     db.cleanup().await;
 }
@@ -995,4 +1124,41 @@ async fn apply_migration_file(pool: &PgPool, file_name: &str) -> Result<(), sqlx
         .expect("migration file should exist for migration tests");
     sqlx::raw_sql(&sql).execute(pool).await?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_legacy_adoption_history_row(
+    pool: &PgPool,
+    adoption_id: &str,
+    action_kind: &str,
+    operator_target_revision: &str,
+    previous_operator_target_revision: Option<&str>,
+    adoptable_revision: Option<&str>,
+    candidate_revision: Option<&str>,
+    adopted_at: &str,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO operator_target_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_target_revision,
+            previous_operator_target_revision,
+            adoptable_revision,
+            candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+        "#,
+    )
+    .bind(adoption_id)
+    .bind(action_kind)
+    .bind(operator_target_revision)
+    .bind(previous_operator_target_revision)
+    .bind(adoptable_revision)
+    .bind(candidate_revision)
+    .bind(adopted_at)
+    .execute(pool)
+    .await
+    .unwrap();
 }

@@ -29,6 +29,11 @@ passphrase = "YOUR_BUILDER_PASSPHRASE"
 
 [negrisk.target_source]
 source = "adopted"
+# This startup anchor is normally written by:
+#   app-live targets adopt --adoptable-revision ...
+# or:
+#   app-live targets rollback [--to-operator-target-revision ...]
+# It remains startup-scoped and is not hot-reloaded into a running daemon.
 operator_target_revision = "YOUR_OPERATOR_TARGET_REVISION"
 
 [negrisk.rollout]

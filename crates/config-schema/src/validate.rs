@@ -19,6 +19,12 @@ impl ValidatedConfig {
         Ok(Self { raw })
     }
 
+    pub fn target_source(&self) -> Result<AppLiveNegRiskTargetSourceView<'_>, ConfigSchemaError> {
+        let target_source = require_target_source(&self.raw)?;
+        validate_target_source_view(target_source)?;
+        Ok(target_source)
+    }
+
     pub fn for_app_live(&self) -> Result<AppLiveConfigView<'_>, ConfigSchemaError> {
         validate_app_live_requiredness(&self.raw)
     }

@@ -14,8 +14,9 @@ use crate::{
         ExecutionAttemptRow, FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow,
         JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
         NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
-        NewOrderRow, OrderRow, PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow,
-        ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        NewOrderRow, OperatorTargetAdoptionHistoryRow, OrderRow, PendingReconcileRow,
+        ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow,
+        StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1789,6 +1790,91 @@ impl CandidateAdoptionRepo {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct OperatorTargetAdoptionHistoryRepo;
+
+impl OperatorTargetAdoptionHistoryRepo {
+    pub async fn append(
+        &self,
+        pool: &PgPool,
+        row: &OperatorTargetAdoptionHistoryRow,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO operator_target_adoption_history (
+                adoption_id,
+                action_kind,
+                operator_target_revision,
+                previous_operator_target_revision,
+                adoptable_revision,
+                candidate_revision,
+                adopted_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(&row.adoption_id)
+        .bind(&row.action_kind)
+        .bind(&row.operator_target_revision)
+        .bind(row.previous_operator_target_revision.as_deref())
+        .bind(row.adoptable_revision.as_deref())
+        .bind(row.candidate_revision.as_deref())
+        .bind(row.adopted_at)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn latest(&self, pool: &PgPool) -> Result<Option<OperatorTargetAdoptionHistoryRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                adoption_id,
+                action_kind,
+                operator_target_revision,
+                previous_operator_target_revision,
+                adoptable_revision,
+                candidate_revision,
+                adopted_at
+            FROM operator_target_adoption_history
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_operator_target_adoption_history_row)
+            .transpose()
+    }
+
+    pub async fn previous_distinct_revision(
+        &self,
+        pool: &PgPool,
+        current_revision: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            r#"
+            SELECT previous_operator_target_revision
+            FROM operator_target_adoption_history
+            WHERE operator_target_revision = $1
+              AND previous_operator_target_revision IS NOT NULL
+              AND previous_operator_target_revision <> $1
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(current_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(|row| row.try_get("previous_operator_target_revision"))
+            .transpose()
+            .map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 pub struct SnapshotPublicationRepo;
 
 impl SnapshotPublicationRepo {
@@ -2733,6 +2819,20 @@ fn map_candidate_adoption_provenance_row(row: PgRow) -> Result<CandidateAdoption
         operator_target_revision: row.try_get("operator_target_revision")?,
         adoptable_revision: row.try_get("adoptable_revision")?,
         candidate_revision: row.try_get("candidate_revision")?,
+    })
+}
+
+fn map_operator_target_adoption_history_row(
+    row: PgRow,
+) -> Result<OperatorTargetAdoptionHistoryRow> {
+    Ok(OperatorTargetAdoptionHistoryRow {
+        adoption_id: row.try_get("adoption_id")?,
+        action_kind: row.try_get("action_kind")?,
+        operator_target_revision: row.try_get("operator_target_revision")?,
+        previous_operator_target_revision: row.try_get("previous_operator_target_revision")?,
+        adoptable_revision: row.try_get("adoptable_revision")?,
+        candidate_revision: row.try_get("candidate_revision")?,
+        adopted_at: row.try_get("adopted_at")?,
     })
 }
 
