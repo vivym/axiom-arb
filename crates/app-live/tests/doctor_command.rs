@@ -32,6 +32,29 @@ fn doctor_live_mode_reports_missing_adopted_target_as_target_source_error() {
     assert!(combined(&output).contains("TargetSourceError"));
 }
 
+#[test]
+fn doctor_live_mode_accepts_explicit_targets_without_target_source() {
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config_fixture("fixtures/app-live-live.toml"))
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(combined.contains("[OK] config parsed"), "{combined}");
+    assert!(
+        combined.contains("[OK] target source resolved"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("[SKIP] control-plane checks not required for explicit targets"),
+        "{combined}"
+    );
+}
+
 fn app_live_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-live") {
         return PathBuf::from(path);

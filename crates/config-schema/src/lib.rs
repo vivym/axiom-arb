@@ -25,3 +25,8 @@ pub fn load_raw_config_from_path(
     let text = std::fs::read_to_string(path)?;
     load_raw_config_from_str(&text)
 }
+
+pub fn render_raw_config_to_string(raw: &RawAxiomConfig) -> Result<String, ConfigSchemaError> {
+    toml::to_string_pretty(raw)
+        .map_err(|error| ConfigSchemaError::Validation(format!("toml serialize error: {error}")))
+}

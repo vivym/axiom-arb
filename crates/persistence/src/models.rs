@@ -299,6 +299,17 @@ pub struct CandidateAdoptionProvenanceRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorTargetAdoptionHistoryRow {
+    pub adoption_id: String,
+    pub action_kind: String,
+    pub operator_target_revision: String,
+    pub previous_operator_target_revision: Option<String>,
+    pub adoptable_revision: Option<String>,
+    pub candidate_revision: Option<String>,
+    pub adopted_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotPublicationRow {
     pub snapshot_id: String,
     pub state_version: i64,

@@ -7,19 +7,29 @@
 1. Start local Postgres with `make db-up` or `docker compose up -d postgres`.
 2. Set `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb`.
 3. Run `cargo run -p app-live -- init --config config/axiom-arb.local.toml --defaults --mode live` to create an operator-local config.
-4. Replace the placeholder account, relayer auth, and operator-target revision values in `config/axiom-arb.local.toml`.
-5. Run `cargo run -p app-live -- doctor --config config/axiom-arb.local.toml`.
-6. Start the daemon with `cargo run -p app-live -- run --config config/axiom-arb.local.toml`.
+4. Replace the placeholder account and relayer auth values in `config/axiom-arb.local.toml`.
+5. Inspect candidate/adoptable state with `cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml`.
+6. Adopt a startup-scoped operator target revision with `cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>`.
+7. Confirm configured vs active state with `cargo run -p app-live -- targets status --config config/axiom-arb.local.toml`.
+8. Run `cargo run -p app-live -- doctor --config config/axiom-arb.local.toml`.
+9. Start the daemon with `cargo run -p app-live -- run --config config/axiom-arb.local.toml`.
 7. Run `DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb cargo test --workspace` once the database is available.
 8. Treat `app-replay` as a consumer of existing journal rows. It does not run migrations or seed `event_journal` for you.
 
 ## Running The Binaries
 
 - `app-live init`: `cargo run -p app-live -- init --config config/axiom-arb.local.toml --defaults --mode live`
+- `app-live targets status`: `cargo run -p app-live -- targets status --config config/axiom-arb.local.toml`
+- `app-live targets candidates`: `cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml`
+- `app-live targets show-current`: `cargo run -p app-live -- targets show-current --config config/axiom-arb.local.toml`
+- `app-live targets adopt`: `cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>`
+- `app-live targets rollback`: `cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml [--to-operator-target-revision <operator-target-revision>]`
 - `app-live doctor`: `cargo run -p app-live -- doctor --config config/axiom-arb.local.toml`
 - `app-live run`: `cargo run -p app-live -- run --config config/axiom-arb.local.toml`
 - `app-replay` from the beginning of an existing journal: `cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0`
 - Real-user shadow smoke remains a manual operator workflow. Set `runtime.mode = "live"` and `runtime.real_user_shadow_smoke = true` in the TOML used for the run so `neg-risk` stays on the shadow path with no live-submit claim. See [`docs/runbooks/real-user-shadow-smoke.md`](docs/runbooks/real-user-shadow-smoke.md).
+
+`targets adopt` and `targets rollback` rewrite `[negrisk.target_source].operator_target_revision` in the local TOML and record adoption history, but they remain startup-scoped operations. They do not hot-reload a running daemon. Use `targets status`, `targets show-current`, and `doctor` to check whether `configured_operator_target_revision` differs from the daemon's active revision and whether a controlled restart is required.
 
 `DATABASE_URL` remains the only deployment env var. Business configuration is loaded from the TOML passed with `--config`. At current `HEAD`, the observability surface is still scoped to repo-owned local signals only: Wave 1A/1B covers execution-attempt spans plus truthful `shadow_attempt_count`, `app-live` recovery divergence signals for resume/rebuild mismatches plus daemon posture/backlog status, and `venue-polymarket` relayer recent-transaction producer observability including local `relayer_pending_age`; Wave 1C adds local `neg-risk` control-plane producer signals in `app-live` plus the `app-replay` neg-risk replay summary span. The observability path remains local-only and OTel-compatible rather than OTel-enabled: there is no OpenTelemetry exporter in the binaries, no collector-backed pipeline, and no collector/OTel deployment claimed by this repository state. This repository state still does not claim a connected production `neg-risk` feed path, dashboards, alerts, `unknown-order`, `broken-leg`, or other collector-backed signals.
 
@@ -44,6 +54,7 @@
 - Phase 3e continuously generates conservative `neg-risk` candidate targets and adoptable startup-scoped target revisions from the discovery pipeline.
 - Real `Polymarket` websocket subscribe/auth/ping sends and `postHeartbeat(previous_heartbeat_id)` request wiring now exist for the daemon source adapters, but live target selection still comes from explicit operator inputs.
 - Candidate generation remains advisory in Phase 3e; operator adoption is still explicit and limited to startup-scoped target revisions rather than automatic live promotion.
+- Operator adoption now has a first-class control-plane workflow under `app-live targets ...`, but adoption still remains restart-scoped rather than hot-reloaded.
 - Restart and resume still require durable live-attempt and live-submission truth plus any pending-reconcile anchors that actually exist; when durable rollout evidence is not loaded and no `negrisk` snapshot data is present, local observability reports neutral rollout provenance instead of claiming snapshot-derived evidence.
 - `neg_risk_live_attempt_count` now counts durable bootstrap/resume live execution records.
 - `observability` now defines typed counters `axiom_neg_risk_live_submit_accepted_total` and `axiom_neg_risk_live_submit_ambiguous_total` for accepted-versus-ambiguous live submit closure accounting.

@@ -1,6 +1,6 @@
-use serde::{de, Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RawAxiomConfig {
     pub runtime: RuntimeToml,
     #[serde(default)]
@@ -9,7 +9,7 @@ pub struct RawAxiomConfig {
     pub negrisk: Option<NegRiskToml>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeToml {
     pub mode: RuntimeModeToml,
     #[serde(default)]
@@ -38,7 +38,19 @@ impl<'de> Deserialize<'de> for RuntimeModeToml {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+impl Serialize for RuntimeModeToml {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match self {
+            Self::Paper => "paper",
+            Self::Live => "live",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PolymarketToml {
     #[serde(default)]
     pub account: Option<PolymarketAccountToml>,
@@ -52,7 +64,7 @@ pub struct PolymarketToml {
     pub signer: Option<PolymarketSignerToml>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PolymarketAccountToml {
     pub address: String,
     #[serde(default)]
@@ -64,7 +76,7 @@ pub struct PolymarketAccountToml {
     pub passphrase: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PolymarketSourceToml {
     pub clob_host: String,
     pub data_api_host: String,
@@ -76,7 +88,7 @@ pub struct PolymarketSourceToml {
     pub metadata_refresh_interval_seconds: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PolymarketSignerToml {
     pub address: String,
     pub funder_address: String,
@@ -88,7 +100,7 @@ pub struct PolymarketSignerToml {
     pub signature: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PolymarketRelayerAuthToml {
     pub kind: RelayerAuthKindToml,
     pub api_key: String,
@@ -104,14 +116,14 @@ pub struct PolymarketRelayerAuthToml {
     pub address: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RelayerAuthKindToml {
     BuilderApiKey,
     RelayerApiKey,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SignatureTypeToml {
     Eoa,
@@ -119,7 +131,7 @@ pub enum SignatureTypeToml {
     Safe,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WalletRouteToml {
     Eoa,
@@ -127,7 +139,7 @@ pub enum WalletRouteToml {
     Safe,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NegRiskToml {
     #[serde(default)]
     pub target_source: Option<NegRiskTargetSourceToml>,
@@ -137,20 +149,20 @@ pub struct NegRiskToml {
     pub targets: Vec<NegRiskTargetToml>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NegRiskTargetSourceToml {
     pub source: NegRiskTargetSourceKindToml,
     #[serde(default)]
     pub operator_target_revision: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NegRiskTargetSourceKindToml {
     Adopted,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NegRiskRolloutToml {
     #[serde(default)]
     pub approved_families: Vec<String>,
@@ -158,14 +170,14 @@ pub struct NegRiskRolloutToml {
     pub ready_families: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NegRiskTargetToml {
     pub family_id: String,
     #[serde(default)]
     pub members: Vec<NegRiskTargetMemberToml>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct NegRiskTargetMemberToml {
     pub condition_id: String,
     pub token_id: String,

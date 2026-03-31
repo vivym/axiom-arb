@@ -10,14 +10,14 @@ pub mod repos;
 pub use instrumentation::NegRiskPersistenceInstrumentation;
 pub use models::{
     AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-    RuntimeProgressRow, StoredOrder,
+    OperatorTargetAdoptionHistoryRow, RuntimeProgressRow, StoredOrder,
 };
 pub use repos::{
     append_shadow_execution_batch, persist_discovery_snapshot, reconcile_current_family_view,
     ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
     IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
-    NegRiskFamilyRepo, OrderRepo, PendingReconcileRepo, ResolutionRepo, RuntimeProgressRepo,
-    ShadowArtifactRepo, SnapshotPublicationRepo,
+    NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo,
+    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
