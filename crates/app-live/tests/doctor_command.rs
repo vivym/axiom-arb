@@ -135,8 +135,6 @@ ready_families = []
 
 #[tokio::test]
 async fn doctor_live_mode_accepts_explicit_targets_without_runtime_progress_anchor() {
-    let database = TestDatabase::new().await;
-    database.seed_runtime_progress_without_anchor().await;
     let config = temp_live_config(
         r#"
 [runtime]
@@ -186,7 +184,7 @@ quantity = "5"
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
-        .env("DATABASE_URL", database.database_url())
+        .env_remove("DATABASE_URL")
         .output()
         .expect("app-live doctor should execute");
 
@@ -486,13 +484,6 @@ impl TestDatabase {
 
     fn database_url(&self) -> &str {
         &self.database_url
-    }
-
-    async fn seed_runtime_progress_without_anchor(&self) {
-        RuntimeProgressRepo
-            .record_progress(&self.pool, 41, 7, Some("snapshot-7"), None)
-            .await
-            .expect("runtime progress should seed without anchor");
     }
 
     async fn seed_adopted_target_with_runtime_progress(&self, operator_target_revision: &str) {

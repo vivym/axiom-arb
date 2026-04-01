@@ -5,6 +5,7 @@ use persistence::connect_pool_from_env;
 
 use crate::commands::targets::state::load_target_control_plane_state;
 use crate::startup::resolve_startup_targets;
+use crate::NegRiskLiveTargetSet;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
@@ -33,6 +34,31 @@ fn evaluate_live(
     config: &AppLiveConfigView<'_>,
     report: &mut DoctorReport,
 ) -> Result<(), DoctorFailure> {
+    if config.target_source().is_none() {
+        NegRiskLiveTargetSet::try_from(config).map_err(|error| {
+            report.push_check(
+                "Target Source",
+                DoctorCheckStatus::Fail,
+                "TargetSourceError",
+                error.to_string(),
+            );
+            DoctorFailure::new("TargetSourceError", error.to_string())
+        })?;
+        report.push_check(
+            "Target Source",
+            DoctorCheckStatus::Pass,
+            "startup target resolution succeeded",
+            "",
+        );
+        report.push_check(
+            "Target Source",
+            DoctorCheckStatus::Skip,
+            "control-plane checks not required for explicit targets",
+            "",
+        );
+        return Ok(());
+    }
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -58,7 +84,7 @@ fn evaluate_live(
         })
     })?;
 
-    let resolved_targets = runtime
+    runtime
         .block_on(resolve_startup_targets(&pool, config))
         .map_err(|error| {
             report.push_check(
@@ -124,13 +150,7 @@ fn evaluate_live(
             report.push_check("Target Source", DoctorCheckStatus::Pass, restart_needed, "");
         }
     } else {
-        let _ = resolved_targets;
-        report.push_check(
-            "Target Source",
-            DoctorCheckStatus::Skip,
-            "control-plane checks not required for explicit targets",
-            "",
-        );
+        unreachable!("explicit target branch should return early");
     }
 
     Ok(())
