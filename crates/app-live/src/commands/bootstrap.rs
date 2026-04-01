@@ -1,8 +1,11 @@
-use std::{error::Error, io};
+mod error;
+mod flow;
+mod output;
+
+use std::error::Error;
 
 use crate::cli::BootstrapArgs;
 
-pub fn execute(_args: BootstrapArgs) -> Result<(), Box<dyn Error>> {
-    eprintln!("bootstrap is not implemented yet");
-    Err(Box::new(io::Error::other("bootstrap is not implemented yet")))
+pub fn execute(args: BootstrapArgs) -> Result<(), Box<dyn Error>> {
+    flow::execute(args).map_err(|error| Box::new(error) as Box<dyn Error>)
 }
