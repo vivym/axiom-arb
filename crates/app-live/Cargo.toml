@@ -27,8 +27,10 @@ venue-polymarket = { path = "../venue-polymarket" }
 [dev-dependencies]
 chrono = "0.4"
 domain = { path = "../domain" }
+futures-util = "0.3"
 state = { path = "../state" }
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.50.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = "0.28.0"
 
 [lib]
 path = "src/lib.rs"
