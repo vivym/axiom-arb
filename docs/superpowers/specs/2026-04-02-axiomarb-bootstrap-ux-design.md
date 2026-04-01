@@ -37,6 +37,7 @@ The recommended direction is:
 - default to `config/axiom-arb.local.toml`
 - if the config does not exist, create or complete it inline
 - if smoke does not yet have an adopted startup target, prompt the operator to explicitly select and adopt one in the flow
+- if smoke does not yet have rollout readiness for the adopted families, prompt the operator to explicitly enable a smoke-only rollout posture for those families
 - reuse `doctor` for preflight and `run` for runtime startup
 - stop after preflight by default, and only start automatically with `--start`
 
@@ -91,12 +92,15 @@ This design should guarantee the following:
 - `bootstrap` defaults to `config/axiom-arb.local.toml`
 - missing local config can be created or completed in-flow
 - smoke bootstrap can inline an explicit target adoption step when no startup target anchor exists yet
+- smoke bootstrap can inline an explicit smoke rollout enablement step for the adopted family set
+- bootstrap-supported smoke startup is adopted-target-only
 - bootstrap reuses existing `init`, `targets`, `doctor`, and `run` semantics rather than inventing parallel authority
-- bootstrap writes back only long-lived config and startup target anchor changes
+- bootstrap writes back only long-lived config, startup target anchor changes, and explicitly confirmed smoke rollout changes
 - bootstrap does not persist probe output or transient auth material
 - bootstrap stops after preflight by default
 - `bootstrap --start` may continue into runtime startup only after all blocking steps pass
 - startup authority remains the existing `operator_target_revision`
+- first-phase smoke bootstrap must distinguish between preflight-only smoke and shadow-work-ready smoke
 
 ## 4. Non-Goals
 
@@ -110,6 +114,7 @@ This design does not define:
 - new runtime/posture semantics
 - a parallel control-plane service
 - persistence of temporary probe output inside the config file
+- first-class bootstrap support for legacy explicit-target startup
 
 ## 5. Architecture Decision
 
@@ -123,6 +128,7 @@ Hard rules:
 - `bootstrap` may guide and sequence existing workflows
 - `bootstrap` must not introduce a second startup authority
 - `bootstrap` must not bypass explicit adoption confirmation
+- `bootstrap` must not silently leave smoke in a preflight-only state and then imply that `--start` will exercise shadow work
 
 ### 5.2 Why Not Just Keep Improving `init -> doctor -> run`
 
@@ -155,6 +161,24 @@ That is why the first phase should:
 - require `--start` for automatic runtime startup
 
 This keeps the path close to one-click without making the first version unsafe.
+
+### 5.4 Why First-Phase Bootstrap Should Not Productize Explicit Targets
+
+The repository still supports explicit-target startup at lower levels today, but that path is now legacy from a UX perspective.
+
+For bootstrap-supported smoke startup, the correct long-term authority is:
+
+- adopted target source
+- explicit `operator_target_revision`
+
+Not:
+
+- hand-authored `negrisk.targets`
+
+Hard rule:
+
+- `bootstrap` should not become a polished high-level entry for explicit-target startup
+- if bootstrap encounters a smoke config that is still using explicit targets, it should stop and direct the operator toward the adopted-target workflow or the lower-level legacy commands
 
 ## 6. Public UX Model
 
@@ -239,15 +263,47 @@ Expected flow:
 4. check whether startup-scoped `operator_target_revision` already exists in config
 5. if it does not exist, list adoptable revisions and require an explicit operator selection
 6. execute adoption through the existing adoption path
-7. run `doctor`
-8. stop with a ready summary, or continue into `run` if `--start` is set
+7. verify that the resulting smoke config is using adopted target source rather than explicit targets
+8. inspect whether rollout readiness already covers the adopted family set
+9. if rollout readiness does not yet cover the adopted family set:
+  - offer a preflight-only stop path
+  - or offer an explicit smoke-only rollout enablement step for those families
+10. run `doctor`
+11. stop with a ready summary, or continue into `run` if `--start` is set
 
 Hard rule:
 
 - bootstrap may inline an adoption interaction
 - bootstrap must still require explicit operator confirmation
+- bootstrap may inline a smoke rollout enablement interaction
+- bootstrap must still require explicit operator confirmation for rollout changes
 
-### 7.3 Default Stop Point
+### 7.3 Smoke Rollout Readiness
+
+First-phase smoke bootstrap should not silently populate:
+
+- `approved_families`
+- `ready_families`
+
+But bootstrap should still be allowed to help the operator complete that decision.
+
+As a result, smoke bootstrap must clearly distinguish two success states:
+
+- `preflight-ready smoke startup`
+- `shadow-work-ready smoke startup`
+
+If rollout lists remain empty, bootstrap may still:
+
+- pass config creation
+- pass target adoption
+- pass doctor
+- stop in a preflight-only ready state
+
+But it must tell the operator that the resulting run would remain a preflight-only smoke with zero `neg-risk` shadow rows.
+
+If the operator explicitly enables smoke rollout readiness for the adopted family set, bootstrap may treat the flow as `shadow-work-ready` and allow `--start` to continue.
+
+### 7.4 Default Stop Point
 
 By default, bootstrap should stop after readiness is established.
 
@@ -262,6 +318,8 @@ Only `--start` should continue into:
 
 - `app-live run`
 
+For smoke, `--start` should only be allowed from the `shadow-work-ready smoke startup` branch.
+
 ## 8. Internal Orchestration Model
 
 ### 8.1 State Machine
@@ -272,6 +330,7 @@ The orchestration layer should behave like a small state machine:
 - `SelectMode`
 - `EnsureLongLivedConfig`
 - `EnsureTargetAnchor`
+- `EnsureSmokeRolloutReady`
 - `RunPreflight`
 - `ReadyToStart`
 - `RunRuntime`
@@ -279,6 +338,7 @@ The orchestration layer should behave like a small state machine:
 Not every mode needs every state:
 
 - `paper` skips `EnsureTargetAnchor`
+- `paper` skips `EnsureSmokeRolloutReady`
 - `RunRuntime` is entered only when `--start` is present
 
 ### 8.2 Reuse Of Existing Command Semantics
@@ -310,6 +370,15 @@ It may not:
 - silently choose the latest adoptable revision
 - bypass provenance checks
 - derive startup targets from runtime active state
+- elevate legacy explicit targets into a first-class bootstrap authority
+
+The rollout posture remains a separate config surface.
+
+For first-phase smoke bootstrap, rollout may only be changed by:
+
+- deriving family ids from the already adopted startup target
+- showing those family ids to the operator
+- requiring explicit confirmation before writing rollout lists
 
 ## 9. Persistence Boundaries
 
@@ -324,6 +393,7 @@ It may not:
 - source configuration
 - existing rollout configuration when preserved
 - adopted `operator_target_revision`
+- explicitly confirmed smoke rollout readiness derived from the adopted family set
 
 ### 9.2 Values That Must Not Be Persisted
 
@@ -348,12 +418,28 @@ When smoke bootstrap must obtain a target anchor, it should:
 
 It should not directly mutate config with a guessed revision.
 
+### 9.4 Smoke Rollout Writes
+
+When smoke bootstrap offers rollout enablement, it should:
+
+1. derive the family ids from the already adopted startup target
+2. show the operator which families would be written
+3. require explicit confirmation
+4. write those family ids into both:
+  - `approved_families`
+  - `ready_families`
+
+This write is intentionally limited to smoke bootstrap readiness.
+
+It does not claim production live rollout readiness.
+
 ## 10. Error Handling
 
 Bootstrap should classify failures by stage:
 
 - `ConfigSetupError`
 - `TargetAdoptionError`
+- `SmokeRolloutError`
 - `PreflightError`
 - `StartError`
 
@@ -363,13 +449,14 @@ Examples:
 
 - `ConfigSetupError`: rerun `bootstrap` or `init --update`
 - `TargetAdoptionError`: inspect `targets candidates` and retry
+- `SmokeRolloutError`: confirm or adjust rollout readiness, then retry bootstrap
 - `PreflightError`: run `doctor --config ...` for full sectioned output
 - `StartError`: inspect runtime logs from `run`
 
 Hard rule:
 
 - bootstrap must fail closed
-- `--start` never overrides a failed adoption or failed preflight step
+- `--start` never overrides a failed adoption, failed rollout-readiness step, or failed preflight step
 
 ## 11. Output Model
 
@@ -378,7 +465,9 @@ Successful bootstrap output should summarize:
 - config path
 - chosen mode
 - whether a startup target anchor exists
+- whether startup is using adopted target source
 - whether preflight passed
+- whether rollout readiness is present or still empty
 - whether runtime was started
 - the next command, if runtime was not started
 
@@ -386,6 +475,7 @@ For smoke, output must explicitly state:
 
 - this is `real-user shadow smoke`
 - startup will request a shadow-only `neg-risk` path
+- rollout readiness may still be empty
 - this is not production live submit readiness
 
 Bootstrap should still point expert users back to lower-level commands when useful:
@@ -417,7 +507,13 @@ Tests must verify:
 - missing target anchor triggers inline adopt workflow
 - explicit operator choice is required before adoption
 - successful adoption writes `operator_target_revision`
+- missing rollout readiness triggers explicit smoke rollout choice
+- explicit operator choice is required before rollout writes
+- successful smoke rollout enablement writes adopted family ids into both rollout lists
+- explicit-target smoke configs are rejected from the high-level bootstrap path with migration guidance
 - failed preflight blocks startup even with `--start`
+- empty rollout state is surfaced as a preflight-only smoke outcome rather than misreported as shadow-work-ready
+- `--start` does not proceed while smoke remains in a preflight-only rollout state
 
 ### 12.3 Orchestration Boundaries
 
@@ -446,10 +542,13 @@ This project is complete when:
 - it supports `paper` and `real-user shadow smoke`
 - it can create or complete local config in-flow
 - smoke bootstrap can inline explicit target adoption when no startup target anchor exists
+- smoke bootstrap can either stop in a clearly preflight-only state or explicitly enable smoke rollout readiness for adopted families
+- smoke bootstrap only supports adopted target source as its high-level startup contract
 - bootstrap reuses existing startup authority and lower-level command semantics
 - bootstrap stops after successful readiness by default
-- `bootstrap --start` enters runtime only after readiness passes
+- `bootstrap --start` enters runtime only after readiness passes, including smoke rollout readiness when shadow work is expected
 - no transient probe or derived auth material is written into config
+- rollout-empty smoke runs are reported as preflight-ready rather than shadow-work-ready
 - the operator can use either:
   - `bootstrap`
   - `bootstrap --start`
@@ -464,6 +563,7 @@ The next UX step should add `app-live bootstrap` as a high-level orchestration c
 
 - config creation or completion
 - explicit target adoption when needed
+- explicit smoke rollout enablement when needed
 - sectioned preflight
 - optional startup
 
