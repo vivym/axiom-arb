@@ -41,7 +41,23 @@ cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
 
-`doctor` must pass before `run`. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode.
+`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode.
+
+Interpret the ending of the `doctor` report like this:
+
+- `Overall: PASS`
+  - the config is ready for `run`
+- `Overall: PASS WITH SKIPS`
+  - acceptable only when the skipped checks match the current mode or intentionally unresolved rollout state
+- `Overall: FAIL`
+  - follow the printed next action first, then rerun `doctor`
+
+When `doctor` prints next actions for target setup, the normal follow-up is:
+
+```bash
+cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
+```
 
 If the wrong target revision was adopted for the smoke, revert it with:
 

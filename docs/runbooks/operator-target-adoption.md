@@ -112,8 +112,8 @@ Adoption is startup-scoped. It does not change the target revision inside a runn
 After a successful adopt:
 
 1. re-run `targets status`
-2. if `restart_needed = true`, perform a controlled restart
-3. run `doctor`
+2. run `doctor`
+3. if `restart_needed = true`, perform a controlled restart
 4. start `run`
 
 ```bash
@@ -121,6 +121,8 @@ cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
+
+`doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
 
 After the daemon comes back up, confirm the active revision caught up:
 
@@ -169,6 +171,15 @@ cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
+
+Interpret the `doctor` result before `run`:
+
+- `PASS`
+  - safe to continue to `run`
+- `PASS WITH SKIPS`
+  - verify the skipped checks match the current mode
+- `FAIL`
+  - follow the printed next action, then rerun `doctor`
 
 For rollback:
 
