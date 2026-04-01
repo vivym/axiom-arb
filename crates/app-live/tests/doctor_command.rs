@@ -26,6 +26,19 @@ fn doctor_paper_mode_marks_live_checks_as_skip() {
         combined.contains("[SKIP] REST authentication not required in paper mode"),
         "{combined}"
     );
+}
+
+#[test]
+fn doctor_paper_mode_includes_sectioned_summary() {
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config_fixture("fixtures/app-live-paper.toml"))
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
     assert!(combined.contains("Config: PASS"), "{combined}");
     assert!(
         combined.contains("Connectivity: PASS WITH SKIPS"),
