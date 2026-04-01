@@ -264,7 +264,7 @@ fn doctor_fails_when_runtime_progress_row_lacks_operator_target_revision_anchor(
 
     let text = combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("TargetStateError"), "{text}");
+    assert!(text.contains("TargetSourceError"), "{text}");
     assert!(
         text.contains("runtime progress row exists without operator_target_revision anchor"),
         "{text}"
@@ -275,7 +275,7 @@ fn doctor_fails_when_runtime_progress_row_lacks_operator_target_revision_anchor(
 }
 
 #[test]
-fn doctor_reports_restart_required_for_explicit_targets_when_runtime_progress_anchor_differs() {
+fn doctor_reports_explicit_targets_with_local_resolution_and_control_plane_skip() {
     let database = TestDatabase::new();
     database.seed_targets_catalog_with_unprovenanced_active_revision();
     let config = temp_config(EXPLICIT_TARGET_LIVE_CONFIG);
@@ -290,15 +290,16 @@ fn doctor_reports_restart_required_for_explicit_targets_when_runtime_progress_an
 
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
-    assert!(text.contains("[OK] target source resolved"), "{text}");
     assert!(
-        text.contains("[OK] restart required for configured target revision to become active"),
+        text.contains("[OK] startup target resolution succeeded"),
         "{text}"
     );
     assert!(
         text.contains("[SKIP] control-plane checks not required for explicit targets"),
         "{text}"
     );
+    assert!(!text.contains("restart required"), "{text}");
+    assert!(!text.contains("runtime progress"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
