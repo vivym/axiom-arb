@@ -1,8 +1,7 @@
 use std::{
     fs,
-    io::Write,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Command,
 };
 
 #[test]
@@ -25,24 +24,13 @@ fn bootstrap_defaults_to_local_config_for_paper() {
     let temp = tempfile::tempdir().expect("temp dir");
     let config_path = temp.path().join("config").join("axiom-arb.local.toml");
 
-    let mut child = Command::new(app_live_binary())
+    let output = Command::new(app_live_binary())
         .arg("bootstrap")
         .current_dir(temp.path())
         .env("DATABASE_URL", default_test_database_url())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("app-live bootstrap should spawn");
+        .output()
+        .expect("app-live bootstrap should execute");
 
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(b"paper\n")
-        .expect("wizard answers should write");
-
-    let output = child.wait_with_output().expect("output");
     assert!(output.status.success(), "{}", combined(&output));
     assert!(
         config_path.exists(),
@@ -52,19 +40,27 @@ fn bootstrap_defaults_to_local_config_for_paper() {
     assert!(
         fs::read_to_string(&config_path)
             .expect("generated config should exist")
-            .contains("mode = \"paper\""),
-        "expected paper config at {}",
-        config_path.display()
+            == "[runtime]\nmode = \"paper\"\n",
+        "expected paper-only config at {}",
+        config_path.display(),
+    );
+    let combined = combined(&output);
+    assert!(combined.contains("Paper bootstrap ready"), "{}", combined);
+    assert!(combined.contains("Runtime not started"), "{}", combined);
+    assert!(
+        combined.contains(&format!("app-live run --config {}", config_path.display())),
+        "{}",
+        combined
     );
     assert!(
-        combined(&output).contains("Paper bootstrap ready"),
-        "expected ready summary, got:\n{}",
-        combined(&output)
+        !combined.contains("app-live -- run --config"),
+        "{}",
+        combined
     );
     assert!(
-        combined(&output).contains("Runtime not started"),
-        "expected preflight-only summary, got:\n{}",
-        combined(&output)
+        !combined.contains("Choose an init mode:"),
+        "bootstrap should stay paper-only, got:\n{}",
+        combined
     );
 }
 
@@ -72,31 +68,92 @@ fn bootstrap_defaults_to_local_config_for_paper() {
 fn bootstrap_paper_start_runs_runtime_after_preflight() {
     let temp = tempfile::tempdir().expect("temp dir");
 
-    let mut child = Command::new(app_live_binary())
+    let output = Command::new(app_live_binary())
         .arg("bootstrap")
         .arg("--start")
         .current_dir(temp.path())
         .env("DATABASE_URL", default_test_database_url())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("app-live bootstrap should spawn");
+        .output()
+        .expect("app-live bootstrap should execute");
 
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(b"paper\n")
-        .expect("wizard answers should write");
-
-    let output = child.wait_with_output().expect("output");
     assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    let doctor_index = combined
+        .find("Overall: PASS WITH SKIPS")
+        .expect("doctor preflight summary should be present");
+    let start_index = combined
+        .find("Paper bootstrap ready. Starting runtime with")
+        .expect("bootstrap should announce runtime startup");
+    let runtime_index = combined
+        .find("app_mode=paper")
+        .expect("paper runtime output should be present");
     assert!(
-        combined(&output).contains("app_mode=paper"),
-        "expected paper runtime output, got:\n{}",
-        combined(&output)
+        doctor_index < start_index && start_index < runtime_index,
+        "expected doctor preflight before runtime startup, got:\n{}",
+        combined
     );
+}
+
+#[test]
+fn bootstrap_rejects_live_config_with_visible_paper_only_error() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x3333333333333333333333333333333333333333"
+
+[negrisk.target_source]
+source = "adopted"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .expect("seed live config");
+
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(
+        combined.contains("bootstrap currently supports only paper configs for this flow"),
+        "{}",
+        combined
+    );
+    assert!(combined.contains(&temp.path().display().to_string()), "{}", combined);
 }
 
 fn app_live_binary() -> PathBuf {
