@@ -9,10 +9,6 @@ pub enum BootstrapError {
         config_path: PathBuf,
         mode: &'static str,
     },
-    MissingConfigAfterInit {
-        config_path: PathBuf,
-    },
-    Init(Box<dyn Error>),
     Doctor(Box<dyn Error>),
     Run(Box<dyn Error>),
     Io(std::io::Error),
@@ -28,12 +24,7 @@ impl fmt::Display for BootstrapError {
                 "bootstrap currently supports only paper configs for this flow; {} is configured for {mode}",
                 config_path.display()
             ),
-            Self::MissingConfigAfterInit { config_path } => write!(
-                f,
-                "bootstrap expected init to create {}, but the file is still missing",
-                config_path.display()
-            ),
-            Self::Init(error) | Self::Doctor(error) | Self::Run(error) => error.fmt(f),
+            Self::Doctor(error) | Self::Run(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
             Self::Schema(error) => error.fmt(f),
             Self::Config(error) => error.fmt(f),

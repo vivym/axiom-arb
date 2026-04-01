@@ -46,14 +46,11 @@ fn bootstrap_defaults_to_local_config_for_paper() {
     );
     let combined = combined(&output);
     assert!(combined.contains("Paper bootstrap ready"), "{}", combined);
-    assert!(combined.contains("Runtime not started"), "{}", combined);
+    let expected_summary =
+        "Runtime not started. Re-run with --start or run app-live run --config config/axiom-arb.local.toml";
+    assert!(combined.contains(expected_summary), "{}", combined);
     assert!(
-        combined.contains(&format!("app-live run --config {}", config_path.display())),
-        "{}",
-        combined
-    );
-    assert!(
-        !combined.contains("app-live -- run --config"),
+        combined.contains("app-live run --config config/axiom-arb.local.toml"),
         "{}",
         combined
     );

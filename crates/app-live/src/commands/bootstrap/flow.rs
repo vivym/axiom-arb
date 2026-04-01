@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::{fs, path::{Path, PathBuf}};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 
-use crate::cli::{BootstrapArgs, DoctorArgs, InitArgs, RunArgs};
-use crate::commands::{doctor, init, run};
+use crate::cli::{BootstrapArgs, DoctorArgs, RunArgs};
+use crate::commands::{doctor, run};
 
 use super::{error::BootstrapError, output};
 
 const DEFAULT_CONFIG_PATH: &str = "config/axiom-arb.local.toml";
+const PAPER_CONFIG: &str = "[runtime]\nmode = \"paper\"\n";
 
 pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     let config_path = args
@@ -15,14 +16,7 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
 
     if !config_path.exists() {
-        init::execute(InitArgs {
-            config: config_path.clone(),
-        })
-        .map_err(BootstrapError::Init)?;
-    }
-
-    if !config_path.exists() {
-        return Err(BootstrapError::MissingConfigAfterInit { config_path });
+        write_paper_config(&config_path)?;
     }
 
     ensure_paper_mode(&config_path)?;
@@ -42,6 +36,14 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
         output::print_ready_summary(&config_path);
     }
 
+    Ok(())
+}
+
+fn write_paper_config(config_path: &Path) -> Result<(), BootstrapError> {
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(config_path, PAPER_CONFIG)?;
     Ok(())
 }
 
