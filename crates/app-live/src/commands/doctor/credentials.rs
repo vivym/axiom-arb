@@ -1,6 +1,6 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
-use crate::{load_real_user_shadow_smoke_config, LocalSignerConfig};
+use crate::LocalSignerConfig;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
@@ -47,25 +47,6 @@ fn evaluate_live(
             "Credentials",
             DoctorCheckStatus::Pass,
             "long-lived account and relayer auth shapes validated",
-            "",
-        );
-    }
-
-    if config.real_user_shadow_smoke() {
-        checked_anything = true;
-        load_real_user_shadow_smoke_config(config).map_err(|error| {
-            report.push_check(
-                "Credentials",
-                DoctorCheckStatus::Fail,
-                "CredentialError",
-                error.to_string(),
-            );
-            DoctorFailure::new("CredentialError", error.to_string())
-        })?;
-        report.push_check(
-            "Credentials",
-            DoctorCheckStatus::Pass,
-            "real-user shadow smoke startup config is valid",
             "",
         );
     }

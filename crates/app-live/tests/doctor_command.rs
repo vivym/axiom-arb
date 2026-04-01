@@ -193,6 +193,10 @@ quantity = "5"
     assert!(combined.contains("[OK] config parsed"), "{combined}");
     assert!(combined.contains("Target Source: PASS"), "{combined}");
     assert!(
+        combined.contains("Runtime Safety: PASS WITH SKIPS"),
+        "{combined}"
+    );
+    assert!(
         combined.contains("[OK] startup target resolution succeeded"),
         "{combined}"
     );
@@ -258,6 +262,10 @@ operator_target_revision = "targets-rev-9"
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
     assert!(combined.contains("Target Source: PASS"), "{combined}");
+    assert!(
+        combined.contains("Runtime Safety: PASS WITH SKIPS"),
+        "{combined}"
+    );
     assert!(
         combined.contains("configured operator target revision"),
         "{combined}"
@@ -398,8 +406,9 @@ quantity = "5"
 
     let combined = combined(&output);
     assert!(!output.status.success(), "{combined}");
-    assert!(combined.contains("CredentialError"), "{combined}");
-    assert!(combined.contains("Credentials: FAIL"), "{combined}");
+    assert!(combined.contains("RuntimeSafetyError"), "{combined}");
+    assert!(combined.contains("Runtime Safety: FAIL"), "{combined}");
+    assert!(combined.contains("Credentials: PASS"), "{combined}");
     assert!(combined.contains("Overall: FAIL"), "{combined}");
 }
 

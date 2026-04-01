@@ -1,5 +1,7 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
+use crate::load_real_user_shadow_smoke_config;
+
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
 
@@ -18,6 +20,15 @@ pub fn evaluate(
         }
         RuntimeModeToml::Live => {
             if config.real_user_shadow_smoke() {
+                load_real_user_shadow_smoke_config(config).map_err(|error| {
+                    report.push_check(
+                        "Runtime Safety",
+                        DoctorCheckStatus::Fail,
+                        "RuntimeSafetyError",
+                        error.to_string(),
+                    );
+                    DoctorFailure::new("RuntimeSafetyError", error.to_string())
+                })?;
                 report.push_check(
                     "Runtime Safety",
                     DoctorCheckStatus::Pass,

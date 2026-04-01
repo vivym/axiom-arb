@@ -9,10 +9,12 @@ use crate::NegRiskLiveTargetSet;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
+use super::DoctorLiveContext;
 
 pub fn evaluate(
     config_path: &Path,
     config: &AppLiveConfigView<'_>,
+    live_context: Option<&DoctorLiveContext>,
     report: &mut DoctorReport,
 ) -> Result<(), DoctorFailure> {
     match config.mode() {
@@ -25,13 +27,14 @@ pub fn evaluate(
             );
             Ok(())
         }
-        RuntimeModeToml::Live => evaluate_live(config_path, config, report),
+        RuntimeModeToml::Live => evaluate_live(config_path, config, live_context, report),
     }
 }
 
 fn evaluate_live(
     config_path: &Path,
     config: &AppLiveConfigView<'_>,
+    live_context: Option<&DoctorLiveContext>,
     report: &mut DoctorReport,
 ) -> Result<(), DoctorFailure> {
     if config.target_source().is_none() {
@@ -59,20 +62,9 @@ fn evaluate_live(
         return Ok(());
     }
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| {
-            report.push_check(
-                "Target Source",
-                DoctorCheckStatus::Fail,
-                "TargetSourceError",
-                error.to_string(),
-            );
-            DoctorFailure::new("TargetSourceError", error.to_string())
-        })?;
+    let live_context = live_context.expect("live context should exist for live target source");
 
-    let pool = runtime.block_on(async {
+    let pool = live_context.runtime.block_on(async {
         connect_pool_from_env().await.map_err(|error| {
             report.push_check(
                 "Target Source",
@@ -84,7 +76,8 @@ fn evaluate_live(
         })
     })?;
 
-    runtime
+    live_context
+        .runtime
         .block_on(resolve_startup_targets(&pool, config))
         .map_err(|error| {
             report.push_check(
@@ -105,7 +98,8 @@ fn evaluate_live(
 
     if let Some(target_source) = config.target_source() {
         if target_source.is_adopted() {
-            let target_state = runtime
+            let target_state = live_context
+                .runtime
                 .block_on(load_target_control_plane_state(&pool, config_path))
                 .map_err(|error| {
                     report.push_check(

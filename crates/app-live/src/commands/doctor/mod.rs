@@ -11,6 +11,29 @@ use crate::cli::DoctorArgs;
 
 use self::report::{DoctorCheckStatus, DoctorReport};
 
+pub(crate) struct DoctorLiveContext {
+    pub(crate) runtime: tokio::runtime::Runtime,
+}
+
+impl DoctorLiveContext {
+    fn new(report: &mut DoctorReport) -> Result<Self, DoctorFailure> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                report.push_check(
+                    "Target Source",
+                    DoctorCheckStatus::Fail,
+                    "TargetSourceError",
+                    error.to_string(),
+                );
+                DoctorFailure::new("TargetSourceError", error.to_string())
+            })?;
+
+        Ok(Self { runtime })
+    }
+}
+
 #[derive(Debug)]
 struct DoctorFailure {
     category: &'static str,
@@ -73,7 +96,11 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
     report.push_check("Config", DoctorCheckStatus::Pass, "config parsed", "");
 
     credentials::evaluate(&config, report)?;
-    target_source::evaluate(&args.config, &config, report)?;
+    let live_context = match config.mode() {
+        RuntimeModeToml::Live => Some(DoctorLiveContext::new(report)?),
+        RuntimeModeToml::Paper => None,
+    };
+    target_source::evaluate(&args.config, &config, live_context.as_ref(), report)?;
     runtime_safety::evaluate(&config, report)?;
     let connectivity_label = match config.mode() {
         RuntimeModeToml::Paper => "REST authentication not required in paper mode",
