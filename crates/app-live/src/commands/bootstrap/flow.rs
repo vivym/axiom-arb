@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 

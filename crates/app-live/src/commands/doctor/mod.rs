@@ -116,15 +116,15 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
 }
 
 fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+
     if report.section_failed("Target Source") {
         return vec![
             format!(
-                "run app-live -- targets candidates --config {}",
-                config_path.display()
+                "app-live targets candidates --config {quoted_config_path}"
             ),
             format!(
-                "run app-live -- targets adopt --config {} --adoptable-revision <revision>",
-                config_path.display()
+                "app-live targets adopt --config {quoted_config_path} --adoptable-revision <revision>"
             ),
         ];
     }
@@ -137,8 +137,10 @@ fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
         return vec!["fix the reported issue and rerun doctor".to_owned()];
     }
 
-    vec![format!(
-        "run app-live -- run --config {}",
-        config_path.display()
-    )]
+    vec![format!("app-live run --config {quoted_config_path}")]
+}
+
+fn shell_quote(value: String) -> String {
+    let escaped = value.replace('\'', r"'\''");
+    format!("'{escaped}'")
 }

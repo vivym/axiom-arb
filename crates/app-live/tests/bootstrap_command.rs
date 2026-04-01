@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::PathBuf,
-    process::Command,
-};
+use std::{fs, path::PathBuf, process::Command};
 
 #[test]
 fn bootstrap_help_lists_command() {
@@ -38,8 +34,7 @@ fn bootstrap_defaults_to_local_config_for_paper() {
         config_path.display()
     );
     assert!(
-        fs::read_to_string(&config_path)
-            .expect("generated config should exist")
+        fs::read_to_string(&config_path).expect("generated config should exist")
             == "[runtime]\nmode = \"paper\"\n",
         "expected paper-only config at {}",
         config_path.display(),
@@ -47,16 +42,54 @@ fn bootstrap_defaults_to_local_config_for_paper() {
     let combined = combined(&output);
     assert!(combined.contains("Paper bootstrap ready"), "{}", combined);
     let expected_summary =
-        "Runtime not started. Re-run with --start or run app-live run --config config/axiom-arb.local.toml";
+        "Runtime not started. Re-run with --start or use: app-live run --config 'config/axiom-arb.local.toml'";
     assert!(combined.contains(expected_summary), "{}", combined);
     assert!(
-        combined.contains("app-live run --config config/axiom-arb.local.toml"),
+        combined.contains("Next: app-live run --config 'config/axiom-arb.local.toml'"),
+        "{}",
+        combined
+    );
+    assert!(
+        !combined.contains("app-live -- run --config"),
         "{}",
         combined
     );
     assert!(
         !combined.contains("Choose an init mode:"),
         "bootstrap should stay paper-only, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn bootstrap_quotes_config_path_with_spaces_in_follow_up_commands() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp.path().join("config with spaces");
+    let config_path = config_dir.join("paper config.toml");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(&config_path, "[runtime]\nmode = \"paper\"\n").expect("seed paper config");
+
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    let quoted_path = format!("'{}'", config_path.display());
+    assert!(
+        combined.contains(&format!("Next: app-live run --config {quoted_path}")),
+        "{}",
+        combined
+    );
+    assert!(
+        combined.contains(&format!(
+            "Runtime not started. Re-run with --start or use: app-live run --config {quoted_path}"
+        )),
+        "{}",
         combined
     );
 }
@@ -150,7 +183,11 @@ ready_families = []
         "{}",
         combined
     );
-    assert!(combined.contains(&temp.path().display().to_string()), "{}", combined);
+    assert!(
+        combined.contains(&temp.path().display().to_string()),
+        "{}",
+        combined
+    );
 }
 
 fn app_live_binary() -> PathBuf {
