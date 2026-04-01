@@ -1,10 +1,14 @@
-use std::{
-    error::Error,
-    fmt::{self, Write as _},
-    fs,
-};
+mod prompt;
+mod render;
+mod summary;
+mod wizard;
 
-use crate::cli::{InitArgs, InitMode};
+use std::{error::Error, fmt, fs};
+
+use config_schema::{load_raw_config_from_str, ValidatedConfig};
+
+use crate::cli::InitArgs;
+use prompt::TerminalPrompt;
 
 #[derive(Debug)]
 pub struct InitError {
@@ -34,99 +38,46 @@ impl From<std::io::Error> for InitError {
 }
 
 pub fn execute(args: InitArgs) -> Result<(), Box<dyn Error>> {
-    let config = render_config(&args);
+    let result = execute_inner(&args);
+    if let Err(error) = &result {
+        eprintln!("{error}");
+    }
+    result.map_err(|error| Box::new(error) as Box<dyn Error>)
+}
+
+fn execute_inner(args: &InitArgs) -> Result<(), InitError> {
+    let mut prompt = TerminalPrompt::new();
+    execute_with_prompt(&mut prompt, args)
+}
+
+fn execute_with_prompt<P: prompt::PromptIo>(
+    prompt: &mut P,
+    args: &InitArgs,
+) -> Result<(), InitError> {
+    let wizard = wizard::run(prompt, &args.config)?;
+    validate_rendered_config(&wizard.rendered_config)?;
+
     if let Some(parent) = args.config.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&args.config, config)?;
+    fs::write(&args.config, wizard.rendered_config)?;
+
+    for section in &wizard.summary.sections {
+        prompt.println(section.title)?;
+        for line in &section.lines {
+            prompt.println(line)?;
+        }
+    }
+
     Ok(())
 }
 
-fn render_config(args: &InitArgs) -> String {
-    let mode = match args.mode {
-        InitMode::Paper => "paper",
-        InitMode::Live => "live",
-    };
-
-    match args.mode {
-        InitMode::Paper => render_paper_config(mode),
-        InitMode::Live => render_live_config(mode, args.real_user_shadow_smoke),
-    }
-}
-
-fn render_paper_config(mode: &str) -> String {
-    let mut output = String::new();
-    writeln!(&mut output, "[runtime]").unwrap();
-    writeln!(&mut output, "mode = \"{mode}\"").unwrap();
-    output
-}
-
-fn render_live_config(mode: &str, real_user_shadow_smoke: bool) -> String {
-    let mut output = String::new();
-    writeln!(&mut output, "[runtime]").unwrap();
-    writeln!(&mut output, "mode = \"{mode}\"").unwrap();
-    writeln!(
-        &mut output,
-        "real_user_shadow_smoke = {}",
-        if real_user_shadow_smoke {
-            "true"
-        } else {
-            "false"
-        }
-    )
-    .unwrap();
-    writeln!(&mut output).unwrap();
-    writeln!(&mut output, "[polymarket.source]").unwrap();
-    writeln!(&mut output, "clob_host = \"https://clob.polymarket.com\"").unwrap();
-    writeln!(
-        &mut output,
-        "data_api_host = \"https://data-api.polymarket.com\""
-    )
-    .unwrap();
-    writeln!(
-        &mut output,
-        "relayer_host = \"https://relayer-v2.polymarket.com\""
-    )
-    .unwrap();
-    writeln!(
-        &mut output,
-        "market_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\""
-    )
-    .unwrap();
-    writeln!(
-        &mut output,
-        "user_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\""
-    )
-    .unwrap();
-    writeln!(&mut output, "heartbeat_interval_seconds = 15").unwrap();
-    writeln!(&mut output, "relayer_poll_interval_seconds = 5").unwrap();
-    writeln!(&mut output, "metadata_refresh_interval_seconds = 60").unwrap();
-    writeln!(&mut output).unwrap();
-    writeln!(&mut output, "[polymarket.account]").unwrap();
-    writeln!(&mut output, "address = \"0xYOUR_ADDRESS\"").unwrap();
-    writeln!(&mut output, "funder_address = \"0xYOUR_FUNDER_ADDRESS\"").unwrap();
-    writeln!(&mut output, "signature_type = \"eoa\"").unwrap();
-    writeln!(&mut output, "wallet_route = \"eoa\"").unwrap();
-    writeln!(&mut output, "api_key = \"YOUR_API_KEY\"").unwrap();
-    writeln!(&mut output, "secret = \"YOUR_API_SECRET\"").unwrap();
-    writeln!(&mut output, "passphrase = \"YOUR_PASSPHRASE\"").unwrap();
-    writeln!(&mut output).unwrap();
-    writeln!(&mut output, "[polymarket.relayer_auth]").unwrap();
-    writeln!(&mut output, "kind = \"builder_api_key\"").unwrap();
-    writeln!(&mut output, "api_key = \"YOUR_BUILDER_API_KEY\"").unwrap();
-    writeln!(&mut output, "secret = \"YOUR_BUILDER_SECRET\"").unwrap();
-    writeln!(&mut output, "passphrase = \"YOUR_BUILDER_PASSPHRASE\"").unwrap();
-    writeln!(&mut output).unwrap();
-    writeln!(&mut output, "[negrisk.target_source]").unwrap();
-    writeln!(&mut output, "source = \"adopted\"").unwrap();
-    writeln!(
-        &mut output,
-        "operator_target_revision = \"YOUR_OPERATOR_TARGET_REVISION\""
-    )
-    .unwrap();
-    writeln!(&mut output).unwrap();
-    writeln!(&mut output, "[negrisk.rollout]").unwrap();
-    writeln!(&mut output, "approved_families = [\"YOUR_FAMILY_ID\"]").unwrap();
-    writeln!(&mut output, "ready_families = [\"YOUR_FAMILY_ID\"]").unwrap();
-    output
+fn validate_rendered_config(rendered_config: &str) -> Result<(), InitError> {
+    let raw = load_raw_config_from_str(rendered_config)
+        .map_err(|error| InitError::new(error.to_string()))?;
+    let validated = ValidatedConfig::new(raw).map_err(|error| InitError::new(error.to_string()))?;
+    validated
+        .for_app_live()
+        .map_err(|error| InitError::new(error.to_string()))?;
+    Ok(())
 }

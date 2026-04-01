@@ -4,8 +4,10 @@ mod validate;
 
 pub use error::ConfigSchemaError;
 pub use raw::{
-    NegRiskTargetSourceKindToml, NegRiskTargetSourceToml, PolymarketAccountToml, RawAxiomConfig,
-    RuntimeModeToml,
+    NegRiskRolloutToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml, NegRiskToml,
+    PolymarketAccountToml, PolymarketRelayerAuthToml, PolymarketSourceToml, PolymarketToml,
+    RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, RuntimeToml, SignatureTypeToml,
+    WalletRouteToml,
 };
 pub use validate::{
     AppLiveConfigView, AppLiveNegRiskRolloutView, AppLiveNegRiskTargetMemberView,
