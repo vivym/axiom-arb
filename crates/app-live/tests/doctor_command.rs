@@ -52,7 +52,10 @@ fn doctor_paper_mode_includes_sectioned_summary() {
         combined.contains("Credentials: PASS WITH SKIPS"),
         "{combined}"
     );
-    assert!(combined.contains("Connectivity: PASS"), "{combined}");
+    assert!(
+        combined.contains("Connectivity: PASS WITH SKIPS"),
+        "{combined}"
+    );
     assert!(combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
 }
 
@@ -73,6 +76,7 @@ fn doctor_paper_mode_fails_without_database_url() {
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Connectivity", "FAIL");
     assert_section_summary(&combined, "Overall", "FAIL");
+    assert!(combined.contains("ConnectivityError"), "{combined}");
 }
 
 #[test]
@@ -208,6 +212,7 @@ quantity = "5"
 
     let combined = combined(&output);
     assert!(!output.status.success(), "{combined}");
+    assert_section_summary(&combined, "Credentials", "PASS");
     assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Connectivity", "FAIL");
@@ -282,7 +287,7 @@ quantity = "5"
     let combined = combined(&output);
     assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Connectivity", "PASS");
+    assert_section_summary(&combined, "Connectivity", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
 }
 

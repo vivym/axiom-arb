@@ -116,6 +116,12 @@ fn evaluate_connectivity(report: &mut DoctorReport) -> Result<(), DoctorFailure>
                 "DATABASE_URL is set",
                 "",
             );
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Skip,
+                "real REST/ws/heartbeat/relayer probes not implemented yet",
+                "",
+            );
             Ok(())
         }
         Err(_) => {
@@ -123,10 +129,10 @@ fn evaluate_connectivity(report: &mut DoctorReport) -> Result<(), DoctorFailure>
             report.push_check(
                 "Connectivity",
                 DoctorCheckStatus::Fail,
-                "DatabaseError",
+                "ConnectivityError",
                 message,
             );
-            Err(DoctorFailure::new("DatabaseError", message))
+            Err(DoctorFailure::new("ConnectivityError", message))
         }
     }
 }
