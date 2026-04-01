@@ -102,16 +102,31 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
     };
     target_source::evaluate(&args.config, &config, live_context.as_ref(), report)?;
     runtime_safety::evaluate(&config, report)?;
-    let connectivity_label = match config.mode() {
-        RuntimeModeToml::Paper => "REST authentication not required in paper mode",
-        RuntimeModeToml::Live => "real connectivity probes not implemented yet",
-    };
-    report.push_check(
-        "Connectivity",
-        DoctorCheckStatus::Skip,
-        connectivity_label,
-        "",
-    );
+    evaluate_connectivity(report)?;
 
     Ok(())
+}
+
+fn evaluate_connectivity(report: &mut DoctorReport) -> Result<(), DoctorFailure> {
+    match std::env::var("DATABASE_URL") {
+        Ok(_) => {
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Pass,
+                "DATABASE_URL is set",
+                "",
+            );
+            Ok(())
+        }
+        Err(_) => {
+            let message = "DATABASE_URL is not set";
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Fail,
+                "DatabaseError",
+                message,
+            );
+            Err(DoctorFailure::new("DatabaseError", message))
+        }
+    }
 }

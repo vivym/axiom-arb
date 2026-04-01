@@ -20,6 +20,7 @@ fn doctor_paper_mode_marks_live_checks_as_skip() {
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-paper.toml"))
+        .env("DATABASE_URL", default_test_database_url())
         .output()
         .expect("app-live doctor should execute");
 
@@ -40,6 +41,7 @@ fn doctor_paper_mode_includes_sectioned_summary() {
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-paper.toml"))
+        .env("DATABASE_URL", default_test_database_url())
         .output()
         .expect("app-live doctor should execute");
 
@@ -50,11 +52,27 @@ fn doctor_paper_mode_includes_sectioned_summary() {
         combined.contains("Credentials: PASS WITH SKIPS"),
         "{combined}"
     );
-    assert!(
-        combined.contains("Connectivity: PASS WITH SKIPS"),
-        "{combined}"
-    );
+    assert!(combined.contains("Connectivity: PASS"), "{combined}");
     assert!(combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
+}
+
+#[test]
+fn doctor_paper_mode_fails_without_database_url() {
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config_fixture("fixtures/app-live-paper.toml"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .expect("app-live doctor should execute");
+
+    let combined = combined(&output);
+    assert!(!output.status.success(), "{combined}");
+    assert_section_summary(&combined, "Credentials", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Connectivity", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
 }
 
 #[test]
@@ -134,7 +152,7 @@ ready_families = []
 }
 
 #[tokio::test]
-async fn doctor_live_mode_accepts_explicit_targets_without_runtime_progress_anchor() {
+async fn doctor_live_mode_fails_without_database_url_for_explicit_targets() {
     let config = temp_live_config(
         r#"
 [runtime]
@@ -188,11 +206,12 @@ quantity = "5"
         .output()
         .expect("app-live doctor should execute");
 
-    assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert!(combined.contains("[OK] config parsed"), "{combined}");
+    assert!(!output.status.success(), "{combined}");
     assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Connectivity", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
     assert!(
         combined.contains("[OK] startup target resolution succeeded"),
         "{combined}"
@@ -201,10 +220,70 @@ quantity = "5"
         combined.contains("[SKIP] control-plane checks not required for explicit targets"),
         "{combined}"
     );
-    assert!(
-        !combined.contains("runtime progress row exists without operator_target_revision anchor"),
-        "{combined}"
+}
+
+#[tokio::test]
+async fn doctor_live_explicit_targets_with_database_url_pass() {
+    let database = TestDatabase::new().await;
+    let config = temp_live_config(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+passphrase = "poly-passphrase"
+timestamp = "1700000000"
+signature = "poly-signature"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
     );
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Connectivity", "PASS");
+    assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
 }
 
 #[tokio::test]
