@@ -191,11 +191,8 @@ quantity = "5"
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
     assert!(combined.contains("[OK] config parsed"), "{combined}");
-    assert!(combined.contains("Target Source: PASS"), "{combined}");
-    assert!(
-        combined.contains("Runtime Safety: PASS WITH SKIPS"),
-        "{combined}"
-    );
+    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert!(
         combined.contains("[OK] startup target resolution succeeded"),
         "{combined}"
@@ -261,11 +258,8 @@ operator_target_revision = "targets-rev-9"
 
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert!(combined.contains("Target Source: PASS"), "{combined}");
-    assert!(
-        combined.contains("Runtime Safety: PASS WITH SKIPS"),
-        "{combined}"
-    );
+    assert_section_summary(&combined, "Target Source", "PASS");
+    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert!(
         combined.contains("configured operator target revision"),
         "{combined}"
@@ -342,7 +336,7 @@ quantity = "5"
 
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert!(combined.contains("Runtime Safety: PASS"), "{combined}");
+    assert_section_summary(&combined, "Runtime Safety", "PASS");
 }
 
 #[tokio::test]
@@ -587,4 +581,9 @@ fn combined(output: &std::process::Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn assert_section_summary(output: &str, section: &str, result: &str) {
+    let expected = format!("{section}: {result}");
+    assert!(output.lines().any(|line| line == expected), "{output}");
 }
