@@ -14,28 +14,30 @@ metadata_refresh_interval_seconds = 60
 
 [polymarket.account]
 address = "0xYOUR_ADDRESS"
+# For a normal EOA this is usually the same as `address`.
 funder_address = "0xYOUR_FUNDER_ADDRESS"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "YOUR_API_KEY"
 secret = "YOUR_API_SECRET"
 passphrase = "YOUR_PASSPHRASE"
+# L2 auth timestamp/signature are derived at startup. Do not hand-author them here.
 
 [polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "YOUR_BUILDER_API_KEY"
-secret = "YOUR_BUILDER_SECRET"
-passphrase = "YOUR_BUILDER_PASSPHRASE"
+kind = "relayer_api_key"
+api_key = "YOUR_RELAYER_API_KEY"
+address = "0xYOUR_RELAYER_API_KEY_ADDRESS"
+
+# Builder API key operators can switch to this shape instead:
+# [polymarket.relayer_auth]
+# kind = "builder_api_key"
+# api_key = "YOUR_BUILDER_API_KEY"
+# secret = "YOUR_BUILDER_SECRET"
+# passphrase = "YOUR_BUILDER_PASSPHRASE"
 
 [negrisk.target_source]
 source = "adopted"
-# This startup anchor is normally written by:
-#   app-live targets adopt --adoptable-revision ...
-# or:
-#   app-live targets rollback [--to-operator-target-revision ...]
-# It remains startup-scoped and is not hot-reloaded into a running daemon.
-operator_target_revision = "YOUR_OPERATOR_TARGET_REVISION"
 
 [negrisk.rollout]
-approved_families = ["YOUR_FAMILY_ID"]
-ready_families = ["YOUR_FAMILY_ID"]
+approved_families = []
+ready_families = []

@@ -2,7 +2,8 @@
 
 This runbook covers the bootstrap policy and launch gates for the `v1a` live candidate.
 
-At current `HEAD`, `app-live` is launched from the unified TOML passed with `--config` and uses `DATABASE_URL` for persistence. The operator-facing flow is `init`, `doctor`, then `run`.
+At current `HEAD`, `app-live` is launched from the unified TOML passed with `--config` and uses `DATABASE_URL` for persistence. The operator-facing flow is `init`, `targets candidates`, `targets adopt`, `doctor`, then `run`.
+The new wizard flow is `init`, `targets candidates`, `targets adopt`, `doctor`, then `run`. Missing target anchors or rollout readiness are surfaced as next steps instead of being prefilled in the config.
 
 `DATABASE_URL` remains the only deployment env var. Operator business config now lives in a TOML file such as `config/axiom-arb.example.toml`.
 
@@ -11,7 +12,9 @@ At current `HEAD`, `app-live` is launched from the unified TOML passed with `--c
 Create or refresh a local operator config, then validate and run it:
 
 ```bash
-cargo run -p app-live -- init --config config/axiom-arb.local.toml --defaults --mode live
+cargo run -p app-live -- init --config config/axiom-arb.local.toml
+cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
@@ -23,12 +26,13 @@ cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0 --l
 ```
 
 The sequence below is the operational posture to preserve during launch and ramp. Use it as the runbook for bringing the daemon up safely, validating reconcile truth first, and deciding when a session is clean enough to widen risk. For the adopted-target startup path, the operator should not hand-author raw `negrisk.targets` members; `doctor` and `run` should resolve the adopted target revision from the config model.
+When no rollout is present yet, keep the rollout lists empty in the generated config and let the wizard flow surface the next adoption step. `targets adopt` only writes `operator_target_revision`; it does not fill `approved_families` or `ready_families`.
 
 Use the target control-plane commands instead of editing `[negrisk.target_source].operator_target_revision` by hand:
 
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
-cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets show-current --config config/axiom-arb.local.toml
 ```

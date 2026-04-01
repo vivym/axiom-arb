@@ -17,3 +17,63 @@ operator_target_revision = "targets-rev-9"
     let text = render_raw_config_to_string(&raw).unwrap();
     assert!(text.contains("operator_target_revision = \"targets-rev-9\""));
 }
+
+#[test]
+fn raw_config_round_trips_safe_empty_rollout_and_adopted_target_source() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[negrisk.target_source]
+source = "adopted"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .unwrap();
+
+    let text = render_raw_config_to_string(&raw).unwrap();
+    assert!(text.contains("source = \"adopted\""));
+    assert!(text.contains("approved_families = []"));
+    assert!(text.contains("ready_families = []"));
+}
+
+#[test]
+fn raw_config_round_trips_preserved_operator_target_revision_and_rollout() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x2222222222222222222222222222222222222222"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-b"]
+"#,
+    )
+    .unwrap();
+
+    let text = render_raw_config_to_string(&raw).unwrap();
+    assert!(text.contains("operator_target_revision = \"targets-rev-9\""));
+    assert!(text.contains("approved_families = [\"family-a\"]"));
+    assert!(text.contains("ready_families = [\"family-b\"]"));
+}

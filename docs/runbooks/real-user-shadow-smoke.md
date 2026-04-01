@@ -10,7 +10,7 @@ Set the same database that `app-live` and `app-replay` will read. `DATABASE_URL`
 export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
 ```
 
-Prepare a config file for the smoke by running `app-live init --config <path> --defaults --mode live --real-user-shadow-smoke` or by copying `config/axiom-arb.example.toml` and then reviewing the long-lived operator settings. The smoke config must set:
+Prepare a smoke config at `config/axiom-arb.local.toml` by running the wizard flow with `app-live init --config config/axiom-arb.local.toml` and then stepping through `targets candidates` and `targets adopt --adoptable-revision <ADOPTABLE_REVISION>` before `doctor` and `run`, or by copying `config/axiom-arb.example.toml` and then reviewing the long-lived operator settings. The smoke config must keep rollout lists empty until the wizard surfaces a real adoptable revision:
 
 ```toml
 [runtime]
@@ -18,13 +18,15 @@ mode = "live"
 real_user_shadow_smoke = true
 ```
 
-Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision.
+Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the `neg-risk` shadow-ready rollout state.
+
+If you are only checking connectivity and smoke preflight, stop after `doctor` and `run` and expect zero `neg-risk` shadow rows. If you want the later SQL checks to expect shadow attempts, populate `approved_families` and `ready_families` first, or otherwise establish rollout readiness before starting the run.
 
 Before running the smoke, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
 
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
-cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 ```
 
@@ -52,7 +54,7 @@ Adopt and rollback only rewrite the configured `operator_target_revision` in the
 If you need to capture replay-visible state after the smoke, run:
 
 ```bash
-cargo run -p app-replay -- --config config/axiom-arb.example.toml --from-seq 0 --limit 1000
+cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0 --limit 1000
 ```
 
 ## SQL Checks
@@ -97,6 +99,8 @@ Pass if all of the following are true:
 - `execution_attempts` contains `neg-risk` rows in `shadow` mode only
 - `shadow_execution_artifacts` contains rows for those attempts
 - `app-replay` emits the structured `app-replay neg-risk shadow smoke` summary when those rows exist
+
+If rollout readiness is intentionally left empty, zero `neg-risk` shadow rows is an expected outcome and this runbook should be treated as a preflight-only smoke.
 
 Fail if any of the following happen:
 
