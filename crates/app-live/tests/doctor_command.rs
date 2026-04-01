@@ -26,6 +26,12 @@ fn doctor_paper_mode_marks_live_checks_as_skip() {
         combined.contains("[SKIP] REST authentication not required in paper mode"),
         "{combined}"
     );
+    assert!(combined.contains("Config: PASS"), "{combined}");
+    assert!(
+        combined.contains("Connectivity: PASS WITH SKIPS"),
+        "{combined}"
+    );
+    assert!(combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
 }
 
 #[test]
