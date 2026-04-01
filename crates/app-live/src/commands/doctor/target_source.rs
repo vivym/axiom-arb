@@ -4,7 +4,7 @@ use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use persistence::connect_pool_from_env;
 
 use crate::commands::targets::state::load_target_control_plane_state;
-use crate::startup::resolve_startup_targets;
+use crate::startup::{resolve_startup_targets, ResolvedTargets};
 use crate::NegRiskLiveTargetSet;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
@@ -16,7 +16,7 @@ pub fn evaluate(
     config: &AppLiveConfigView<'_>,
     live_context: Option<&DoctorLiveContext>,
     report: &mut DoctorReport,
-) -> Result<(), DoctorFailure> {
+) -> Result<Option<ResolvedTargets>, DoctorFailure> {
     match config.mode() {
         RuntimeModeToml::Paper => {
             report.push_check(
@@ -25,7 +25,7 @@ pub fn evaluate(
                 "startup target resolution not required in paper mode",
                 "",
             );
-            Ok(())
+            Ok(None)
         }
         RuntimeModeToml::Live => evaluate_live(config_path, config, live_context, report),
     }
@@ -36,9 +36,9 @@ fn evaluate_live(
     config: &AppLiveConfigView<'_>,
     live_context: Option<&DoctorLiveContext>,
     report: &mut DoctorReport,
-) -> Result<(), DoctorFailure> {
+) -> Result<Option<ResolvedTargets>, DoctorFailure> {
     if config.target_source().is_none() {
-        NegRiskLiveTargetSet::try_from(config).map_err(|error| {
+        let targets = NegRiskLiveTargetSet::try_from(config).map_err(|error| {
             report.push_check(
                 "Target Source",
                 DoctorCheckStatus::Fail,
@@ -59,7 +59,10 @@ fn evaluate_live(
             "control-plane checks not required for explicit targets",
             "",
         );
-        return Ok(());
+        return Ok(Some(ResolvedTargets {
+            operator_target_revision: (!targets.is_empty()).then(|| targets.revision().to_owned()),
+            targets,
+        }));
     }
 
     let live_context = live_context.expect("live context should exist for live target source");
@@ -76,7 +79,7 @@ fn evaluate_live(
         })
     })?;
 
-    live_context
+    let resolved_targets = live_context
         .runtime
         .block_on(resolve_startup_targets(&pool, config))
         .map_err(|error| {
@@ -147,5 +150,5 @@ fn evaluate_live(
         unreachable!("explicit target branch should return early");
     }
 
-    Ok(())
+    Ok(Some(resolved_targets))
 }

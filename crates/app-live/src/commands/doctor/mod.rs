@@ -1,3 +1,4 @@
+mod connectivity;
 mod credentials;
 mod report;
 mod runtime_safety;
@@ -100,39 +101,15 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
         RuntimeModeToml::Live => Some(DoctorLiveContext::new(report)?),
         RuntimeModeToml::Paper => None,
     };
-    target_source::evaluate(&args.config, &config, live_context.as_ref(), report)?;
+    let resolved_targets =
+        target_source::evaluate(&args.config, &config, live_context.as_ref(), report)?;
     runtime_safety::evaluate(&config, report)?;
-    evaluate_connectivity(report)?;
+    connectivity::evaluate(
+        &config,
+        live_context.as_ref(),
+        resolved_targets.as_ref(),
+        report,
+    )?;
 
     Ok(())
-}
-
-fn evaluate_connectivity(report: &mut DoctorReport) -> Result<(), DoctorFailure> {
-    match std::env::var("DATABASE_URL") {
-        Ok(_) => {
-            report.push_check(
-                "Connectivity",
-                DoctorCheckStatus::Pass,
-                "DATABASE_URL is set",
-                "",
-            );
-            report.push_check(
-                "Connectivity",
-                DoctorCheckStatus::Skip,
-                "real REST/ws/heartbeat/relayer probes not implemented yet",
-                "",
-            );
-            Ok(())
-        }
-        Err(_) => {
-            let message = "DATABASE_URL is not set";
-            report.push_check(
-                "Connectivity",
-                DoctorCheckStatus::Fail,
-                "ConnectivityError",
-                message,
-            );
-            Err(DoctorFailure::new("ConnectivityError", message))
-        }
-    }
 }
