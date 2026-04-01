@@ -249,7 +249,8 @@ But `Runtime Safety` must additionally prove:
 
 - `runtime.mode = "live"`
 - `real_user_shadow_smoke = true`
-- the neg-risk shadow-only guard is in effect
+- the smoke-safe startup configuration is valid
+- the shadow-only neg-risk path will be requested on startup
 
 Hard rule:
 
@@ -294,12 +295,14 @@ Required probes for `live` and `smoke`:
 
 2. market ws probe
 - connect market ws
-- send minimal subscribe
+- derive market subscription scope only from already resolved startup targets
+- send minimal subscribe using the resolved target token IDs as `asset_ids`
 - receive an interpretable ack, pong, or data message
 
 3. user ws probe
 - connect user ws
-- perform auth/subscribe
+- derive user subscription scope only from already resolved startup targets
+- perform auth/subscribe using the resolved target condition IDs as `markets`
 - receive an interpretable ack, pong, or data message
 
 4. heartbeat probe
@@ -311,6 +314,8 @@ Required probes for `live` and `smoke`:
 
 Hard rules:
 
+- websocket probes must not invent subscription scope through metadata/discovery fallback or any other second authority path
+- if startup target resolution succeeds but does not yield usable token IDs / condition IDs for websocket probing, the websocket probe should report `SKIP` with an operator-facing next action rather than silently guessing
 - these probes may use protocol-required writes
 - these probes must not enter the order submit path
 - these probes must not create runtime follow-up work
@@ -319,10 +324,19 @@ Hard rules:
 
 This section should continue the current contract:
 
-- resolve startup targets
-- report configured operator target revision
-- report active operator target revision when available
-- report `restart needed` semantics
+- resolve startup targets for whichever startup authority is configured
+- preserve the two startup-input paths that exist at current `HEAD`:
+  - adopted target source
+  - explicit targets
+- adopted target source remains the primary operator-facing path
+- explicit targets remain a currently supported low-level startup path, but this design does not broaden or productize them further
+- for adopted target source:
+  - report configured operator target revision
+  - report active operator target revision when available
+  - report `restart needed` semantics
+- for explicit targets:
+  - report startup target resolution success/failure
+  - explicitly `SKIP` control-plane-specific checks, matching the current runtime contract
 
 This section must not expand into a deeper control-plane audit.
 
@@ -333,12 +347,12 @@ It should stay focused on startup readiness.
 This section should prove:
 
 - mode flags are internally consistent
-- smoke guard is active when required
+- smoke-safe startup configuration is valid when required
 - the preflight is not accidentally being interpreted as a live-submit readiness claim
 
 For `paper`, this section primarily proves non-live expectations.
 
-For `smoke`, this section should explicitly state the shadow-only safety posture.
+For `smoke`, this section should explicitly state that startup will request the shadow-only neg-risk posture rather than claiming that a running daemon guard has already been observed in effect.
 
 ## 9. Error Model
 
