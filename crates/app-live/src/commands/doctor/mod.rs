@@ -77,7 +77,7 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
     runtime_safety::evaluate(&config, report)?;
     let connectivity_label = match config.mode() {
         RuntimeModeToml::Paper => "REST authentication not required in paper mode",
-        RuntimeModeToml::Live => "control-plane checks not required for explicit targets",
+        RuntimeModeToml::Live => "real connectivity probes not implemented yet",
     };
     report.push_check(
         "Connectivity",

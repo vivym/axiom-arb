@@ -5,7 +5,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use persistence::{run_migrations, RuntimeProgressRepo};
+use persistence::{
+    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+};
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 
 static SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -130,8 +134,9 @@ ready_families = []
 }
 
 #[tokio::test]
-async fn doctor_live_mode_accepts_explicit_targets_without_target_source() {
+async fn doctor_live_mode_accepts_explicit_targets_without_runtime_progress_anchor() {
     let database = TestDatabase::new().await;
+    database.seed_runtime_progress_without_anchor().await;
     let config = temp_live_config(
         r#"
 [runtime]
@@ -195,6 +200,77 @@ quantity = "5"
     );
     assert!(
         combined.contains("[SKIP] control-plane checks not required for explicit targets"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("runtime progress row exists without operator_target_revision anchor"),
+        "{combined}"
+    );
+}
+
+#[tokio::test]
+async fn doctor_adopted_source_reports_control_plane_details_without_explicit_target_skip_text() {
+    let database = TestDatabase::new().await;
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
+    let config = temp_live_config(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+    );
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(combined.contains("Target Source: PASS"), "{combined}");
+    assert!(
+        combined.contains("configured operator target revision"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("active operator target revision"),
+        "{combined}"
+    );
+    assert!(combined.contains("restart not needed"), "{combined}");
+    assert!(
+        !combined.contains("[SKIP] control-plane checks not required for explicit targets"),
         "{combined}"
     );
 }
@@ -261,25 +337,6 @@ quantity = "5"
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
     assert!(combined.contains("Runtime Safety: PASS"), "{combined}");
-}
-
-#[tokio::test]
-async fn doctor_live_mode_reports_fail_summary_when_runtime_progress_anchor_is_missing() {
-    let database = TestDatabase::new().await;
-    database.seed_runtime_progress_without_anchor().await;
-    let output = Command::new(app_live_binary())
-        .arg("doctor")
-        .arg("--config")
-        .arg(config_fixture("fixtures/app-live-live.toml"))
-        .env("DATABASE_URL", database.database_url())
-        .output()
-        .expect("app-live doctor should execute");
-
-    let combined = combined(&output);
-    assert!(!output.status.success(), "{combined}");
-    assert!(combined.contains("TargetSourceError"), "{combined}");
-    assert!(combined.contains("Target Source: FAIL"), "{combined}");
-    assert!(combined.contains("Overall: FAIL"), "{combined}");
 }
 
 #[tokio::test]
@@ -436,6 +493,77 @@ impl TestDatabase {
             .record_progress(&self.pool, 41, 7, Some("snapshot-7"), None)
             .await
             .expect("runtime progress should seed without anchor");
+    }
+
+    async fn seed_adopted_target_with_runtime_progress(&self, operator_target_revision: &str) {
+        CandidateArtifactRepo
+            .upsert_candidate_target_set(
+                &self.pool,
+                &CandidateTargetSetRow {
+                    candidate_revision: "candidate-9".to_owned(),
+                    snapshot_id: "snapshot-9".to_owned(),
+                    source_revision: "discovery-9".to_owned(),
+                    payload: json!({
+                        "candidate_revision": "candidate-9",
+                        "snapshot_id": "snapshot-9",
+                    }),
+                },
+            )
+            .await
+            .expect("candidate row should persist");
+
+        CandidateArtifactRepo
+            .upsert_adoptable_target_revision(
+                &self.pool,
+                &AdoptableTargetRevisionRow {
+                    adoptable_revision: "adoptable-9".to_owned(),
+                    candidate_revision: "candidate-9".to_owned(),
+                    rendered_operator_target_revision: operator_target_revision.to_owned(),
+                    payload: json!({
+                        "adoptable_revision": "adoptable-9",
+                        "candidate_revision": "candidate-9",
+                        "rendered_operator_target_revision": operator_target_revision,
+                        "rendered_live_targets": {
+                            "family-a": {
+                                "family_id": "family-a",
+                                "members": [
+                                    {
+                                        "condition_id": "condition-1",
+                                        "token_id": "token-1",
+                                        "price": "0.43",
+                                        "quantity": "5",
+                                    }
+                                ]
+                            }
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("adoptable row should persist");
+
+        CandidateAdoptionRepo
+            .upsert_provenance(
+                &self.pool,
+                &CandidateAdoptionProvenanceRow {
+                    operator_target_revision: operator_target_revision.to_owned(),
+                    adoptable_revision: "adoptable-9".to_owned(),
+                    candidate_revision: "candidate-9".to_owned(),
+                },
+            )
+            .await
+            .expect("candidate provenance should persist");
+
+        RuntimeProgressRepo
+            .record_progress(
+                &self.pool,
+                41,
+                7,
+                Some("snapshot-7"),
+                Some(operator_target_revision),
+            )
+            .await
+            .expect("runtime progress should seed with anchor");
     }
 }
 

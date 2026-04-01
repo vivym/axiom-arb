@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
-use persistence::{connect_pool_from_env, RuntimeProgressRepo};
+use persistence::connect_pool_from_env;
 
 use crate::commands::targets::state::load_target_control_plane_state;
 use crate::startup::resolve_startup_targets;
@@ -124,71 +124,13 @@ fn evaluate_live(
             report.push_check("Target Source", DoctorCheckStatus::Pass, restart_needed, "");
         }
     } else {
-        let active_operator_target_revision = runtime
-            .block_on(RuntimeProgressRepo.current(&pool))
-            .map_err(|error| {
-                report.push_check(
-                    "Target Source",
-                    DoctorCheckStatus::Fail,
-                    "TargetSourceError",
-                    error.to_string(),
-                );
-                DoctorFailure::new("TargetSourceError", error.to_string())
-            })?;
-
-        let active_operator_target_revision = match active_operator_target_revision {
-            Some(row) => match row.operator_target_revision {
-                Some(revision) => Some(revision),
-                None => {
-                    let message =
-                        "runtime progress row exists without operator_target_revision anchor";
-                    report.push_check(
-                        "Target Source",
-                        DoctorCheckStatus::Fail,
-                        "TargetSourceError",
-                        message,
-                    );
-                    return Err(DoctorFailure::new("TargetSourceError", message));
-                }
-            },
-            None => None,
-        };
-
-        match (
-            resolved_targets.operator_target_revision.as_deref(),
-            active_operator_target_revision.as_deref(),
-        ) {
-            (Some(configured), Some(active)) if configured != active => report.push_check(
-                "Target Source",
-                DoctorCheckStatus::Pass,
-                format!(
-                    "configured operator target revision {configured} differs from active runtime state {active}"
-                ),
-                "",
-            ),
-            (Some(configured), Some(active)) => report.push_check(
-                "Target Source",
-                DoctorCheckStatus::Pass,
-                format!(
-                    "configured operator target revision {configured} matches active runtime state {active}"
-                ),
-                "",
-            ),
-            (Some(configured), None) => report.push_check(
-                "Target Source",
-                DoctorCheckStatus::Pass,
-                format!(
-                    "configured operator target revision {configured} resolved but active runtime state unavailable"
-                ),
-                "",
-            ),
-            (None, _) => report.push_check(
-                "Target Source",
-                DoctorCheckStatus::Pass,
-                "explicit targets resolved without an operator target revision anchor",
-                "",
-            ),
-        }
+        let _ = resolved_targets;
+        report.push_check(
+            "Target Source",
+            DoctorCheckStatus::Skip,
+            "control-plane checks not required for explicit targets",
+            "",
+        );
     }
 
     Ok(())
