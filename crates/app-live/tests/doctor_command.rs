@@ -165,6 +165,72 @@ async fn doctor_live_mode_reports_fail_summary_when_runtime_progress_anchor_is_m
     assert!(combined.contains("Overall: FAIL"), "{combined}");
 }
 
+#[tokio::test]
+async fn doctor_live_mode_reports_fail_summary_when_real_user_shadow_smoke_config_is_invalid() {
+    let database = TestDatabase::new().await;
+    let config = temp_live_config(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "ftp://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    );
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    let combined = combined(&output);
+    assert!(!output.status.success(), "{combined}");
+    assert!(combined.contains("ConfigError"), "{combined}");
+    assert!(combined.contains("Connectivity: FAIL"), "{combined}");
+    assert!(combined.contains("Overall: FAIL"), "{combined}");
+}
+
 fn app_live_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-live") {
         return PathBuf::from(path);
@@ -189,6 +255,12 @@ fn config_fixture(relative: &str) -> PathBuf {
         .join("config-schema")
         .join("tests")
         .join(relative)
+}
+
+fn temp_live_config(contents: &str) -> tempfile::NamedTempFile {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(temp.path(), contents).expect("write temp config");
+    temp
 }
 
 fn default_test_database_url() -> &'static str {

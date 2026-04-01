@@ -89,9 +89,17 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
             Ok(())
         }
         RuntimeModeToml::Live => {
-            if load_real_user_shadow_smoke_config(&config).is_ok()
-                && config.real_user_shadow_smoke()
-            {
+            if config.real_user_shadow_smoke() {
+                let _smoke = load_real_user_shadow_smoke_config(&config).map_err(|error| {
+                    report.push_check(
+                        "Connectivity",
+                        DoctorCheckStatus::Fail,
+                        "ConfigError",
+                        error.to_string(),
+                    );
+                    DoctorFailure::new("ConfigError", error.to_string())
+                })?;
+
                 report.push_check(
                     "Connectivity",
                     DoctorCheckStatus::Pass,
