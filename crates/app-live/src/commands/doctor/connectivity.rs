@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, future::Future, pin::Pin, time::Duration};
 
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use domain::{SignatureType, WalletRoute};
+use persistence::connect_pool_from_env;
 use venue_polymarket::{
     L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, RelayerAuth, SignerContext,
     WsUserChannelAuth,
@@ -111,6 +112,7 @@ fn evaluate_live(
     report: &mut DoctorReport,
 ) -> Result<(), DoctorFailure> {
     let live_context = live_context.expect("live context should exist for live doctor probes");
+    verify_database_connectivity(live_context, report)?;
     let resolved_targets =
         resolved_targets.expect("resolved startup targets should exist for live doctor probes");
     let source_config: PolymarketSourceConfig =
@@ -158,6 +160,32 @@ fn evaluate_live(
     }
 
     Ok(())
+}
+
+fn verify_database_connectivity(
+    live_context: &DoctorLiveContext,
+    report: &mut DoctorReport,
+) -> Result<(), DoctorFailure> {
+    live_context
+        .runtime
+        .block_on(connect_pool_from_env())
+        .map(|_| {
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Pass,
+                "database connectivity probe succeeded",
+                "",
+            );
+        })
+        .map_err(|error| {
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Fail,
+                "ConnectivityError",
+                error.to_string(),
+            );
+            DoctorFailure::new("ConnectivityError", error.to_string())
+        })
 }
 
 fn require_database_url(report: &mut DoctorReport) -> Result<(), DoctorFailure> {

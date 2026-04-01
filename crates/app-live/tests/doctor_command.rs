@@ -322,6 +322,82 @@ quantity = "5"
 }
 
 #[tokio::test]
+async fn doctor_live_explicit_targets_fail_when_database_is_unreachable() {
+    let venue = MockDoctorVenue::success();
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+passphrase = "poly-passphrase"
+timestamp = "1700000000"
+signature = "poly-signature"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env(
+            "DATABASE_URL",
+            "postgres://axiom:axiom@127.0.0.1:9/axiom_arb",
+        )
+        .output()
+        .expect("app-live doctor should execute");
+
+    let combined = combined(&output);
+    assert!(!output.status.success(), "{combined}");
+    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Connectivity", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
+    assert!(combined.contains("ConnectivityError"), "{combined}");
+    assert!(
+        combined.contains("Next: fix the reported issue and rerun doctor"),
+        "{combined}"
+    );
+}
+
+#[tokio::test]
 async fn doctor_adopted_source_reports_control_plane_details_without_explicit_target_skip_text() {
     let database = TestDatabase::new().await;
     let venue = MockDoctorVenue::success();
