@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use persistence::run_migrations;
+use persistence::{run_migrations, RuntimeProgressRepo};
 use sqlx::postgres::PgPoolOptions;
 
 static SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -146,6 +146,25 @@ async fn doctor_live_mode_accepts_explicit_targets_without_target_source() {
     );
 }
 
+#[tokio::test]
+async fn doctor_live_mode_reports_fail_summary_when_runtime_progress_anchor_is_missing() {
+    let database = TestDatabase::new().await;
+    database.seed_runtime_progress_without_anchor().await;
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(config_fixture("fixtures/app-live-live.toml"))
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    let combined = combined(&output);
+    assert!(!output.status.success(), "{combined}");
+    assert!(combined.contains("TargetStateError"), "{combined}");
+    assert!(combined.contains("Connectivity: FAIL"), "{combined}");
+    assert!(combined.contains("Overall: FAIL"), "{combined}");
+}
+
 fn app_live_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-live") {
         return PathBuf::from(path);
@@ -178,6 +197,7 @@ fn default_test_database_url() -> &'static str {
 
 struct TestDatabase {
     database_url: String,
+    pool: sqlx::PgPool,
 }
 
 impl TestDatabase {
@@ -214,11 +234,19 @@ impl TestDatabase {
 
         Self {
             database_url: scoped_url,
+            pool,
         }
     }
 
     fn database_url(&self) -> &str {
         &self.database_url
+    }
+
+    async fn seed_runtime_progress_without_anchor(&self) {
+        RuntimeProgressRepo
+            .record_progress(&self.pool, 41, 7, Some("snapshot-7"), None)
+            .await
+            .expect("runtime progress should seed without anchor");
     }
 }
 

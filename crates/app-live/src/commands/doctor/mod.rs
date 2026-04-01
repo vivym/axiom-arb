@@ -103,7 +103,15 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|error| DoctorFailure::new("RuntimeError", error.to_string()))?;
+                .map_err(|error| {
+                    report.push_check(
+                        "Connectivity",
+                        DoctorCheckStatus::Fail,
+                        "RuntimeError",
+                        error.to_string(),
+                    );
+                    DoctorFailure::new("RuntimeError", error.to_string())
+                })?;
             let pool = runtime.block_on(async {
                 connect_pool_from_env().await.map_err(|error| {
                     report.push_check(
@@ -178,16 +186,24 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
                             error.to_string(),
                         );
                         DoctorFailure::new("TargetStateError", error.to_string())
-                    })?
-                    .map(|row| {
-                        row.operator_target_revision.ok_or_else(|| {
-                            DoctorFailure::new(
+                    })?;
+
+                let active_operator_target_revision = match active_operator_target_revision {
+                    Some(row) => match row.operator_target_revision {
+                        Some(revision) => Some(revision),
+                        None => {
+                            let message = "runtime progress row exists without operator_target_revision anchor";
+                            report.push_check(
+                                "Connectivity",
+                                DoctorCheckStatus::Fail,
                                 "TargetStateError",
-                                "runtime progress row exists without operator_target_revision anchor",
-                            )
-                        })
-                    })
-                    .transpose()?;
+                                message,
+                            );
+                            return Err(DoctorFailure::new("TargetStateError", message));
+                        }
+                    },
+                    None => None,
+                };
 
                 match (
                     resolved_targets.operator_target_revision.as_deref(),
