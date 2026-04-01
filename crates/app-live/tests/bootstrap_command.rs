@@ -12,6 +12,21 @@ fn bootstrap_help_lists_command() {
     );
 }
 
+#[test]
+fn bootstrap_command_exits_nonzero_with_visible_error() {
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "expected failure, got:\n{}", combined(&output));
+    assert!(
+        combined(&output).contains("bootstrap is not implemented yet"),
+        "expected visible bootstrap error, got:\n{}",
+        combined(&output)
+    );
+}
+
 fn app_live_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-live") {
         return PathBuf::from(path);
