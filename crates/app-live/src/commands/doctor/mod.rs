@@ -4,7 +4,7 @@ mod report;
 mod runtime_safety;
 mod target_source;
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, path::Path};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 
@@ -61,7 +61,8 @@ impl Error for DoctorFailure {}
 pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
     let mut report = DoctorReport::new();
     let result = execute_inner(&args, &mut report);
-    report.render();
+    let next_actions = next_actions(&report, &args.config);
+    report.render(&next_actions);
     result.map_err(|error| Box::new(error) as Box<dyn Error>)
 }
 
@@ -112,4 +113,32 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
     )?;
 
     Ok(())
+}
+
+fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
+    if report.section_failed("Target Source") {
+        return vec![
+            format!(
+                "run app-live -- targets candidates --config {}",
+                config_path.display()
+            ),
+            format!(
+                "run app-live -- targets adopt --config {} --adoptable-revision <revision>",
+                config_path.display()
+            ),
+        ];
+    }
+
+    if report.section_failed("Config")
+        || report.section_failed("Credentials")
+        || report.section_failed("Connectivity")
+        || report.section_failed("Runtime Safety")
+    {
+        return vec!["fix the reported issue and rerun doctor".to_owned()];
+    }
+
+    vec![format!(
+        "run app-live -- run --config {}",
+        config_path.display()
+    )]
 }

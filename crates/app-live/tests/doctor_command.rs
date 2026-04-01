@@ -65,6 +65,10 @@ fn doctor_paper_mode_includes_sectioned_summary() {
         "{combined}"
     );
     assert!(combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
+    assert!(
+        combined.contains("Next: run app-live -- run --config"),
+        "{combined}"
+    );
 }
 
 #[test]
@@ -159,6 +163,14 @@ ready_families = []
     assert!(combined.contains("TargetSourceError"), "{combined}");
     assert!(
         combined.contains("missing negrisk.target_source.operator_target_revision"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: run app-live -- targets candidates --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: run app-live -- targets adopt --config"),
         "{combined}"
     );
 }
@@ -303,6 +315,10 @@ quantity = "5"
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Connectivity", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
+    assert!(
+        combined.contains("Next: run app-live -- run --config"),
+        "{combined}"
+    );
 }
 
 #[tokio::test]
@@ -515,6 +531,10 @@ quantity = "5"
     assert_section_summary(&combined, "Connectivity", "FAIL");
     assert_section_summary(&combined, "Overall", "FAIL");
     assert!(combined.contains("ConnectivityError"), "{combined}");
+    assert!(
+        combined.contains("Next: fix the reported issue and rerun doctor"),
+        "{combined}"
+    );
 }
 
 #[tokio::test]

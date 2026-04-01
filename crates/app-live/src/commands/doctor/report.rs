@@ -114,7 +114,7 @@ impl DoctorReport {
         self.section_mut(section).push_check(status, label, detail);
     }
 
-    pub fn render(&self) {
+    pub fn render(&self, next_actions: &[String]) {
         for section in &self.sections {
             for check in &section.checks {
                 if check.detail.is_empty() {
@@ -134,6 +134,18 @@ impl DoctorReport {
             println!("{}: {}", section.title, section.result());
         }
         println!("Overall: {}", self.overall_result());
+
+        for action in next_actions {
+            println!("Next: {action}");
+        }
+    }
+
+    pub fn section_failed(&self, title: &'static str) -> bool {
+        self.sections
+            .iter()
+            .find(|section| section.title == title)
+            .map(|section| matches!(section.result(), DoctorOverallResult::Fail))
+            .unwrap_or(false)
     }
 
     fn section_mut(&mut self, title: &'static str) -> &mut DoctorSectionReport {
