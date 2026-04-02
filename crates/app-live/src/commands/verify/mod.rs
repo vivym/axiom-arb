@@ -110,12 +110,20 @@ fn evaluate_foundation_outcome(
 fn evaluate_paper_outcome(
     evidence: &evidence::VerifyEvidenceWindow,
 ) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
-    if !evidence.observed_live_attempts.is_empty() {
+    let selected_live_attempt_count = evidence
+        .attempts
+        .iter()
+        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
+        .count();
+    let forbidden_live_attempt_count =
+        evidence.observed_live_attempts.len() + selected_live_attempt_count;
+
+    if forbidden_live_attempt_count > 0 {
         return (
             model::VerifyVerdict::Fail,
             Some(format!(
                 "forbidden live side effects: observed {} live attempt(s)",
-                evidence.observed_live_attempts.len()
+                forbidden_live_attempt_count
             )),
             vec!["stop live activity and inspect recent local execution state".to_owned()],
         );

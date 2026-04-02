@@ -67,6 +67,28 @@ fn verify_paper_fails_when_live_attempts_are_observed() {
 }
 
 #[test]
+fn verify_paper_explicit_live_attempt_window_fails_when_live_attempt_is_selected() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_live_attempt("attempt-live-explicit-1");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .arg("--attempt-id")
+        .arg("attempt-live-explicit-1")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("forbidden live side effects"), "{text}");
+
+    verify_db.cleanup();
+}
+
+#[test]
 fn verify_placeholder_fails_for_missing_config() {
     let output = Command::new(cli::app_live_binary())
         .arg("verify")
