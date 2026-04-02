@@ -126,26 +126,6 @@ fn adopted_summary(
         }
     };
 
-    if let Some(active_revision) = state.active_operator_target_revision.as_deref() {
-        if active_revision != configured_target {
-            return Ok(StatusOutcome::Summary(StatusSummary {
-                mode: Some(mode),
-                readiness: StatusReadiness::RestartRequired,
-                details: StatusDetails {
-                    configured_target: Some(configured_target.clone()),
-                    active_target: Some(active_revision.to_owned()),
-                    target_source: Some(StatusTargetSource::AdoptedTargets),
-                    rollout_state: Some(StatusRolloutState::Required),
-                    restart_needed: Some(true),
-                    reason: Some(
-                        "configured and active operator_target_revision differ".to_owned(),
-                    ),
-                },
-                actions: vec![StatusAction::PerformControlledRestart],
-            }));
-        }
-    }
-
     let resolved_targets = runtime.block_on(async {
         let pool = connect_pool_from_env()
             .await
@@ -170,7 +150,50 @@ fn adopted_summary(
 
     let rollout_ready = rollout_covers_families(config, &family_ids);
     let family_ids_label = family_ids.iter().cloned().collect::<Vec<_>>().join(", ");
-    let (readiness, rollout_state, actions, reason) = if rollout_ready {
+    let rollout_state = if rollout_ready {
+        StatusRolloutState::Ready
+    } else {
+        StatusRolloutState::Required
+    };
+    let rollout_reason = if rollout_ready {
+        format!("adopted families are covered by rollout: {family_ids_label}")
+    } else {
+        format!("rollout must cover adopted families: {family_ids_label}")
+    };
+    let active_target = state.active_operator_target_revision.clone();
+    let restart_needed = active_target
+        .as_deref()
+        .map(|active| active != configured_target);
+
+    if restart_needed == Some(true) {
+        let mut actions = Vec::new();
+        if !rollout_ready {
+            actions.push(if smoke_mode {
+                StatusAction::EnableSmokeRollout
+            } else {
+                StatusAction::EnableLiveRollout
+            });
+        }
+        actions.push(StatusAction::PerformControlledRestart);
+
+        return Ok(StatusOutcome::Summary(StatusSummary {
+            mode: Some(mode),
+            readiness: StatusReadiness::RestartRequired,
+            details: StatusDetails {
+                configured_target: Some(configured_target.clone()),
+                active_target,
+                target_source: Some(StatusTargetSource::AdoptedTargets),
+                rollout_state: Some(rollout_state),
+                restart_needed: Some(true),
+                reason: Some(format!(
+                    "configured and active operator_target_revision differ; {rollout_reason}"
+                )),
+            },
+            actions,
+        }));
+    }
+
+    let (readiness, actions, reason) = if rollout_ready {
         let readiness = if smoke_mode {
             StatusReadiness::SmokeConfigReady
         } else {
@@ -178,11 +201,8 @@ fn adopted_summary(
         };
         (
             readiness,
-            StatusRolloutState::Ready,
             vec![StatusAction::RunDoctor],
-            Some(format!(
-                "adopted families are covered by rollout: {family_ids_label}"
-            )),
+            Some(rollout_reason),
         )
     } else {
         let readiness = if smoke_mode {
@@ -195,20 +215,8 @@ fn adopted_summary(
         } else {
             StatusAction::EnableLiveRollout
         };
-        (
-            readiness,
-            StatusRolloutState::Required,
-            vec![action],
-            Some(format!(
-                "rollout must cover adopted families: {family_ids_label}"
-            )),
-        )
+        (readiness, vec![action], Some(rollout_reason))
     };
-
-    let active_target = state.active_operator_target_revision.clone();
-    let restart_needed = active_target
-        .as_deref()
-        .map(|active| active != configured_target);
 
     Ok(StatusOutcome::Summary(StatusSummary {
         mode: Some(mode),

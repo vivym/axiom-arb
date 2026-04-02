@@ -111,12 +111,63 @@ fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
         combined.contains("Readiness: restart-required"),
         "{combined}"
     );
+    assert!(combined.contains("Rollout state: required"), "{combined}");
+    assert!(
+        combined.contains("Reason: configured and active operator_target_revision differ; rollout must cover adopted families: family-a"),
+        "{combined}"
+    );
+    assert!(combined.contains("Next: edit "), "{combined}");
     assert!(
         combined.contains("Next: perform controlled restart"),
         "{combined}"
     );
 
     database.cleanup();
+}
+
+#[test]
+fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already_configured() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Mode: live"), "{combined}");
+    assert!(
+        combined.contains("Readiness: restart-required"),
+        "{combined}"
+    );
+    assert!(combined.contains("Rollout state: ready"), "{combined}");
+    assert!(
+        combined.contains("Reason: configured and active operator_target_revision differ; adopted families are covered by rollout: family-a"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains(
+            "[negrisk.rollout].approved_families and ready_families for adopted families"
+        ),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: perform controlled restart"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
 }
 
 #[test]
