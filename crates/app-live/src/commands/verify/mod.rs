@@ -22,9 +22,9 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     let anchor_comparison =
         context::compare_window_to_current_config_anchor(&verify_context, &selection);
 
-    let (verdict, reason, next_actions) =
-        evaluate_foundation_outcome(&verify_context, &anchor_comparison);
     let evidence = load_evidence_window(&verify_context, &anchor_comparison, &selection)?;
+    let (verdict, reason, next_actions) =
+        evaluate_foundation_outcome(&verify_context, &anchor_comparison, &evidence);
     render_foundation_report(
         &verify_context,
         verdict,
@@ -69,6 +69,7 @@ fn load_evidence_window(
 fn evaluate_foundation_outcome(
     verify_context: &context::VerifyContext,
     anchor_comparison: &context::ConfigAnchorComparison,
+    evidence: &evidence::VerifyEvidenceWindow,
 ) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
     if verify_context.control_plane.target_source
         == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets)
@@ -90,6 +91,10 @@ fn evaluate_foundation_outcome(
         );
     }
 
+    if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Paper) {
+        return evaluate_paper_outcome(evidence);
+    }
+
     (
         model::VerifyVerdict::Fail,
         verify_context.reason.clone().or_else(|| {
@@ -98,6 +103,29 @@ fn evaluate_foundation_outcome(
                     .to_owned(),
             )
         }),
+        vec!["run app-live status --config {config}".to_owned()],
+    )
+}
+
+fn evaluate_paper_outcome(
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
+    if !evidence.observed_live_attempts.is_empty() {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(format!(
+                "forbidden live side effects: observed {} live attempt(s)",
+                evidence.observed_live_attempts.len()
+            )),
+            vec!["stop live activity and inspect recent local execution state".to_owned()],
+        );
+    }
+
+    (
+        model::VerifyVerdict::PassWithWarnings,
+        Some(
+            "paper verification is conservative: no forbidden live side effects were observed, but basic run evidence is incomplete".to_owned(),
+        ),
         vec!["run app-live status --config {config}".to_owned()],
     )
 }
@@ -112,6 +140,7 @@ fn render_foundation_report(
 ) {
     let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
     let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
+    let forbidden_live_attempt_count = evidence.observed_live_attempts.len();
 
     println!("Scenario: {}", verify_context.scenario.label());
     println!("Verdict: {}", verdict_label_upper(verdict));
@@ -127,7 +156,7 @@ fn render_foundation_report(
     );
     println!(
         "Side Effects: {}",
-        live_artifact_count + live_submission_count
+        forbidden_live_attempt_count + live_artifact_count + live_submission_count
     );
     println!("Control-Plane Context");
     println!("Expectation: {}", verify_context.expectation.label());

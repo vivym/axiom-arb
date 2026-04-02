@@ -26,6 +26,47 @@ fn verify_subcommand_is_exposed() {
 }
 
 #[test]
+fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_no_live_attempts_exist(
+) {
+    let verify_db = verify_db::TestDatabase::new();
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: paper"), "{text}");
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(text.contains("Expectation: paper-no-live"), "{text}");
+
+    verify_db.cleanup();
+}
+
+#[test]
+fn verify_paper_fails_when_live_attempts_are_observed() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_live_attempt("attempt-live-1");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("forbidden live side effects"), "{text}");
+
+    verify_db.cleanup();
+}
+
+#[test]
 fn verify_placeholder_fails_for_missing_config() {
     let output = Command::new(cli::app_live_binary())
         .arg("verify")

@@ -19,6 +19,7 @@ const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
 #[derive(Debug, Clone, Default)]
 pub struct VerifyEvidenceWindow {
     pub attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
+    pub observed_live_attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
     pub journal: Vec<JournalEntryRow>,
     pub shadow_artifacts: Vec<ShadowExecutionArtifactRow>,
     pub live_artifacts: BTreeMap<String, Vec<LiveExecutionArtifactRow>>,
@@ -30,6 +31,7 @@ pub async fn load(
     selection: &VerifyWindowSelection,
 ) -> Result<VerifyEvidenceWindow> {
     let attempts = select_attempts(pool, selection).await?;
+    let observed_live_attempts = select_observed_live_attempts(pool, selection).await?;
     let journal = select_journal(pool, selection).await?;
     let attempt_ids = attempts
         .iter()
@@ -40,6 +42,7 @@ pub async fn load(
         shadow_artifacts: ShadowArtifactRepo
             .list_for_attempts(pool, &attempt_ids)
             .await?,
+        observed_live_attempts,
         live_artifacts: LiveArtifactRepo
             .list_for_attempts(pool, &attempt_ids)
             .await?,
@@ -49,6 +52,24 @@ pub async fn load(
         attempts,
         journal,
     })
+}
+
+async fn select_observed_live_attempts(
+    pool: &PgPool,
+    selection: &VerifyWindowSelection,
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    match selection {
+        VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Paper) => {
+            ExecutionAttemptRepo
+                .list_recent_by_mode(
+                    pool,
+                    Some(ExecutionMode::Live),
+                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
+                )
+                .await
+        }
+        _ => Ok(Vec::new()),
+    }
 }
 
 async fn select_attempts(

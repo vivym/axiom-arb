@@ -193,6 +193,10 @@ impl TestDatabase {
         });
     }
 
+    pub fn seed_live_attempt(&self, attempt_id: &str) {
+        self.seed_attempt(sample_attempt(attempt_id, ExecutionMode::Live));
+    }
+
     pub fn seed_shadow_artifact(&self, row: ShadowExecutionArtifactRow) {
         self.runtime.block_on(async {
             ShadowArtifactRepo
