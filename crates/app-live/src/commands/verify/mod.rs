@@ -3,6 +3,7 @@ use std::{error::Error, fmt::Write as _, io, path::Path};
 use crate::cli::VerifyArgs;
 
 pub mod model;
+pub mod window;
 
 pub fn execute(_args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     let error = io::Error::new(
