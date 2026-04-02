@@ -300,6 +300,16 @@ kind = "relayer_api_key"
 api_key = "relay-key"
 address = "0x1111111111111111111111111111111111111111"
 
+[polymarket.source_overrides]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"
@@ -307,6 +317,46 @@ operator_target_revision = "targets-rev-9"
 [negrisk.rollout]
 approved_families = []
 ready_families = []
+"#
+    .to_owned()
+}
+
+pub fn smoke_ready_config() -> String {
+    r#"[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[polymarket.source_overrides]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
 "#
     .to_owned()
 }
@@ -322,6 +372,10 @@ pub mod config_shapes {
 
     pub fn smoke_rollout_required_config() -> String {
         super::smoke_rollout_required_config()
+    }
+
+    pub fn smoke_ready_config() -> String {
+        super::smoke_ready_config()
     }
 }
 
@@ -358,6 +412,27 @@ pub fn sample_shadow_artifact(attempt_id: &str) -> ShadowExecutionArtifactRow {
             "attempt_id": attempt_id,
             "kind": "shadow_replay",
         }),
+    }
+}
+
+impl TestDatabase {
+    pub fn seed_smoke_runtime_progress(&self, operator_target_revision: &str) {
+        self.seed_adopted_target_with_active_revision(
+            operator_target_revision,
+            Some(operator_target_revision),
+        );
+    }
+
+    pub fn seed_shadow_attempt_with_artifacts(&self, attempt_id: &str) {
+        self.seed_attempt(sample_attempt(attempt_id, ExecutionMode::Shadow));
+        self.seed_shadow_artifact(sample_shadow_artifact(attempt_id));
+    }
+
+    pub fn seed_non_working_smoke_run_window(&self) {
+        self.seed_attempt(sample_attempt(
+            "attempt-shadow-preflight-1",
+            ExecutionMode::Shadow,
+        ));
     }
 }
 

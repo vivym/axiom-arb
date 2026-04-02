@@ -95,6 +95,11 @@ fn evaluate_foundation_outcome(
         return evaluate_paper_outcome(evidence);
     }
 
+    if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::RealUserShadowSmoke)
+    {
+        return evaluate_smoke_outcome(verify_context, evidence);
+    }
+
     (
         model::VerifyVerdict::Fail,
         verify_context.reason.clone().or_else(|| {
@@ -103,6 +108,80 @@ fn evaluate_foundation_outcome(
                     .to_owned(),
             )
         }),
+        vec!["run app-live status --config {config}".to_owned()],
+    )
+}
+
+fn evaluate_smoke_outcome(
+    verify_context: &context::VerifyContext,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
+    let selected_shadow_attempt_count = evidence
+        .attempts
+        .iter()
+        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
+        .count();
+    let has_run_evidence =
+        selected_shadow_attempt_count > 0 || !evidence.replay_shadow_attempt_artifacts.is_empty();
+    let has_consistent_shadow_artifacts = shadow_attempts_have_consistent_artifacts(evidence);
+    let live_side_effect_count: usize = evidence
+        .live_artifacts
+        .values()
+        .map(Vec::len)
+        .sum::<usize>()
+        + evidence
+            .live_submissions
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+        + evidence
+            .attempts
+            .iter()
+            .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
+            .count();
+
+    if live_side_effect_count > 0 {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(format!(
+                "forbidden live side effects: observed {live_side_effect_count} live side effect(s)"
+            )),
+            vec!["stop live activity and inspect recent local execution state".to_owned()],
+        );
+    }
+
+    if !has_run_evidence {
+        return (
+            model::VerifyVerdict::Fail,
+            Some("no credible run evidence exists".to_owned()),
+            vec!["run app-live status --config {config}".to_owned()],
+        );
+    }
+
+    if has_consistent_shadow_artifacts {
+        return (
+            model::VerifyVerdict::Pass,
+            Some(format!(
+                "shadow smoke evidence is complete; shadow attempts: {}",
+                selected_shadow_attempt_count
+            )),
+            vec!["run app-live status --config {config}".to_owned()],
+        );
+    }
+
+    if verify_context.control_plane.rollout_state
+        == Some(model::VerifyControlPlaneRolloutState::Required)
+    {
+        return (
+            model::VerifyVerdict::PassWithWarnings,
+            Some("rollout not ready; smoke run produced no shadow work".to_owned()),
+            vec!["run app-live status --config {config}".to_owned()],
+        );
+    }
+
+    (
+        model::VerifyVerdict::Fail,
+        Some("no credible run evidence exists".to_owned()),
         vec!["run app-live status --config {config}".to_owned()],
     )
 }
@@ -159,7 +238,7 @@ fn render_foundation_report(
     );
     println!(
         "Replay: {}",
-        evidence.shadow_artifacts.len() + evidence.journal.len()
+        replay_evidence_label(verify_context, evidence)
     );
     println!(
         "Side Effects: {}",
@@ -208,6 +287,21 @@ fn render_foundation_report(
     }
 }
 
+fn replay_evidence_label(
+    verify_context: &context::VerifyContext,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> String {
+    if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::RealUserShadowSmoke)
+    {
+        return format!(
+            "shadow attempts: {}",
+            evidence.replay_shadow_attempt_artifacts.len()
+        );
+    }
+
+    (evidence.shadow_artifacts.len() + evidence.journal.len()).to_string()
+}
+
 fn paper_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
     let mut attempt_ids = std::collections::BTreeSet::new();
 
@@ -222,6 +316,36 @@ fn paper_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize 
     }
 
     attempt_ids.len()
+}
+
+fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidenceWindow) -> bool {
+    let shadow_attempt_ids = evidence
+        .attempts
+        .iter()
+        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
+        .map(|row| row.attempt.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    if shadow_attempt_ids.is_empty() {
+        return false;
+    }
+
+    let shadow_artifact_attempt_ids = evidence
+        .shadow_artifacts
+        .iter()
+        .map(|row| row.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let replay_shadow_artifact_attempt_ids = evidence
+        .replay_shadow_attempt_artifacts
+        .iter()
+        .filter(|row| !row.artifacts.is_empty())
+        .map(|row| row.attempt.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    shadow_attempt_ids.iter().all(|attempt_id| {
+        shadow_artifact_attempt_ids.contains(attempt_id)
+            || replay_shadow_artifact_attempt_ids.contains(attempt_id)
+    })
 }
 
 fn render_context_line(label: &str, value: Option<&str>) {

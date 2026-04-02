@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use app_replay::NegRiskShadowAttemptArtifacts;
 use chrono::{DateTime, Utc};
 use domain::ExecutionMode;
 use persistence::{
@@ -20,6 +21,7 @@ const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
 pub struct VerifyEvidenceWindow {
     pub attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
     pub observed_live_attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
+    pub replay_shadow_attempt_artifacts: Vec<NegRiskShadowAttemptArtifacts>,
     pub journal: Vec<JournalEntryRow>,
     pub shadow_artifacts: Vec<ShadowExecutionArtifactRow>,
     pub live_artifacts: BTreeMap<String, Vec<LiveExecutionArtifactRow>>,
@@ -32,6 +34,8 @@ pub async fn load(
 ) -> Result<VerifyEvidenceWindow> {
     let attempts = select_attempts(pool, selection).await?;
     let observed_live_attempts = select_observed_live_attempts(pool, selection).await?;
+    let replay_shadow_attempt_artifacts =
+        load_replay_shadow_attempt_artifacts(pool, selection, &attempts).await;
     let journal = select_journal(pool, selection).await?;
     let attempt_ids = attempts
         .iter()
@@ -43,6 +47,7 @@ pub async fn load(
             .list_for_attempts(pool, &attempt_ids)
             .await?,
         observed_live_attempts,
+        replay_shadow_attempt_artifacts,
         live_artifacts: LiveArtifactRepo
             .list_for_attempts(pool, &attempt_ids)
             .await?,
@@ -52,6 +57,34 @@ pub async fn load(
         attempts,
         journal,
     })
+}
+
+async fn load_replay_shadow_attempt_artifacts(
+    pool: &PgPool,
+    selection: &VerifyWindowSelection,
+    attempts: &[ExecutionAttemptWithCreatedAtRow],
+) -> Vec<NegRiskShadowAttemptArtifacts> {
+    let Ok(rows) = app_replay::load_negrisk_shadow_attempt_artifacts(pool).await else {
+        return Vec::new();
+    };
+
+    if attempts.is_empty() {
+        return match selection {
+            VerifyWindowSelection::LatestForScenario(
+                super::model::VerifyScenario::RealUserShadowSmoke,
+            ) => rows,
+            _ => Vec::new(),
+        };
+    }
+
+    let attempt_ids = attempts
+        .iter()
+        .map(|row| row.attempt.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
+    rows.into_iter()
+        .filter(|row| attempt_ids.contains(row.attempt.attempt_id.as_str()))
+        .collect()
 }
 
 async fn select_observed_live_attempts(

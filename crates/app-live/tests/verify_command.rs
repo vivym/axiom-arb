@@ -254,3 +254,81 @@ fn verify_report_counts_grouped_live_records_by_total_record_count() {
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
 }
+
+#[test]
+fn verify_smoke_passes_when_shadow_only_evidence_is_complete() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_shadow_attempt_with_artifacts("attempt-shadow-1");
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-ready",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: real-user shadow smoke"), "{text}");
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("shadow attempts: 1"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_smoke_requires_real_run_evidence_before_it_can_be_any_pass_variant() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-empty",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("no credible run evidence exists"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_smoke_preflight_only_run_can_warn_without_failing() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    verify_db.seed_non_working_smoke_run_window();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-rollout-required",
+        &verify_db::config_shapes::smoke_rollout_required_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(text.contains("rollout not ready"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
