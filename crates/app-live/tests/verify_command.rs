@@ -67,7 +67,7 @@ fn verify_historical_attempt_window_degrades_when_it_cannot_be_tied_to_current_c
     ));
     let config_path = verify_db::temp_config_path(
         "app-live-verify",
-        &verify_db::config_shapes::live_ready_config_for("targets-rev-9"),
+        &verify_db::live_ready_config_for("targets-rev-9"),
     );
 
     let output = Command::new(cli::app_live_binary())

@@ -242,14 +242,13 @@ impl TestDatabase {
     }
 }
 
-pub mod config_shapes {
-    pub fn live_ready_config() -> String {
-        live_ready_config_for("targets-rev-9")
-    }
+pub fn live_ready_config() -> String {
+    live_ready_config_for("targets-rev-9")
+}
 
-    pub fn live_ready_config_for(operator_target_revision: &str) -> String {
-        format!(
-            r#"[runtime]
+pub fn live_ready_config_for(operator_target_revision: &str) -> String {
+    format!(
+        r#"[runtime]
 mode = "live"
 real_user_shadow_smoke = false
 
@@ -275,11 +274,11 @@ operator_target_revision = "{operator_target_revision}"
 approved_families = ["family-a"]
 ready_families = ["family-a"]
 "#
-        )
-    }
+    )
+}
 
-    pub fn smoke_rollout_required_config() -> String {
-        r#"[runtime]
+pub fn smoke_rollout_required_config() -> String {
+    r#"[runtime]
 mode = "live"
 real_user_shadow_smoke = true
 
@@ -305,7 +304,20 @@ operator_target_revision = "targets-rev-9"
 approved_families = []
 ready_families = []
 "#
-        .to_owned()
+    .to_owned()
+}
+
+pub mod config_shapes {
+    pub fn live_ready_config() -> String {
+        super::live_ready_config()
+    }
+
+    pub fn live_ready_config_for(operator_target_revision: &str) -> String {
+        super::live_ready_config_for(operator_target_revision)
+    }
+
+    pub fn smoke_rollout_required_config() -> String {
+        super::smoke_rollout_required_config()
     }
 }
 
