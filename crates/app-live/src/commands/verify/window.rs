@@ -47,7 +47,10 @@ impl VerifyWindowSelection {
 
         if let Some(since) = since {
             let duration = parse_since(&since)?;
-            return Ok(Self::ExplicitSince(Utc::now() - duration));
+            let selected_at = Utc::now()
+                .checked_sub_signed(duration)
+                .ok_or_else(|| VerifyWindowSelectionError::since_window_overflows_now(since))?;
+            return Ok(Self::ExplicitSince(selected_at));
         }
 
         if to_seq.is_some() {
@@ -106,6 +109,7 @@ pub enum VerifyWindowSelectionError {
     InvalidSinceValue(String),
     UnsupportedSinceSuffix(char),
     SinceValueOverflow { value: String, unit: char },
+    SinceWindowOverflowsNow(String),
 }
 
 impl VerifyWindowSelectionError {
@@ -123,6 +127,10 @@ impl VerifyWindowSelectionError {
 
     fn since_value_overflow(value: String, unit: char) -> Self {
         Self::SinceValueOverflow { value, unit }
+    }
+
+    fn since_window_overflows_now(value: String) -> Self {
+        Self::SinceWindowOverflowsNow(value)
     }
 }
 
@@ -146,6 +154,9 @@ impl fmt::Display for VerifyWindowSelectionError {
             }
             Self::SinceValueOverflow { value, unit } => {
                 write!(f, "since value overflows chrono duration: {value}{unit}")
+            }
+            Self::SinceWindowOverflowsNow(value) => {
+                write!(f, "since window overflows current time: {value}")
             }
         }
     }
@@ -271,6 +282,22 @@ mod tests {
         assert!(matches!(
             parse_since("9223372036854775807s").unwrap_err(),
             super::VerifyWindowSelectionError::SinceValueOverflow { .. }
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_overflowing_since_without_panicking() {
+        let error = VerifyWindowSelection::from_args(
+            None,
+            None,
+            None,
+            Some("9223372036854775s".to_owned()),
+            VerifyScenario::Live,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::VerifyWindowSelectionError::SinceWindowOverflowsNow(_)
         ));
     }
 }
