@@ -12,7 +12,6 @@ use clap::Parser;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("{error}");
         tracing::error!(error = %error, "app-live bootstrap failed");
         process::exit(1);
     }
