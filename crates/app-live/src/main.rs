@@ -1,6 +1,7 @@
 use std::process;
 
 use app_live::cli::{AppLiveCli, AppLiveCommand};
+use app_live::commands::bootstrap::execute as bootstrap_execute;
 use app_live::commands::doctor::execute as doctor_execute;
 use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
@@ -17,6 +18,7 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = AppLiveCli::parse();
     match cli.command {
+        AppLiveCommand::Bootstrap(args) => bootstrap_execute(args),
         AppLiveCommand::Doctor(args) => doctor_execute(args),
         AppLiveCommand::Init(args) => init_execute(args),
         AppLiveCommand::Run(args) => run_execute(args),

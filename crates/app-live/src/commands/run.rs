@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, error::Error};
+use std::{collections::BTreeSet, error::Error, path::Path};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 use observability::{bootstrap_observability, span_names};
@@ -14,10 +14,14 @@ use crate::{
 };
 
 pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
+    run_from_config_path(&args.config)
+}
+
+pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Error>> {
     let observability = bootstrap_observability("app-live");
     let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
     let _bootstrap_guard = bootstrap_span.enter();
-    let raw = load_raw_config_from_path(&args.config)?;
+    let raw = load_raw_config_from_path(config_path)?;
     let validated = ValidatedConfig::new(raw)?;
     let config = validated.for_app_live()?;
     let real_user_shadow_smoke = load_real_user_shadow_smoke_config(&config)?;
@@ -53,7 +57,7 @@ pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
                     )
                     .map_err(|error| {
                         ConfigError::InvalidPolymarketSourceConfig {
-                            value: args.config.display().to_string(),
+                            value: config_path.display().to_string(),
                             message: error,
                         }
                     })?,

@@ -41,13 +41,8 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
     if catalog.adoptable_revisions.is_empty() {
         println!("adoptable = none");
     } else {
-        for adoptable in &catalog.adoptable_revisions {
-            println!(
-                "adoptable adoptable_revision = {} candidate_revision = {} operator_target_revision = {}",
-                adoptable.adoptable_revision,
-                adoptable.candidate_revision,
-                adoptable.rendered_operator_target_revision
-            );
+        for line in adoptable_revision_lines(catalog) {
+            println!("{line}");
         }
     }
 
@@ -69,4 +64,19 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
     } else {
         println!("adopted = none");
     }
+}
+
+pub(crate) fn adoptable_revision_lines(catalog: &TargetCandidatesCatalog) -> Vec<String> {
+    catalog
+        .adoptable_revisions
+        .iter()
+        .map(|adoptable| {
+            format!(
+                "adoptable adoptable_revision = {} candidate_revision = {} operator_target_revision = {}",
+                adoptable.adoptable_revision,
+                adoptable.candidate_revision,
+                adoptable.rendered_operator_target_revision
+            )
+        })
+        .collect()
 }

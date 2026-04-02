@@ -66,7 +66,7 @@ fn doctor_paper_mode_includes_sectioned_summary() {
     );
     assert!(combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
     assert!(
-        combined.contains("Next: run app-live -- run --config"),
+        combined.contains("Next: app-live run --config"),
         "{combined}"
     );
 }
@@ -166,11 +166,11 @@ ready_families = []
         "{combined}"
     );
     assert!(
-        combined.contains("Next: run app-live -- targets candidates --config"),
+        combined.contains("Next: app-live targets candidates --config"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: run app-live -- targets adopt --config"),
+        combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
 }
@@ -316,7 +316,7 @@ quantity = "5"
     assert_section_summary(&combined, "Connectivity", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
     assert!(
-        combined.contains("Next: run app-live -- run --config"),
+        combined.contains("Next: app-live run --config"),
         "{combined}"
     );
 }

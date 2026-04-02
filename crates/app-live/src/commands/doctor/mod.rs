@@ -58,12 +58,40 @@ impl fmt::Display for DoctorFailure {
 
 impl Error for DoctorFailure {}
 
+pub(crate) struct DoctorExecution {
+    report: DoctorReport,
+    next_actions: Vec<String>,
+    failure: Option<DoctorFailure>,
+}
+
+impl DoctorExecution {
+    pub(crate) fn render(&self) {
+        self.report.render(&self.next_actions);
+    }
+
+    pub(crate) fn into_result(self) -> Result<(), Box<dyn Error>> {
+        match self.failure {
+            Some(error) => Err(Box::new(error)),
+            None => Ok(()),
+        }
+    }
+}
+
 pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
+    let execution = run_report(&args);
+    execution.render();
+    execution.into_result()
+}
+
+pub(crate) fn run_report(args: &DoctorArgs) -> DoctorExecution {
     let mut report = DoctorReport::new();
-    let result = execute_inner(&args, &mut report);
+    let failure = execute_inner(args, &mut report).err();
     let next_actions = next_actions(&report, &args.config);
-    report.render(&next_actions);
-    result.map_err(|error| Box::new(error) as Box<dyn Error>)
+    DoctorExecution {
+        report,
+        next_actions,
+        failure,
+    }
 }
 
 fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), DoctorFailure> {
@@ -116,15 +144,15 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
 }
 
 fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+
     if report.section_failed("Target Source") {
         return vec![
             format!(
-                "run app-live -- targets candidates --config {}",
-                config_path.display()
+                "app-live targets candidates --config {quoted_config_path}"
             ),
             format!(
-                "run app-live -- targets adopt --config {} --adoptable-revision <revision>",
-                config_path.display()
+                "app-live targets adopt --config {quoted_config_path} --adoptable-revision <revision>"
             ),
         ];
     }
@@ -137,8 +165,10 @@ fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
         return vec!["fix the reported issue and rerun doctor".to_owned()];
     }
 
-    vec![format!(
-        "run app-live -- run --config {}",
-        config_path.display()
-    )]
+    vec![format!("app-live run --config {quoted_config_path}")]
+}
+
+fn shell_quote(value: String) -> String {
+    let escaped = value.replace('\'', r"'\''");
+    format!("'{escaped}'")
 }

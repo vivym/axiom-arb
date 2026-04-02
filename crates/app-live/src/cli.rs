@@ -7,6 +7,15 @@ pub struct RunArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct BootstrapArgs {
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    #[arg(long)]
+    pub start: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct InitArgs {
     #[arg(long)]
     pub config: PathBuf,
@@ -80,6 +89,7 @@ pub struct AppLiveCli {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum AppLiveCommand {
+    Bootstrap(BootstrapArgs),
     Doctor(DoctorArgs),
     Init(InitArgs),
     Run(RunArgs),
