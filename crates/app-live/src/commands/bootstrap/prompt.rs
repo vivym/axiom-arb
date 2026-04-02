@@ -93,6 +93,31 @@ fn parse_piped_bootstrap_mode(line: &str) -> Result<BootstrapModeSelection, Init
     }
 }
 
+pub fn choose_adoptable_revision<P: PromptIo>(
+    prompt: &mut P,
+    revisions: &[String],
+) -> Result<String, InitError> {
+    if revisions.is_empty() {
+        return Err(InitError::new(
+            "bootstrap could not find any adoptable revisions",
+        ));
+    }
+
+    loop {
+        prompt.println("Choose an adoptable revision for smoke bootstrap:")?;
+        for revision in revisions {
+            prompt.println(revision)?;
+        }
+
+        let selected = prompt.read_line()?.trim().to_owned();
+        if revisions.iter().any(|revision| revision == &selected) {
+            return Ok(selected);
+        }
+
+        prompt.println("Please choose one of the listed adoptable revisions.")?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -186,5 +211,46 @@ mod tests {
 
         assert_eq!(error.to_string(), "bootstrap only supports paper or smoke");
         assert!(prompt.output.is_empty());
+    }
+
+    #[test]
+    fn choose_adoptable_revision_accepts_listed_revision() {
+        let mut prompt = TestPrompt::new(&["adoptable-2"]);
+
+        let selection = super::choose_adoptable_revision(
+            &mut prompt,
+            &["adoptable-1".into(), "adoptable-2".into()],
+        )
+        .expect("listed adoptable revision should be accepted");
+
+        assert_eq!(selection, "adoptable-2");
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Choose an adoptable revision for smoke bootstrap:",
+                "adoptable-1",
+                "adoptable-2",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_adoptable_revision_reprompts_until_listed_revision_is_selected() {
+        let mut prompt = TestPrompt::new(&["candidate-1", "adoptable-1"]);
+
+        let selection = super::choose_adoptable_revision(&mut prompt, &["adoptable-1".into()])
+            .expect("listed adoptable revision should be accepted");
+
+        assert_eq!(selection, "adoptable-1");
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Choose an adoptable revision for smoke bootstrap:",
+                "adoptable-1",
+                "Please choose one of the listed adoptable revisions.",
+                "Choose an adoptable revision for smoke bootstrap:",
+                "adoptable-1",
+            ]
+        );
     }
 }

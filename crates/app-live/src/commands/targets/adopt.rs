@@ -1,10 +1,11 @@
-use std::error::Error;
+use std::{error::Error, path::Path};
 
 use chrono::Utc;
 use persistence::{
     connect_pool_from_env, models::OperatorTargetAdoptionHistoryRow,
     OperatorTargetAdoptionHistoryRepo,
 };
+use sqlx::PgPool;
 
 use crate::{
     cli::TargetAdoptArgs,
@@ -38,51 +39,13 @@ fn execute_inner(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
 
     let summary = runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        let selection = resolve_adoption_selection(
+        adopt_selected_revision(
             &pool,
+            &args.config,
             args.operator_target_revision.as_deref(),
             args.adoptable_revision.as_deref(),
         )
-        .await?;
-        let active_operator_target_revision = load_active_operator_target_revision(&pool).await?;
-        let previous_operator_target_revision = configured_operator_target_revision(&args.config)?;
-        let changed = previous_operator_target_revision.as_deref()
-            != Some(selection.operator_target_revision.as_str());
-        let restart_required = active_operator_target_revision
-            .as_deref()
-            .map(|active| active != selection.operator_target_revision);
-
-        if changed {
-            let history_row = OperatorTargetAdoptionHistoryRow {
-                adoption_id: format!(
-                    "adopt-{}-{}",
-                    Utc::now()
-                        .timestamp_nanos_opt()
-                        .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000),
-                    selection.operator_target_revision
-                ),
-                action_kind: "adopt".to_owned(),
-                operator_target_revision: selection.operator_target_revision.clone(),
-                previous_operator_target_revision: previous_operator_target_revision.clone(),
-                adoptable_revision: selection.adoptable_revision.clone(),
-                candidate_revision: selection.candidate_revision.clone(),
-                adopted_at: Utc::now(),
-            };
-            OperatorTargetAdoptionHistoryRepo
-                .append(&pool, &history_row)
-                .await?;
-            rewrite_operator_target_revision(&args.config, &selection.operator_target_revision)?;
-        }
-
-        Ok::<_, Box<dyn Error>>(AdoptSummary {
-            selection,
-            previous_operator_target_revision: if changed {
-                previous_operator_target_revision
-            } else {
-                None
-            },
-            restart_required,
-        })
+        .await
     })?;
 
     print_summary(&summary);
@@ -102,10 +65,10 @@ fn validate_selector_flags(
     }
 }
 
-struct AdoptSummary {
-    selection: ResolvedAdoptionSelection,
-    previous_operator_target_revision: Option<String>,
-    restart_required: Option<bool>,
+pub(crate) struct AdoptSummary {
+    pub(crate) selection: ResolvedAdoptionSelection,
+    pub(crate) previous_operator_target_revision: Option<String>,
+    pub(crate) restart_required: Option<bool>,
 }
 
 fn print_summary(summary: &AdoptSummary) {
@@ -144,4 +107,55 @@ fn print_summary(summary: &AdoptSummary) {
             None => "unknown",
         }
     );
+}
+
+pub(crate) async fn adopt_selected_revision(
+    pool: &PgPool,
+    config_path: &Path,
+    operator_target_revision: Option<&str>,
+    adoptable_revision: Option<&str>,
+) -> Result<AdoptSummary, Box<dyn Error>> {
+    validate_selector_flags(operator_target_revision, adoptable_revision)?;
+
+    let selection =
+        resolve_adoption_selection(pool, operator_target_revision, adoptable_revision).await?;
+    let active_operator_target_revision = load_active_operator_target_revision(pool).await?;
+    let previous_operator_target_revision = configured_operator_target_revision(config_path)?;
+    let changed = previous_operator_target_revision.as_deref()
+        != Some(selection.operator_target_revision.as_str());
+    let restart_required = active_operator_target_revision
+        .as_deref()
+        .map(|active| active != selection.operator_target_revision);
+
+    if changed {
+        let history_row = OperatorTargetAdoptionHistoryRow {
+            adoption_id: format!(
+                "adopt-{}-{}",
+                Utc::now()
+                    .timestamp_nanos_opt()
+                    .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000),
+                selection.operator_target_revision
+            ),
+            action_kind: "adopt".to_owned(),
+            operator_target_revision: selection.operator_target_revision.clone(),
+            previous_operator_target_revision: previous_operator_target_revision.clone(),
+            adoptable_revision: selection.adoptable_revision.clone(),
+            candidate_revision: selection.candidate_revision.clone(),
+            adopted_at: Utc::now(),
+        };
+        OperatorTargetAdoptionHistoryRepo
+            .append(pool, &history_row)
+            .await?;
+        rewrite_operator_target_revision(config_path, &selection.operator_target_revision)?;
+    }
+
+    Ok(AdoptSummary {
+        selection,
+        previous_operator_target_revision: if changed {
+            previous_operator_target_revision
+        } else {
+            None
+        },
+        restart_required,
+    })
 }

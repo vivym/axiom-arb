@@ -521,7 +521,9 @@ ready_families = []
 }
 
 #[test]
-fn bootstrap_existing_smoke_config_without_target_anchor_points_to_candidates_and_adopt() {
+fn bootstrap_existing_smoke_config_without_target_anchor_points_to_candidates_and_adopt_when_no_adoptables_exist(
+) {
+    let database = BootstrapTestDatabase::new();
     let temp = tempfile::tempdir().expect("temp dir");
     let config_path = temp.path().join("axiom-arb.local.toml");
     fs::write(
@@ -568,7 +570,7 @@ ready_families = []
         .arg("bootstrap")
         .arg("--config")
         .arg(&config_path)
-        .env("DATABASE_URL", default_test_database_url())
+        .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live bootstrap should execute");
 
@@ -590,6 +592,8 @@ ready_families = []
         !combined.contains("app-live targets show-current --config"),
         "{combined}"
     );
+
+    database.cleanup();
 }
 
 #[test]

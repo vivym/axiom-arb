@@ -24,6 +24,14 @@ pub fn print_smoke_ready_summary(config_path: &Path) {
     );
 }
 
+pub fn print_smoke_target_anchor_summary(config_path: &Path) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    println!("Smoke bootstrap target anchor written");
+    println!("Config: {}", config_path.display());
+    println!("Next: app-live bootstrap --config {quoted_config_path}");
+    println!("Next: app-live targets show-current --config {quoted_config_path}");
+}
+
 fn shell_quote(value: String) -> String {
     let escaped = value.replace('\'', r"'\''");
     format!("'{escaped}'")
