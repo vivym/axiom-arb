@@ -5,13 +5,16 @@ use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig}
 use crate::cli::{BootstrapArgs, DoctorArgs};
 use crate::commands::{doctor, init, run};
 
-use super::{error::BootstrapError, output, prompt};
+use super::{
+    error::{BootstrapError, SmokeFollowUp},
+    output, prompt,
+};
 
 const DEFAULT_CONFIG_PATH: &str = "config/axiom-arb.local.toml";
 
 enum ExistingBootstrapMode {
     Paper,
-    Smoke,
+    Smoke(SmokeFollowUp),
 }
 
 enum MissingConfigOutcome {
@@ -36,8 +39,11 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
 
     match detect_existing_bootstrap_mode(&config_path)? {
         ExistingBootstrapMode::Paper => {}
-        ExistingBootstrapMode::Smoke => {
-            return Err(BootstrapError::SmokeConfigCompletionOnly { config_path });
+        ExistingBootstrapMode::Smoke(follow_up) => {
+            return Err(BootstrapError::SmokeConfigCompletionOnly {
+                config_path,
+                follow_up,
+            });
         }
     }
 
@@ -101,13 +107,38 @@ fn detect_existing_bootstrap_mode(
     config_path: &PathBuf,
 ) -> Result<ExistingBootstrapMode, BootstrapError> {
     let raw = load_raw_config_from_path(config_path)?;
-    let validated = ValidatedConfig::new(raw)?;
+
+    if raw.runtime.mode == RuntimeModeToml::Live
+        && raw.runtime.real_user_shadow_smoke
+        && raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+            .is_none()
+    {
+        return Ok(ExistingBootstrapMode::Smoke(
+            SmokeFollowUp::LegacyExplicitTargets,
+        ));
+    }
+
+    let validated = ValidatedConfig::new(raw.clone())?;
     let config = validated.for_app_live()?;
 
     match config.mode() {
         RuntimeModeToml::Paper => Ok(ExistingBootstrapMode::Paper),
         RuntimeModeToml::Live if config.real_user_shadow_smoke() => {
-            Ok(ExistingBootstrapMode::Smoke)
+            let follow_up = match raw
+                .negrisk
+                .as_ref()
+                .and_then(|negrisk| negrisk.target_source.as_ref())
+            {
+                Some(target_source) if target_source.operator_target_revision.is_some() => {
+                    SmokeFollowUp::AlreadyAdopted
+                }
+                Some(_) => SmokeFollowUp::NeedsAdoption,
+                None => SmokeFollowUp::LegacyExplicitTargets,
+            };
+            Ok(ExistingBootstrapMode::Smoke(follow_up))
         }
         RuntimeModeToml::Live => Err(BootstrapError::UnsupportedMode {
             config_path: config_path.clone(),

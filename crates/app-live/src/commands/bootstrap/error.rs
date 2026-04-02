@@ -11,6 +11,7 @@ pub enum BootstrapError {
     },
     SmokeConfigCompletionOnly {
         config_path: PathBuf,
+        follow_up: SmokeFollowUp,
     },
     SmokeStartUnsupported {
         config_path: PathBuf,
@@ -23,6 +24,13 @@ pub enum BootstrapError {
     Config(ConfigError),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SmokeFollowUp {
+    NeedsAdoption,
+    AlreadyAdopted,
+    LegacyExplicitTargets,
+}
+
 impl fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -31,13 +39,34 @@ impl fmt::Display for BootstrapError {
                 "bootstrap currently supports only paper configs for this flow; {} is configured for {mode}",
                 config_path.display()
             ),
-            Self::SmokeConfigCompletionOnly { config_path } => write!(
-                f,
-                "bootstrap smoke follow-through is not implemented yet; {} already exists, so continue with: app-live targets candidates --config {} ; app-live targets adopt --config {} --adoptable-revision ADOPTABLE_REVISION",
-                config_path.display(),
-                shell_quote(config_path.display().to_string()),
-                shell_quote(config_path.display().to_string()),
-            ),
+            Self::SmokeConfigCompletionOnly {
+                config_path,
+                follow_up,
+            } => {
+                let quoted_config_path = shell_quote(config_path.display().to_string());
+                match follow_up {
+                    SmokeFollowUp::NeedsAdoption => write!(
+                        f,
+                        "bootstrap smoke follow-through is not implemented yet; {} already exists, so continue with: app-live targets candidates --config {} ; app-live targets adopt --config {} --adoptable-revision ADOPTABLE_REVISION",
+                        config_path.display(),
+                        quoted_config_path,
+                        quoted_config_path,
+                    ),
+                    SmokeFollowUp::AlreadyAdopted => write!(
+                        f,
+                        "bootstrap smoke follow-through is not implemented yet; {} already has an adopted target anchor, so continue with: app-live targets status --config {} ; app-live targets show-current --config {}",
+                        config_path.display(),
+                        quoted_config_path,
+                        quoted_config_path,
+                    ),
+                    SmokeFollowUp::LegacyExplicitTargets => write!(
+                        f,
+                        "bootstrap smoke follow-through is not implemented yet; {} still uses legacy explicit targets, so move it aside or rewrite it to an adopted target source, then rerun app-live bootstrap --config {} before continuing with targets candidates/adopt",
+                        config_path.display(),
+                        quoted_config_path,
+                    ),
+                }
+            }
             Self::SmokeStartUnsupported { config_path } => write!(
                 f,
                 "bootstrap smoke does not support --start yet; complete config first, then continue with targets workflow using {}",

@@ -490,11 +490,11 @@ ready_families = []
         "{combined}"
     );
     assert!(
-        combined.contains("app-live targets candidates --config"),
+        combined.contains("app-live targets status --config"),
         "{combined}"
     );
     assert!(
-        combined.contains("app-live targets adopt --config"),
+        combined.contains("app-live targets show-current --config"),
         "{combined}"
     );
     assert!(
@@ -503,6 +503,156 @@ ready_families = []
     );
     assert!(
         !combined.contains("Smoke bootstrap config written"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn bootstrap_existing_smoke_config_without_target_anchor_points_to_candidates_and_adopt() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("axiom-arb.local.toml");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x2222222222222222222222222222222222222222"
+
+[negrisk.target_source]
+source = "adopted"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .expect("seed smoke config without target anchor");
+
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(
+        combined.contains("app-live targets candidates --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("app-live targets status --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("app-live targets show-current --config"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn bootstrap_existing_smoke_config_with_legacy_explicit_targets_surfaces_migration_steps() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("axiom-arb.local.toml");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x2222222222222222222222222222222222222222"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    )
+    .expect("seed legacy explicit-target smoke config");
+
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(
+        combined.contains("still uses legacy explicit targets"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("rerun app-live bootstrap --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains(&format!("'{}'", config_path.display())),
         "{combined}"
     );
 }
