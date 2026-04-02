@@ -7,6 +7,7 @@ use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
 use app_live::commands::status::execute as status_execute;
 use app_live::commands::targets::execute as targets_execute;
+use app_live::commands::verify::execute as verify_execute;
 use clap::Parser;
 
 fn main() {
@@ -25,5 +26,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         AppLiveCommand::Status(args) => status_execute(args),
         AppLiveCommand::Run(args) => run_execute(args),
         AppLiveCommand::Targets(args) => targets_execute(args),
+        AppLiveCommand::Verify(args) => verify_execute(args),
     }
 }
