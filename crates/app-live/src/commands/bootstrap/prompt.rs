@@ -2,10 +2,15 @@ use std::io::{self, BufRead, IsTerminal, Write};
 
 use crate::commands::init::{InitError, PromptIo};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootstrapModeSelection {
     Paper,
     Smoke,
+}
+
+pub enum BootstrapModeInput {
+    Terminal,
+    Piped(Option<String>),
 }
 
 pub struct BootstrapPrompt {
@@ -55,9 +60,18 @@ pub fn read_piped_first_line() -> Result<Option<String>, InitError> {
     Ok(Some(line))
 }
 
-pub fn select_bootstrap_mode<P: PromptIo>(
+pub fn choose_bootstrap_mode<P: PromptIo>(
     prompt: &mut P,
+    input: BootstrapModeInput,
 ) -> Result<BootstrapModeSelection, InitError> {
+    match input {
+        BootstrapModeInput::Terminal => select_bootstrap_mode(prompt),
+        BootstrapModeInput::Piped(None) => Ok(BootstrapModeSelection::Paper),
+        BootstrapModeInput::Piped(Some(line)) => parse_piped_bootstrap_mode(&line),
+    }
+}
+
+fn select_bootstrap_mode<P: PromptIo>(prompt: &mut P) -> Result<BootstrapModeSelection, InitError> {
     loop {
         prompt.println("Choose a bootstrap mode:")?;
         prompt.println("paper")?;
@@ -68,5 +82,109 @@ pub fn select_bootstrap_mode<P: PromptIo>(
             "smoke" => return Ok(BootstrapModeSelection::Smoke),
             _ => prompt.println("Please choose one of the listed options.")?,
         }
+    }
+}
+
+fn parse_piped_bootstrap_mode(line: &str) -> Result<BootstrapModeSelection, InitError> {
+    match line.trim().to_lowercase().as_str() {
+        "paper" => Ok(BootstrapModeSelection::Paper),
+        "smoke" => Ok(BootstrapModeSelection::Smoke),
+        _ => Err(InitError::new("bootstrap only supports paper or smoke")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::{choose_bootstrap_mode, BootstrapModeInput, BootstrapModeSelection};
+    use crate::commands::init::{InitError, PromptIo};
+
+    struct TestPrompt {
+        inputs: VecDeque<String>,
+        output: Vec<String>,
+    }
+
+    impl TestPrompt {
+        fn new(inputs: &[&str]) -> Self {
+            Self {
+                inputs: inputs.iter().map(|line| format!("{line}\n")).collect(),
+                output: Vec::new(),
+            }
+        }
+    }
+
+    impl PromptIo for TestPrompt {
+        fn read_line(&mut self) -> Result<String, InitError> {
+            self.inputs.pop_front().ok_or_else(|| {
+                InitError::new("unexpected end of input while reading init wizard answer")
+            })
+        }
+
+        fn println(&mut self, line: &str) -> Result<(), InitError> {
+            self.output.push(line.to_owned());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn choose_bootstrap_mode_accepts_paper_immediately_for_terminal_input() {
+        let mut prompt = TestPrompt::new(&["paper"]);
+
+        let selection = choose_bootstrap_mode(&mut prompt, BootstrapModeInput::Terminal)
+            .expect("paper should be accepted");
+
+        assert!(matches!(selection, BootstrapModeSelection::Paper));
+        assert_eq!(
+            prompt.output,
+            vec!["Choose a bootstrap mode:", "paper", "smoke"]
+        );
+    }
+
+    #[test]
+    fn choose_bootstrap_mode_reprompts_until_paper_or_smoke_for_terminal_input() {
+        let mut prompt = TestPrompt::new(&["live", "smoke"]);
+
+        let selection = choose_bootstrap_mode(&mut prompt, BootstrapModeInput::Terminal)
+            .expect("smoke should be accepted");
+
+        assert!(matches!(selection, BootstrapModeSelection::Smoke));
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Choose a bootstrap mode:",
+                "paper",
+                "smoke",
+                "Please choose one of the listed options.",
+                "Choose a bootstrap mode:",
+                "paper",
+                "smoke",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_bootstrap_mode_defaults_to_paper_when_piped_input_is_empty() {
+        let mut prompt = TestPrompt::new(&[]);
+
+        let selection = choose_bootstrap_mode(&mut prompt, BootstrapModeInput::Piped(None))
+            .expect("empty piped input should default to paper");
+
+        assert!(matches!(selection, BootstrapModeSelection::Paper));
+        assert!(prompt.output.is_empty());
+    }
+
+    #[test]
+    fn choose_bootstrap_mode_rejects_unsupported_piped_mode_explicitly() {
+        let mut prompt = TestPrompt::new(&[]);
+
+        let error = choose_bootstrap_mode(
+            &mut prompt,
+            BootstrapModeInput::Piped(Some("live\n".to_string())),
+        )
+        .expect_err("unsupported piped mode should fail");
+
+        assert_eq!(error.to_string(), "bootstrap only supports paper or smoke");
+        assert!(prompt.output.is_empty());
     }
 }

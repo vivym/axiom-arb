@@ -33,8 +33,10 @@ impl fmt::Display for BootstrapError {
             ),
             Self::SmokeConfigCompletionOnly { config_path } => write!(
                 f,
-                "bootstrap smoke follow-through is not implemented yet; {} already exists, so use the targets workflow directly",
-                config_path.display()
+                "bootstrap smoke follow-through is not implemented yet; {} already exists, so continue with: app-live targets candidates --config {} ; app-live targets adopt --config {} --adoptable-revision ADOPTABLE_REVISION",
+                config_path.display(),
+                shell_quote(config_path.display().to_string()),
+                shell_quote(config_path.display().to_string()),
             ),
             Self::SmokeStartUnsupported { config_path } => write!(
                 f,
@@ -47,6 +49,11 @@ impl fmt::Display for BootstrapError {
             Self::Config(error) => error.fmt(f),
         }
     }
+}
+
+fn shell_quote(value: String) -> String {
+    let escaped = value.replace('\'', r"'\''");
+    format!("'{escaped}'")
 }
 
 impl Error for BootstrapError {}

@@ -64,21 +64,15 @@ fn complete_missing_config(
     config_path: &std::path::Path,
     start_requested: bool,
 ) -> Result<MissingConfigOutcome, BootstrapError> {
+    let mut prompt = prompt::BootstrapPrompt::new(None);
     let selection = if prompt::stdin_is_terminal() {
-        let mut prompt = prompt::BootstrapPrompt::new(None);
-        prompt::select_bootstrap_mode(&mut prompt)
+        prompt::choose_bootstrap_mode(&mut prompt, prompt::BootstrapModeInput::Terminal)
             .map_err(|error| BootstrapError::Init(Box::new(error)))?
     } else {
-        match prompt::read_piped_first_line()
+        let first_line = prompt::read_piped_first_line()
+            .map_err(|error| BootstrapError::Init(Box::new(error)))?;
+        prompt::choose_bootstrap_mode(&mut prompt, prompt::BootstrapModeInput::Piped(first_line))
             .map_err(|error| BootstrapError::Init(Box::new(error)))?
-        {
-            Some(first_line) => {
-                let mut prompt = prompt::BootstrapPrompt::new(Some(first_line));
-                prompt::select_bootstrap_mode(&mut prompt)
-                    .map_err(|error| BootstrapError::Init(Box::new(error)))?
-            }
-            None => prompt::BootstrapModeSelection::Paper,
-        }
     };
 
     let wizard = match selection {

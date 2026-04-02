@@ -327,7 +327,7 @@ fn bootstrap_smoke_completes_local_config() {
     assert!(rollout.ready_families().is_empty());
 
     let combined = combined(&output);
-    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(!combined.contains("Choose a bootstrap mode:"), "{combined}");
     assert!(!combined.contains("Choose an init mode:"), "{combined}");
     assert!(
         combined.contains("app-live targets candidates --config"),
@@ -376,13 +376,13 @@ fn bootstrap_rejects_live_selection_without_persisting_live_config() {
     );
 
     let combined = combined(&output);
-    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(!combined.contains("Choose a bootstrap mode:"), "{combined}");
     assert!(
-        combined.contains("Please choose one of the listed options."),
+        !combined.contains("Please choose one of the listed options."),
         "{combined}"
     );
     assert!(
-        combined.contains("unexpected end of input while reading init wizard answer"),
+        combined.contains("bootstrap only supports paper or smoke"),
         "{combined}"
     );
 }
@@ -419,7 +419,7 @@ fn bootstrap_smoke_start_fails_closed_without_writing_config() {
     );
 
     let combined = combined(&output);
-    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(!combined.contains("Choose a bootstrap mode:"), "{combined}");
     assert!(
         combined.contains("bootstrap smoke does not support --start yet"),
         "{combined}"
@@ -490,15 +490,19 @@ ready_families = []
         "{combined}"
     );
     assert!(
+        combined.contains("app-live targets candidates --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(
         combined.contains(&config_path.display().to_string()),
         "{combined}"
     );
     assert!(
         !combined.contains("Smoke bootstrap config written"),
-        "{combined}"
-    );
-    assert!(
-        !combined.contains("app-live targets adopt --config"),
         "{combined}"
     );
 }
