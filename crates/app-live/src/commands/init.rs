@@ -3,7 +3,7 @@ mod render;
 mod summary;
 mod wizard;
 
-use std::{error::Error, fmt, fs};
+use std::{error::Error, fmt, fs, path::Path};
 
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
@@ -55,12 +55,7 @@ fn execute_with_prompt<P: prompt::PromptIo>(
     args: &InitArgs,
 ) -> Result<(), InitError> {
     let wizard = wizard::run(prompt, &args.config)?;
-    validate_rendered_config(&wizard.rendered_config)?;
-
-    if let Some(parent) = args.config.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&args.config, wizard.rendered_config)?;
+    validate_and_write_rendered_config(&args.config, &wizard.rendered_config)?;
 
     for section in &wizard.summary.sections {
         prompt.println(section.title)?;
@@ -69,6 +64,23 @@ fn execute_with_prompt<P: prompt::PromptIo>(
         }
     }
 
+    Ok(())
+}
+
+pub fn paper_wizard_result(config_path: &Path) -> Result<wizard::WizardResult, InitError> {
+    Ok(wizard::paper(config_path))
+}
+
+pub fn validate_and_write_rendered_config(
+    config_path: &Path,
+    rendered_config: &str,
+) -> Result<(), InitError> {
+    validate_rendered_config(rendered_config)?;
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(config_path, rendered_config)?;
     Ok(())
 }
 

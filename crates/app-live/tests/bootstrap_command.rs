@@ -1,5 +1,10 @@
 use std::{fs, path::PathBuf, process::Command};
 
+use app_live::{
+    cli::DoctorArgs,
+    commands::{doctor, init, run},
+};
+
 #[test]
 fn bootstrap_help_lists_command() {
     let output = Command::new(app_live_binary())
@@ -188,6 +193,44 @@ ready_families = []
         "{}",
         combined
     );
+}
+
+#[test]
+fn bootstrap_reuses_init_doctor_run_semantics_for_paper() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("config").join("axiom-arb.local.toml");
+
+    let wizard = init::paper_wizard_result(&config_path).expect("paper wizard result");
+    init::validate_and_write_rendered_config(&config_path, &wizard.rendered_config)
+        .expect("paper config should write");
+
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("written config"),
+        wizard.rendered_config
+    );
+
+    unsafe {
+        std::env::set_var("DATABASE_URL", default_test_database_url());
+    }
+
+    let doctor_result = doctor::run_report(DoctorArgs {
+        config: config_path.clone(),
+    })
+    .expect("doctor should pass for generated paper config");
+    assert!(doctor_result.succeeded());
+    assert_eq!(
+        doctor_result.report().overall_result().to_string(),
+        "PASS WITH SKIPS"
+    );
+    assert_eq!(
+        doctor_result.next_actions(),
+        &[format!(
+            "app-live run --config '{}'",
+            config_path.display().to_string()
+        )]
+    );
+
+    run::run_from_config_path(&config_path).expect("paper run helper should execute");
 }
 
 fn app_live_binary() -> PathBuf {

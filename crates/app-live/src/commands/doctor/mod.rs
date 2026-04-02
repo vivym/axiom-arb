@@ -58,12 +58,52 @@ impl fmt::Display for DoctorFailure {
 
 impl Error for DoctorFailure {}
 
+pub struct DoctorExecution {
+    report: DoctorReport,
+    next_actions: Vec<String>,
+    failure: Option<DoctorFailure>,
+}
+
+impl DoctorExecution {
+    pub fn report(&self) -> &DoctorReport {
+        &self.report
+    }
+
+    pub fn next_actions(&self) -> &[String] {
+        &self.next_actions
+    }
+
+    pub fn succeeded(&self) -> bool {
+        self.failure.is_none()
+    }
+
+    pub fn render(&self) {
+        self.report.render(&self.next_actions);
+    }
+
+    pub fn into_result(self) -> Result<(), Box<dyn Error>> {
+        match self.failure {
+            Some(error) => Err(Box::new(error)),
+            None => Ok(()),
+        }
+    }
+}
+
 pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
+    let execution = run_report(args)?;
+    execution.render();
+    execution.into_result()
+}
+
+pub fn run_report(args: DoctorArgs) -> Result<DoctorExecution, Box<dyn Error>> {
     let mut report = DoctorReport::new();
-    let result = execute_inner(&args, &mut report);
+    let failure = execute_inner(&args, &mut report).err();
     let next_actions = next_actions(&report, &args.config);
-    report.render(&next_actions);
-    result.map_err(|error| Box::new(error) as Box<dyn Error>)
+    Ok(DoctorExecution {
+        report,
+        next_actions,
+        failure,
+    })
 }
 
 fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), DoctorFailure> {

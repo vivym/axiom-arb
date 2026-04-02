@@ -1,17 +1,13 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 
-use crate::cli::{BootstrapArgs, DoctorArgs, RunArgs};
-use crate::commands::{doctor, run};
+use crate::cli::{BootstrapArgs, DoctorArgs};
+use crate::commands::{doctor, init, run};
 
 use super::{error::BootstrapError, output};
 
 const DEFAULT_CONFIG_PATH: &str = "config/axiom-arb.local.toml";
-const PAPER_CONFIG: &str = "[runtime]\nmode = \"paper\"\n";
 
 pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     let config_path = args
@@ -24,17 +20,18 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
 
     ensure_paper_mode(&config_path)?;
 
-    doctor::execute(DoctorArgs {
+    let doctor_execution = doctor::run_report(DoctorArgs {
         config: config_path.clone(),
     })
     .map_err(BootstrapError::Doctor)?;
+    doctor_execution.render();
+    doctor_execution
+        .into_result()
+        .map_err(BootstrapError::Doctor)?;
 
     if args.start {
         output::print_starting_runtime(&config_path);
-        run::execute(RunArgs {
-            config: config_path,
-        })
-        .map_err(BootstrapError::Run)?;
+        run::run_from_config_path(&config_path).map_err(BootstrapError::Run)?;
     } else {
         output::print_ready_summary(&config_path);
     }
@@ -42,11 +39,11 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     Ok(())
 }
 
-fn write_paper_config(config_path: &Path) -> Result<(), BootstrapError> {
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(config_path, PAPER_CONFIG)?;
+fn write_paper_config(config_path: &std::path::Path) -> Result<(), BootstrapError> {
+    let wizard = init::paper_wizard_result(config_path)
+        .map_err(|error| BootstrapError::Init(Box::new(error)))?;
+    init::validate_and_write_rendered_config(config_path, &wizard.rendered_config)
+        .map_err(|error| BootstrapError::Init(Box::new(error)))?;
     Ok(())
 }
 

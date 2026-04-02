@@ -13,19 +13,23 @@ pub struct WizardResult {
     pub summary: WizardSummary,
 }
 
+pub fn paper(config_path: &Path) -> WizardResult {
+    WizardResult {
+        rendered_config: render_paper_config(),
+        summary: summary::render(InitSummary {
+            mode: WizardMode::Paper,
+            config_path,
+            configured_operator_target_revision: None,
+            rollout_is_empty: true,
+        }),
+    }
+}
+
 pub fn run<P: PromptIo>(prompt: &mut P, config_path: &Path) -> Result<WizardResult, InitError> {
     match prompt::select_one(prompt, "Choose an init mode:", &["paper", "live", "smoke"])? {
         0 => {
             confirm_replace_if_needed(prompt, config_path)?;
-            Ok(WizardResult {
-                rendered_config: render_paper_config(),
-                summary: summary::render(InitSummary {
-                    mode: WizardMode::Paper,
-                    config_path,
-                    configured_operator_target_revision: None,
-                    rollout_is_empty: true,
-                }),
-            })
+            Ok(paper(config_path))
         }
         1 => render_live_or_smoke(prompt, config_path, false),
         2 => render_live_or_smoke(prompt, config_path, true),
