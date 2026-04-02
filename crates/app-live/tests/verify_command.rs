@@ -21,3 +21,17 @@ fn verify_subcommand_is_exposed() {
     assert!(text.contains("--attempt-id"), "{text}");
     assert!(text.contains("--since"), "{text}");
 }
+
+#[test]
+fn verify_placeholder_fails_for_missing_config() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg("/definitely/missing.toml")
+        .output()
+        .expect("app-live verify --config /definitely/missing.toml should execute");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("not implemented"), "{text}");
+}
