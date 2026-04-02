@@ -10,13 +10,16 @@ use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use crate::cli::InitArgs;
 use prompt::TerminalPrompt;
 
+pub(crate) use prompt::PromptIo;
+pub(crate) use wizard::WizardResult;
+
 #[derive(Debug)]
 pub struct InitError {
     message: String,
 }
 
 impl InitError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -70,11 +73,11 @@ pub(crate) fn execute_with_prompt<P: prompt::PromptIo>(
 pub(crate) fn run_wizard_with_prompt<P: prompt::PromptIo>(
     prompt: &mut P,
     config_path: &Path,
-) -> Result<wizard::WizardResult, InitError> {
+) -> Result<WizardResult, InitError> {
     wizard::run(prompt, config_path)
 }
 
-pub(crate) fn paper_wizard_result(config_path: &Path) -> Result<wizard::WizardResult, InitError> {
+pub(crate) fn paper_wizard_result(config_path: &Path) -> Result<WizardResult, InitError> {
     Ok(wizard::paper(config_path))
 }
 

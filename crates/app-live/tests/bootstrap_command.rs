@@ -1,4 +1,11 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
+
+use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
 #[test]
 fn bootstrap_help_lists_command() {
@@ -273,6 +280,67 @@ fn bootstrap_reuses_init_doctor_run_semantics_for_paper() {
         )),
         "{init_text}"
     );
+}
+
+#[test]
+fn bootstrap_smoke_completes_local_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("config").join("axiom-arb.local.toml");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .current_dir(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live bootstrap should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"smoke\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(&config_path).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let live = validated
+        .for_app_live()
+        .expect("generated live config should validate for app-live");
+
+    assert_eq!(live.mode(), config_schema::RuntimeModeToml::Live);
+    assert!(live.real_user_shadow_smoke());
+    let target_source = live.target_source().expect("target source should exist");
+    assert!(target_source.is_adopted());
+    assert!(target_source.operator_target_revision().is_none());
+
+    let rollout = live.negrisk_rollout().expect("rollout should exist");
+    assert!(rollout.approved_families().is_empty());
+    assert!(rollout.ready_families().is_empty());
+
+    let combined = combined(&output);
+    assert!(
+        combined.contains("app-live targets candidates --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(!combined.contains("Paper bootstrap ready"), "{combined}");
+    assert!(
+        !combined.contains("Runtime not started. Re-run with --start"),
+        "{combined}"
+    );
+    assert!(!combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
 }
 
 fn app_live_binary() -> PathBuf {

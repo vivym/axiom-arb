@@ -1,6 +1,7 @@
 mod error;
 mod flow;
 mod output;
+mod prompt;
 
 use std::error::Error;
 
