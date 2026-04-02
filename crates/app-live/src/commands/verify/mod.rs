@@ -142,7 +142,12 @@ fn render_foundation_report(
 ) {
     let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
     let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
-    let forbidden_live_attempt_count = paper_live_attempt_count(evidence);
+    let forbidden_live_attempt_count =
+        if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Paper) {
+            paper_live_attempt_count(evidence)
+        } else {
+            0
+        };
 
     println!("Scenario: {}", verify_context.scenario.label());
     println!("Verdict: {}", verdict_label_upper(verdict));
