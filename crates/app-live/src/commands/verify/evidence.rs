@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use domain::ExecutionMode;
 use persistence::{
     models::{
         ExecutionAttemptWithCreatedAtRow, JournalEntryRow, LiveExecutionArtifactRow,
@@ -55,10 +56,8 @@ async fn select_attempts(
     selection: &VerifyWindowSelection,
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     match selection {
-        VerifyWindowSelection::LatestForScenario => {
-            ExecutionAttemptRepo
-                .list_recent(pool, DEFAULT_RECENT_ATTEMPTS_LIMIT)
-                .await
+        VerifyWindowSelection::LatestForScenario(scenario) => {
+            select_latest_attempts_for_scenario(pool, *scenario).await
         }
         VerifyWindowSelection::ExplicitAttemptId(attempt_id) => ExecutionAttemptRepo
             .get_by_attempt_id(pool, attempt_id)
@@ -85,11 +84,36 @@ async fn select_journal(
 }
 
 async fn list_journal_since(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<JournalEntryRow>> {
-    let current = persistence::RuntimeProgressRepo.current(pool).await?;
-    let from_seq = current.map(|row| row.last_journal_seq).unwrap_or_default();
-    let rows = JournalRepo.list_range(pool, from_seq, None).await?;
+    let rows = JournalRepo.list_range(pool, 0, None).await?;
     Ok(rows
         .into_iter()
         .filter(|row| row.event_ts >= since || row.ingested_at >= since)
         .collect())
+}
+
+async fn select_latest_attempts_for_scenario(
+    pool: &PgPool,
+    scenario: super::model::VerifyScenario,
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    match scenario {
+        super::model::VerifyScenario::Paper => Ok(Vec::new()),
+        super::model::VerifyScenario::Live => {
+            ExecutionAttemptRepo
+                .list_recent_by_mode(
+                    pool,
+                    Some(ExecutionMode::Live),
+                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
+                )
+                .await
+        }
+        super::model::VerifyScenario::RealUserShadowSmoke => {
+            ExecutionAttemptRepo
+                .list_recent_by_mode(
+                    pool,
+                    Some(ExecutionMode::Shadow),
+                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
+                )
+                .await
+        }
+    }
 }

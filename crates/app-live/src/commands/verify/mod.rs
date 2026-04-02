@@ -110,13 +110,16 @@ fn render_foundation_report(
     evidence: &evidence::VerifyEvidenceWindow,
     config_path: &Path,
 ) {
+    let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
+    let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
+
     println!("Scenario: {}", verify_context.scenario.label());
     println!("Verdict: {}", verdict_label_upper(verdict));
     println!("Result Evidence");
     println!("Attempts: {}", evidence.attempts.len());
     println!(
         "Artifacts: {}",
-        evidence.shadow_artifacts.len() + evidence.live_artifacts.len()
+        evidence.shadow_artifacts.len() + live_artifact_count
     );
     println!(
         "Replay: {}",
@@ -124,7 +127,7 @@ fn render_foundation_report(
     );
     println!(
         "Side Effects: {}",
-        evidence.live_artifacts.len() + evidence.live_submissions.len()
+        live_artifact_count + live_submission_count
     );
     println!("Control-Plane Context");
     println!("Expectation: {}", verify_context.expectation.label());

@@ -5,7 +5,7 @@ use super::model::VerifyScenario;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyWindowSelection {
-    LatestForScenario,
+    LatestForScenario(VerifyScenario),
     ExplicitAttemptId(String),
     ExplicitSeqRange { from_seq: i64, to_seq: Option<i64> },
     ExplicitSince(DateTime<Utc>),
@@ -57,7 +57,7 @@ impl VerifyWindowSelection {
             return Err(VerifyWindowSelectionError::ToSeqRequiresFromSeq);
         }
 
-        Ok(Self::LatestForScenario)
+        Ok(Self::LatestForScenario(_scenario))
     }
 
     pub fn is_historical_explicit(&self) -> bool {

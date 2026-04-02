@@ -2059,27 +2059,62 @@ impl ExecutionAttemptRepo {
         pool: &PgPool,
         limit: i64,
     ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                attempt_id,
-                plan_id,
-                snapshot_id,
-                route,
-                scope,
-                matched_rule_id,
-                execution_mode,
-                attempt_no,
-                idempotency_key,
-                created_at
-            FROM execution_attempts
-            ORDER BY created_at DESC, attempt_id DESC
-            LIMIT $1
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+        self.list_recent_by_mode(pool, None, limit).await
+    }
+
+    pub async fn list_recent_by_mode(
+        &self,
+        pool: &PgPool,
+        mode: Option<domain::ExecutionMode>,
+        limit: i64,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = if let Some(mode) = mode {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key,
+                    created_at
+                FROM execution_attempts
+                WHERE execution_mode = $1
+                ORDER BY created_at DESC, attempt_id DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(execution_mode_to_str(mode))
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key,
+                    created_at
+                FROM execution_attempts
+                ORDER BY created_at DESC, attempt_id DESC
+                LIMIT $1
+                "#,
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+        };
 
         rows.into_iter()
             .map(map_execution_attempt_with_created_at_row)
