@@ -39,6 +39,7 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     let config_path = args
         .config
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+    let mut smoke_mode = false;
 
     if !config_path.exists() {
         match complete_missing_config(&config_path, args.start)? {
@@ -55,11 +56,11 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
         ExistingBootstrapMode::Smoke(follow_up) => match follow_up {
             SmokeFollowUp::NeedsAdoption => {
                 inline_smoke_adoption(&config_path)?;
+                smoke_mode = true;
                 output::print_smoke_target_anchor_summary(&config_path);
-                return finish_smoke_bootstrap(&config_path, args.start);
             }
             SmokeFollowUp::AlreadyAdopted => {
-                return finish_smoke_bootstrap(&config_path, args.start)
+                smoke_mode = true;
             }
             SmokeFollowUp::LegacyExplicitTargets => {
                 return Err(BootstrapError::SmokeConfigCompletionOnly {
@@ -68,7 +69,7 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
                 });
             }
         },
-    }
+    };
 
     let doctor_args = DoctorArgs {
         config: config_path.clone(),
@@ -79,11 +80,29 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
         .into_result()
         .map_err(BootstrapError::Doctor)?;
 
+    let smoke_state = if smoke_mode {
+        Some(ensure_smoke_rollout_state(&config_path, args.start)?)
+    } else {
+        None
+    };
+
     if args.start {
-        output::print_starting_runtime(&config_path);
+        if smoke_state.is_some() {
+            output::print_starting_smoke_runtime(&config_path);
+        } else {
+            output::print_starting_runtime(&config_path);
+        }
         run::run_from_config_path(&config_path).map_err(BootstrapError::Run)?;
     } else {
-        output::print_ready_summary(&config_path);
+        match smoke_state {
+            Some(SmokeBootstrapState::PreflightOnly { family_ids }) => {
+                output::print_smoke_preflight_only_summary(&config_path, &family_ids);
+            }
+            Some(SmokeBootstrapState::ShadowWorkReady { family_ids }) => {
+                output::print_smoke_rollout_ready_summary(&config_path, &family_ids);
+            }
+            None => output::print_ready_summary(&config_path),
+        }
     }
 
     Ok(())
@@ -214,19 +233,6 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<(), BootstrapError> {
         ))
         .map(|_| ())
         .map_err(BootstrapError::Init)
-}
-
-fn finish_smoke_bootstrap(config_path: &Path, start_requested: bool) -> Result<(), BootstrapError> {
-    match ensure_smoke_rollout_state(config_path, start_requested)? {
-        SmokeBootstrapState::PreflightOnly { family_ids } => {
-            output::print_smoke_preflight_only_summary(config_path, &family_ids);
-            Ok(())
-        }
-        SmokeBootstrapState::ShadowWorkReady { family_ids } => {
-            output::print_smoke_rollout_ready_summary(config_path, &family_ids);
-            Ok(())
-        }
-    }
 }
 
 fn ensure_smoke_rollout_state(

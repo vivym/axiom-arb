@@ -14,6 +14,11 @@ pub fn print_starting_runtime(config_path: &Path) {
     println!("Paper bootstrap ready. Starting runtime with config {quoted_config_path}",);
 }
 
+pub fn print_starting_smoke_runtime(config_path: &Path) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    println!("Smoke bootstrap ready. Starting runtime with config {quoted_config_path}",);
+}
+
 pub fn print_smoke_ready_summary(config_path: &Path) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
     println!("Smoke bootstrap config written");
