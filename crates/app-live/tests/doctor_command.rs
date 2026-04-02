@@ -72,6 +72,32 @@ fn doctor_paper_mode_includes_sectioned_summary() {
 }
 
 #[test]
+fn doctor_paper_mode_quotes_follow_up_config_paths_with_spaces() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let config_dir = temp_dir.path().join("config with spaces");
+    fs::create_dir_all(&config_dir).expect("config dir with spaces");
+    let config_path = config_dir.join("app live paper.toml");
+    fs::copy(config_fixture("fixtures/app-live-paper.toml"), &config_path)
+        .expect("copy paper fixture into spaced path");
+
+    let output = Command::new(app_live_binary())
+        .arg("doctor")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    let expected = format!(
+        "Next: app-live run --config '{}'",
+        config_path.display().to_string().replace('\'', r"'\''")
+    );
+    assert!(combined.contains(&expected), "{combined}");
+}
+
+#[test]
 fn doctor_paper_mode_fails_without_database_url() {
     let output = Command::new(app_live_binary())
         .arg("doctor")
