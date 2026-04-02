@@ -57,7 +57,6 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
             SmokeFollowUp::NeedsAdoption => {
                 inline_smoke_adoption(&config_path)?;
                 smoke_mode = true;
-                output::print_smoke_target_anchor_summary(&config_path);
             }
             SmokeFollowUp::AlreadyAdopted => {
                 smoke_mode = true;
