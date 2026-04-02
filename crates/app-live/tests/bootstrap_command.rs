@@ -756,10 +756,126 @@ ready_families = ["family-a"]
     assert!(output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
     assert!(
-        combined.contains("Smoke bootstrap ready. Starting runtime with"),
+        combined.contains("Smoke bootstrap reached shadow-work-ready smoke startup"),
         "{combined}"
     );
     assert!(combined.contains("app_mode=live"), "{combined}");
+
+    database.cleanup();
+}
+
+#[test]
+fn bootstrap_smoke_summary_distinguishes_preflight_and_shadow_ready() {
+    let database = BootstrapTestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let venue = MockDoctorVenue::success();
+
+    let preflight_temp = tempfile::tempdir().expect("preflight temp dir");
+    let preflight_config_path = preflight_temp.path().join("axiom-arb.local.toml");
+    let smoke_config = format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x2222222222222222222222222222222222222222"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    );
+    fs::write(&preflight_config_path, &smoke_config).expect("seed preflight-only smoke config");
+
+    let mut preflight_child = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&preflight_config_path)
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("preflight-only bootstrap should spawn");
+
+    preflight_child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"preflight-only\n")
+        .expect("preflight-only selection should write");
+
+    let preflight_output = preflight_child.wait_with_output().expect("output");
+    assert!(
+        preflight_output.status.success(),
+        "{}",
+        combined(&preflight_output)
+    );
+    let preflight_combined = combined(&preflight_output);
+    assert!(
+        preflight_combined.contains("preflight-ready smoke"),
+        "{preflight_combined}"
+    );
+
+    let ready_temp = tempfile::tempdir().expect("ready temp dir");
+    let ready_config_path = ready_temp.path().join("axiom-arb.local.toml");
+    fs::write(&ready_config_path, smoke_config).expect("seed rollout-ready smoke config");
+
+    let mut ready_child = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&ready_config_path)
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("shadow-work-ready bootstrap should spawn");
+
+    ready_child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"enable\n")
+        .expect("rollout selection should write");
+
+    let ready_output = ready_child.wait_with_output().expect("output");
+    assert!(ready_output.status.success(), "{}", combined(&ready_output));
+    let ready_combined = combined(&ready_output);
+    assert!(
+        ready_combined.contains("shadow-work-ready smoke"),
+        "{ready_combined}"
+    );
 
     database.cleanup();
 }

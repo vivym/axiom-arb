@@ -16,7 +16,9 @@ pub fn print_starting_runtime(config_path: &Path) {
 
 pub fn print_starting_smoke_runtime(config_path: &Path) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    println!("Smoke bootstrap ready. Starting runtime with config {quoted_config_path}",);
+    println!(
+        "Smoke bootstrap reached shadow-work-ready smoke startup. Starting runtime with config {quoted_config_path}",
+    );
 }
 
 pub fn print_smoke_ready_summary(config_path: &Path) {
@@ -31,7 +33,7 @@ pub fn print_smoke_ready_summary(config_path: &Path) {
 
 pub fn print_smoke_preflight_only_summary(config_path: &Path, family_ids: &[String]) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    println!("Smoke bootstrap is preflight-only");
+    println!("Smoke bootstrap reached preflight-ready smoke startup");
     println!("Config: {}", config_path.display());
     println!("Adopted families: {}", family_ids.join(", "));
     println!("Next: app-live bootstrap --config {quoted_config_path}");
@@ -39,7 +41,7 @@ pub fn print_smoke_preflight_only_summary(config_path: &Path, family_ids: &[Stri
 
 pub fn print_smoke_rollout_ready_summary(config_path: &Path, family_ids: &[String]) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    println!("Smoke bootstrap is shadow-work-ready");
+    println!("Smoke bootstrap reached shadow-work-ready smoke startup");
     println!("Config: {}", config_path.display());
     println!("Rollout families: {}", family_ids.join(", "));
     println!("Next: app-live bootstrap --config {quoted_config_path}");

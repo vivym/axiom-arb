@@ -10,7 +10,13 @@ Set the same database that `app-live` and `app-replay` will read. `DATABASE_URL`
 export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
 ```
 
-Prepare a smoke config at `config/axiom-arb.local.toml` by running the wizard flow with `app-live init --config config/axiom-arb.local.toml` and then stepping through `targets candidates` and `targets adopt --adoptable-revision <ADOPTABLE_REVISION>` before `doctor` and `run`, or by copying `config/axiom-arb.example.toml` and then reviewing the long-lived operator settings. The smoke config must keep rollout lists empty until the wizard surfaces a real adoptable revision:
+Prepare a smoke config at `config/axiom-arb.local.toml` with the preferred high-level flow:
+
+```bash
+cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml
+```
+
+For smoke, `bootstrap` reuses the init wizard, keeps startup authority on `[negrisk.target_source].operator_target_revision`, prompts for an explicit adoptable revision when no target anchor exists yet, and then asks whether to stay in `preflight-ready smoke startup` or explicitly enable `shadow-work-ready smoke startup` for the adopted family set. If you prefer the lower-level path, you can still run `app-live init`, `targets candidates`, and `targets adopt` manually, or copy `config/axiom-arb.example.toml` and review the long-lived operator settings. The smoke config must keep rollout lists empty until the operator explicitly confirms the smoke-only rollout posture:
 
 ```toml
 [runtime]
@@ -20,9 +26,9 @@ real_user_shadow_smoke = true
 
 Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the `neg-risk` shadow-ready rollout state.
 
-If you are only checking connectivity and smoke preflight, stop after `doctor` and `run` and expect zero `neg-risk` shadow rows. If you want the later SQL checks to expect shadow attempts, populate `approved_families` and `ready_families` first, or otherwise establish rollout readiness before starting the run.
+If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists and `bootstrap --start` may continue into `run`.
 
-Before running the smoke, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
+Before running the smoke with the lower-level path, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
 
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
@@ -34,14 +40,21 @@ cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 
 ## Run
 
-Preflight the smoke config, then start `app-live` with the smoke config:
+With the preferred high-level flow, stop after `bootstrap` or continue straight into runtime:
+
+```bash
+cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml
+cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml --start
+```
+
+If you are using the lower-level path, preflight the smoke config, then start `app-live` with the smoke config:
 
 ```bash
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
 
-`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode.
+`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `bootstrap --start` reuses that same `doctor -> run` sequence; it does not bypass preflight.
 
 Interpret the ending of the `doctor` report like this:
 
@@ -116,7 +129,7 @@ Pass if all of the following are true:
 - `shadow_execution_artifacts` contains rows for those attempts
 - `app-replay` emits the structured `app-replay neg-risk shadow smoke` summary when those rows exist
 
-If rollout readiness is intentionally left empty, zero `neg-risk` shadow rows is an expected outcome and this runbook should be treated as a preflight-only smoke.
+If rollout readiness is intentionally left empty, zero `neg-risk` shadow rows is an expected outcome and this runbook should be treated as `preflight-ready smoke startup`, not `shadow-work-ready smoke startup`.
 
 Fail if any of the following happen:
 
