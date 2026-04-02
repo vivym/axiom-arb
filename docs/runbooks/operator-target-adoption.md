@@ -39,7 +39,25 @@ Expected output shape:
 
 Use this command to choose the revision you want to adopt. `advisory` rows are not yet adopted. `adoptable` rows are eligible inputs to `targets adopt`.
 
-## 2. Check Current Configured Vs Active State
+## 2. Check High-Level Readiness First
+
+Start with the high-level readiness view:
+
+```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
+```
+
+`status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
+
+- `targets adopt`
+- rollout enablement
+- controlled restart
+- `doctor`
+- `run`
+
+Then drop into the lower-level control-plane views when you need exact provenance.
+
+## 3. Check Current Configured Vs Active State
 
 Get a compact status summary:
 
@@ -74,7 +92,7 @@ Interpretation:
 - if they differ, the new target is configured but not yet active
 - `restart_needed = true` means a controlled restart is required before the daemon will use the configured revision
 
-## 3. Adopt A New Target Revision
+## 4. Adopt A New Target Revision
 
 The normal path is to adopt from an `adoptable_revision`:
 
@@ -105,18 +123,20 @@ Fail-closed cases:
 - selecting an adoptable revision that does not resolve to exactly one rendered operator target revision
 - selecting a revision whose durable provenance is missing or malformed
 
-## 4. Restart To Activate The Newly Adopted Revision
+## 5. Restart To Activate The Newly Adopted Revision
 
 Adoption is startup-scoped. It does not change the target revision inside a running daemon.
 
 After a successful adopt:
 
-1. re-run `targets status`
+1. re-run `status`
+2. re-run `targets status` if you need the lower-level control-plane details
 2. run `doctor`
 3. if `restart_needed = true`, perform a controlled restart
 4. start `run`
 
 ```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
@@ -130,7 +150,7 @@ After the daemon comes back up, confirm the active revision caught up:
 cargo run -p app-live -- targets show-current --config config/axiom-arb.local.toml
 ```
 
-## 5. Roll Back
+## 6. Roll Back
 
 Roll back to the previous adopted revision:
 
@@ -154,23 +174,38 @@ Rollback behavior:
 After rollback, use the same verification flow as adopt:
 
 ```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets show-current --config config/axiom-arb.local.toml
 ```
 
 If `restart_needed = true`, perform a controlled restart before expecting the daemon to use the rolled-back revision.
 
-## 6. Recommended Operator Flow
+## 7. Recommended Operator Flow
 
 For day-to-day target control-plane operations, use this sequence:
 
 ```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
-cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
+
+Interpret `status` before `doctor` like this:
+
+- `target-adoption-required`
+  - run `targets candidates`, then `targets adopt`
+- `restart-required`
+  - perform a controlled restart before expecting the running daemon to pick up the configured revision
+- `live-rollout-required` or `smoke-rollout-required`
+  - fix rollout readiness first
+- `live-config-ready` or `smoke-config-ready`
+  - continue to `doctor`
+- `blocked`
+  - follow the printed next action and rerun `status`
 
 Interpret the `doctor` result before `run`:
 
@@ -185,10 +220,24 @@ For rollback:
 
 ```bash
 cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
-cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 ```
 
-## 7. Troubleshooting
+## 8. Troubleshooting
+
+If `status` shows:
+
+- `target-adoption-required`
+  - no startup-scoped adopted target revision is currently configured
+  - inspect `targets candidates`, then adopt one
+
+- `restart-required`
+  - the configured revision differs from the daemon's active revision
+  - adoption or rollback succeeded, but a controlled restart is still required
+
+- `blocked`
+  - follow the printed next action first
+  - if you need lineage detail, fall back to `targets status` / `targets show-current`
 
 If `targets status` shows:
 
@@ -210,7 +259,7 @@ If `targets adopt` or `targets rollback` fails:
 - run `targets show-current` to inspect the current provenance chain
 - verify the config path is the same file you intend `doctor` and `run` to use
 
-## 8. Safety Rules
+## 9. Safety Rules
 
 - `operator_target_revision` is the only startup and restore authority
 - `candidate_revision` and `adoptable_revision` are selection and provenance context only

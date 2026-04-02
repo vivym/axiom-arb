@@ -6,6 +6,9 @@ use std::{
     },
 };
 
+pub mod cli;
+pub mod status_db;
+
 use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
@@ -25,6 +28,7 @@ pub fn capture_tracing<T>(f: impl FnOnce() -> T) -> (String, T) {
     (captured, result)
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CapturedSpan {
     pub name: String,
@@ -32,11 +36,13 @@ pub struct CapturedSpan {
 }
 
 impl CapturedSpan {
+    #[allow(dead_code)]
     pub fn field(&self, key: &str) -> Option<&String> {
         self.fields.get(key)
     }
 }
 
+#[allow(dead_code)]
 pub fn capture_spans<T>(f: impl FnOnce() -> T) -> (Vec<CapturedSpan>, T) {
     let spans = Arc::new(Mutex::new(BTreeMap::<u64, CapturedSpan>::new()));
     let subscriber = SpanCaptureSubscriber {
@@ -111,6 +117,7 @@ impl Subscriber for CaptureSubscriber {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct SpanCaptureSubscriber {
     spans: Arc<Mutex<BTreeMap<u64, CapturedSpan>>>,
     next_id: Arc<AtomicU64>,
@@ -188,6 +195,7 @@ impl Visit for EventVisitor {
     }
 }
 
+#[allow(dead_code)]
 struct FieldMapVisitor<'a> {
     fields: &'a mut BTreeMap<String, String>,
 }

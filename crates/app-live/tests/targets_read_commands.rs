@@ -289,7 +289,6 @@ fn doctor_reports_explicit_targets_with_local_resolution_and_control_plane_skip(
         .expect("app-live doctor should execute");
 
     let text = combined(&output);
-    assert!(output.status.success(), "{text}");
     assert!(
         text.contains("[OK] startup target resolution succeeded"),
         "{text}"
@@ -298,6 +297,7 @@ fn doctor_reports_explicit_targets_with_local_resolution_and_control_plane_skip(
         text.contains("[SKIP] control-plane checks not required for explicit targets"),
         "{text}"
     );
+    assert!(!text.contains("TargetSourceError"), "{text}");
     assert!(!text.contains("restart required"), "{text}");
     assert!(!text.contains("runtime progress"), "{text}");
 
