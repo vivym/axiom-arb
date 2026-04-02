@@ -115,6 +115,10 @@ fn detect_existing_bootstrap_mode(
             .as_ref()
             .and_then(|negrisk| negrisk.target_source.as_ref())
             .is_none()
+        && raw
+            .negrisk
+            .as_ref()
+            .is_some_and(|negrisk| !negrisk.targets.is_empty())
     {
         return Ok(ExistingBootstrapMode::Smoke(
             SmokeFollowUp::LegacyExplicitTargets,
