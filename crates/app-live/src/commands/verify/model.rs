@@ -51,6 +51,53 @@ impl VerifyExpectation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyControlPlaneMode {
+    Paper,
+    Live,
+    RealUserShadowSmoke,
+}
+
+impl VerifyControlPlaneMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Paper => "paper",
+            Self::Live => "live",
+            Self::RealUserShadowSmoke => "real-user shadow smoke",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyControlPlaneTargetSource {
+    LegacyExplicitTargets,
+    AdoptedTargets,
+}
+
+impl VerifyControlPlaneTargetSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LegacyExplicitTargets => "legacy explicit targets",
+            Self::AdoptedTargets => "adopted targets",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyControlPlaneRolloutState {
+    Required,
+    Ready,
+}
+
+impl VerifyControlPlaneRolloutState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Ready => "ready",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VerifyResultEvidence {
     pub attempts: Vec<String>,
@@ -61,12 +108,12 @@ pub struct VerifyResultEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VerifyControlPlaneContext {
-    pub mode: Option<String>,
-    pub target_source: Option<String>,
+    pub mode: Option<VerifyControlPlaneMode>,
+    pub target_source: Option<VerifyControlPlaneTargetSource>,
     pub configured_target: Option<String>,
     pub active_target: Option<String>,
     pub restart_needed: Option<bool>,
-    pub rollout_state: Option<String>,
+    pub rollout_state: Option<VerifyControlPlaneRolloutState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,33 +125,12 @@ pub struct VerifyReport {
     pub next_actions: Vec<String>,
 }
 
-impl VerifyReport {
-    pub fn fixture_for_render_test() -> Self {
-        Self {
-            scenario: VerifyScenario::Paper,
-            verdict: VerifyVerdict::PassWithWarnings,
-            evidence: VerifyResultEvidence {
-                attempts: vec!["1 attempt".to_owned()],
-                artifacts: vec!["replay transcript".to_owned()],
-                replay: vec!["shadow replay completed".to_owned()],
-                side_effects: vec!["no live side effects".to_owned()],
-            },
-            control_plane_context: VerifyControlPlaneContext {
-                mode: Some("paper".to_owned()),
-                target_source: Some("adopted targets".to_owned()),
-                configured_target: Some("targets-rev-9".to_owned()),
-                active_target: Some("targets-rev-9".to_owned()),
-                restart_needed: Some(false),
-                rollout_state: Some("ready".to_owned()),
-            },
-            next_actions: vec!["app-live status --config {config}".to_owned()],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::VerifyExpectation;
+    use super::{
+        VerifyControlPlaneMode, VerifyControlPlaneRolloutState, VerifyControlPlaneTargetSource,
+        VerifyExpectation,
+    };
 
     #[test]
     fn verify_expectation_labels_use_operator_vocabulary() {
@@ -118,5 +144,25 @@ mod tests {
             VerifyExpectation::LiveConfigConsistent.label(),
             "live-config-consistent"
         );
+    }
+
+    #[test]
+    fn verify_control_plane_labels_use_operator_vocabulary() {
+        assert_eq!(VerifyControlPlaneMode::Paper.label(), "paper");
+        assert_eq!(VerifyControlPlaneMode::Live.label(), "live");
+        assert_eq!(
+            VerifyControlPlaneMode::RealUserShadowSmoke.label(),
+            "real-user shadow smoke"
+        );
+        assert_eq!(
+            VerifyControlPlaneTargetSource::LegacyExplicitTargets.label(),
+            "legacy explicit targets"
+        );
+        assert_eq!(
+            VerifyControlPlaneTargetSource::AdoptedTargets.label(),
+            "adopted targets"
+        );
+        assert_eq!(VerifyControlPlaneRolloutState::Required.label(), "required");
+        assert_eq!(VerifyControlPlaneRolloutState::Ready.label(), "ready");
     }
 }
