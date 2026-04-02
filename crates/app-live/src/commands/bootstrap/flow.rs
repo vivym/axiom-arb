@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 use persistence::connect_pool_from_env;
@@ -8,6 +11,7 @@ use crate::commands::{
     doctor, init, run,
     targets::{adopt, state::load_target_candidates_catalog},
 };
+use crate::startup;
 
 use super::{
     error::{BootstrapError, SmokeFollowUp},
@@ -24,6 +28,11 @@ enum ExistingBootstrapMode {
 enum MissingConfigOutcome {
     PaperWritten,
     SmokeWritten,
+}
+
+enum SmokeBootstrapState {
+    PreflightOnly { family_ids: Vec<String> },
+    ShadowWorkReady { family_ids: Vec<String> },
 }
 
 pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
@@ -47,9 +56,12 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
             SmokeFollowUp::NeedsAdoption => {
                 inline_smoke_adoption(&config_path)?;
                 output::print_smoke_target_anchor_summary(&config_path);
-                return Ok(());
+                return finish_smoke_bootstrap(&config_path, args.start);
             }
-            SmokeFollowUp::AlreadyAdopted | SmokeFollowUp::LegacyExplicitTargets => {
+            SmokeFollowUp::AlreadyAdopted => {
+                return finish_smoke_bootstrap(&config_path, args.start)
+            }
+            SmokeFollowUp::LegacyExplicitTargets => {
                 return Err(BootstrapError::SmokeConfigCompletionOnly {
                     config_path,
                     follow_up,
@@ -202,4 +214,114 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<(), BootstrapError> {
         ))
         .map(|_| ())
         .map_err(BootstrapError::Init)
+}
+
+fn finish_smoke_bootstrap(config_path: &Path, start_requested: bool) -> Result<(), BootstrapError> {
+    match ensure_smoke_rollout_state(config_path, start_requested)? {
+        SmokeBootstrapState::PreflightOnly { family_ids } => {
+            output::print_smoke_preflight_only_summary(config_path, &family_ids);
+            Ok(())
+        }
+        SmokeBootstrapState::ShadowWorkReady { family_ids } => {
+            output::print_smoke_rollout_ready_summary(config_path, &family_ids);
+            Ok(())
+        }
+    }
+}
+
+fn ensure_smoke_rollout_state(
+    config_path: &Path,
+    start_requested: bool,
+) -> Result<SmokeBootstrapState, BootstrapError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| BootstrapError::SmokeRollout(Box::new(error)))?;
+
+    let family_ids = runtime
+        .block_on(adopted_smoke_family_ids(config_path))
+        .map_err(BootstrapError::SmokeRollout)?;
+
+    if smoke_rollout_is_ready(config_path, &family_ids)? {
+        return Ok(SmokeBootstrapState::ShadowWorkReady { family_ids });
+    }
+
+    let mut prompt = prompt::BootstrapPrompt::new(None);
+    let selection = prompt::choose_smoke_rollout_selection(&mut prompt, &family_ids)
+        .map_err(|error| BootstrapError::SmokeRollout(Box::new(error)))?;
+
+    match selection {
+        prompt::SmokeRolloutSelection::PreflightOnly => {
+            if start_requested {
+                Err(BootstrapError::SmokeStartRequiresRolloutReadiness {
+                    config_path: config_path.to_path_buf(),
+                })
+            } else {
+                Ok(SmokeBootstrapState::PreflightOnly { family_ids })
+            }
+        }
+        prompt::SmokeRolloutSelection::Enable => {
+            crate::commands::targets::config_file::rewrite_smoke_rollout_families(
+                config_path,
+                &family_ids,
+            )
+            .map_err(BootstrapError::SmokeRollout)?;
+            Ok(SmokeBootstrapState::ShadowWorkReady { family_ids })
+        }
+    }
+}
+
+async fn adopted_smoke_family_ids(
+    config_path: &Path,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let raw = load_raw_config_from_path(config_path)?;
+    let validated = ValidatedConfig::new(raw)?;
+    let config = validated.for_app_live()?;
+    let pool = connect_pool_from_env().await?;
+    let resolved = startup::resolve_startup_targets(&pool, &config).await?;
+    let family_ids = resolved
+        .targets
+        .targets()
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if family_ids.is_empty() {
+        return Err("bootstrap could not derive any adopted smoke families".into());
+    }
+    Ok(family_ids)
+}
+
+fn smoke_rollout_is_ready(
+    config_path: &Path,
+    family_ids: &[String],
+) -> Result<bool, BootstrapError> {
+    let raw = load_raw_config_from_path(config_path)?;
+    let validated = ValidatedConfig::new(raw)?;
+    let config = validated.for_app_live()?;
+    let approved = config
+        .negrisk_rollout()
+        .map(|rollout| {
+            rollout
+                .approved_families()
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let ready = config
+        .negrisk_rollout()
+        .map(|rollout| {
+            rollout
+                .ready_families()
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(family_ids
+        .iter()
+        .all(|family_id| approved.contains(family_id) && ready.contains(family_id)))
 }

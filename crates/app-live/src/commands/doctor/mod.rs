@@ -85,7 +85,7 @@ pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
 
 pub(crate) fn run_report(args: &DoctorArgs) -> DoctorExecution {
     let mut report = DoctorReport::new();
-    let failure = execute_inner(&args, &mut report).err();
+    let failure = execute_inner(args, &mut report).err();
     let next_actions = next_actions(&report, &args.config);
     DoctorExecution {
         report,

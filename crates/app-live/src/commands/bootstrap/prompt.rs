@@ -13,6 +13,12 @@ pub enum BootstrapModeInput {
     Piped(Option<String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmokeRolloutSelection {
+    PreflightOnly,
+    Enable,
+}
+
 pub struct BootstrapPrompt {
     buffered_line: Option<String>,
 }
@@ -115,6 +121,34 @@ pub fn choose_adoptable_revision<P: PromptIo>(
         }
 
         prompt.println("Please choose one of the listed adoptable revisions.")?;
+    }
+}
+
+pub fn choose_smoke_rollout_selection<P: PromptIo>(
+    prompt: &mut P,
+    family_ids: &[String],
+) -> Result<SmokeRolloutSelection, InitError> {
+    if family_ids.is_empty() {
+        return Err(InitError::new(
+            "bootstrap could not derive any adopted smoke families",
+        ));
+    }
+
+    loop {
+        prompt.println("Smoke rollout readiness is currently preflight-only.")?;
+        prompt.println("Adopted families:")?;
+        for family_id in family_ids {
+            prompt.println(family_id)?;
+        }
+        prompt.println("Choose one:")?;
+        prompt.println("preflight-only")?;
+        prompt.println("enable")?;
+
+        match prompt.read_line()?.trim().to_lowercase().as_str() {
+            "preflight-only" => return Ok(SmokeRolloutSelection::PreflightOnly),
+            "enable" => return Ok(SmokeRolloutSelection::Enable),
+            _ => prompt.println("Please choose one of the listed rollout options.")?,
+        }
     }
 }
 
@@ -250,6 +284,62 @@ mod tests {
                 "Please choose one of the listed adoptable revisions.",
                 "Choose an adoptable revision for smoke bootstrap:",
                 "adoptable-1",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_smoke_rollout_selection_accepts_enable() {
+        let mut prompt = TestPrompt::new(&["enable"]);
+
+        let selection = super::choose_smoke_rollout_selection(
+            &mut prompt,
+            &["family-a".into(), "family-b".into()],
+        )
+        .expect("enable should be accepted");
+
+        assert!(matches!(selection, super::SmokeRolloutSelection::Enable));
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Smoke rollout readiness is currently preflight-only.",
+                "Adopted families:",
+                "family-a",
+                "family-b",
+                "Choose one:",
+                "preflight-only",
+                "enable",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_smoke_rollout_selection_reprompts_until_valid_choice() {
+        let mut prompt = TestPrompt::new(&["later", "preflight-only"]);
+
+        let selection = super::choose_smoke_rollout_selection(&mut prompt, &["family-a".into()])
+            .expect("preflight-only should be accepted");
+
+        assert!(matches!(
+            selection,
+            super::SmokeRolloutSelection::PreflightOnly
+        ));
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Smoke rollout readiness is currently preflight-only.",
+                "Adopted families:",
+                "family-a",
+                "Choose one:",
+                "preflight-only",
+                "enable",
+                "Please choose one of the listed rollout options.",
+                "Smoke rollout readiness is currently preflight-only.",
+                "Adopted families:",
+                "family-a",
+                "Choose one:",
+                "preflight-only",
+                "enable",
             ]
         );
     }

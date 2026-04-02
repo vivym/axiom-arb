@@ -16,7 +16,11 @@ pub enum BootstrapError {
     SmokeStartUnsupported {
         config_path: PathBuf,
     },
+    SmokeStartRequiresRolloutReadiness {
+        config_path: PathBuf,
+    },
     Init(Box<dyn Error>),
+    SmokeRollout(Box<dyn Error>),
     Doctor(Box<dyn Error>),
     Run(Box<dyn Error>),
     Io(std::io::Error),
@@ -72,7 +76,15 @@ impl fmt::Display for BootstrapError {
                 "bootstrap smoke does not support --start yet; complete config first, then continue with targets workflow using {}",
                 config_path.display()
             ),
-            Self::Init(error) | Self::Doctor(error) | Self::Run(error) => error.fmt(f),
+            Self::SmokeStartRequiresRolloutReadiness { config_path } => write!(
+                f,
+                "bootstrap smoke --start requires rollout readiness; {} is still preflight-only, so rerun without --start or enable rollout readiness first",
+                config_path.display()
+            ),
+            Self::Init(error)
+            | Self::SmokeRollout(error)
+            | Self::Doctor(error)
+            | Self::Run(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
             Self::Schema(error) => error.fmt(f),
             Self::Config(error) => error.fmt(f),

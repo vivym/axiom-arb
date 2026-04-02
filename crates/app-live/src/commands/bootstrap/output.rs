@@ -32,6 +32,22 @@ pub fn print_smoke_target_anchor_summary(config_path: &Path) {
     println!("Next: app-live targets show-current --config {quoted_config_path}");
 }
 
+pub fn print_smoke_preflight_only_summary(config_path: &Path, family_ids: &[String]) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    println!("Smoke bootstrap is preflight-only");
+    println!("Config: {}", config_path.display());
+    println!("Adopted families: {}", family_ids.join(", "));
+    println!("Next: app-live bootstrap --config {quoted_config_path}");
+}
+
+pub fn print_smoke_rollout_ready_summary(config_path: &Path, family_ids: &[String]) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    println!("Smoke bootstrap is shadow-work-ready");
+    println!("Config: {}", config_path.display());
+    println!("Rollout families: {}", family_ids.join(", "));
+    println!("Next: app-live bootstrap --config {quoted_config_path}");
+}
+
 fn shell_quote(value: String) -> String {
     let escaped = value.replace('\'', r"'\''");
     format!("'{escaped}'")
