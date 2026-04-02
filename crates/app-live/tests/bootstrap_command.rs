@@ -327,6 +327,8 @@ fn bootstrap_smoke_completes_local_config() {
     assert!(rollout.ready_families().is_empty());
 
     let combined = combined(&output);
+    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(!combined.contains("Choose an init mode:"), "{combined}");
     assert!(
         combined.contains("app-live targets candidates --config"),
         "{combined}"
@@ -341,6 +343,164 @@ fn bootstrap_smoke_completes_local_config() {
         "{combined}"
     );
     assert!(!combined.contains("Overall: PASS WITH SKIPS"), "{combined}");
+}
+
+#[test]
+fn bootstrap_rejects_live_selection_without_persisting_live_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("config").join("axiom-arb.local.toml");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .current_dir(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live bootstrap should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"live\n")
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(!output.status.success(), "{}", combined(&output));
+    assert!(
+        !config_path.exists(),
+        "unsupported live selection should not write {}",
+        config_path.display()
+    );
+
+    let combined = combined(&output);
+    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(
+        combined.contains("Please choose one of the listed options."),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("unexpected end of input while reading init wizard answer"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn bootstrap_smoke_start_fails_closed_without_writing_config() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("config").join("axiom-arb.local.toml");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--start")
+        .current_dir(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live bootstrap should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"smoke\n")
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(!output.status.success(), "{}", combined(&output));
+    assert!(
+        !config_path.exists(),
+        "smoke --start should fail before writing {}",
+        config_path.display()
+    );
+
+    let combined = combined(&output);
+    assert!(combined.contains("Choose a bootstrap mode:"), "{combined}");
+    assert!(
+        combined.contains("bootstrap smoke does not support --start yet"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Smoke bootstrap config written"),
+        "{combined}"
+    );
+}
+
+#[test]
+fn bootstrap_existing_smoke_config_fails_with_clear_in_scope_message() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let config_path = temp.path().join("axiom-arb.local.toml");
+    fs::write(
+        &config_path,
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x2222222222222222222222222222222222222222"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = []
+"#,
+    )
+    .expect("seed smoke config");
+
+    let output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(
+        combined.contains("bootstrap smoke follow-through is not implemented yet"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains(&config_path.display().to_string()),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Smoke bootstrap config written"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
 }
 
 fn app_live_binary() -> PathBuf {

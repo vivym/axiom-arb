@@ -37,6 +37,13 @@ pub fn run<P: PromptIo>(prompt: &mut P, config_path: &Path) -> Result<WizardResu
     }
 }
 
+pub(crate) fn smoke<P: PromptIo>(
+    prompt: &mut P,
+    config_path: &Path,
+) -> Result<WizardResult, InitError> {
+    render_live_or_smoke(prompt, config_path, true)
+}
+
 fn confirm_replace_if_needed<P: PromptIo>(
     prompt: &mut P,
     config_path: &Path,

@@ -81,6 +81,13 @@ pub(crate) fn paper_wizard_result(config_path: &Path) -> Result<WizardResult, In
     Ok(wizard::paper(config_path))
 }
 
+pub(crate) fn smoke_wizard_with_prompt<P: prompt::PromptIo>(
+    prompt: &mut P,
+    config_path: &Path,
+) -> Result<WizardResult, InitError> {
+    wizard::smoke(prompt, config_path)
+}
+
 pub(crate) fn validate_and_write_rendered_config(
     config_path: &Path,
     rendered_config: &str,
