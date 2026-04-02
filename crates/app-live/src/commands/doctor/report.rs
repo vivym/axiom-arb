@@ -161,7 +161,7 @@ impl DoctorReport {
         self.sections.last_mut().expect("section just pushed")
     }
 
-    pub fn overall_result(&self) -> DoctorOverallResult {
+    fn overall_result(&self) -> DoctorOverallResult {
         if self
             .sections
             .iter()

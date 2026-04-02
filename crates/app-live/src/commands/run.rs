@@ -17,7 +17,7 @@ pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
     run_from_config_path(&args.config)
 }
 
-pub fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Error>> {
+pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Error>> {
     let observability = bootstrap_observability("app-live");
     let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
     let _bootstrap_guard = bootstrap_span.enter();

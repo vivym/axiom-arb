@@ -58,30 +58,18 @@ impl fmt::Display for DoctorFailure {
 
 impl Error for DoctorFailure {}
 
-pub struct DoctorExecution {
+pub(crate) struct DoctorExecution {
     report: DoctorReport,
     next_actions: Vec<String>,
     failure: Option<DoctorFailure>,
 }
 
 impl DoctorExecution {
-    pub fn report(&self) -> &DoctorReport {
-        &self.report
-    }
-
-    pub fn next_actions(&self) -> &[String] {
-        &self.next_actions
-    }
-
-    pub fn succeeded(&self) -> bool {
-        self.failure.is_none()
-    }
-
-    pub fn render(&self) {
+    pub(crate) fn render(&self) {
         self.report.render(&self.next_actions);
     }
 
-    pub fn into_result(self) -> Result<(), Box<dyn Error>> {
+    pub(crate) fn into_result(self) -> Result<(), Box<dyn Error>> {
         match self.failure {
             Some(error) => Err(Box::new(error)),
             None => Ok(()),
@@ -90,20 +78,20 @@ impl DoctorExecution {
 }
 
 pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
-    let execution = run_report(args)?;
+    let execution = run_report(&args);
     execution.render();
     execution.into_result()
 }
 
-pub fn run_report(args: DoctorArgs) -> Result<DoctorExecution, Box<dyn Error>> {
+pub(crate) fn run_report(args: &DoctorArgs) -> DoctorExecution {
     let mut report = DoctorReport::new();
     let failure = execute_inner(&args, &mut report).err();
     let next_actions = next_actions(&report, &args.config);
-    Ok(DoctorExecution {
+    DoctorExecution {
         report,
         next_actions,
         failure,
-    })
+    }
 }
 
 fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), DoctorFailure> {

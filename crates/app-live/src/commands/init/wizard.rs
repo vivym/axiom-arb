@@ -13,7 +13,7 @@ pub struct WizardResult {
     pub summary: WizardSummary,
 }
 
-pub fn paper(config_path: &Path) -> WizardResult {
+pub(crate) fn paper(config_path: &Path) -> WizardResult {
     WizardResult {
         rendered_config: render_paper_config(),
         summary: summary::render(InitSummary {

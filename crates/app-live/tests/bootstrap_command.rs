@@ -1,10 +1,5 @@
 use std::{fs, path::PathBuf, process::Command};
 
-use app_live::{
-    cli::DoctorArgs,
-    commands::{doctor, init, run},
-};
-
 #[test]
 fn bootstrap_help_lists_command() {
     let output = Command::new(app_live_binary())
@@ -197,40 +192,87 @@ ready_families = []
 
 #[test]
 fn bootstrap_reuses_init_doctor_run_semantics_for_paper() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let config_path = temp.path().join("config").join("axiom-arb.local.toml");
+    let bootstrap_temp = tempfile::tempdir().expect("bootstrap temp dir");
+    let bootstrap_config_path = bootstrap_temp
+        .path()
+        .join("config")
+        .join("axiom-arb.local.toml");
 
-    let wizard = init::paper_wizard_result(&config_path).expect("paper wizard result");
-    init::validate_and_write_rendered_config(&config_path, &wizard.rendered_config)
-        .expect("paper config should write");
+    let bootstrap_output = Command::new(app_live_binary())
+        .arg("bootstrap")
+        .current_dir(bootstrap_temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live bootstrap should execute");
 
-    assert_eq!(
-        fs::read_to_string(&config_path).expect("written config"),
-        wizard.rendered_config
+    assert!(
+        bootstrap_output.status.success(),
+        "{}",
+        combined(&bootstrap_output)
     );
 
-    unsafe {
-        std::env::set_var("DATABASE_URL", default_test_database_url());
-    }
+    let init_temp = tempfile::tempdir().expect("init temp dir");
+    let init_config_path = init_temp.path().join("config").join("axiom-arb.local.toml");
 
-    let doctor_result = doctor::run_report(DoctorArgs {
-        config: config_path.clone(),
-    })
-    .expect("doctor should pass for generated paper config");
-    assert!(doctor_result.succeeded());
+    let mut init_child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(&init_config_path)
+        .current_dir(init_temp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    use std::io::Write;
+    init_child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"paper\n")
+        .expect("paper answer should write");
+
+    let init_output = init_child.wait_with_output().expect("init output");
+    assert!(init_output.status.success(), "{}", combined(&init_output));
+
     assert_eq!(
-        doctor_result.report().overall_result().to_string(),
-        "PASS WITH SKIPS"
+        fs::read_to_string(&bootstrap_config_path).expect("bootstrap config"),
+        fs::read_to_string(&init_config_path).expect("init config"),
     );
-    assert_eq!(
-        doctor_result.next_actions(),
-        &[format!(
+
+    let bootstrap_text = combined(&bootstrap_output);
+    assert!(
+        bootstrap_text.contains("Overall: PASS WITH SKIPS"),
+        "{bootstrap_text}"
+    );
+    assert!(
+        bootstrap_text.contains("Next: app-live run --config 'config/axiom-arb.local.toml'"),
+        "{bootstrap_text}"
+    );
+    assert!(
+        !bootstrap_text.contains("Choose an init mode:"),
+        "{bootstrap_text}"
+    );
+
+    let init_text = combined(&init_output);
+    assert!(init_text.contains("What Was Written"), "{init_text}");
+    assert!(init_text.contains("[runtime]"), "{init_text}");
+    assert!(init_text.contains("mode = \"paper\""), "{init_text}");
+    assert!(
+        init_text.contains(&format!(
+            "app-live doctor --config '{}'",
+            init_config_path.display()
+        )),
+        "{init_text}"
+    );
+    assert!(
+        init_text.contains(&format!(
             "app-live run --config '{}'",
-            config_path.display().to_string()
-        )]
+            init_config_path.display()
+        )),
+        "{init_text}"
     );
-
-    run::run_from_config_path(&config_path).expect("paper run helper should execute");
 }
 
 fn app_live_binary() -> PathBuf {

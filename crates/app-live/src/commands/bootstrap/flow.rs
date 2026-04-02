@@ -20,10 +20,10 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
 
     ensure_paper_mode(&config_path)?;
 
-    let doctor_execution = doctor::run_report(DoctorArgs {
+    let doctor_args = DoctorArgs {
         config: config_path.clone(),
-    })
-    .map_err(BootstrapError::Doctor)?;
+    };
+    let doctor_execution = doctor::run_report(&doctor_args);
     doctor_execution.render();
     doctor_execution
         .into_result()
