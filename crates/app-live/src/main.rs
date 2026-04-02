@@ -5,6 +5,7 @@ use app_live::commands::bootstrap::execute as bootstrap_execute;
 use app_live::commands::doctor::execute as doctor_execute;
 use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
+use app_live::commands::status::execute as status_execute;
 use app_live::commands::targets::execute as targets_execute;
 use clap::Parser;
 
@@ -21,6 +22,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         AppLiveCommand::Bootstrap(args) => bootstrap_execute(args),
         AppLiveCommand::Doctor(args) => doctor_execute(args),
         AppLiveCommand::Init(args) => init_execute(args),
+        AppLiveCommand::Status(args) => status_execute(args),
         AppLiveCommand::Run(args) => run_execute(args),
         AppLiveCommand::Targets(args) => targets_execute(args),
     }

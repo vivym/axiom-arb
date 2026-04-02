@@ -31,12 +31,21 @@ If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `
 Before running the smoke with the lower-level path, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
 
 ```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
-cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 ```
 
-`targets status` and `targets show-current` should tell you whether the configured revision is already active or whether the smoke run still needs a controlled restart to pick up the new startup-scoped target revision.
+`status` should now tell you whether the smoke is:
+
+- `target-adoption-required`
+- `restart-required`
+- `smoke-rollout-required`
+- `smoke-config-ready`
+- `blocked`
+
+Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary.
 
 ## Run
 
@@ -50,9 +59,24 @@ cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml --start
 If you are using the lower-level path, preflight the smoke config, then start `app-live` with the smoke config:
 
 ```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
+
+Interpret `status` before `doctor` like this:
+
+- `smoke-rollout-required`
+  - config and adopted target are present, but rollout is still intentionally empty
+  - you are still in preflight-only smoke; follow the printed next action before expecting shadow work
+- `smoke-config-ready`
+  - config, adopted target, and smoke rollout are aligned
+  - continue to `doctor`
+- `restart-required`
+  - the configured revision is not the active revision yet
+  - perform a controlled restart before expecting the daemon to use the configured smoke target
+- `blocked`
+  - fix the reported blocker first, then rerun `status`
 
 `doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `bootstrap --start` reuses that same `doctor -> run` sequence; it does not bypass preflight.
 
@@ -70,6 +94,7 @@ When `doctor` prints next actions for target setup, the normal follow-up is:
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <ADOPTABLE_REVISION>
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
 ```
 
 If the wrong target revision was adopted for the smoke, revert it with:

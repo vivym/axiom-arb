@@ -28,6 +28,12 @@ pub struct DoctorArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct StatusArgs {
+    #[arg(long)]
+    pub config: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct TargetsArgs {
     #[command(subcommand)]
     pub command: TargetCommand,
@@ -92,6 +98,7 @@ pub enum AppLiveCommand {
     Bootstrap(BootstrapArgs),
     Doctor(DoctorArgs),
     Init(InitArgs),
+    Status(StatusArgs),
     Run(RunArgs),
     Targets(TargetsArgs),
 }
