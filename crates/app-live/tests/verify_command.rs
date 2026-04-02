@@ -62,6 +62,7 @@ fn verify_paper_fails_when_live_attempts_are_observed() {
     let text = cli::combined(&output);
     assert!(text.contains("Verdict: FAIL"), "{text}");
     assert!(text.contains("forbidden live side effects"), "{text}");
+    assert!(text.contains("Side Effects: 1"), "{text}");
 
     verify_db.cleanup();
 }

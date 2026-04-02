@@ -110,13 +110,7 @@ fn evaluate_foundation_outcome(
 fn evaluate_paper_outcome(
     evidence: &evidence::VerifyEvidenceWindow,
 ) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
-    let selected_live_attempt_count = evidence
-        .attempts
-        .iter()
-        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
-        .count();
-    let forbidden_live_attempt_count =
-        evidence.observed_live_attempts.len() + selected_live_attempt_count;
+    let forbidden_live_attempt_count = paper_live_attempt_count(evidence);
 
     if forbidden_live_attempt_count > 0 {
         return (
@@ -148,7 +142,7 @@ fn render_foundation_report(
 ) {
     let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
     let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
-    let forbidden_live_attempt_count = evidence.observed_live_attempts.len();
+    let forbidden_live_attempt_count = paper_live_attempt_count(evidence);
 
     println!("Scenario: {}", verify_context.scenario.label());
     println!("Verdict: {}", verdict_label_upper(verdict));
@@ -207,6 +201,22 @@ fn render_foundation_report(
             action.replace("{config}", &shell_quote(config_path.display().to_string()))
         );
     }
+}
+
+fn paper_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
+    let mut attempt_ids = std::collections::BTreeSet::new();
+
+    for row in &evidence.observed_live_attempts {
+        attempt_ids.insert(row.attempt.attempt_id.clone());
+    }
+
+    for row in &evidence.attempts {
+        if matches!(row.attempt.execution_mode, domain::ExecutionMode::Live) {
+            attempt_ids.insert(row.attempt.attempt_id.clone());
+        }
+    }
+
+    attempt_ids.len()
 }
 
 fn render_context_line(label: &str, value: Option<&str>) {
