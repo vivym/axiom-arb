@@ -8,6 +8,7 @@ use std::{
 
 pub mod cli;
 pub mod status_db;
+pub mod verify_db;
 
 use tracing::{
     field::{Field, Visit},

@@ -1,17 +1,186 @@
 use std::{error::Error, fmt::Write as _, io, path::Path};
 
+use persistence::connect_pool_from_env;
+use tokio::runtime::Builder;
+
 use crate::cli::VerifyArgs;
 
+pub mod context;
+pub mod evidence;
 pub mod model;
 pub mod window;
 
-pub fn execute(_args: VerifyArgs) -> Result<(), Box<dyn Error>> {
-    let error = io::Error::new(
-        io::ErrorKind::Other,
-        "verify is not implemented yet; this command currently exposes only the CLI surface",
+pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
+    let verify_context = context::load(&args.config);
+    let selection = window::VerifyWindowSelection::from_args(
+        args.from_seq,
+        args.to_seq,
+        args.attempt_id,
+        args.since,
+        verify_context.scenario,
+    )?;
+    let anchor_comparison =
+        context::compare_window_to_current_config_anchor(&verify_context, &selection);
+
+    let (verdict, reason, next_actions) =
+        evaluate_foundation_outcome(&verify_context, &anchor_comparison);
+    let evidence = load_evidence_window(&verify_context, &anchor_comparison, &selection)?;
+    render_foundation_report(
+        &verify_context,
+        verdict,
+        reason.as_deref(),
+        &next_actions,
+        &evidence,
+        &args.config,
     );
-    eprintln!("{error}");
-    Err(error.into())
+
+    if matches!(verdict, model::VerifyVerdict::Fail) {
+        return Err(io::Error::other(reason.unwrap_or_else(|| "verify failed".to_owned())).into());
+    }
+
+    Ok(())
+}
+
+fn load_evidence_window(
+    verify_context: &context::VerifyContext,
+    anchor_comparison: &context::ConfigAnchorComparison,
+    selection: &window::VerifyWindowSelection,
+) -> Result<evidence::VerifyEvidenceWindow, Box<dyn Error>> {
+    let runtime = Builder::new_current_thread().enable_all().build()?;
+    let result = runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        evidence::load(&pool, selection).await
+    });
+
+    match result {
+        Ok(evidence) => Ok(evidence),
+        Err(error)
+            if verify_context.reason.is_some()
+                || verify_context.control_plane.target_source
+                    == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets)
+                || !anchor_comparison.comparable =>
+        {
+            Ok(evidence::VerifyEvidenceWindow::default())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn evaluate_foundation_outcome(
+    verify_context: &context::VerifyContext,
+    anchor_comparison: &context::ConfigAnchorComparison,
+) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
+    if verify_context.control_plane.target_source
+        == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets)
+    {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(verify_context.reason.clone().unwrap_or_else(|| {
+                "legacy explicit targets are not supported in verify".to_owned()
+            })),
+            vec!["migrate to adopted target source or use lower-level commands".to_owned()],
+        );
+    }
+
+    if !anchor_comparison.comparable {
+        return (
+            model::VerifyVerdict::PassWithWarnings,
+            anchor_comparison.reason.clone(),
+            vec!["rerun verify without an explicit historical window".to_owned()],
+        );
+    }
+
+    (
+        model::VerifyVerdict::Fail,
+        verify_context.reason.clone().or_else(|| {
+            Some(
+                "verify verdict rules beyond control-plane foundation are not implemented yet"
+                    .to_owned(),
+            )
+        }),
+        vec!["run app-live status --config {config}".to_owned()],
+    )
+}
+
+fn render_foundation_report(
+    verify_context: &context::VerifyContext,
+    verdict: model::VerifyVerdict,
+    reason: Option<&str>,
+    next_actions: &[String],
+    evidence: &evidence::VerifyEvidenceWindow,
+    config_path: &Path,
+) {
+    println!("Scenario: {}", verify_context.scenario.label());
+    println!("Verdict: {}", verdict_label_upper(verdict));
+    println!("Result Evidence");
+    println!("Attempts: {}", evidence.attempts.len());
+    println!(
+        "Artifacts: {}",
+        evidence.shadow_artifacts.len() + evidence.live_artifacts.len()
+    );
+    println!(
+        "Replay: {}",
+        evidence.shadow_artifacts.len() + evidence.journal.len()
+    );
+    println!(
+        "Side Effects: {}",
+        evidence.live_artifacts.len() + evidence.live_submissions.len()
+    );
+    println!("Control-Plane Context");
+    println!("Expectation: {}", verify_context.expectation.label());
+    render_context_line(
+        "Mode",
+        verify_context.control_plane.mode.map(|value| value.label()),
+    );
+    render_context_line(
+        "Target Source",
+        verify_context
+            .control_plane
+            .target_source
+            .map(|value| value.label()),
+    );
+    render_context_line(
+        "Configured Target",
+        verify_context.control_plane.configured_target.as_deref(),
+    );
+    render_context_line(
+        "Active Target",
+        verify_context.control_plane.active_target.as_deref(),
+    );
+    if let Some(restart_needed) = verify_context.control_plane.restart_needed {
+        println!("Restart Needed: {restart_needed}");
+    }
+    render_context_line(
+        "Rollout State",
+        verify_context
+            .control_plane
+            .rollout_state
+            .map(|value| value.label()),
+    );
+    if let Some(reason) = reason {
+        println!("Reason: {reason}");
+    }
+    println!("Next Actions");
+    for action in next_actions {
+        println!(
+            "Next: {}",
+            action.replace("{config}", &shell_quote(config_path.display().to_string()))
+        );
+    }
+}
+
+fn render_context_line(label: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        println!("{label}: {value}");
+    }
+}
+
+fn verdict_label_upper(verdict: model::VerifyVerdict) -> &'static str {
+    match verdict {
+        model::VerifyVerdict::Pass => "PASS",
+        model::VerifyVerdict::PassWithWarnings => "PASS WITH WARNINGS",
+        model::VerifyVerdict::Fail => "FAIL",
+    }
 }
 
 pub fn render_report(report: &model::VerifyReport, config_path: &Path) -> String {

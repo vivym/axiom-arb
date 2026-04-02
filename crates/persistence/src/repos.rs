@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Utc};
 use domain::{
     ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
 };
@@ -11,12 +12,12 @@ use crate::{
     models::{
         execution_mode_from_str, execution_mode_to_str, AdoptableTargetRevisionRow,
         ApprovalStateRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        ExecutionAttemptRow, FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow,
-        JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
-        NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow, NegRiskFamilyValidationRow,
-        NewOrderRow, OperatorTargetAdoptionHistoryRow, OrderRow, PendingReconcileRow,
-        ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow,
-        StoredOrder,
+        ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow, FamilyHaltRow, IdentifierRecordRow,
+        InventoryBucketRow, JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow,
+        LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
+        NegRiskFamilyValidationRow, NewOrderRow, OperatorTargetAdoptionHistoryRow, OrderRow,
+        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
+        SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1455,6 +1456,65 @@ impl JournalRepo {
 
         rows.into_iter().map(map_journal_entry_row).collect()
     }
+
+    pub async fn list_range(
+        &self,
+        pool: &PgPool,
+        from_seq: i64,
+        to_seq: Option<i64>,
+    ) -> Result<Vec<JournalEntryRow>> {
+        let rows = if let Some(to_seq) = to_seq {
+            sqlx::query(
+                r#"
+                SELECT
+                    journal_seq,
+                    stream,
+                    source_kind,
+                    source_session_id,
+                    source_event_id,
+                    dedupe_key,
+                    causal_parent_id,
+                    event_type,
+                    event_ts,
+                    payload,
+                    ingested_at
+                FROM event_journal
+                WHERE journal_seq >= $1
+                  AND journal_seq <= $2
+                ORDER BY journal_seq
+                "#,
+            )
+            .bind(from_seq)
+            .bind(to_seq)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    journal_seq,
+                    stream,
+                    source_kind,
+                    source_session_id,
+                    source_event_id,
+                    dedupe_key,
+                    causal_parent_id,
+                    event_type,
+                    event_ts,
+                    payload,
+                    ingested_at
+                FROM event_journal
+                WHERE journal_seq >= $1
+                ORDER BY journal_seq
+                "#,
+            )
+            .bind(from_seq)
+            .fetch_all(pool)
+            .await?
+        };
+
+        rows.into_iter().map(map_journal_entry_row).collect()
+    }
 }
 
 const RUNTIME_PROGRESS_KEY: &str = "default";
@@ -1930,6 +1990,100 @@ impl ExecutionAttemptRepo {
     pub async fn list_shadow_attempts(&self, pool: &PgPool) -> Result<Vec<ExecutionAttemptRow>> {
         self.list_attempts_by_mode(pool, domain::ExecutionMode::Shadow)
             .await
+    }
+
+    pub async fn get_by_attempt_id(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Option<ExecutionAttemptWithCreatedAtRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                created_at
+            FROM execution_attempts
+            WHERE attempt_id = $1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_execution_attempt_with_created_at_row)
+            .transpose()
+    }
+
+    pub async fn list_created_since(
+        &self,
+        pool: &PgPool,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                created_at
+            FROM execution_attempts
+            WHERE created_at >= $1
+            ORDER BY created_at DESC, attempt_id DESC
+            "#,
+        )
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
+    }
+
+    pub async fn list_recent(
+        &self,
+        pool: &PgPool,
+        limit: i64,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                created_at
+            FROM execution_attempts
+            ORDER BY created_at DESC, attempt_id DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
     }
 
     async fn list_attempts_by_mode(
@@ -2868,6 +3022,17 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
+    })
+}
+
+fn map_execution_attempt_with_created_at_row(
+    row: PgRow,
+) -> Result<ExecutionAttemptWithCreatedAtRow> {
+    let created_at = row.try_get("created_at")?;
+    let attempt = map_execution_attempt_row(row)?;
+    Ok(ExecutionAttemptWithCreatedAtRow {
+        attempt,
+        created_at,
     })
 }
 
