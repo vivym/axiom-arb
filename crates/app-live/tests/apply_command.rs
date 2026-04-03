@@ -44,7 +44,7 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
 }
 
 #[test]
-fn apply_maps_blocked_readiness_to_readiness_error() {
+fn apply_maps_invalid_config_to_parse_error() {
     let config_path = temp_invalid_config_path();
 
     let output = Command::new(cli::app_live_binary())
@@ -57,9 +57,26 @@ fn apply_maps_blocked_readiness_to_readiness_error() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("toml parse error"), "{text}");
-    assert!(!text.contains("readiness error"), "{text}");
 
     let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_maps_smoke_blocked_readiness_to_concrete_reason() {
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env_remove("DATABASE_URL")
+        .output()
+        .expect("app-live apply should execute for smoke blocked readiness");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DATABASE_URL is not set"), "{text}");
+    assert!(!text.contains("readiness error"), "{text}");
 }
 
 #[test]
