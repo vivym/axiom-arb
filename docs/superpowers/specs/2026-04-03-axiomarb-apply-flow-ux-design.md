@@ -40,7 +40,6 @@ The recommended direction is:
 - inline explicit smoke-only rollout enablement when the adopted family set is not yet rollout-ready
 - stop at “ready to start” by default
 - only enter `run` when `--start` is present
-- only enter `verify` when `--verify` is present
 
 This is not a new startup authority.
 
@@ -90,7 +89,6 @@ This design should guarantee the following:
 - run `doctor` as the required preflight gate before any optional startup
 - stop at “ready to start” by default
 - allow `--start` to continue into `run`
-- allow `--verify` to continue into `verify` after `run`
 - keep target authority on `operator_target_revision`
 - keep runtime active truth owned by `run`, not by `apply`
 - persist only long-lived config and control-plane changes
@@ -107,6 +105,8 @@ This design does not define:
 - a replacement for `verify`
 - automatic candidate adoption
 - silent or automatic rollout enablement
+- detached or background process supervision
+- automatic verification chaining after `run` in the first phase
 - hot reload of runtime target state
 - persistence of probe or verify output
 - productization of legacy explicit-target startup in the high-level flow
@@ -125,6 +125,7 @@ Hard rules:
 - `apply` must not silently perform adoption
 - `apply` must not silently perform rollout enablement
 - `apply` must not directly mark configured state as active
+- `apply` must not claim to stop or replace an already-running daemon on its own
 - `apply` must not write transient probe or verify state into config
 
 ### 5.2 Why `apply` Instead Of Growing `bootstrap`
@@ -183,7 +184,6 @@ The public entry becomes:
 ```bash
 cargo run -p app-live -- apply --config config/axiom-arb.local.toml
 cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
-cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start --verify
 ```
 
 The command does not replace lower-level commands.
@@ -196,7 +196,14 @@ The first version should support only:
 
 - `real-user shadow smoke`
 
-If `apply` is invoked against a non-smoke config, it should fail with a high-level unsupported-scenario message and point the operator back to the appropriate lower-level or bootstrap path.
+If `apply` is invoked against a non-smoke config, the unsupported path should be explicit:
+
+- `paper`
+  - direct the operator back to `bootstrap` or `run`
+- `live`
+  - direct the operator back to `status -> doctor -> run`
+
+It should not give a generic “bootstrap or lower-level path” message.
 
 ### 6.3 Relationship To Existing Commands
 
@@ -220,6 +227,24 @@ If `apply` is invoked against a non-smoke config, it should fail with a high-lev
 
 `apply` sits above those commands as a smoke-focused workflow coordinator.
 
+### 6.4 Status Action Ownership
+
+The first implementation should also tighten smoke next-action ownership at the high-level layer.
+
+Today, `status` still points smoke rollout enablement back to `bootstrap`.
+
+Once `apply` exists, the high-level smoke flow should change to:
+
+- smoke adoption / rollout / start progression
+  - `status` points to `apply`
+- first-run config/bootstrap work
+  - `status` may still point to `bootstrap`
+
+That keeps the Day 0 / Day 1+ split consistent:
+
+- `bootstrap` owns first-run setup
+- `apply` owns ongoing smoke progression
+
 ## 7. Operator Flow
 
 ### 7.1 Default `apply`
@@ -240,22 +265,70 @@ Expected flow:
 
 1. perform the same readiness / adoption / rollout / preflight flow
 2. if all blocking steps pass, continue into `run`
-3. if `restart-required` was the main remaining blocker, `apply --start` becomes the high-level way to actually apply the configured smoke state to active runtime state
+3. if `restart-required` was the main remaining blocker, `apply --start` may continue only after explicit operator confirmation that the old process has already been or is being manually replaced
 
-### 7.3 `apply --start --verify`
+This is still a foreground startup path.
 
-Expected flow:
+It is not a detached process manager and it is not a remote restart controller.
 
-1. perform the same readiness / adoption / rollout / preflight flow
-2. continue into `run`
-3. on successful runtime entry, continue into `verify`
-4. finish with a high-level run outcome summary plus next actions
+### 7.3 Why First-Phase `apply` Should Not Chain `verify`
 
-This does not make `verify` implicit by default.
+The first phase should stop at successful `run`.
 
-It keeps verification opt-in while still making it easy to chain into the high-level smoke path.
+Reason:
 
-## 8. Internal State Machine
+- `run` is the current long-lived foreground daemon entrypoint
+- once `run` takes over successfully, control does not naturally return to `apply`
+- claiming that `apply --start --verify` can run `verify` after startup would require a separate detached-session or supervisor contract that does not exist yet
+
+So the correct first-phase boundary is:
+
+- `apply` may stop at “ready to start”
+- `apply --start` may continue into foreground `run`
+- `verify` remains a separate follow-up command until the repo has a real run-session identity and post-start orchestration contract
+
+## 8. Status Transition Matrix
+
+`apply` should not invent its own readiness interpretation.
+
+It should map directly from high-level `status` outputs to orchestration states:
+
+- `blocked`
+  - stop immediately with `ReadinessError`
+  - print the blocking reason and next action
+
+- `blocked` + legacy explicit-target indicators
+  - if `status` details/action indicate legacy explicit targets or migration is required
+  - stop immediately with migration guidance
+  - do not productize this path inside `apply`
+
+- `target-adoption-required`
+  - enter `EnsureTargetAnchor`
+
+- `smoke-rollout-required`
+  - enter `EnsureSmokeRollout`
+
+- `smoke-config-ready`
+  - enter `RunPreflight`
+
+- `restart-required`
+  - if rollout is still not ready, enter `EnsureSmokeRollout` first
+  - otherwise surface a controlled-restart confirmation gate
+  - only `--start` may continue beyond that gate
+
+The key rule is:
+
+- `apply` only advances when `status` already provides a valid next action
+- it does not reinterpret `blocked` as recoverable on its own
+
+In other words, legacy explicit-target handling must come from the existing `status` truth:
+
+- target source
+- readiness details
+- migration action
+
+It must not invent a new readiness enum branch just for `apply`.
+## 9. Internal State Machine
 
 The first version should be built as an explicit orchestration state machine.
 
@@ -275,23 +348,24 @@ Recommended states:
 - if rollout is not ready, prompt for explicit smoke-only rollout enablement
 - on success, return to `LoadReadiness`
 
-4. `RunPreflight`
+4. `ConfirmManualRestartBoundary`
+- entered only when readiness says `restart-required`
+- only relevant when `--start` is present
+- requires explicit operator confirmation that any existing process using the old revision is being handled outside `apply`
+
+5. `RunPreflight`
 - reuse `doctor`
 - fail closed on any blocking preflight result
 
-5. `Ready`
+6. `Ready`
 - default terminal state
 - only reached when the system is ready to start
 
-6. `RunRuntime`
+7. `RunRuntime`
 - entered only with `--start`
 - reuse `run`
 
-7. `RunVerify`
-- entered only with `--verify` after successful `run`
-- reuse `verify`
-
-## 9. Persistence Boundaries
+## 10. Persistence Boundaries
 
 ### 9.1 Allowed Persistent Writes
 
@@ -330,7 +404,7 @@ That preserves the current authority boundary:
 - config/control-plane express intent
 - runtime startup makes that intent active
 
-## 10. Interaction Model
+## 11. Interaction Model
 
 ### 10.1 Current State
 
@@ -348,9 +422,9 @@ Before making any write or transition, print the planned high-level actions, suc
 
 - adopt target revision
 - enable smoke-only rollout
+- confirm manual restart boundary
 - run doctor
 - start runtime
-- verify latest result
 
 ### 10.3 Explicit Confirmation
 
@@ -358,6 +432,7 @@ The first version requires explicit confirmation for:
 
 - target adoption
 - smoke-only rollout enablement
+- manual restart boundary when `restart-required` and `--start` are combined
 
 It must not auto-select the newest adoptable revision and must not silently enable rollout.
 
@@ -367,7 +442,6 @@ At the end of the flow, print a concise high-level outcome such as:
 
 - `Ready to start`
 - `Started`
-- `Started and verified`
 - `Blocked`
 
 ### 10.5 Next Actions
@@ -378,53 +452,55 @@ Examples:
 
 - rerun `app-live apply --start`
 - inspect `app-live doctor --config ...`
-- inspect `app-live verify --config ...`
+- run `app-live verify --config ...`
 - no action required
 
-## 11. Error Model
+## 12. Error Model
 
 The first version should classify failures by stage:
 
 - `ReadinessError`
 - `AdoptionError`
 - `RolloutEnablementError`
+- `RestartBoundaryError`
 - `PreflightError`
 - `StartError`
-- `VerifyError`
 
 The CLI does not need to expose those type names directly to operators, but it must preserve that stage boundary in output and next actions.
 
-## 12. Testing Requirements
+## 13. Testing Requirements
 
 The first implementation should include:
 
 1. state-machine tests
 - missing target anchor
 - rollout missing
+- blocked readiness
+- legacy explicit-target rejection
+- restart-required confirmation gate
 - preflight failure
 - ready-without-start
 - start path
-- start-plus-verify path
 
 2. orchestration-boundary tests
 - `apply` reuses existing command semantics
 - `apply` does not introduce new authority
 - `apply` does not persist transient state
+- `apply` does not pretend to supervise or stop an already-running daemon
 
 3. interaction tests
 - explicit adoption prompt
 - explicit rollout confirmation
+- explicit restart-boundary confirmation
 - default stop-at-ready behavior
 - `--start` only starts after successful preflight
-- `--verify` only runs after successful `run`
 
 4. smoke-specific regression tests
 - restart-required flow
 - adopted-target flow
 - rollout enablement flow
-- verify chaining flow
 
-## 13. Acceptance Criteria
+## 14. Acceptance Criteria
 
 This project is complete when:
 
@@ -434,17 +510,17 @@ This project is complete when:
 - `apply` can inline explicit smoke-only rollout enablement
 - default `apply` stops at “ready to start”
 - `apply --start` continues into `run`
-- `apply --start --verify` continues into `verify`
 - `apply` writes only long-lived target/control-plane changes
 - `apply` does not write transient probe or verify state
 - `apply` does not introduce a second startup authority
+- `apply` does not claim background or remote restart management it does not actually provide
 - the smoke Day 1+ operator path is materially simpler than manual `status -> targets -> doctor -> run -> verify`
 
-## 14. Recommended Next Step
+## 15. Recommended Next Step
 
 If this spec is approved, the next step should be an implementation plan focused on:
 
 1. CLI surface and orchestration state machine
 2. adoption and rollout confirmation plumbing
-3. `doctor`, `run`, and `verify` chaining
+3. restart-boundary handling and `doctor` / `run` chaining
 4. smoke-specific regression coverage
