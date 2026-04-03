@@ -36,20 +36,23 @@ pub fn load(config_path: &Path) -> VerifyContext {
     }
 }
 
+pub fn parse_expectation_override(value: &str) -> Result<Option<VerifyExpectation>, String> {
+    match value {
+        "auto" => Ok(None),
+        "paper-no-live" => Ok(Some(VerifyExpectation::PaperNoLive)),
+        "smoke-shadow-only" => Ok(Some(VerifyExpectation::SmokeShadowOnly)),
+        "live-config-consistent" => Ok(Some(VerifyExpectation::LiveConfigConsistent)),
+        other => Err(format!(
+            "unsupported verify expectation: {other}; expected auto, paper-no-live, smoke-shadow-only, or live-config-consistent"
+        )),
+    }
+}
+
 pub fn compare_window_to_current_config_anchor(
-    context: &VerifyContext,
+    _context: &VerifyContext,
     window: &VerifyWindowSelection,
 ) -> ConfigAnchorComparison {
     if !window.is_historical_explicit() {
-        return ConfigAnchorComparison {
-            comparable: true,
-            reason: None,
-        };
-    }
-
-    if context.control_plane.target_source != Some(VerifyControlPlaneTargetSource::AdoptedTargets)
-        || context.control_plane.configured_target.is_none()
-    {
         return ConfigAnchorComparison {
             comparable: true,
             reason: None,
@@ -143,5 +146,61 @@ fn map_rollout_state(state: StatusRolloutState) -> VerifyControlPlaneRolloutStat
     match state {
         StatusRolloutState::Required => VerifyControlPlaneRolloutState::Required,
         StatusRolloutState::Ready => VerifyControlPlaneRolloutState::Ready,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        compare_window_to_current_config_anchor, parse_expectation_override, VerifyContext,
+    };
+    use crate::commands::verify::{
+        model::{
+            VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneTargetSource,
+            VerifyExpectation,
+        },
+        window::VerifyWindowSelection,
+    };
+
+    #[test]
+    fn parse_expectation_override_accepts_fixed_profiles() {
+        assert_eq!(parse_expectation_override("auto").unwrap(), None);
+        assert_eq!(
+            parse_expectation_override("paper-no-live").unwrap(),
+            Some(VerifyExpectation::PaperNoLive)
+        );
+        assert_eq!(
+            parse_expectation_override("smoke-shadow-only").unwrap(),
+            Some(VerifyExpectation::SmokeShadowOnly)
+        );
+        assert_eq!(
+            parse_expectation_override("live-config-consistent").unwrap(),
+            Some(VerifyExpectation::LiveConfigConsistent)
+        );
+    }
+
+    #[test]
+    fn explicit_historical_windows_are_not_comparable_to_current_config() {
+        let context = VerifyContext {
+            scenario: crate::commands::verify::model::VerifyScenario::Live,
+            expectation: VerifyExpectation::LiveConfigConsistent,
+            control_plane: VerifyControlPlaneContext {
+                mode: Some(VerifyControlPlaneMode::Live),
+                target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),
+                configured_target: Some("targets-rev-9".to_owned()),
+                active_target: Some("targets-rev-9".to_owned()),
+                restart_needed: Some(false),
+                rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
+            },
+            reason: None,
+        };
+        let window = VerifyWindowSelection::ExplicitAttemptId("attempt-old".to_owned());
+
+        let comparison = compare_window_to_current_config_anchor(&context, &window);
+        assert!(!comparison.comparable);
+        assert_eq!(
+            comparison.reason.as_deref(),
+            Some("historical window is not provably tied to the current config anchor")
+        );
     }
 }

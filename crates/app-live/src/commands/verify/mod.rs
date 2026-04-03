@@ -11,7 +11,16 @@ pub mod model;
 pub mod window;
 
 pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
-    let verify_context = context::load(&args.config);
+    let mut verify_context = context::load(&args.config);
+    if let Some(expectation) = args
+        .expect
+        .as_deref()
+        .map(context::parse_expectation_override)
+        .transpose()?
+        .flatten()
+    {
+        verify_context.expectation = expectation;
+    }
     let selection = window::VerifyWindowSelection::from_args(
         args.from_seq,
         args.to_seq,
@@ -100,6 +109,10 @@ fn evaluate_foundation_outcome(
         return evaluate_smoke_outcome(verify_context, evidence);
     }
 
+    if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Live) {
+        return evaluate_live_outcome(verify_context, evidence);
+    }
+
     (
         model::VerifyVerdict::Fail,
         verify_context.reason.clone().or_else(|| {
@@ -110,6 +123,76 @@ fn evaluate_foundation_outcome(
         }),
         vec!["run app-live status --config {config}".to_owned()],
     )
+}
+
+fn evaluate_live_outcome(
+    verify_context: &context::VerifyContext,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
+    if verify_context.expectation != model::VerifyExpectation::LiveConfigConsistent {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(format!(
+                "expectation {} is not compatible with live verification",
+                verify_context.expectation.label()
+            )),
+            vec!["rerun verify with --expect live-config-consistent".to_owned()],
+        );
+    }
+
+    let live_attempt_count = live_attempt_count(evidence);
+    let shadow_attempt_count = evidence
+        .attempts
+        .iter()
+        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
+        .count();
+    let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
+    let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
+    let live_evidence_count = live_attempt_count + live_artifact_count + live_submission_count;
+
+    if shadow_attempt_count > 0 {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(format!(
+                "contradictory local outcomes: observed {shadow_attempt_count} shadow attempt(s) in live verification"
+            )),
+            vec!["inspect the latest local execution attempts before rerunning verify".to_owned()],
+        );
+    }
+
+    if live_evidence_count == 0 {
+        return (
+            model::VerifyVerdict::Fail,
+            Some(
+                "contradictory local outcomes: no live results were observed for a live config"
+                    .to_owned(),
+            ),
+            vec!["run app-live status --config {config}".to_owned()],
+        );
+    }
+
+    let rollout_ready = verify_context.control_plane.rollout_state
+        == Some(model::VerifyControlPlaneRolloutState::Ready);
+    let active_matches_config = verify_context.control_plane.configured_target.as_deref()
+        == verify_context.control_plane.active_target.as_deref();
+
+    if rollout_ready && active_matches_config {
+        (
+            model::VerifyVerdict::Pass,
+            Some(format!(
+                "live-config-consistent: {live_attempt_count} live attempt(s) with aligned control-plane state"
+            )),
+            vec!["continue normal live operations".to_owned()],
+        )
+    } else {
+        (
+            model::VerifyVerdict::PassWithWarnings,
+            Some(format!(
+                "live results are locally consistent but readiness remains incomplete; live attempts: {live_attempt_count}"
+            )),
+            vec!["rerun app-live status --config {config}".to_owned()],
+        )
+    }
 }
 
 fn evaluate_smoke_outcome(
@@ -325,6 +408,14 @@ fn smoke_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize 
             .iter()
             .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
             .count()
+}
+
+fn live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
+    evidence
+        .attempts
+        .iter()
+        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
+        .count()
 }
 
 fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidenceWindow) -> bool {

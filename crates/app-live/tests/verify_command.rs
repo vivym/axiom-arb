@@ -68,7 +68,7 @@ fn verify_paper_fails_when_live_attempts_are_observed() {
 }
 
 #[test]
-fn verify_paper_explicit_live_attempt_window_fails_when_live_attempt_is_selected() {
+fn verify_paper_explicit_live_attempt_window_degrades_when_it_cannot_be_tied_to_current_config() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_live_attempt("attempt-live-explicit-1");
 
@@ -83,8 +83,11 @@ fn verify_paper_explicit_live_attempt_window_fails_when_live_attempt_is_selected
         .unwrap();
 
     let text = cli::combined(&output);
-    assert!(text.contains("Verdict: FAIL"), "{text}");
-    assert!(text.contains("forbidden live side effects"), "{text}");
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(
+        text.contains("historical window is not provably tied to the current config anchor"),
+        "{text}"
+    );
 
     verify_db.cleanup();
 }
@@ -120,6 +123,90 @@ fn verify_explicit_target_config_is_reported_as_legacy_unsupported() {
     assert!(text.contains("legacy explicit targets"), "{text}");
 
     verify_db.cleanup();
+}
+
+#[test]
+fn verify_live_passes_when_local_results_match_current_config_and_control_plane() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-ready",
+        &verify_db::live_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: live"), "{text}");
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(
+        text.contains("Expectation: live-config-consistent"),
+        "{text}"
+    );
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_live_fails_when_results_conflict_with_current_mode_and_readiness() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_shadow_attempt_with_artifacts("attempt-shadow-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-conflict",
+        &verify_db::live_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("contradictory local outcomes"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_expect_override_selects_a_fixed_profile_set() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-override-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-override",
+        &verify_db::live_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--expect")
+        .arg("paper-no-live")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Expectation: paper-no-live"), "{text}");
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]

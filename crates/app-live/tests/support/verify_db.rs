@@ -224,6 +224,15 @@ impl TestDatabase {
         });
     }
 
+    pub fn seed_live_attempt_with_artifacts(&self, attempt_id: &str) {
+        self.seed_live_attempt(attempt_id);
+        self.seed_live_artifact(sample_live_artifact(attempt_id));
+        self.seed_live_submission(sample_live_submission(
+            attempt_id,
+            &format!("{attempt_id}-submission"),
+        ));
+    }
+
     pub fn seed_journal(&self, row: JournalEntryInput) {
         self.runtime.block_on(async {
             JournalRepo
