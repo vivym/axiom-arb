@@ -1,9 +1,14 @@
 mod support;
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use support::cli;
-use support::status_db::TestDatabase;
+use support::{apply_db, status_db::TestDatabase};
 
 #[test]
 fn apply_subcommand_is_exposed() {
@@ -97,6 +102,81 @@ fn apply_maps_target_adoption_required_to_ensure_target_anchor() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("ensure-target-anchor"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_enters_inline_target_adoption_when_target_anchor_missing() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Choose an adoptable revision"), "{text}");
+    assert!(text.contains("adoptable-9"), "{text}");
+    assert!(text.contains("cancel"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_cancelled_inline_target_adoption_stops_without_writes() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("cancelled"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("config should still load");
+    assert!(
+        !rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert_eq!(database.history_count(), 0);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_can_inline_smoke_target_adoption() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "adoptable-9\n");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("ensure-smoke-rollout"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(
+        rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+
+    let latest = database.latest_history().expect("history row should exist");
+    assert_eq!(latest.action_kind, "adopt");
+    assert_eq!(latest.operator_target_revision, "targets-rev-9");
+    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
+    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -201,3 +281,31 @@ fn temp_invalid_config_path() -> PathBuf {
 }
 
 static NEXT_TEMP_CONFIG_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn run_apply_with_stdin(
+    config_path: &std::path::Path,
+    database_url: &str,
+    stdin_input: &str,
+) -> std::process::Output {
+    let mut child = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(config_path)
+        .env("DATABASE_URL", database_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live apply should spawn");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(stdin_input.as_bytes())
+        .expect("stdin should write");
+
+    child
+        .wait_with_output()
+        .expect("app-live apply should finish")
+}

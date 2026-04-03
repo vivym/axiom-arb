@@ -7,6 +7,7 @@ use std::{
 };
 
 pub mod cli;
+pub mod apply_db;
 pub mod status_db;
 pub mod verify_db;
 
