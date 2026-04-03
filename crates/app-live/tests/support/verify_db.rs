@@ -435,11 +435,19 @@ pub fn temp_config_path(prefix: &str, contents: &str) -> PathBuf {
 }
 
 pub fn sample_attempt(attempt_id: &str, execution_mode: ExecutionMode) -> ExecutionAttemptRow {
+    sample_attempt_for_route(attempt_id, execution_mode, "neg-risk")
+}
+
+pub fn sample_attempt_for_route(
+    attempt_id: &str,
+    execution_mode: ExecutionMode,
+    route: &str,
+) -> ExecutionAttemptRow {
     ExecutionAttemptRow {
         attempt_id: attempt_id.to_owned(),
         plan_id: "negrisk-submit-family:family-a".to_owned(),
         snapshot_id: "snapshot-verify-7".to_owned(),
-        route: "neg-risk".to_owned(),
+        route: route.to_owned(),
         scope: "family-a".to_owned(),
         matched_rule_id: Some("rule-neg-risk-submit".to_owned()),
         execution_mode,
@@ -454,6 +462,17 @@ pub fn sample_attempt_in_snapshot(
     snapshot_id: &str,
 ) -> ExecutionAttemptRow {
     let mut row = sample_attempt(attempt_id, execution_mode);
+    row.snapshot_id = snapshot_id.to_owned();
+    row
+}
+
+pub fn sample_attempt_in_snapshot_for_route(
+    attempt_id: &str,
+    execution_mode: ExecutionMode,
+    snapshot_id: &str,
+    route: &str,
+) -> ExecutionAttemptRow {
+    let mut row = sample_attempt_for_route(attempt_id, execution_mode, route);
     row.snapshot_id = snapshot_id.to_owned();
     row
 }
