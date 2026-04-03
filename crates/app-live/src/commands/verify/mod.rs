@@ -124,21 +124,17 @@ fn evaluate_smoke_outcome(
     let has_run_evidence =
         selected_shadow_attempt_count > 0 || !evidence.replay_shadow_attempt_artifacts.is_empty();
     let has_consistent_shadow_artifacts = shadow_attempts_have_consistent_artifacts(evidence);
-    let live_side_effect_count: usize = evidence
-        .live_artifacts
-        .values()
-        .map(Vec::len)
-        .sum::<usize>()
+    let live_side_effect_count = smoke_live_attempt_count(evidence)
         + evidence
-            .live_submissions
+            .live_artifacts
             .values()
             .map(Vec::len)
             .sum::<usize>()
         + evidence
-            .attempts
-            .iter()
-            .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
-            .count();
+            .live_submissions
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
 
     if live_side_effect_count > 0 {
         return (
@@ -224,6 +220,10 @@ fn render_foundation_report(
     let forbidden_live_attempt_count =
         if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Paper) {
             paper_live_attempt_count(evidence)
+        } else if verify_context.control_plane.mode
+            == Some(model::VerifyControlPlaneMode::RealUserShadowSmoke)
+        {
+            smoke_live_attempt_count(evidence)
         } else {
             0
         };
@@ -316,6 +316,15 @@ fn paper_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize 
     }
 
     attempt_ids.len()
+}
+
+fn smoke_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
+    evidence.observed_live_attempts.len()
+        + evidence
+            .attempts
+            .iter()
+            .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
+            .count()
 }
 
 fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidenceWindow) -> bool {

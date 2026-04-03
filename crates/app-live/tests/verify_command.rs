@@ -283,6 +283,93 @@ fn verify_smoke_passes_when_shadow_only_evidence_is_complete() {
 }
 
 #[test]
+fn verify_smoke_fails_when_a_durable_live_attempt_is_present_outside_the_shadow_attempt_window() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_shadow_attempt_with_artifacts_in_snapshot("attempt-shadow-1", "snapshot-smoke");
+    verify_db.seed_live_attempt_in_snapshot("attempt-live-1", "snapshot-live-outside");
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-live-side-effects",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("forbidden live side effects"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_smoke_default_window_reflects_the_latest_smoke_rerun_only() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_non_working_smoke_run_window_in_snapshot("snapshot-smoke-old");
+    verify_db.seed_shadow_attempt_with_artifacts_in_snapshot(
+        "attempt-shadow-2",
+        "snapshot-smoke-latest",
+    );
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-latest",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("shadow attempts: 1"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_smoke_latest_window_prefers_latest_shadow_attempt_per_scope_within_snapshot() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_non_working_smoke_run_window_in_snapshot("snapshot-smoke-shared");
+    verify_db.seed_shadow_attempt_with_artifacts_in_snapshot(
+        "attempt-shadow-latest",
+        "snapshot-smoke-shared",
+    );
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-shared-snapshot",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("shadow attempts: 1"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_smoke_requires_real_run_evidence_before_it_can_be_any_pass_variant() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_smoke_runtime_progress("targets-rev-9");

@@ -2062,6 +2062,70 @@ impl ExecutionAttemptRepo {
         self.list_recent_by_mode(pool, None, limit).await
     }
 
+    pub async fn list_by_mode_with_created_at(
+        &self,
+        pool: &PgPool,
+        mode: domain::ExecutionMode,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                created_at
+            FROM execution_attempts
+            WHERE execution_mode = $1
+            ORDER BY created_at DESC, attempt_id DESC
+            "#,
+        )
+        .bind(execution_mode_to_str(mode))
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
+    }
+
+    pub async fn list_by_snapshot_id(
+        &self,
+        pool: &PgPool,
+        snapshot_id: &str,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                created_at
+            FROM execution_attempts
+            WHERE snapshot_id = $1
+            ORDER BY created_at DESC, attempt_id DESC
+            "#,
+        )
+        .bind(snapshot_id)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
+    }
+
     pub async fn list_recent_by_mode(
         &self,
         pool: &PgPool,

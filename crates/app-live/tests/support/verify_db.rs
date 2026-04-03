@@ -404,6 +404,16 @@ pub fn sample_attempt(attempt_id: &str, execution_mode: ExecutionMode) -> Execut
     }
 }
 
+pub fn sample_attempt_in_snapshot(
+    attempt_id: &str,
+    execution_mode: ExecutionMode,
+    snapshot_id: &str,
+) -> ExecutionAttemptRow {
+    let mut row = sample_attempt(attempt_id, execution_mode);
+    row.snapshot_id = snapshot_id.to_owned();
+    row
+}
+
 pub fn sample_shadow_artifact(attempt_id: &str) -> ShadowExecutionArtifactRow {
     ShadowExecutionArtifactRow {
         attempt_id: attempt_id.to_owned(),
@@ -428,10 +438,39 @@ impl TestDatabase {
         self.seed_shadow_artifact(sample_shadow_artifact(attempt_id));
     }
 
+    pub fn seed_shadow_attempt_with_artifacts_in_snapshot(
+        &self,
+        attempt_id: &str,
+        snapshot_id: &str,
+    ) {
+        self.seed_attempt(sample_attempt_in_snapshot(
+            attempt_id,
+            ExecutionMode::Shadow,
+            snapshot_id,
+        ));
+        self.seed_shadow_artifact(sample_shadow_artifact(attempt_id));
+    }
+
     pub fn seed_non_working_smoke_run_window(&self) {
         self.seed_attempt(sample_attempt(
             "attempt-shadow-preflight-1",
             ExecutionMode::Shadow,
+        ));
+    }
+
+    pub fn seed_non_working_smoke_run_window_in_snapshot(&self, snapshot_id: &str) {
+        self.seed_attempt(sample_attempt_in_snapshot(
+            "attempt-shadow-preflight-1",
+            ExecutionMode::Shadow,
+            snapshot_id,
+        ));
+    }
+
+    pub fn seed_live_attempt_in_snapshot(&self, attempt_id: &str, snapshot_id: &str) {
+        self.seed_attempt(sample_attempt_in_snapshot(
+            attempt_id,
+            ExecutionMode::Live,
+            snapshot_id,
         ));
     }
 }

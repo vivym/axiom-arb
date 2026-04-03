@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Entry, BTreeMap};
 
 use app_replay::NegRiskShadowAttemptArtifacts;
 use chrono::{DateTime, Utc};
@@ -40,6 +40,11 @@ pub async fn load(
     let attempt_ids = attempts
         .iter()
         .map(|row| row.attempt.attempt_id.clone())
+        .chain(
+            observed_live_attempts
+                .iter()
+                .map(|row| row.attempt.attempt_id.clone()),
+        )
         .collect::<Vec<_>>();
 
     Ok(VerifyEvidenceWindow {
@@ -99,6 +104,13 @@ async fn select_observed_live_attempts(
                     Some(ExecutionMode::Live),
                     DEFAULT_RECENT_ATTEMPTS_LIMIT,
                 )
+                .await
+        }
+        VerifyWindowSelection::LatestForScenario(
+            super::model::VerifyScenario::RealUserShadowSmoke,
+        ) => {
+            ExecutionAttemptRepo
+                .list_by_mode_with_created_at(pool, ExecutionMode::Live)
                 .await
         }
         _ => Ok(Vec::new()),
@@ -161,13 +173,50 @@ async fn select_latest_attempts_for_scenario(
                 .await
         }
         super::model::VerifyScenario::RealUserShadowSmoke => {
-            ExecutionAttemptRepo
-                .list_recent_by_mode(
-                    pool,
-                    Some(ExecutionMode::Shadow),
-                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
+            Ok(select_latest_smoke_run_attempts(pool)
+                .await?
+                .into_iter()
+                .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Shadow))
+                .fold(
+                    BTreeMap::<String, ExecutionAttemptWithCreatedAtRow>::new(),
+                    |mut latest_by_scope, row| {
+                        match latest_by_scope.entry(row.attempt.scope.clone()) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(row);
+                            }
+                            Entry::Occupied(mut entry) => {
+                                let existing = entry.get();
+                                if row.created_at > existing.created_at
+                                    || (row.created_at == existing.created_at
+                                        && row.attempt.attempt_id > existing.attempt.attempt_id)
+                                {
+                                    entry.insert(row);
+                                }
+                            }
+                        }
+                        latest_by_scope
+                    },
                 )
-                .await
+                .into_values()
+                .collect())
         }
     }
+}
+
+async fn select_latest_smoke_run_attempts(
+    pool: &PgPool,
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    let latest_shadow_attempt = ExecutionAttemptRepo
+        .list_recent_by_mode(pool, Some(ExecutionMode::Shadow), 1)
+        .await?
+        .into_iter()
+        .next();
+
+    let Some(latest_shadow_attempt) = latest_shadow_attempt else {
+        return Ok(Vec::new());
+    };
+
+    ExecutionAttemptRepo
+        .list_by_snapshot_id(pool, &latest_shadow_attempt.attempt.snapshot_id)
+        .await
 }
