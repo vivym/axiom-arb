@@ -47,6 +47,23 @@ fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_n
 }
 
 #[test]
+fn verify_paper_blocked_without_database_url_fails_instead_of_warning() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Scenario: paper"), "{text}");
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("DATABASE_URL"), "{text}");
+}
+
+#[test]
 fn verify_paper_fails_when_live_attempts_are_observed() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_live_attempt("attempt-live-1");

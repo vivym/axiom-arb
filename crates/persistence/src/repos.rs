@@ -1515,6 +1515,38 @@ impl JournalRepo {
 
         rows.into_iter().map(map_journal_entry_row).collect()
     }
+
+    pub async fn list_since(
+        &self,
+        pool: &PgPool,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<JournalEntryRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                journal_seq,
+                stream,
+                source_kind,
+                source_session_id,
+                source_event_id,
+                dedupe_key,
+                causal_parent_id,
+                event_type,
+                event_ts,
+                payload,
+                ingested_at
+            FROM event_journal
+            WHERE event_ts >= $1
+               OR ingested_at >= $1
+            ORDER BY journal_seq
+            "#,
+        )
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter().map(map_journal_entry_row).collect()
+    }
 }
 
 const RUNTIME_PROGRESS_KEY: &str = "default";

@@ -33,7 +33,31 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     let anchor_comparison =
         context::compare_window_to_current_config_anchor(&verify_context, &selection);
 
-    let evidence = load_evidence_window(&verify_context, &anchor_comparison, &selection)?;
+    let evidence = match load_evidence_window(&verify_context, &anchor_comparison, &selection) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            let reason = verify_context
+                .reason
+                .clone()
+                .map(|context_reason| {
+                    format!("{context_reason}; failed to load local verification evidence: {error}")
+                })
+                .unwrap_or_else(|| format!("failed to load local verification evidence: {error}"));
+            let next_actions = next_actions_from_context(
+                &verify_context,
+                &["run app-live status --config {config}"],
+            );
+            render_foundation_report(
+                &verify_context,
+                model::VerifyVerdict::Fail,
+                Some(&reason),
+                &next_actions,
+                &evidence::VerifyEvidenceWindow::default(),
+                &args.config,
+            );
+            return Err(io::Error::other(reason).into());
+        }
+    };
     let (verdict, reason, next_actions) =
         evaluate_foundation_outcome(&verify_context, &anchor_comparison, &evidence);
     render_foundation_report(
@@ -54,7 +78,7 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
 
 fn load_evidence_window(
     verify_context: &context::VerifyContext,
-    anchor_comparison: &context::ConfigAnchorComparison,
+    _anchor_comparison: &context::ConfigAnchorComparison,
     selection: &window::VerifyWindowSelection,
 ) -> Result<evidence::VerifyEvidenceWindow, Box<dyn Error>> {
     let runtime = Builder::new_current_thread().enable_all().build()?;
@@ -66,10 +90,8 @@ fn load_evidence_window(
     match result {
         Ok(evidence) => Ok(evidence),
         Err(error)
-            if verify_context.reason.is_some()
-                || verify_context.control_plane.target_source
-                    == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets)
-                || !anchor_comparison.comparable =>
+            if verify_context.control_plane.target_source
+                == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets) =>
         {
             Ok(evidence::VerifyEvidenceWindow::default())
         }

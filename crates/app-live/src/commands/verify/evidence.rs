@@ -176,11 +176,7 @@ async fn select_journal(
 }
 
 async fn list_journal_since(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<JournalEntryRow>> {
-    let rows = JournalRepo.list_range(pool, 0, None).await?;
-    Ok(rows
-        .into_iter()
-        .filter(|row| row.event_ts >= since || row.ingested_at >= since)
-        .collect())
+    JournalRepo.list_since(pool, since).await
 }
 
 async fn select_latest_attempts_for_scenario(
