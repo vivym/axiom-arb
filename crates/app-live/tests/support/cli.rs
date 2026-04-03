@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn app_live_binary() -> PathBuf {
     if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app-live") {
@@ -40,4 +40,16 @@ pub fn combined(output: &std::process::Output) -> String {
 #[allow(dead_code)]
 pub fn default_test_database_url() -> &'static str {
     "postgres://axiom:axiom@localhost:5432/axiom_arb"
+}
+
+pub fn shell_quote_path(path: &Path) -> String {
+    let value = path.display().to_string();
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        value
+    } else {
+        format!("'{}'", value.replace('\'', r"'\''"))
+    }
 }

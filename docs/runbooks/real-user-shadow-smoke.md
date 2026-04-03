@@ -80,6 +80,28 @@ Interpret `status` before `doctor` like this:
 
 `doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `bootstrap --start` reuses that same `doctor -> run` sequence; it does not bypass preflight.
 
+After `run`, use the high-level verifier as the default happy path:
+
+```bash
+cargo run -p app-live -- verify --config config/axiom-arb.local.toml
+```
+
+Interpret the verifier like this:
+
+- `Scenario: real-user shadow smoke`
+  - confirms the verifier inferred the smoke path
+- `Verdict: PASS`
+  - shadow-only run evidence is present
+  - no forbidden live side effects were observed
+- `Verdict: PASS WITH WARNINGS`
+  - a real smoke run happened
+  - but rollout-not-ready or missing stronger replay evidence makes the result incomplete
+- `Verdict: FAIL`
+  - no credible run evidence exists
+  - or forbidden live side effects were observed
+
+`verify` is intentionally local-only. It does not do venue probes and it does not replace `doctor`; it validates what the latest local smoke run actually produced.
+
 Interpret the ending of the `doctor` report like this:
 
 - `Overall: PASS`
@@ -105,13 +127,15 @@ cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
 
 Adopt and rollback only rewrite the configured `operator_target_revision` in the TOML. They do not hot-reload the running daemon.
 
-If you need to capture replay-visible state after the smoke, run:
+If you need deeper debugging beyond `verify`, capture replay-visible state after the smoke with:
 
 ```bash
 cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0 --limit 1000
 ```
 
-## SQL Checks
+## Deeper Debugging
+
+Use SQL only when `verify` fails or when you need to inspect the raw evidence behind its verdict.
 
 Check that `neg-risk` only produced shadow attempts:
 
@@ -147,18 +171,13 @@ Expected:
 
 ## Pass / Fail Rubric
 
-Pass if all of the following are true:
+Treat `app-live verify --config config/axiom-arb.local.toml` as the primary verdict:
 
-- `app-live` starts with the smoke guard enabled and stays on the shadow path for `neg-risk`
-- `execution_attempts` contains `neg-risk` rows in `shadow` mode only
-- `shadow_execution_artifacts` contains rows for those attempts
-- `app-replay` emits the structured `app-replay neg-risk shadow smoke` summary when those rows exist
+- `PASS`
+  - smoke-only behavior is evidenced locally
+- `PASS WITH WARNINGS`
+  - smoke executed, but rollout/readiness or replay strength remains incomplete
+- `FAIL`
+  - live side effects appeared, or there is no credible local smoke run evidence
 
-If rollout readiness is intentionally left empty, zero `neg-risk` shadow rows is an expected outcome and this runbook should be treated as `preflight-ready smoke startup`, not `shadow-work-ready smoke startup`.
-
-Fail if any of the following happen:
-
-- `app-live` runs in paper mode
-- any `neg-risk` row is recorded as `live`
-- shadow artifacts exist without a matching shadow attempt
-- the replay summary does not report the smoke rows
+If rollout readiness is intentionally left empty, zero `neg-risk` shadow rows is an expected outcome and this runbook should be treated as `preflight-ready smoke startup`, not `shadow-work-ready smoke startup`. In that case `verify` should not produce `PASS`; it should either warn or fail depending on whether a real run happened.

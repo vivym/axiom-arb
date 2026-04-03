@@ -1,5 +1,7 @@
 use std::{error::Error, fmt::Write as _, io, path::Path};
 
+use crate::commands::status::model::StatusAction;
+use crate::commands::status::render_action_template as render_status_action_template;
 use persistence::connect_pool_from_env;
 use tokio::runtime::Builder;
 
@@ -92,16 +94,20 @@ fn evaluate_foundation_outcome(
         );
     }
 
+    if let Some((reason, next_actions)) = incompatible_expectation_outcome(verify_context) {
+        return (model::VerifyVerdict::Fail, Some(reason), next_actions);
+    }
+
     if !anchor_comparison.comparable {
-        return (
-            model::VerifyVerdict::PassWithWarnings,
-            anchor_comparison.reason.clone(),
-            vec!["rerun verify without an explicit historical window".to_owned()],
+        return evaluate_noncomparable_historical_outcome(
+            verify_context,
+            anchor_comparison,
+            evidence,
         );
     }
 
     if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Paper) {
-        return evaluate_paper_outcome(evidence);
+        return evaluate_paper_outcome(verify_context, evidence);
     }
 
     if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::RealUserShadowSmoke)
@@ -129,23 +135,8 @@ fn evaluate_live_outcome(
     verify_context: &context::VerifyContext,
     evidence: &evidence::VerifyEvidenceWindow,
 ) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
-    if verify_context.expectation != model::VerifyExpectation::LiveConfigConsistent {
-        return (
-            model::VerifyVerdict::Fail,
-            Some(format!(
-                "expectation {} is not compatible with live verification",
-                verify_context.expectation.label()
-            )),
-            vec!["rerun verify with --expect live-config-consistent".to_owned()],
-        );
-    }
-
     let live_attempt_count = live_attempt_count(evidence);
-    let shadow_attempt_count = evidence
-        .attempts
-        .iter()
-        .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
-        .count();
+    let shadow_attempt_count = live_shadow_attempt_count(evidence);
     let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
     let live_submission_count: usize = evidence.live_submissions.values().map(Vec::len).sum();
     let live_evidence_count = live_attempt_count + live_artifact_count + live_submission_count;
@@ -167,7 +158,7 @@ fn evaluate_live_outcome(
                 "contradictory local outcomes: no live results were observed for a live config"
                     .to_owned(),
             ),
-            vec!["run app-live status --config {config}".to_owned()],
+            next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         );
     }
 
@@ -190,7 +181,10 @@ fn evaluate_live_outcome(
             Some(format!(
                 "live results are locally consistent but readiness remains incomplete; live attempts: {live_attempt_count}"
             )),
-            vec!["rerun app-live status --config {config}".to_owned()],
+            next_actions_from_context(
+                verify_context,
+                &["run app-live status --config {config}"],
+            ),
         )
     }
 }
@@ -233,7 +227,7 @@ fn evaluate_smoke_outcome(
         return (
             model::VerifyVerdict::Fail,
             Some("no credible run evidence exists".to_owned()),
-            vec!["run app-live status --config {config}".to_owned()],
+            next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         );
     }
 
@@ -244,7 +238,7 @@ fn evaluate_smoke_outcome(
                 "shadow smoke evidence is complete; shadow attempts: {}",
                 selected_shadow_attempt_count
             )),
-            vec!["run app-live status --config {config}".to_owned()],
+            next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         );
     }
 
@@ -254,18 +248,19 @@ fn evaluate_smoke_outcome(
         return (
             model::VerifyVerdict::PassWithWarnings,
             Some("rollout not ready; smoke run produced no shadow work".to_owned()),
-            vec!["run app-live status --config {config}".to_owned()],
+            next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         );
     }
 
     (
         model::VerifyVerdict::Fail,
         Some("no credible run evidence exists".to_owned()),
-        vec!["run app-live status --config {config}".to_owned()],
+        next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
     )
 }
 
 fn evaluate_paper_outcome(
+    verify_context: &context::VerifyContext,
     evidence: &evidence::VerifyEvidenceWindow,
 ) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
     let forbidden_live_attempt_count = paper_live_attempt_count(evidence);
@@ -286,8 +281,126 @@ fn evaluate_paper_outcome(
         Some(
             "paper verification is conservative: no forbidden live side effects were observed, but basic run evidence is incomplete".to_owned(),
         ),
-        vec!["run app-live status --config {config}".to_owned()],
+        next_actions_from_context(
+            verify_context,
+            &["run app-live status --config {config}"],
+        ),
     )
+}
+
+fn evaluate_noncomparable_historical_outcome(
+    verify_context: &context::VerifyContext,
+    anchor_comparison: &context::ConfigAnchorComparison,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> (model::VerifyVerdict, Option<String>, Vec<String>) {
+    match verify_context.control_plane.mode {
+        Some(model::VerifyControlPlaneMode::Paper) => {
+            evaluate_paper_outcome(verify_context, evidence)
+        }
+        Some(model::VerifyControlPlaneMode::RealUserShadowSmoke) => {
+            let selected_shadow_attempt_count = evidence
+                .attempts
+                .iter()
+                .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
+                .count();
+            let has_run_evidence = selected_shadow_attempt_count > 0
+                || !evidence.replay_shadow_attempt_artifacts.is_empty();
+            let live_side_effect_count = smoke_live_attempt_count(evidence)
+                + evidence
+                    .live_artifacts
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>()
+                + evidence
+                    .live_submissions
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>();
+
+            if live_side_effect_count > 0 {
+                return (
+                    model::VerifyVerdict::Fail,
+                    Some(format!(
+                        "forbidden live side effects: observed {live_side_effect_count} live side effect(s)"
+                    )),
+                    vec!["stop live activity and inspect recent local execution state".to_owned()],
+                );
+            }
+
+            if !has_run_evidence {
+                return (
+                    model::VerifyVerdict::Fail,
+                    Some("no credible run evidence exists".to_owned()),
+                    next_actions_from_context(
+                        verify_context,
+                        &["run app-live status --config {config}"],
+                    ),
+                );
+            }
+
+            (
+                model::VerifyVerdict::PassWithWarnings,
+                anchor_comparison.reason.clone(),
+                next_actions_with_prefix(
+                    verify_context,
+                    "rerun verify without an explicit historical window",
+                    &["run app-live status --config {config}"],
+                ),
+            )
+        }
+        Some(model::VerifyControlPlaneMode::Live) => {
+            let shadow_attempt_count = live_shadow_attempt_count(evidence);
+            let live_evidence_count = live_attempt_count(evidence)
+                + evidence
+                    .live_artifacts
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>()
+                + evidence
+                    .live_submissions
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>();
+            let has_any_evidence =
+                live_evidence_count > 0 || shadow_attempt_count > 0 || !evidence.journal.is_empty();
+
+            if shadow_attempt_count > 0 {
+                return (
+                    model::VerifyVerdict::Fail,
+                    Some(format!(
+                        "contradictory local outcomes: observed {shadow_attempt_count} shadow attempt(s) in live verification"
+                    )),
+                    vec!["inspect the latest local execution attempts before rerunning verify".to_owned()],
+                );
+            }
+
+            if !has_any_evidence {
+                return (
+                    model::VerifyVerdict::Fail,
+                    Some("no credible run evidence exists".to_owned()),
+                    next_actions_from_context(
+                        verify_context,
+                        &["run app-live status --config {config}"],
+                    ),
+                );
+            }
+
+            (
+                model::VerifyVerdict::PassWithWarnings,
+                anchor_comparison.reason.clone(),
+                next_actions_with_prefix(
+                    verify_context,
+                    "rerun verify without an explicit historical window",
+                    &["run app-live status --config {config}"],
+                ),
+            )
+        }
+        None => (
+            model::VerifyVerdict::PassWithWarnings,
+            anchor_comparison.reason.clone(),
+            vec!["rerun verify without an explicit historical window".to_owned()],
+        ),
+    }
 }
 
 fn render_foundation_report(
@@ -307,6 +420,8 @@ fn render_foundation_report(
             == Some(model::VerifyControlPlaneMode::RealUserShadowSmoke)
         {
             smoke_live_attempt_count(evidence)
+        } else if verify_context.control_plane.mode == Some(model::VerifyControlPlaneMode::Live) {
+            live_shadow_attempt_count(evidence)
         } else {
             0
         };
@@ -402,12 +517,19 @@ fn paper_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize 
 }
 
 fn smoke_live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
-    evidence.observed_live_attempts.len()
-        + evidence
-            .attempts
-            .iter()
-            .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
-            .count()
+    let mut attempt_ids = std::collections::BTreeSet::new();
+
+    for row in &evidence.observed_live_attempts {
+        attempt_ids.insert(row.attempt.attempt_id.clone());
+    }
+
+    for row in &evidence.attempts {
+        if matches!(row.attempt.execution_mode, domain::ExecutionMode::Live) {
+            attempt_ids.insert(row.attempt.attempt_id.clone());
+        }
+    }
+
+    attempt_ids.len()
 }
 
 fn live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
@@ -415,7 +537,25 @@ fn live_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
         .attempts
         .iter()
         .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Live))
-        .count()
+        .map(|row| row.attempt.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn live_shadow_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
+    let mut attempt_ids = std::collections::BTreeSet::new();
+
+    for row in &evidence.observed_shadow_attempts {
+        attempt_ids.insert(row.attempt.attempt_id.clone());
+    }
+
+    for row in &evidence.attempts {
+        if matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow) {
+            attempt_ids.insert(row.attempt.attempt_id.clone());
+        }
+    }
+
+    attempt_ids.len()
 }
 
 fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidenceWindow) -> bool {
@@ -460,6 +600,67 @@ fn verdict_label_upper(verdict: model::VerifyVerdict) -> &'static str {
         model::VerifyVerdict::PassWithWarnings => "PASS WITH WARNINGS",
         model::VerifyVerdict::Fail => "FAIL",
     }
+}
+
+fn incompatible_expectation_outcome(
+    verify_context: &context::VerifyContext,
+) -> Option<(String, Vec<String>)> {
+    let expected = match verify_context.control_plane.mode {
+        Some(model::VerifyControlPlaneMode::Paper) => model::VerifyExpectation::PaperNoLive,
+        Some(model::VerifyControlPlaneMode::RealUserShadowSmoke) => {
+            model::VerifyExpectation::SmokeShadowOnly
+        }
+        Some(model::VerifyControlPlaneMode::Live) => model::VerifyExpectation::LiveConfigConsistent,
+        None => return None,
+    };
+
+    if verify_context.expectation == expected {
+        return None;
+    }
+
+    Some((
+        format!(
+            "expectation {} is not compatible with {} verification",
+            verify_context.expectation.label(),
+            verify_context.scenario.label()
+        ),
+        vec![format!("rerun verify with --expect {}", expected.label())],
+    ))
+}
+
+fn next_actions_from_context(
+    verify_context: &context::VerifyContext,
+    fallback: &[&str],
+) -> Vec<String> {
+    let actions = verify_context
+        .actions
+        .iter()
+        .map(|action| status_action_label(*action))
+        .collect::<Vec<_>>();
+
+    if actions.is_empty() {
+        fallback.iter().map(|value| (*value).to_owned()).collect()
+    } else {
+        actions
+    }
+}
+
+fn next_actions_with_prefix(
+    verify_context: &context::VerifyContext,
+    prefix: &str,
+    fallback: &[&str],
+) -> Vec<String> {
+    let mut actions = vec![prefix.to_owned()];
+    for action in next_actions_from_context(verify_context, fallback) {
+        if !actions.contains(&action) {
+            actions.push(action);
+        }
+    }
+    actions
+}
+
+fn status_action_label(action: StatusAction) -> String {
+    render_status_action_template(&action)
 }
 
 pub fn render_report(report: &model::VerifyReport, config_path: &Path) -> String {
@@ -551,13 +752,20 @@ mod tests {
     use std::path::Path;
 
     use super::{
+        context::{ConfigAnchorComparison, VerifyContext},
+        evaluate_foundation_outcome,
+        evidence::VerifyEvidenceWindow,
         model::{
             VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneRolloutState,
-            VerifyControlPlaneTargetSource, VerifyReport, VerifyResultEvidence, VerifyScenario,
-            VerifyVerdict,
+            VerifyControlPlaneTargetSource, VerifyExpectation, VerifyReport, VerifyResultEvidence,
+            VerifyScenario, VerifyVerdict,
         },
-        render_report,
+        next_actions_from_context, render_report,
     };
+    use crate::commands::status::model::{StatusAction, StatusReadiness};
+    use chrono::Utc;
+    use domain::ExecutionMode;
+    use persistence::models::{ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow};
 
     #[test]
     fn render_report_renders_populated_content_and_quotes_config_paths() {
@@ -638,6 +846,173 @@ mod tests {
         assert!(!rendered.contains("Restart Needed:"), "{rendered}");
     }
 
+    #[test]
+    fn paper_historical_windows_still_fail_forbidden_live_side_effects() {
+        let context = verify_context(
+            VerifyScenario::Paper,
+            VerifyExpectation::PaperNoLive,
+            VerifyControlPlaneMode::Paper,
+            Some(StatusReadiness::PaperReady),
+            vec![StatusAction::RunAppLiveRun],
+        );
+        let evidence = VerifyEvidenceWindow {
+            attempts: vec![attempt_row("attempt-live-1", ExecutionMode::Live)],
+            ..VerifyEvidenceWindow::default()
+        };
+
+        let (verdict, reason, _next_actions) =
+            evaluate_foundation_outcome(&context, &noncomparable_anchor(), &evidence);
+
+        assert_eq!(verdict, VerifyVerdict::Fail);
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forbidden live side effects"));
+    }
+
+    #[test]
+    fn live_verify_fails_when_observed_shadow_attempts_exist_outside_selected_window() {
+        let context = verify_context(
+            VerifyScenario::Live,
+            VerifyExpectation::LiveConfigConsistent,
+            VerifyControlPlaneMode::Live,
+            Some(StatusReadiness::LiveConfigReady),
+            vec![StatusAction::RunDoctor],
+        );
+        let evidence = VerifyEvidenceWindow {
+            attempts: vec![attempt_row("attempt-live-1", ExecutionMode::Live)],
+            observed_shadow_attempts: vec![attempt_row("attempt-shadow-1", ExecutionMode::Shadow)],
+            ..VerifyEvidenceWindow::default()
+        };
+
+        let (verdict, reason, _next_actions) =
+            evaluate_foundation_outcome(&context, &comparable_anchor(), &evidence);
+
+        assert_eq!(verdict, VerifyVerdict::Fail);
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("contradictory local outcomes"));
+    }
+
+    #[test]
+    fn live_historical_windows_still_fail_for_shadow_contradictions() {
+        let context = verify_context(
+            VerifyScenario::Live,
+            VerifyExpectation::LiveConfigConsistent,
+            VerifyControlPlaneMode::Live,
+            Some(StatusReadiness::LiveConfigReady),
+            vec![StatusAction::RunDoctor],
+        );
+        let evidence = VerifyEvidenceWindow {
+            attempts: vec![attempt_row("attempt-shadow-1", ExecutionMode::Shadow)],
+            ..VerifyEvidenceWindow::default()
+        };
+
+        let (verdict, reason, _next_actions) =
+            evaluate_foundation_outcome(&context, &noncomparable_anchor(), &evidence);
+
+        assert_eq!(verdict, VerifyVerdict::Fail);
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("contradictory local outcomes"));
+    }
+
+    #[test]
+    fn incompatible_expectations_fail_fast_for_paper_and_smoke() {
+        let paper_context = verify_context(
+            VerifyScenario::Paper,
+            VerifyExpectation::SmokeShadowOnly,
+            VerifyControlPlaneMode::Paper,
+            Some(StatusReadiness::PaperReady),
+            vec![StatusAction::RunAppLiveRun],
+        );
+        let smoke_context = verify_context(
+            VerifyScenario::RealUserShadowSmoke,
+            VerifyExpectation::PaperNoLive,
+            VerifyControlPlaneMode::RealUserShadowSmoke,
+            Some(StatusReadiness::SmokeConfigReady),
+            vec![StatusAction::RunDoctor],
+        );
+
+        let (paper_verdict, paper_reason, _) = evaluate_foundation_outcome(
+            &paper_context,
+            &comparable_anchor(),
+            &VerifyEvidenceWindow::default(),
+        );
+        let (smoke_verdict, smoke_reason, _) = evaluate_foundation_outcome(
+            &smoke_context,
+            &comparable_anchor(),
+            &VerifyEvidenceWindow::default(),
+        );
+
+        assert_eq!(paper_verdict, VerifyVerdict::Fail);
+        assert!(paper_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not compatible"));
+        assert_eq!(smoke_verdict, VerifyVerdict::Fail);
+        assert!(smoke_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not compatible"));
+    }
+
+    #[test]
+    fn live_warning_actions_follow_readiness_context() {
+        let mut context = verify_context(
+            VerifyScenario::Live,
+            VerifyExpectation::LiveConfigConsistent,
+            VerifyControlPlaneMode::Live,
+            Some(StatusReadiness::RestartRequired),
+            vec![StatusAction::PerformControlledRestart],
+        );
+        context.control_plane.active_target = Some("targets-rev-8".to_owned());
+        let evidence = VerifyEvidenceWindow {
+            attempts: vec![attempt_row("attempt-live-1", ExecutionMode::Live)],
+            ..VerifyEvidenceWindow::default()
+        };
+
+        let (verdict, _reason, next_actions) =
+            evaluate_foundation_outcome(&context, &comparable_anchor(), &evidence);
+
+        assert_eq!(verdict, VerifyVerdict::PassWithWarnings);
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("controlled restart")));
+    }
+
+    #[test]
+    fn rollout_guidance_actions_remain_concrete_operator_steps() {
+        let smoke_context = verify_context(
+            VerifyScenario::RealUserShadowSmoke,
+            VerifyExpectation::SmokeShadowOnly,
+            VerifyControlPlaneMode::RealUserShadowSmoke,
+            Some(StatusReadiness::SmokeRolloutRequired),
+            vec![StatusAction::EnableSmokeRollout],
+        );
+        let live_context = verify_context(
+            VerifyScenario::Live,
+            VerifyExpectation::LiveConfigConsistent,
+            VerifyControlPlaneMode::Live,
+            Some(StatusReadiness::LiveRolloutRequired),
+            vec![StatusAction::EnableLiveRollout],
+        );
+
+        let smoke_actions =
+            next_actions_from_context(&smoke_context, &["run app-live status --config {config}"]);
+        let live_actions =
+            next_actions_from_context(&live_context, &["run app-live status --config {config}"]);
+
+        assert!(smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live bootstrap --config")));
+        assert!(live_actions.iter().any(|action| {
+            action.contains("approved_families") && action.contains("ready_families")
+        }));
+    }
+
     fn populated_report_fixture() -> VerifyReport {
         VerifyReport {
             scenario: VerifyScenario::Paper,
@@ -670,6 +1045,66 @@ mod tests {
             evidence: VerifyResultEvidence::default(),
             control_plane_context: VerifyControlPlaneContext::default(),
             next_actions: Vec::new(),
+        }
+    }
+
+    fn verify_context(
+        scenario: VerifyScenario,
+        expectation: VerifyExpectation,
+        mode: VerifyControlPlaneMode,
+        readiness: Option<StatusReadiness>,
+        actions: Vec<StatusAction>,
+    ) -> VerifyContext {
+        VerifyContext {
+            scenario,
+            expectation,
+            control_plane: VerifyControlPlaneContext {
+                mode: Some(mode),
+                target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),
+                configured_target: Some("targets-rev-9".to_owned()),
+                active_target: Some("targets-rev-9".to_owned()),
+                restart_needed: Some(false),
+                rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
+            },
+            readiness,
+            actions,
+            reason: None,
+        }
+    }
+
+    fn attempt_row(
+        attempt_id: &str,
+        execution_mode: ExecutionMode,
+    ) -> ExecutionAttemptWithCreatedAtRow {
+        ExecutionAttemptWithCreatedAtRow {
+            attempt: ExecutionAttemptRow {
+                attempt_id: attempt_id.to_owned(),
+                plan_id: "plan-1".to_owned(),
+                snapshot_id: "snapshot-1".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "scope-1".to_owned(),
+                matched_rule_id: None,
+                execution_mode,
+                attempt_no: 1,
+                idempotency_key: format!("{attempt_id}-idem"),
+            },
+            created_at: Utc::now(),
+        }
+    }
+
+    fn comparable_anchor() -> ConfigAnchorComparison {
+        ConfigAnchorComparison {
+            comparable: true,
+            reason: None,
+        }
+    }
+
+    fn noncomparable_anchor() -> ConfigAnchorComparison {
+        ConfigAnchorComparison {
+            comparable: false,
+            reason: Some(
+                "historical window is not provably tied to the current config anchor".to_owned(),
+            ),
         }
     }
 }

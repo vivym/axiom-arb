@@ -131,18 +131,22 @@ After a successful adopt:
 
 1. re-run `status`
 2. re-run `targets status` if you need the lower-level control-plane details
-2. run `doctor`
-3. if `restart_needed = true`, perform a controlled restart
-4. start `run`
+3. run `doctor`
+4. if `restart_needed = true`, perform a controlled restart
+5. start `run`
+6. verify the local result
 
 ```bash
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
+cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
 `doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
+
+`verify` is the post-run local result check. It does not perform venue probes; instead it answers whether the latest local run evidence is consistent with the current mode and control-plane posture. Use it after `run` to confirm the daemon produced the kind of result you expected before moving on.
 
 After the daemon comes back up, confirm the active revision caught up:
 
@@ -192,6 +196,7 @@ cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --ad
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
+cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
 Interpret `status` before `doctor` like this:
@@ -215,6 +220,15 @@ Interpret the `doctor` result before `run`:
   - verify the skipped checks match the current mode
 - `FAIL`
   - follow the printed next action, then rerun `doctor`
+
+Interpret `verify` after `run`:
+
+- `PASS`
+  - the latest local result is consistent with the current mode and control-plane posture
+- `PASS WITH WARNINGS`
+  - the result is usable but incomplete; follow the printed next action
+- `FAIL`
+  - local evidence conflicts with the expected posture or is not credible enough; stop and inspect before rerunning
 
 For rollback:
 

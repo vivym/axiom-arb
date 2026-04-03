@@ -68,7 +68,7 @@ fn verify_paper_fails_when_live_attempts_are_observed() {
 }
 
 #[test]
-fn verify_paper_explicit_live_attempt_window_degrades_when_it_cannot_be_tied_to_current_config() {
+fn verify_paper_explicit_live_attempt_window_still_fails_forbidden_live_side_effects() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_live_attempt("attempt-live-explicit-1");
 
@@ -83,11 +83,8 @@ fn verify_paper_explicit_live_attempt_window_degrades_when_it_cannot_be_tied_to_
         .unwrap();
 
     let text = cli::combined(&output);
-    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
-    assert!(
-        text.contains("historical window is not provably tied to the current config anchor"),
-        "{text}"
-    );
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("forbidden live side effects"), "{text}");
 
     verify_db.cleanup();
 }
@@ -204,6 +201,38 @@ fn verify_expect_override_selects_a_fixed_profile_set() {
     let text = cli::combined(&output);
     assert!(text.contains("Expectation: paper-no-live"), "{text}");
     assert!(text.contains("Verdict: FAIL"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_smoke_expect_override_rejects_incompatible_profile() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    verify_db.seed_shadow_attempt_with_artifacts("attempt-shadow-smoke-override-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-override",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--expect")
+        .arg("live-config-consistent")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(
+        text.contains("Expectation: live-config-consistent"),
+        "{text}"
+    );
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("not compatible"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -502,6 +531,45 @@ fn verify_smoke_preflight_only_run_can_warn_without_failing() {
     let text = cli::combined(&output);
     assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
     assert!(text.contains("rollout not ready"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "Next: app-live bootstrap --config {}",
+            cli::shell_quote_path(&config_path)
+        )),
+        "{text}"
+    );
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_live_rollout_required_uses_concrete_rollout_enablement_guidance() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-rollout-required-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-rollout-required",
+        &verify_db::live_rollout_required_config_for("targets-rev-9"),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "Next: edit {} and set [negrisk.rollout].approved_families and ready_families for adopted families",
+            cli::shell_quote_path(&config_path)
+        )),
+        "{text}"
+    );
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);

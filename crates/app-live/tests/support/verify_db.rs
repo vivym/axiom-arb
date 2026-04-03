@@ -290,6 +290,37 @@ ready_families = ["family-a"]
     )
 }
 
+pub fn live_rollout_required_config_for(operator_target_revision: &str) -> String {
+    format!(
+        r#"[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "{operator_target_revision}"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#
+    )
+}
+
 pub fn smoke_rollout_required_config() -> String {
     r#"[runtime]
 mode = "live"
@@ -377,6 +408,10 @@ pub mod config_shapes {
 
     pub fn live_ready_config_for(operator_target_revision: &str) -> String {
         super::live_ready_config_for(operator_target_revision)
+    }
+
+    pub fn live_rollout_required_config_for(operator_target_revision: &str) -> String {
+        super::live_rollout_required_config_for(operator_target_revision)
     }
 
     pub fn smoke_rollout_required_config() -> String {

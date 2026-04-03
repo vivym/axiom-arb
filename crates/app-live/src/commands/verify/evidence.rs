@@ -21,6 +21,7 @@ const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
 pub struct VerifyEvidenceWindow {
     pub attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
     pub observed_live_attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
+    pub observed_shadow_attempts: Vec<ExecutionAttemptWithCreatedAtRow>,
     pub replay_shadow_attempt_artifacts: Vec<NegRiskShadowAttemptArtifacts>,
     pub journal: Vec<JournalEntryRow>,
     pub shadow_artifacts: Vec<ShadowExecutionArtifactRow>,
@@ -34,6 +35,7 @@ pub async fn load(
 ) -> Result<VerifyEvidenceWindow> {
     let attempts = select_attempts(pool, selection).await?;
     let observed_live_attempts = select_observed_live_attempts(pool, selection).await?;
+    let observed_shadow_attempts = select_observed_shadow_attempts(pool, selection).await?;
     let replay_shadow_attempt_artifacts =
         load_replay_shadow_attempt_artifacts(pool, selection, &attempts).await;
     let journal = select_journal(pool, selection).await?;
@@ -45,6 +47,11 @@ pub async fn load(
                 .iter()
                 .map(|row| row.attempt.attempt_id.clone()),
         )
+        .chain(
+            observed_shadow_attempts
+                .iter()
+                .map(|row| row.attempt.attempt_id.clone()),
+        )
         .collect::<Vec<_>>();
 
     Ok(VerifyEvidenceWindow {
@@ -52,6 +59,7 @@ pub async fn load(
             .list_for_attempts(pool, &attempt_ids)
             .await?,
         observed_live_attempts,
+        observed_shadow_attempts,
         replay_shadow_attempt_artifacts,
         live_artifacts: LiveArtifactRepo
             .list_for_attempts(pool, &attempt_ids)
@@ -111,6 +119,24 @@ async fn select_observed_live_attempts(
         ) => {
             ExecutionAttemptRepo
                 .list_by_mode_with_created_at(pool, ExecutionMode::Live)
+                .await
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+async fn select_observed_shadow_attempts(
+    pool: &PgPool,
+    selection: &VerifyWindowSelection,
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    match selection {
+        VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Live) => {
+            ExecutionAttemptRepo
+                .list_recent_by_mode(
+                    pool,
+                    Some(ExecutionMode::Shadow),
+                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
+                )
                 .await
         }
         _ => Ok(Vec::new()),

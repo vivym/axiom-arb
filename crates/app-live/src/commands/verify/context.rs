@@ -10,8 +10,8 @@ use super::{
 use crate::commands::status::{
     evaluate::{self, StatusDeferred, StatusOutcome},
     model::{
-        StatusDetails, StatusMode, StatusReadiness, StatusRolloutState, StatusSummary,
-        StatusTargetSource,
+        StatusAction, StatusDetails, StatusMode, StatusReadiness, StatusRolloutState,
+        StatusSummary, StatusTargetSource,
     },
 };
 
@@ -20,6 +20,8 @@ pub struct VerifyContext {
     pub scenario: VerifyScenario,
     pub expectation: VerifyExpectation,
     pub control_plane: VerifyControlPlaneContext,
+    pub readiness: Option<StatusReadiness>,
+    pub actions: Vec<StatusAction>,
     pub reason: Option<String>,
 }
 
@@ -70,6 +72,8 @@ pub fn compare_window_to_current_config_anchor(
 fn from_summary(summary: StatusSummary) -> VerifyContext {
     let scenario = map_scenario(summary.mode);
     let expectation = derive_auto_expectation(summary.mode, summary.readiness);
+    let readiness = summary.readiness;
+    let actions = summary.actions;
     let StatusDetails {
         configured_target,
         active_target,
@@ -90,6 +94,8 @@ fn from_summary(summary: StatusSummary) -> VerifyContext {
             restart_needed,
             rollout_state: rollout_state.map(map_rollout_state),
         },
+        readiness: Some(readiness),
+        actions,
         reason,
     }
 }
@@ -102,6 +108,8 @@ fn from_deferred(deferred: StatusDeferred) -> VerifyContext {
             mode: Some(map_mode(deferred.mode)),
             ..VerifyControlPlaneContext::default()
         },
+        readiness: Some(StatusReadiness::Blocked),
+        actions: vec![StatusAction::FixBlockingIssueAndRerunStatus],
         reason: Some(deferred.reason),
     }
 }
@@ -156,8 +164,8 @@ mod tests {
     };
     use crate::commands::verify::{
         model::{
-            VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneTargetSource,
-            VerifyExpectation,
+            VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneRolloutState,
+            VerifyControlPlaneTargetSource, VerifyExpectation,
         },
         window::VerifyWindowSelection,
     };
@@ -192,6 +200,8 @@ mod tests {
                 restart_needed: Some(false),
                 rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
             },
+            readiness: Some(crate::commands::status::model::StatusReadiness::LiveConfigReady),
+            actions: vec![crate::commands::status::model::StatusAction::RunDoctor],
             reason: None,
         };
         let window = VerifyWindowSelection::ExplicitAttemptId("attempt-old".to_owned());
