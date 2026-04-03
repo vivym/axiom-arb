@@ -56,7 +56,8 @@ fn apply_maps_blocked_readiness_to_readiness_error() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("readiness error"), "{text}");
+    assert!(text.contains("toml parse error"), "{text}");
+    assert!(!text.contains("readiness error"), "{text}");
 
     let _ = fs::remove_file(config_path);
 }
@@ -173,7 +174,11 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
 
 fn temp_invalid_config_path() -> PathBuf {
     let mut path = std::env::temp_dir();
-    path.push(format!("app-live-apply-{}.toml", std::process::id()));
+    path.push(format!(
+        "app-live-apply-{}-{}.toml",
+        std::process::id(),
+        NEXT_TEMP_CONFIG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     fs::write(&path, "runtime = [").expect("temp fixture should be writable");
     path
 }

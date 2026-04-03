@@ -52,10 +52,10 @@ impl ApplyScenario {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyFailureKind {
     UnsupportedScenario(ApplyUnsupportedScenario),
-    ReadinessError,
+    ReadinessError(String),
     Transition(ApplyStage),
 }
 
@@ -66,7 +66,7 @@ pub enum ApplyUnsupportedScenario {
 }
 
 impl ApplyFailureKind {
-    pub fn guidance(self) -> String {
+    pub fn guidance(&self) -> String {
         match self {
             Self::UnsupportedScenario(ApplyUnsupportedScenario::Paper) => {
                 "paper configs are not supported by apply yet; use bootstrap or run".to_owned()
@@ -75,14 +75,14 @@ impl ApplyFailureKind {
                 "live configs are not supported by apply yet; use status -> doctor -> run"
                     .to_owned()
             }
-            Self::ReadinessError => "readiness error".to_owned(),
+            Self::ReadinessError(reason) => reason.clone(),
             Self::Transition(stage) => stage.label().to_owned(),
         }
     }
 
-    pub fn from_status_readiness(readiness: StatusReadiness) -> Self {
+    pub fn from_status_readiness(readiness: StatusReadiness, reason: String) -> Self {
         match readiness {
-            StatusReadiness::Blocked => Self::ReadinessError,
+            StatusReadiness::Blocked => Self::ReadinessError(reason),
             StatusReadiness::TargetAdoptionRequired => {
                 Self::Transition(ApplyStage::EnsureTargetAnchor)
             }
@@ -95,7 +95,7 @@ impl ApplyFailureKind {
             }
             StatusReadiness::PaperReady
             | StatusReadiness::LiveRolloutRequired
-            | StatusReadiness::LiveConfigReady => Self::ReadinessError,
+            | StatusReadiness::LiveConfigReady => Self::ReadinessError(reason),
         }
     }
 }
