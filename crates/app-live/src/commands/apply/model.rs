@@ -52,20 +52,27 @@ impl ApplyScenario {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyFailureKind {
-    UnsupportedScenario(ApplyScenario),
+    UnsupportedScenario(ApplyUnsupportedScenario),
+    SmokeScaffoldOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyUnsupportedScenario {
+    Paper,
+    Live,
 }
 
 impl ApplyFailureKind {
     pub fn unsupported_guidance(self) -> &'static str {
         match self {
-            Self::UnsupportedScenario(ApplyScenario::Paper) => {
+            Self::UnsupportedScenario(ApplyUnsupportedScenario::Paper) => {
                 "paper configs are not supported by apply yet; use bootstrap or run"
             }
-            Self::UnsupportedScenario(ApplyScenario::Live) => {
+            Self::UnsupportedScenario(ApplyUnsupportedScenario::Live) => {
                 "live configs are not supported by apply yet; use status -> doctor -> run"
             }
-            Self::UnsupportedScenario(ApplyScenario::Smoke) => {
-                "smoke configs are supported by apply"
+            Self::SmokeScaffoldOnly => {
+                "apply is still a scaffold for smoke configs; not implemented yet"
             }
         }
     }

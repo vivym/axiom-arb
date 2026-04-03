@@ -6,7 +6,7 @@ use crate::cli::ApplyArgs;
 
 pub mod model;
 
-use model::{ApplyFailureKind, ApplyScenario};
+use model::{ApplyFailureKind, ApplyScenario, ApplyUnsupportedScenario};
 
 #[derive(Debug)]
 struct ApplyError {
@@ -28,13 +28,18 @@ pub fn execute(args: ApplyArgs) -> Result<(), Box<dyn Error>> {
     let scenario = ApplyScenario::from_config(&config);
 
     match scenario {
-        ApplyScenario::Smoke => Ok(()),
-        ApplyScenario::Paper | ApplyScenario::Live => {
-            let error = ApplyError {
-                kind: ApplyFailureKind::UnsupportedScenario(scenario),
-            };
-            eprintln!("{error}");
-            Err(Box::new(error))
-        }
+        ApplyScenario::Paper => Err(apply_failure(ApplyFailureKind::UnsupportedScenario(
+            ApplyUnsupportedScenario::Paper,
+        ))),
+        ApplyScenario::Live => Err(apply_failure(ApplyFailureKind::UnsupportedScenario(
+            ApplyUnsupportedScenario::Live,
+        ))),
+        ApplyScenario::Smoke => Err(apply_failure(ApplyFailureKind::SmokeScaffoldOnly)),
     }
+}
+
+fn apply_failure(kind: ApplyFailureKind) -> Box<dyn Error> {
+    let error = ApplyError { kind };
+    eprintln!("{error}");
+    Box::new(error)
 }

@@ -41,3 +41,32 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
     assert!(!live_output.status.success(), "{live_text}");
     assert!(live_text.contains("status -> doctor -> run"), "{live_text}");
 }
+
+#[test]
+fn apply_rejects_smoke_config_as_scaffold_only_for_now() {
+    let smoke_output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-ux-smoke.toml"))
+        .output()
+        .expect("app-live apply should execute for smoke config");
+    let smoke_text = cli::combined(&smoke_output);
+    assert!(!smoke_output.status.success(), "{smoke_text}");
+    assert!(smoke_text.contains("scaffold"), "{smoke_text}");
+    assert!(smoke_text.contains("not implemented"), "{smoke_text}");
+
+    let smoke_start_output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-ux-smoke.toml"))
+        .arg("--start")
+        .output()
+        .expect("app-live apply --start should execute for smoke config");
+    let smoke_start_text = cli::combined(&smoke_start_output);
+    assert!(!smoke_start_output.status.success(), "{smoke_start_text}");
+    assert!(smoke_start_text.contains("scaffold"), "{smoke_start_text}");
+    assert!(
+        smoke_start_text.contains("not implemented"),
+        "{smoke_start_text}"
+    );
+}
