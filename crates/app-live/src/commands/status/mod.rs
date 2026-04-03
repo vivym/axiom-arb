@@ -73,7 +73,7 @@ pub(crate) fn render_action_template(action: &model::StatusAction) -> String {
         model::StatusAction::FixBlockingIssueAndRerunStatus => {
             "fix the blocking issue, then rerun app-live status --config {config}".to_owned()
         }
-        model::StatusAction::EnableSmokeRollout => "app-live apply --config {config}".to_owned(),
+        model::StatusAction::EnableSmokeRollout => "app-live bootstrap --config {config}".to_owned(),
         model::StatusAction::EnableLiveRollout =>
             "edit {config} and set [negrisk.rollout].approved_families and ready_families for adopted families".to_owned(),
         model::StatusAction::MigrateLegacyExplicitTargets => {
@@ -84,7 +84,16 @@ pub(crate) fn render_action_template(action: &model::StatusAction) -> String {
 
 fn render_action(action: &model::StatusAction, config_path: &Path) -> String {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    render_action_template(action).replace("{config}", &quoted_config_path)
+    render_status_action_template(action, &quoted_config_path)
+}
+
+fn render_status_action_template(action: &model::StatusAction, quoted_config_path: &str) -> String {
+    match action {
+        model::StatusAction::EnableSmokeRollout => {
+            "app-live apply --config {config}".replace("{config}", quoted_config_path)
+        }
+        _ => render_action_template(action).replace("{config}", quoted_config_path),
+    }
 }
 
 fn shell_quote(value: String) -> String {
