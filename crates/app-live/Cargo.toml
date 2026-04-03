@@ -11,6 +11,7 @@ domain = { path = "../domain" }
 execution = { path = "../execution" }
 observability = { path = "../observability" }
 persistence = { path = "../persistence" }
+app-replay = { path = "../app-replay" }
 risk = { path = "../risk" }
 rust_decimal = { version = "1.40.0", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -64,28 +64,27 @@ fn render_summary(summary: &model::StatusSummary, config_path: &Path) {
     }
 }
 
-fn render_action(action: &model::StatusAction, config_path: &Path) -> String {
-    let quoted_config_path = shell_quote(config_path.display().to_string());
+pub(crate) fn render_action_template(action: &model::StatusAction) -> String {
     match action {
-        model::StatusAction::RunAppLiveRun => format!("app-live run --config {quoted_config_path}"),
-        model::StatusAction::RunDoctor => format!("app-live doctor --config {quoted_config_path}"),
-        model::StatusAction::RunTargetsAdopt => {
-            format!("app-live targets adopt --config {quoted_config_path}")
-        }
+        model::StatusAction::RunAppLiveRun => "app-live run --config {config}".to_owned(),
+        model::StatusAction::RunDoctor => "app-live doctor --config {config}".to_owned(),
+        model::StatusAction::RunTargetsAdopt => "app-live targets adopt --config {config}".to_owned(),
         model::StatusAction::PerformControlledRestart => "perform controlled restart".to_owned(),
         model::StatusAction::FixBlockingIssueAndRerunStatus => {
-            format!("fix the blocking issue, then rerun app-live status --config {quoted_config_path}")
+            "fix the blocking issue, then rerun app-live status --config {config}".to_owned()
         }
-        model::StatusAction::EnableSmokeRollout => {
-            format!("app-live bootstrap --config {quoted_config_path}")
-        }
-        model::StatusAction::EnableLiveRollout => format!(
-            "edit {quoted_config_path} and set [negrisk.rollout].approved_families and ready_families for adopted families"
-        ),
+        model::StatusAction::EnableSmokeRollout => "app-live bootstrap --config {config}".to_owned(),
+        model::StatusAction::EnableLiveRollout =>
+            "edit {config} and set [negrisk.rollout].approved_families and ready_families for adopted families".to_owned(),
         model::StatusAction::MigrateLegacyExplicitTargets => {
             "migrate to adopted target source or use lower-level commands".to_owned()
         }
     }
+}
+
+fn render_action(action: &model::StatusAction, config_path: &Path) -> String {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    render_action_template(action).replace("{config}", &quoted_config_path)
 }
 
 fn shell_quote(value: String) -> String {

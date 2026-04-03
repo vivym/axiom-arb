@@ -333,6 +333,12 @@ pub struct ExecutionAttemptRow {
     pub idempotency_key: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionAttemptWithCreatedAtRow {
+    pub attempt: ExecutionAttemptRow,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingReconcileRow {
     pub pending_ref: String,

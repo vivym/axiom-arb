@@ -34,6 +34,27 @@ pub struct StatusArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct VerifyArgs {
+    #[arg(long)]
+    pub config: PathBuf,
+
+    #[arg(long)]
+    pub expect: Option<String>,
+
+    #[arg(long = "from-seq")]
+    pub from_seq: Option<i64>,
+
+    #[arg(long = "to-seq")]
+    pub to_seq: Option<i64>,
+
+    #[arg(long = "attempt-id")]
+    pub attempt_id: Option<String>,
+
+    #[arg(long)]
+    pub since: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct TargetsArgs {
     #[command(subcommand)]
     pub command: TargetCommand,
@@ -101,4 +122,5 @@ pub enum AppLiveCommand {
     Status(StatusArgs),
     Run(RunArgs),
     Targets(TargetsArgs),
+    Verify(VerifyArgs),
 }

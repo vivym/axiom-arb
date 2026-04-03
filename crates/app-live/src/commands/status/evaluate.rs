@@ -67,6 +67,22 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
 }
 
 fn paper_summary() -> StatusSummary {
+    if std::env::var("DATABASE_URL").is_err() {
+        return StatusSummary {
+            mode: Some(StatusMode::Paper),
+            readiness: StatusReadiness::Blocked,
+            details: StatusDetails {
+                configured_target: None,
+                active_target: None,
+                target_source: None,
+                rollout_state: None,
+                restart_needed: None,
+                reason: Some("DATABASE_URL is required before paper run can start".to_owned()),
+            },
+            actions: vec![StatusAction::FixBlockingIssueAndRerunStatus],
+        };
+    }
+
     StatusSummary {
         mode: Some(StatusMode::Paper),
         readiness: StatusReadiness::PaperReady,

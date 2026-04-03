@@ -556,6 +556,83 @@ async fn persistence_repos_round_trip_runtime_foundation() {
 }
 
 #[tokio::test]
+async fn journal_repo_list_since_filters_rows_in_sql() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    let journal = JournalRepo;
+    let old_ts = Utc::now() - chrono::Duration::hours(2);
+    let recent_ts = Utc::now() - chrono::Duration::minutes(5);
+    let cutoff = Utc::now() - chrono::Duration::minutes(30);
+
+    sqlx::query(
+        r#"
+        INSERT INTO event_journal (
+            stream,
+            source_kind,
+            source_session_id,
+            source_event_id,
+            dedupe_key,
+            causal_parent_id,
+            event_type,
+            event_ts,
+            payload,
+            ingested_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind("verify")
+    .bind("test")
+    .bind("session-old")
+    .bind("event-old")
+    .bind("event-old")
+    .bind(None::<i64>)
+    .bind("old")
+    .bind(old_ts)
+    .bind(json!({ "kind": "old" }))
+    .bind(old_ts)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO event_journal (
+            stream,
+            source_kind,
+            source_session_id,
+            source_event_id,
+            dedupe_key,
+            causal_parent_id,
+            event_type,
+            event_ts,
+            payload,
+            ingested_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind("verify")
+    .bind("test")
+    .bind("session-recent")
+    .bind("event-recent")
+    .bind("event-recent")
+    .bind(None::<i64>)
+    .bind("recent")
+    .bind(recent_ts)
+    .bind(json!({ "kind": "recent" }))
+    .bind(recent_ts)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let rows = journal.list_since(&db.pool, cutoff).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].event_type, "recent");
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn live_submission_migration_preserves_existing_live_artifacts_pending_reconcile_anchors_and_blocks_mode_drift(
 ) {
     let db = TestDatabase::new().await;

@@ -24,7 +24,7 @@ static SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn doctor_paper_mode_marks_live_checks_as_skip() {
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-paper.toml"))
@@ -45,7 +45,7 @@ fn doctor_paper_mode_marks_live_checks_as_skip() {
 
 #[test]
 fn doctor_paper_mode_includes_sectioned_summary() {
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-paper.toml"))
@@ -80,7 +80,7 @@ fn doctor_paper_mode_quotes_follow_up_config_paths_with_spaces() {
     fs::copy(config_fixture("fixtures/app-live-paper.toml"), &config_path)
         .expect("copy paper fixture into spaced path");
 
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(&config_path)
@@ -99,7 +99,7 @@ fn doctor_paper_mode_quotes_follow_up_config_paths_with_spaces() {
 
 #[test]
 fn doctor_paper_mode_fails_without_database_url() {
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-paper.toml"))
@@ -119,7 +119,7 @@ fn doctor_paper_mode_fails_without_database_url() {
 
 #[test]
 fn doctor_live_mode_reports_missing_adopted_target_as_target_source_error() {
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config_fixture("fixtures/app-live-ux-live.toml"))
@@ -176,7 +176,7 @@ ready_families = []
     )
     .expect("seed wizard-shaped config");
 
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(temp.path())
@@ -248,7 +248,7 @@ price = "0.43"
 quantity = "5"
 "#,
     );
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -327,7 +327,7 @@ quantity = "5"
         market_ws_url = venue.market_ws_url(),
         user_ws_url = venue.user_ws_url(),
     ));
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -400,7 +400,7 @@ quantity = "5"
         market_ws_url = venue.market_ws_url(),
         user_ws_url = venue.user_ws_url(),
     ));
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -470,7 +470,7 @@ operator_target_revision = "targets-rev-9"
         market_ws_url = venue.market_ws_url(),
         user_ws_url = venue.user_ws_url(),
     ));
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -551,7 +551,7 @@ quantity = "5"
         market_ws_url = venue.market_ws_url(),
         user_ws_url = venue.user_ws_url(),
     ));
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -618,7 +618,7 @@ quantity = "5"
         market_ws_url = venue.market_ws_url(),
         user_ws_url = venue.user_ws_url(),
     ));
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -690,7 +690,7 @@ price = "0.43"
 quantity = "5"
 "#,
     );
-    let output = Command::new(app_live_binary())
+    let output = app_live_command()
         .arg("doctor")
         .arg("--config")
         .arg(config.path())
@@ -722,6 +722,24 @@ fn app_live_binary() -> PathBuf {
     }
 
     path
+}
+
+fn app_live_command() -> Command {
+    let mut command = Command::new(app_live_binary());
+    for key in [
+        "all_proxy",
+        "ALL_PROXY",
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+    ] {
+        command.env_remove(key);
+    }
+    command
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env("NO_PROXY", "127.0.0.1,localhost");
+    command
 }
 
 fn config_fixture(relative: &str) -> PathBuf {

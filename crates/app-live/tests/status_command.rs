@@ -10,6 +10,10 @@ fn status_subcommand_is_exposed() {
         .arg("status")
         .arg("--config")
         .arg(cli::config_fixture("app-live-paper.toml"))
+        .env(
+            "DATABASE_URL",
+            "postgres://axiom:axiom@localhost:5432/axiom_arb",
+        )
         .output()
         .expect("app-live status should execute");
 
@@ -57,6 +61,31 @@ fn status_invalid_paper_config_is_blocked() {
         combined.contains("Next: fix the blocking issue, then rerun app-live status --config"),
         "{combined}"
     );
+}
+
+#[test]
+fn status_paper_mode_without_database_url_is_blocked() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Mode: paper"), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(
+        combined.contains("Reason: DATABASE_URL is required before paper run can start"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: fix the blocking issue, then rerun app-live status --config"),
+        "{combined}"
+    );
+    assert!(!combined.contains("Readiness: paper-ready"), "{combined}");
 }
 
 #[test]
