@@ -1,5 +1,7 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
+use crate::commands::status::model::StatusReadiness;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyStage {
     LoadReadiness,
@@ -53,7 +55,8 @@ impl ApplyScenario {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyFailureKind {
     UnsupportedScenario(ApplyUnsupportedScenario),
-    SmokeScaffoldOnly,
+    ReadinessError,
+    Transition(ApplyStage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,17 +66,36 @@ pub enum ApplyUnsupportedScenario {
 }
 
 impl ApplyFailureKind {
-    pub fn unsupported_guidance(self) -> &'static str {
+    pub fn guidance(self) -> String {
         match self {
             Self::UnsupportedScenario(ApplyUnsupportedScenario::Paper) => {
-                "paper configs are not supported by apply yet; use bootstrap or run"
+                "paper configs are not supported by apply yet; use bootstrap or run".to_owned()
             }
             Self::UnsupportedScenario(ApplyUnsupportedScenario::Live) => {
                 "live configs are not supported by apply yet; use status -> doctor -> run"
+                    .to_owned()
             }
-            Self::SmokeScaffoldOnly => {
-                "apply is still a scaffold for smoke configs; not implemented yet"
+            Self::ReadinessError => "readiness error".to_owned(),
+            Self::Transition(stage) => stage.label().to_owned(),
+        }
+    }
+
+    pub fn from_status_readiness(readiness: StatusReadiness) -> Self {
+        match readiness {
+            StatusReadiness::Blocked => Self::ReadinessError,
+            StatusReadiness::TargetAdoptionRequired => {
+                Self::Transition(ApplyStage::EnsureTargetAnchor)
             }
+            StatusReadiness::SmokeRolloutRequired => {
+                Self::Transition(ApplyStage::EnsureSmokeRollout)
+            }
+            StatusReadiness::SmokeConfigReady => Self::Transition(ApplyStage::RunPreflight),
+            StatusReadiness::RestartRequired => {
+                Self::Transition(ApplyStage::ConfirmManualRestartBoundary)
+            }
+            StatusReadiness::PaperReady
+            | StatusReadiness::LiveRolloutRequired
+            | StatusReadiness::LiveConfigReady => Self::ReadinessError,
         }
     }
 }

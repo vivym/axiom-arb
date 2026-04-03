@@ -73,7 +73,7 @@ pub(crate) fn render_action_template(action: &model::StatusAction) -> String {
         model::StatusAction::FixBlockingIssueAndRerunStatus => {
             "fix the blocking issue, then rerun app-live status --config {config}".to_owned()
         }
-        model::StatusAction::EnableSmokeRollout => "app-live bootstrap --config {config}".to_owned(),
+        model::StatusAction::EnableSmokeRollout => "app-live apply --config {config}".to_owned(),
         model::StatusAction::EnableLiveRollout =>
             "edit {config} and set [negrisk.rollout].approved_families and ready_families for adopted families".to_owned(),
         model::StatusAction::MigrateLegacyExplicitTargets => {

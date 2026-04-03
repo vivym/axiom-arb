@@ -302,7 +302,43 @@ fn status_adopted_smoke_source_with_unavailable_active_revision_is_smoke_rollout
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live bootstrap --config"),
+        combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live bootstrap --config"),
+        "{combined}"
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn status_smoke_rollout_required_points_to_apply() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Readiness: smoke-rollout-required"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live bootstrap --config"),
         "{combined}"
     );
 
