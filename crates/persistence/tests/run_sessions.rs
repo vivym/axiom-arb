@@ -86,7 +86,7 @@ async fn run_sessions_migration_creates_table_and_session_link_columns() {
     assert!(tables.iter().any(|name| name == "run_sessions"));
 
     let progress_columns: Vec<String> = sqlx::query_scalar(
-        "select column_name from information_schema.columns where table_name = 'runtime_apply_progress'",
+        "select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'runtime_apply_progress'",
     )
     .fetch_all(&db.pool)
     .await
@@ -96,7 +96,7 @@ async fn run_sessions_migration_creates_table_and_session_link_columns() {
         .any(|name| name == "active_run_session_id"));
 
     let attempt_columns: Vec<String> = sqlx::query_scalar(
-        "select column_name from information_schema.columns where table_name = 'execution_attempts'",
+        "select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'execution_attempts'",
     )
     .fetch_all(&db.pool)
     .await
