@@ -127,32 +127,13 @@ fn real_user_shadow_smoke_source_bundle_carries_source_and_signer_configs() {
     let sources = build_real_user_shadow_smoke_sources(
         smoke.source_config.clone(),
         signer.clone(),
-        Some("run-session-77"),
+        "run-session-77",
     )
     .expect("source bundle should build");
 
     assert_eq!(sources.source_config, smoke.source_config);
     assert_eq!(sources.signer_config, signer);
     assert_eq!(sources.snapshot(), StaticSnapshotSource::empty().snapshot());
-}
-
-#[test]
-fn real_user_shadow_smoke_source_bundle_uses_caller_run_session_id_for_heartbeat() {
-    let config = live_config_view();
-    let smoke = app_live::load_real_user_shadow_smoke_config(&config)
-        .expect("smoke config should parse")
-        .expect("smoke should be enabled");
-    let signer = LocalSignerConfig::try_from(&config).expect("signer config should parse");
-
-    let sources = build_real_user_shadow_smoke_sources(
-        smoke.source_config.clone(),
-        signer,
-        Some("run-session-77"),
-    )
-    .expect("source bundle should build");
-
-    assert_eq!(sources.heartbeat.source_session_id(), "run-session-77");
-    assert_ne!(sources.heartbeat.source_session_id(), "session-live");
 }
 
 fn sample_input_task_event(journal_seq: i64) -> InputTaskEvent {

@@ -18,12 +18,19 @@ pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
 }
 
 pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Error>> {
-    run_from_config_path_with_invoked_by(config_path, "run")
+    run_from_config_path_for_source(config_path, RunInvocationSource::Run)
 }
 
 pub(crate) fn run_from_config_path_with_invoked_by(
     config_path: &Path,
     invoked_by: &'static str,
+) -> Result<(), Box<dyn Error>> {
+    run_from_config_path_for_source(config_path, RunInvocationSource::from_label(invoked_by)?)
+}
+
+fn run_from_config_path_for_source(
+    config_path: &Path,
+    invoked_by: RunInvocationSource,
 ) -> Result<(), Box<dyn Error>> {
     let observability = bootstrap_observability("app-live");
     let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
@@ -33,7 +40,7 @@ pub(crate) fn run_from_config_path_with_invoked_by(
     let config = validated.for_app_live()?;
     let real_user_shadow_smoke = load_real_user_shadow_smoke_config(&config)?;
     require_database_url_env()?;
-    let run_session = RunSessionHandle::create_starting(config_path, &config, invoked_by)?;
+    let run_session = RunSessionHandle::create_starting(config_path, &config, invoked_by.as_str())?;
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
     let result = (|| -> Result<crate::runtime::AppRunResult, Box<dyn Error>> {
         match config.mode() {
@@ -63,7 +70,7 @@ pub(crate) fn run_from_config_path_with_invoked_by(
                             signer_config
                                 .clone()
                                 .expect("smoke startup should require signer config"),
-                            Some(run_session.run_session_id()),
+                            run_session.run_session_id(),
                         )
                         .map_err(|error| {
                             ConfigError::InvalidPolymarketSourceConfig {
@@ -107,6 +114,36 @@ pub(crate) fn run_from_config_path_with_invoked_by(
         Err(error) => {
             run_session.mark_failed(&error.to_string())?;
             Err(error)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunInvocationSource {
+    Run,
+    Bootstrap,
+    Apply,
+}
+
+impl RunInvocationSource {
+    fn from_label(label: &'static str) -> Result<Self, Box<dyn Error>> {
+        match label {
+            "run" => Ok(Self::Run),
+            "bootstrap" => Ok(Self::Bootstrap),
+            "apply" => Ok(Self::Apply),
+            other => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported run invocation source: {other}"),
+            )
+            .into()),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Bootstrap => "bootstrap",
+            Self::Apply => "apply",
         }
     }
 }

@@ -61,12 +61,25 @@ impl<S> HeartbeatTaskGroup<S>
 where
     S: HeartbeatSource,
 {
-    pub fn for_runtime(source: S, run_session_id: Option<&str>) -> Self {
-        Self::build(
+    pub fn for_runtime(source: S, run_session_id: impl Into<String>) -> Self {
+        let now = Utc::now();
+
+        Self {
             source,
-            run_session_id.unwrap_or("session-live"),
-            Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 31).unwrap(),
-        )
+            monitor: OrderHeartbeatMonitor::new(Duration::seconds(30)),
+            state: OrderHeartbeatState {
+                heartbeat_id: None,
+                last_success_at: now,
+                reconcile_attention_since: None,
+                reconcile_reason: None,
+                requires_reconcile_attention: false,
+            },
+            next_journal_seq: 1,
+            session_id: run_session_id.into(),
+            scope_id: "runtime".to_owned(),
+            now,
+            instrumentation: AppInstrumentation::disabled(),
+        }
     }
 
     pub fn for_tests(source: S) -> Self {
@@ -74,14 +87,18 @@ where
     }
 
     fn for_tests_with_run_session_id(source: S, run_session_id: impl Into<String>) -> Self {
-        Self::build(
+        Self::build_test(
             source,
             run_session_id,
             Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 31).unwrap(),
         )
     }
 
-    fn build(source: S, run_session_id: impl Into<String>, now: chrono::DateTime<Utc>) -> Self {
+    fn build_test(
+        source: S,
+        run_session_id: impl Into<String>,
+        now: chrono::DateTime<Utc>,
+    ) -> Self {
         Self {
             source,
             monitor: OrderHeartbeatMonitor::new(Duration::seconds(30)),
@@ -98,10 +115,6 @@ where
             now,
             instrumentation: AppInstrumentation::disabled(),
         }
-    }
-
-    pub fn source_session_id(&self) -> &str {
-        &self.session_id
     }
 
     pub async fn tick(&mut self) -> Result<Option<InputTaskEvent>, String> {
@@ -144,6 +157,11 @@ where
         );
         self.next_journal_seq += 1;
         input
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_source_session_id(&self) -> &str {
+        &self.session_id
     }
 }
 
@@ -223,6 +241,7 @@ fn heartbeat_attention_reason(reason: HeartbeatReconcileReason) -> &'static str 
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, Utc};
     use venue_polymarket::HeartbeatFetchResult;
 
     use super::{HeartbeatSource, HeartbeatTaskGroup};
@@ -240,6 +259,24 @@ mod tests {
         assert_eq!(emitted.event.source_kind, "runtime_attention");
         assert_eq!(emitted.event.source_session_id, "run-session-42");
         assert_eq!(emitted.event.payload.kind(), "runtime_attention_observed");
+    }
+
+    #[test]
+    fn runtime_heartbeat_group_uses_runtime_defaults_instead_of_test_seeds() {
+        let before = Utc::now();
+        let group = HeartbeatTaskGroup::for_runtime(
+            ScriptedHeartbeatSource::timeout(),
+            Some("run-session-9"),
+        );
+        let after = Utc::now();
+
+        assert_eq!(group.session_id, "run-session-9");
+        assert_eq!(group.scope_id, "runtime");
+        assert_eq!(group.state.heartbeat_id, None);
+        assert!(group.now >= before);
+        assert!(group.now <= after);
+        assert!(group.state.last_success_at >= before - Duration::seconds(1));
+        assert!(group.state.last_success_at <= after + Duration::seconds(1));
     }
 
     #[derive(Debug)]
