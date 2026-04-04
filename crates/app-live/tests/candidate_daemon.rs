@@ -621,6 +621,7 @@ impl TestDatabase {
                     execution_mode: domain::ExecutionMode::Live,
                     attempt_no: 1,
                     idempotency_key: "idem-attempt-live-1".to_owned(),
+                    run_session_id: None,
                 };
                 ExecutionAttemptRepo
                     .append(&self.pool, &attempt)
@@ -677,6 +678,7 @@ impl TestDatabase {
                     execution_mode: domain::ExecutionMode::Shadow,
                     attempt_no: 1,
                     idempotency_key: "idem-attempt-shadow-broken-1".to_owned(),
+                    run_session_id: None,
                 };
                 ExecutionAttemptRepo
                     .append(&self.pool, &attempt)

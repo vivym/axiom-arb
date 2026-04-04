@@ -453,6 +453,7 @@ pub fn sample_attempt_for_route(
         execution_mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 

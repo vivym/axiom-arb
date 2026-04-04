@@ -1144,6 +1144,7 @@ mod tests {
                 execution_mode,
                 attempt_no: 1,
                 idempotency_key: format!("{attempt_id}-idem"),
+                run_session_id: None,
             },
             created_at: Utc::now(),
         }

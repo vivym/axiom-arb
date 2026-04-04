@@ -105,6 +105,7 @@ fn sample_attempt(
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 

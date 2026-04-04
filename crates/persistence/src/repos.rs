@@ -2320,6 +2320,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1

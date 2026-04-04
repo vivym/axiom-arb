@@ -82,6 +82,7 @@ fn smoke_restore_fails_when_snapshot_filter_retains_no_shadow_execution_records(
         execution_mode: ExecutionMode::Shadow,
         attempt_no: 1,
         idempotency_key: "idem-attempt-7".to_owned(),
+        run_session_id: None,
     });
     supervisor.seed_neg_risk_shadow_execution_artifact(ShadowExecutionArtifactRow {
         attempt_id: "attempt-7".to_owned(),

@@ -307,6 +307,7 @@ async fn live_attempt_artifact_loader_includes_backfilled_legacy_negrisk_attempt
                     execution_mode: domain::ExecutionMode::Live,
                     attempt_no: 1,
                     idempotency_key: "idem-legacy-live-1".to_owned(),
+                    run_session_id: None,
                 },
                 artifacts: vec![LiveExecutionArtifactRow {
                     attempt_id: attempt_id.to_owned(),
@@ -431,6 +432,7 @@ async fn create_legacy_live_schema(pool: &PgPool) {
             ),
             attempt_no INTEGER NOT NULL,
             idempotency_key TEXT NOT NULL,
+            run_session_id TEXT,
             outcome TEXT,
             payload JSONB NOT NULL DEFAULT '{}'::JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -616,6 +618,7 @@ fn sample_attempt(attempt_id: &str, plan_id: &str, route: &str) -> ExecutionAtte
         execution_mode: domain::ExecutionMode::Live,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 

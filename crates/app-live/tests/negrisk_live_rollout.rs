@@ -492,6 +492,7 @@ fn stale_shadow_attempt(snapshot_id: &str) -> ExecutionAttemptRow {
         execution_mode: ExecutionMode::Shadow,
         attempt_no: 1,
         idempotency_key: "idem-shadow-attempt-family-a-1".to_owned(),
+        run_session_id: None,
     }
 }
 

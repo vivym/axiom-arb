@@ -338,6 +338,30 @@ async fn execution_attempt_row_exposes_run_session_id_through_repo() {
 }
 
 #[tokio::test]
+async fn execution_attempt_list_recent_by_mode_and_route_round_trips_run_session_id() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    let mut row = sample_attempt("attempt-live-route-session-1", ExecutionMode::Live);
+    row.run_session_id = Some("run-session-1".to_owned());
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let rows = ExecutionAttemptRepo
+        .list_recent_by_mode_and_route(&db.pool, ExecutionMode::Live, "neg-risk", 10)
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].attempt.run_session_id.as_deref(),
+        Some("run-session-1")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn runtime_progress_preserves_operator_target_revision_when_update_omits_it() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

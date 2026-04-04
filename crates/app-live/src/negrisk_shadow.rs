@@ -136,6 +136,7 @@ fn execute_shadow_family(
         attempt_no: i32::try_from(execution_record.attempt.attempt_no)
             .expect("attempt number should fit in i32"),
         idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
+        run_session_id: None,
     };
     let artifacts = vec![ShadowExecutionArtifactRow {
         attempt_id: attempt.attempt_id.clone(),

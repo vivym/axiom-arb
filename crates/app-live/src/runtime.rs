@@ -885,6 +885,7 @@ pub(crate) fn persist_live_execution_records(
                     ))
                 })?,
                 idempotency_key: record.idempotency_key.clone(),
+                run_session_id: None,
             };
             ExecutionAttemptRepo.append(&pool, &attempt).await?;
             LiveSubmissionRepo
@@ -969,6 +970,7 @@ mod tests {
                 execution_mode: ExecutionMode::Live,
                 attempt_no: 1,
                 idempotency_key: "idem-attempt-live-1".to_owned(),
+                run_session_id: None,
             }],
             BTreeMap::new(),
             &[],
@@ -1011,6 +1013,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: None,
+                active_run_session_id: None,
             }),
             true,
         )
@@ -1029,6 +1032,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: Some("targets-rev-stale".to_owned()),
+                active_run_session_id: None,
             }),
             Some("targets-rev-current"),
             true,
@@ -1058,6 +1062,7 @@ mod tests {
             execution_mode: ExecutionMode::Shadow,
             attempt_no: 1,
             idempotency_key: "idem-attempt-shadow-1".to_owned(),
+            run_session_id: None,
         }];
         let artifacts = vec![ShadowExecutionArtifactRow {
             attempt_id: "attempt-shadow-1".to_owned(),
@@ -1087,6 +1092,7 @@ mod tests {
                 execution_mode: ExecutionMode::Shadow,
                 attempt_no: 1,
                 idempotency_key: "idem-attempt-shadow-1".to_owned(),
+                run_session_id: None,
             }],
             Vec::new(),
         )

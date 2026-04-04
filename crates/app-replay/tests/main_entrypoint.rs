@@ -412,6 +412,7 @@ async fn seed_negrisk_shadow_smoke_rows(pool: &PgPool) {
                 execution_mode: ExecutionMode::Shadow,
                 attempt_no: 1,
                 idempotency_key: "idem-attempt-shadow-1".to_owned(),
+                run_session_id: None,
             },
         )
         .await
