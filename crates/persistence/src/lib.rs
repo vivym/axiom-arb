@@ -16,10 +16,10 @@ pub use models::{
 pub use repos::{
     append_shadow_execution_batch, persist_discovery_snapshot, reconcile_current_family_view,
     ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
-    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
-    NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo,
-    ResolutionRepo, RunSessionProjectedRow, RunSessionRepo, RuntimeProgressRepo,
-    ShadowArtifactRepo, SnapshotPublicationRepo,
+    IdentifierRepo, InventoryRepo, JournalRepo, LatestRelevantRunSessionQuery, LiveArtifactRepo,
+    LiveSubmissionRepo, NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo,
+    PendingReconcileRepo, ResolutionRepo, RunSessionProjectedRow, RunSessionRepo,
+    RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;

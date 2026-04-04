@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{Duration, Utc};
 use domain::ExecutionMode;
 use persistence::{
-    models::ExecutionAttemptRow, run_migrations, ExecutionAttemptRepo, PersistenceError,
-    RunSessionRepo, RunSessionRow, RunSessionState, RuntimeProgressRepo,
+    models::ExecutionAttemptRow, run_migrations, ExecutionAttemptRepo,
+    LatestRelevantRunSessionQuery, PersistenceError, RunSessionRepo, RunSessionRow,
+    RunSessionState, RuntimeProgressRepo,
 };
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
@@ -398,13 +399,15 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
     let relevant = RunSessionRepo
         .latest_relevant(
             &db.pool,
-            "live",
-            "config/axiom-arb.local.toml",
-            "fp-new",
-            Some("targets-rev-2"),
-            "startup-target-2",
-            Some("ready"),
-            Duration::minutes(5),
+            LatestRelevantRunSessionQuery {
+                mode: "live",
+                config_path: "config/axiom-arb.local.toml",
+                config_fingerprint: "fp-new",
+                configured_target: Some("targets-rev-2"),
+                startup_target_revision_at_start: "startup-target-2",
+                rollout_state: Some("ready"),
+                stale_after: Duration::minutes(5),
+            },
         )
         .await
         .unwrap()
@@ -412,7 +415,14 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
     assert_eq!(relevant.run_session_id, "rs-new");
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-1"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-1"),
+            None,
+        )
         .await
         .unwrap();
     RuntimeProgressRepo
@@ -501,13 +511,15 @@ async fn run_session_repo_latest_relevant_treats_overdue_running_session_as_stal
     let relevant = RunSessionRepo
         .latest_relevant(
             &db.pool,
-            "live",
-            "config/axiom-arb.local.toml",
-            "fp-shared",
-            Some("targets-rev-shared"),
-            "startup-target-shared",
-            Some("ready"),
-            Duration::minutes(5),
+            LatestRelevantRunSessionQuery {
+                mode: "live",
+                config_path: "config/axiom-arb.local.toml",
+                config_fingerprint: "fp-shared",
+                configured_target: Some("targets-rev-shared"),
+                startup_target_revision_at_start: "startup-target-shared",
+                rollout_state: Some("ready"),
+                stale_after: Duration::minutes(5),
+            },
         )
         .await
         .unwrap()
@@ -548,13 +560,15 @@ async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_with
     let relevant = RunSessionRepo
         .latest_relevant(
             &db.pool,
-            "live",
-            "config/axiom-arb.local.toml",
-            "fp-explicit",
-            None,
-            "startup-target-explicit",
-            Some("ready"),
-            Duration::minutes(5),
+            LatestRelevantRunSessionQuery {
+                mode: "live",
+                config_path: "config/axiom-arb.local.toml",
+                config_fingerprint: "fp-explicit",
+                configured_target: None,
+                startup_target_revision_at_start: "startup-target-explicit",
+                rollout_state: Some("ready"),
+                stale_after: Duration::minutes(5),
+            },
         )
         .await
         .unwrap()

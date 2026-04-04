@@ -1561,8 +1561,29 @@ pub struct RunSessionProjectedRow {
     pub is_stale: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LatestRelevantRunSessionQuery<'a> {
+    pub mode: &'a str,
+    pub config_path: &'a str,
+    pub config_fingerprint: &'a str,
+    pub configured_target: Option<&'a str>,
+    pub startup_target_revision_at_start: &'a str,
+    pub rollout_state: Option<&'a str>,
+    pub stale_after: chrono::Duration,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RunSessionRepo;
+
+#[derive(Debug, Clone)]
+struct RunSessionTransition<'a> {
+    run_session_id: &'a str,
+    allowed_from: &'a [RunSessionState],
+    to_state: RunSessionState,
+    changed_at: DateTime<Utc>,
+    exit_status: Option<&'a str>,
+    exit_reason: Option<&'a str>,
+}
 
 impl RunSessionRepo {
     pub async fn create_starting(&self, pool: &PgPool, row: &RunSessionRow) -> Result<()> {
@@ -1648,12 +1669,14 @@ impl RunSessionRepo {
     ) -> Result<()> {
         self.transition_active_state(
             pool,
-            run_session_id,
-            &[RunSessionState::Starting],
-            RunSessionState::Running,
-            seen_at,
-            None,
-            None,
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting],
+                to_state: RunSessionState::Running,
+                changed_at: seen_at,
+                exit_status: None,
+                exit_reason: None,
+            },
         )
         .await
     }
@@ -1668,12 +1691,14 @@ impl RunSessionRepo {
     ) -> Result<()> {
         self.transition_active_state(
             pool,
-            run_session_id,
-            &[RunSessionState::Starting, RunSessionState::Running],
-            RunSessionState::Exited,
-            ended_at,
-            Some(exit_status),
-            exit_reason,
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting, RunSessionState::Running],
+                to_state: RunSessionState::Exited,
+                changed_at: ended_at,
+                exit_status: Some(exit_status),
+                exit_reason,
+            },
         )
         .await
     }
@@ -1687,12 +1712,14 @@ impl RunSessionRepo {
     ) -> Result<()> {
         self.transition_active_state(
             pool,
-            run_session_id,
-            &[RunSessionState::Starting, RunSessionState::Running],
-            RunSessionState::Failed,
-            ended_at,
-            Some("failed"),
-            Some(exit_reason),
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting, RunSessionState::Running],
+                to_state: RunSessionState::Failed,
+                changed_at: ended_at,
+                exit_status: Some("failed"),
+                exit_reason: Some(exit_reason),
+            },
         )
         .await
     }
@@ -1773,13 +1800,7 @@ impl RunSessionRepo {
     pub async fn latest_relevant(
         &self,
         pool: &PgPool,
-        mode: &str,
-        config_path: &str,
-        config_fingerprint: &str,
-        configured_target: Option<&str>,
-        startup_target_revision_at_start: &str,
-        rollout_state: Option<&str>,
-        stale_after: chrono::Duration,
+        query: LatestRelevantRunSessionQuery<'_>,
     ) -> Result<Option<RunSessionRow>> {
         let row = sqlx::query(
             r#"
@@ -1830,13 +1851,13 @@ impl RunSessionRepo {
             LIMIT 1
             "#,
         )
-        .bind(mode)
-        .bind(config_path)
-        .bind(config_fingerprint)
-        .bind(configured_target)
-        .bind(startup_target_revision_at_start)
-        .bind(rollout_state)
-        .bind(stale_after.num_seconds())
+        .bind(query.mode)
+        .bind(query.config_path)
+        .bind(query.config_fingerprint)
+        .bind(query.configured_target)
+        .bind(query.startup_target_revision_at_start)
+        .bind(query.rollout_state)
+        .bind(query.stale_after.num_seconds())
         .fetch_optional(pool)
         .await?;
 
@@ -1921,16 +1942,17 @@ impl RunSessionRepo {
     async fn transition_active_state(
         &self,
         pool: &PgPool,
-        run_session_id: &str,
-        allowed_from: &[RunSessionState],
-        to_state: RunSessionState,
-        changed_at: DateTime<Utc>,
-        exit_status: Option<&str>,
-        exit_reason: Option<&str>,
+        transition: RunSessionTransition<'_>,
     ) -> Result<()> {
-        let is_terminal = matches!(to_state, RunSessionState::Exited | RunSessionState::Failed);
-        let allowed_from_labels: Vec<&str> =
-            allowed_from.iter().map(RunSessionState::as_str).collect();
+        let is_terminal = matches!(
+            transition.to_state,
+            RunSessionState::Exited | RunSessionState::Failed
+        );
+        let allowed_from_labels: Vec<&str> = transition
+            .allowed_from
+            .iter()
+            .map(RunSessionState::as_str)
+            .collect();
         let result = sqlx::query(
             r#"
             UPDATE run_sessions
@@ -1943,19 +1965,23 @@ impl RunSessionRepo {
               AND state = ANY($7)
             "#,
         )
-        .bind(run_session_id)
-        .bind(to_state.as_str())
-        .bind(changed_at)
+        .bind(transition.run_session_id)
+        .bind(transition.to_state.as_str())
+        .bind(transition.changed_at)
         .bind(is_terminal)
-        .bind(exit_status)
-        .bind(exit_reason)
+        .bind(transition.exit_status)
+        .bind(transition.exit_reason)
         .bind(&allowed_from_labels)
         .execute(pool)
         .await?;
 
         if result.rows_affected() == 0 {
             return self
-                .classify_run_session_update_failure(pool, run_session_id, to_state.as_str())
+                .classify_run_session_update_failure(
+                    pool,
+                    transition.run_session_id,
+                    transition.to_state.as_str(),
+                )
                 .await;
         }
 
