@@ -18,7 +18,8 @@ pub use repos::{
     ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
     IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
     NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo,
-    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
+    ResolutionRepo, RunSessionProjectedRow, RunSessionRepo, RuntimeProgressRepo,
+    ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -53,6 +54,14 @@ pub enum PersistenceError {
         discovery_revision: i64,
     },
     MissingRuntimeProgressRow,
+    MissingRunSessionRow {
+        run_session_id: String,
+    },
+    InvalidRunSessionTransition {
+        run_session_id: String,
+        from_state: String,
+        to_state: String,
+    },
     DuplicateExecutionAttempt {
         attempt_id: String,
     },
@@ -141,6 +150,17 @@ impl fmt::Display for PersistenceError {
             Self::MissingRuntimeProgressRow => {
                 write!(f, "runtime progress row does not exist")
             }
+            Self::MissingRunSessionRow { run_session_id } => {
+                write!(f, "run session {run_session_id} does not exist")
+            }
+            Self::InvalidRunSessionTransition {
+                run_session_id,
+                from_state,
+                to_state,
+            } => write!(
+                f,
+                "run session {run_session_id} cannot transition from {from_state} to {to_state}"
+            ),
             Self::DuplicateExecutionAttempt { attempt_id } => {
                 write!(f, "execution attempt {attempt_id} already exists")
             }

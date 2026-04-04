@@ -1,6 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use persistence::{run_migrations, RunSessionState};
+use chrono::{Duration, Utc};
+use domain::ExecutionMode;
+use persistence::{
+    models::ExecutionAttemptRow, run_migrations, ExecutionAttemptRepo, PersistenceError,
+    RunSessionRepo, RunSessionRow, RunSessionState, RuntimeProgressRepo,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
@@ -68,6 +73,74 @@ impl TestDatabase {
             .expect("test schema should drop");
 
         self.admin_pool.close().await;
+    }
+}
+
+fn sample_starting_session(run_session_id: &str) -> RunSessionRow {
+    RunSessionRow {
+        run_session_id: run_session_id.to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state: RunSessionState::Starting,
+        started_at: Utc::now(),
+        last_seen_at: Utc::now(),
+        ended_at: None,
+        exit_status: None,
+        exit_reason: None,
+        config_path: "config/axiom-arb.local.toml".to_owned(),
+        config_fingerprint: "fp-default".to_owned(),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: "startup-target-default".to_owned(),
+        configured_operator_target_revision: Some("targets-rev-default".to_owned()),
+        active_operator_target_revision_at_start: Some("targets-rev-default".to_owned()),
+        rollout_state_at_start: Some("ready".to_owned()),
+        real_user_shadow_smoke: false,
+    }
+}
+
+fn sample_starting_session_for_target(
+    run_session_id: &str,
+    config_path: &str,
+    config_fingerprint: &str,
+    startup_target_revision_at_start: &str,
+    configured_operator_target_revision: &str,
+    started_at: chrono::DateTime<Utc>,
+) -> RunSessionRow {
+    RunSessionRow {
+        run_session_id: run_session_id.to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state: RunSessionState::Starting,
+        started_at,
+        last_seen_at: started_at,
+        ended_at: None,
+        exit_status: None,
+        exit_reason: None,
+        config_path: config_path.to_owned(),
+        config_fingerprint: config_fingerprint.to_owned(),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
+        configured_operator_target_revision: Some(configured_operator_target_revision.to_owned()),
+        active_operator_target_revision_at_start: Some(
+            configured_operator_target_revision.to_owned(),
+        ),
+        rollout_state_at_start: Some("ready".to_owned()),
+        real_user_shadow_smoke: false,
+    }
+}
+
+fn sample_attempt(attempt_id: &str, run_session_id: Option<&str>) -> ExecutionAttemptRow {
+    ExecutionAttemptRow {
+        attempt_id: attempt_id.to_owned(),
+        plan_id: format!("plan-{attempt_id}"),
+        snapshot_id: "snapshot-7".to_owned(),
+        route: "neg-risk".to_owned(),
+        scope: "family:family-1".to_owned(),
+        matched_rule_id: Some("rule-family-anchor".to_owned()),
+        execution_mode: ExecutionMode::Live,
+        attempt_no: 1,
+        idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: run_session_id.map(str::to_owned),
     }
 }
 
@@ -177,6 +250,194 @@ async fn run_sessions_reject_invalid_state_labels() {
         err.to_string().contains("state") || err.to_string().contains("check constraint"),
         "unexpected database error: {err}"
     );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_round_trips_starting_running_and_terminal_states() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RunSessionRepo
+        .create_starting(&db.pool, &sample_starting_session("rs-1"))
+        .await
+        .unwrap();
+
+    let running_at = Utc::now();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-1", running_at)
+        .await
+        .unwrap();
+
+    let exited_at = running_at + Duration::seconds(10);
+    RunSessionRepo
+        .mark_exited(&db.pool, "rs-1", exited_at, "success", None)
+        .await
+        .unwrap();
+
+    let row = RunSessionRepo.get(&db.pool, "rs-1").await.unwrap().unwrap();
+    assert_eq!(row.state, RunSessionState::Exited);
+    assert_eq!(row.exit_status.as_deref(), Some("success"));
+    assert_eq!(row.exit_reason, None);
+    assert_eq!(row.ended_at, Some(exited_at));
+    assert_eq!(row.last_seen_at, exited_at);
+
+    let err = RunSessionRepo
+        .mark_running(&db.pool, "rs-1", exited_at + Duration::seconds(1))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidRunSessionTransition { .. }
+    ));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_projects_stale_from_freshness_without_writing_stale_state() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let mut row = sample_starting_session("rs-old");
+    row.started_at = Utc::now() - Duration::minutes(10);
+    row.last_seen_at = row.started_at;
+
+    RunSessionRepo
+        .create_starting(&db.pool, &row)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-old", row.last_seen_at)
+        .await
+        .unwrap();
+
+    let projected = RunSessionRepo
+        .load_with_projected_state(&db.pool, "rs-old", Duration::minutes(5))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(projected.state_label, "stale");
+    assert!(projected.is_stale);
+
+    let raw = RunSessionRepo
+        .get(&db.pool, "rs-old")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(raw.state, RunSessionState::Running);
+
+    let stored_state: String =
+        sqlx::query_scalar("SELECT state FROM run_sessions WHERE run_session_id = $1")
+            .bind("rs-old")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_state, "running");
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_selects_latest_relevant_and_conflicting_active_sessions() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let old_started_at = Utc::now() - Duration::minutes(30);
+    let new_started_at = Utc::now() - Duration::minutes(5);
+
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-old",
+                "config/axiom-arb.local.toml",
+                "fp-old",
+                "startup-target-1",
+                "targets-rev-1",
+                old_started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-old", old_started_at)
+        .await
+        .unwrap();
+
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-new",
+                "config/axiom-arb.local.toml",
+                "fp-new",
+                "startup-target-2",
+                "targets-rev-2",
+                new_started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-new", new_started_at)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_exited(
+            &db.pool,
+            "rs-new",
+            new_started_at + Duration::minutes(1),
+            "success",
+            None,
+        )
+        .await
+        .unwrap();
+
+    let relevant = RunSessionRepo
+        .latest_relevant(
+            &db.pool,
+            "live",
+            "config/axiom-arb.local.toml",
+            "fp-new",
+            "targets-rev-2",
+            "startup-target-2",
+            Some("ready"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(relevant.run_session_id, "rs-new");
+
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-1"))
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "rs-old")
+        .await
+        .unwrap();
+
+    let conflicting = RunSessionRepo
+        .conflicting_active_for_run_session(&db.pool, "rs-old")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(conflicting.run_session_id, "rs-old");
+
+    ExecutionAttemptRepo
+        .append(&db.pool, &sample_attempt("attempt-1", Some("rs-new")))
+        .await
+        .unwrap();
+
+    let resolved = RunSessionRepo
+        .resolve_unique_for_attempt_id(&db.pool, "attempt-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.run_session_id, "rs-new");
 
     db.cleanup().await;
 }
