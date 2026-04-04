@@ -66,13 +66,14 @@ impl BootstrapSource for SmokeSafeStartupSource {
 pub fn build_real_user_shadow_smoke_sources(
     source: PolymarketSourceConfig,
     signer: LocalSignerConfig,
+    run_session_id: Option<&str>,
 ) -> Result<RealUserShadowSmokeSources, String> {
     Ok(RealUserShadowSmokeSources {
         source_config: source,
         signer_config: signer,
         market: MarketDataTaskGroup,
         user: UserStateTaskGroup,
-        heartbeat: HeartbeatTaskGroup::for_tests(SmokeHeartbeatSource),
+        heartbeat: HeartbeatTaskGroup::for_runtime(SmokeHeartbeatSource, run_session_id),
         relayer: RelayerTaskGroup,
         metadata: MetadataTaskGroup,
         bootstrap_snapshot: RemoteSnapshot::empty(),

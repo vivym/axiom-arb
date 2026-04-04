@@ -54,6 +54,7 @@ pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Err
                         signer_config
                             .clone()
                             .expect("smoke startup should require signer config"),
+                        None,
                     )
                     .map_err(|error| {
                         ConfigError::InvalidPolymarketSourceConfig {

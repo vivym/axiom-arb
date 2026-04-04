@@ -61,11 +61,27 @@ impl<S> HeartbeatTaskGroup<S>
 where
     S: HeartbeatSource,
 {
+    pub fn for_runtime(source: S, run_session_id: Option<&str>) -> Self {
+        Self::build(
+            source,
+            run_session_id.unwrap_or("session-live"),
+            Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 31).unwrap(),
+        )
+    }
+
     pub fn for_tests(source: S) -> Self {
         Self::for_tests_with_run_session_id(source, "session-live")
     }
 
     fn for_tests_with_run_session_id(source: S, run_session_id: impl Into<String>) -> Self {
+        Self::build(
+            source,
+            run_session_id,
+            Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 31).unwrap(),
+        )
+    }
+
+    fn build(source: S, run_session_id: impl Into<String>, now: chrono::DateTime<Utc>) -> Self {
         Self {
             source,
             monitor: OrderHeartbeatMonitor::new(Duration::seconds(30)),
@@ -79,9 +95,13 @@ where
             next_journal_seq: 1,
             session_id: run_session_id.into(),
             scope_id: "family-a".to_owned(),
-            now: Utc.with_ymd_and_hms(2026, 3, 27, 9, 0, 31).unwrap(),
+            now,
             instrumentation: AppInstrumentation::disabled(),
         }
+    }
+
+    pub fn source_session_id(&self) -> &str {
+        &self.session_id
     }
 
     pub async fn tick(&mut self) -> Result<Option<InputTaskEvent>, String> {
