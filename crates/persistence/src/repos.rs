@@ -1605,7 +1605,7 @@ impl RuntimeProgressRepo {
         pool: &PgPool,
         active_run_session_id: &str,
     ) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE runtime_apply_progress
             SET active_run_session_id = $2,
@@ -1618,11 +1618,15 @@ impl RuntimeProgressRepo {
         .execute(pool)
         .await?;
 
+        if result.rows_affected() == 0 {
+            return Err(PersistenceError::MissingRuntimeProgressRow);
+        }
+
         Ok(())
     }
 
     pub async fn clear_active_run_session_id(&self, pool: &PgPool) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE runtime_apply_progress
             SET active_run_session_id = NULL,
@@ -1633,6 +1637,10 @@ impl RuntimeProgressRepo {
         .bind(RUNTIME_PROGRESS_KEY)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(PersistenceError::MissingRuntimeProgressRow);
+        }
 
         Ok(())
     }

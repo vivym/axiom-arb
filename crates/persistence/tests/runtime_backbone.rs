@@ -223,13 +223,43 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
 }
 
 #[tokio::test]
+async fn runtime_progress_set_active_run_session_id_requires_existing_row() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let err = RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, PersistenceError::MissingRuntimeProgressRow));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_clear_active_run_session_id_requires_existing_row() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let err = RuntimeProgressRepo
+        .clear_active_run_session_id(&db.pool)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, PersistenceError::MissingRuntimeProgressRow));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
     seed_run_session(&db.pool, "run-session-1").await;
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
         .await
         .unwrap();
     RuntimeProgressRepo
@@ -245,6 +275,10 @@ async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
     assert_eq!(
         progress.active_run_session_id.as_deref(),
         Some("run-session-1")
+    );
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
     );
 
     db.cleanup().await;
@@ -387,7 +421,7 @@ async fn runtime_progress_can_clear_active_run_session_id_explicitly() {
     seed_run_session(&db.pool, "run-session-1").await;
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
         .await
         .unwrap();
     RuntimeProgressRepo
@@ -405,6 +439,10 @@ async fn runtime_progress_can_clear_active_run_session_id_explicitly() {
         .unwrap()
         .unwrap();
     assert_eq!(progress.active_run_session_id, None);
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
 
     db.cleanup().await;
 }

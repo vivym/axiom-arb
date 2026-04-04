@@ -52,6 +52,7 @@ pub enum PersistenceError {
     MissingDiscoverySnapshot {
         discovery_revision: i64,
     },
+    MissingRuntimeProgressRow,
     DuplicateExecutionAttempt {
         attempt_id: String,
     },
@@ -137,6 +138,9 @@ impl fmt::Display for PersistenceError {
                 f,
                 "missing neg-risk discovery snapshot for revision {discovery_revision}"
             ),
+            Self::MissingRuntimeProgressRow => {
+                write!(f, "runtime progress row does not exist")
+            }
             Self::DuplicateExecutionAttempt { attempt_id } => {
                 write!(f, "execution attempt {attempt_id} already exists")
             }
