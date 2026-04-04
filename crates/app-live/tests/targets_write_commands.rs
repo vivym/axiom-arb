@@ -439,7 +439,14 @@ impl TestDatabase {
                 .await
                 .expect("adoption provenance should seed");
             RuntimeProgressRepo
-                .record_progress(&self.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-7"))
+                .record_progress(
+                    &self.pool,
+                    41,
+                    7,
+                    Some("snapshot-7"),
+                    Some("targets-rev-7"),
+                    None,
+                )
                 .await
                 .expect("runtime progress should seed");
         });
@@ -489,7 +496,14 @@ impl TestDatabase {
                 .await
                 .expect("adoption history should seed");
             RuntimeProgressRepo
-                .record_progress(&self.pool, 51, 9, Some("snapshot-9"), Some("targets-rev-9"))
+                .record_progress(
+                    &self.pool,
+                    51,
+                    9,
+                    Some("snapshot-9"),
+                    Some("targets-rev-9"),
+                    None,
+                )
                 .await
                 .expect("runtime progress should seed");
         });
@@ -581,6 +595,7 @@ impl TestDatabase {
                     7,
                     Some("snapshot-7"),
                     Some(operator_target_revision),
+                    None,
                 )
                 .await
                 .expect("runtime progress should seed");

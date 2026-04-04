@@ -2006,6 +2006,7 @@ impl RuntimeProgressRepo {
         last_state_version: i64,
         last_snapshot_id: Option<&str>,
         operator_target_revision: Option<&str>,
+        active_run_session_id: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -2017,7 +2018,7 @@ impl RuntimeProgressRepo {
                 active_run_session_id,
                 operator_target_revision
             )
-            VALUES ($1, $2, $3, $4, NULL, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (progress_key) DO UPDATE
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
@@ -2037,6 +2038,7 @@ impl RuntimeProgressRepo {
         .bind(last_journal_seq)
         .bind(last_state_version)
         .bind(last_snapshot_id)
+        .bind(active_run_session_id)
         .bind(operator_target_revision)
         .execute(pool)
         .await?;

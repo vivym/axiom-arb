@@ -156,6 +156,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-verify-7"),
                         Some(active_operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed");
@@ -178,6 +179,7 @@ impl TestDatabase {
                     last_state_version,
                     last_snapshot_id,
                     operator_target_revision,
+                    None,
                 )
                 .await
                 .expect("runtime progress should seed");

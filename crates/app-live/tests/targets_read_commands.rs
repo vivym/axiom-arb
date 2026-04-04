@@ -530,7 +530,7 @@ impl TestDatabase {
                     .expect("adoption history should seed");
 
                 RuntimeProgressRepo
-                    .record_progress(&self.pool, 41, 7, Some("snapshot-7"), None)
+                    .record_progress(&self.pool, 41, 7, Some("snapshot-7"), None, None)
                     .await
                     .expect("runtime progress should seed without anchor");
             });
@@ -627,6 +627,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some("targets-rev-10"),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed with unprovenanced active revision");

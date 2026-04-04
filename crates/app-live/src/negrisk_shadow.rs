@@ -44,6 +44,24 @@ pub fn eligible_shadow_records(
     ready_families: &std::collections::BTreeSet<String>,
     recorder: Option<RuntimeMetricsRecorder>,
 ) -> Result<Vec<NegRiskShadowExecutionRecord>, NegRiskShadowError> {
+    eligible_shadow_records_with_run_session_id(
+        snapshot_id,
+        targets,
+        approved_families,
+        ready_families,
+        recorder,
+        None,
+    )
+}
+
+pub fn eligible_shadow_records_with_run_session_id(
+    snapshot_id: &str,
+    targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
+    approved_families: &std::collections::BTreeSet<String>,
+    ready_families: &std::collections::BTreeSet<String>,
+    recorder: Option<RuntimeMetricsRecorder>,
+    run_session_id: Option<&str>,
+) -> Result<Vec<NegRiskShadowExecutionRecord>, NegRiskShadowError> {
     let live_rules = approved_families
         .iter()
         .map(|family_id| {
@@ -87,6 +105,7 @@ pub fn eligible_shadow_records(
                 Some(recorder) => ExecutionInstrumentation::enabled(recorder.clone()),
                 None => ExecutionInstrumentation::disabled(),
             },
+            run_session_id,
         )?);
     }
 
@@ -98,6 +117,7 @@ fn execute_shadow_family(
     target: &NegRiskFamilyLiveTarget,
     matched_rule_id: &str,
     instrumentation: ExecutionInstrumentation,
+    run_session_id: Option<&str>,
 ) -> Result<NegRiskShadowExecutionRecord, NegRiskShadowError> {
     let request = domain::ExecutionRequest {
         request_id: format!("negrisk-shadow-request:{snapshot_id}:{}", target.family_id),
@@ -136,7 +156,7 @@ fn execute_shadow_family(
         attempt_no: i32::try_from(execution_record.attempt.attempt_no)
             .expect("attempt number should fit in i32"),
         idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
-        run_session_id: None,
+        run_session_id: run_session_id.map(str::to_owned),
     };
     let artifacts = vec![ShadowExecutionArtifactRow {
         attempt_id: attempt.attempt_id.clone(),
@@ -186,4 +206,48 @@ fn shadow_artifact_payload(
         "matched_rule_id": attempt.matched_rule_id,
         "members": members,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use rust_decimal::Decimal;
+
+    use super::eligible_shadow_records_with_run_session_id;
+    use crate::config::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+
+    #[test]
+    fn eligible_shadow_records_populate_run_session_id_when_provided() {
+        let targets = BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-a".to_owned(),
+                    token_id: "token-a".to_owned(),
+                    price: Decimal::new(42, 2),
+                    quantity: Decimal::new(1, 0),
+                }],
+            },
+        )]);
+        let approved_families = BTreeSet::from(["family-a".to_owned()]);
+        let ready_families = BTreeSet::from(["family-a".to_owned()]);
+
+        let records = eligible_shadow_records_with_run_session_id(
+            "snapshot-7",
+            &targets,
+            &approved_families,
+            &ready_families,
+            None,
+            Some("run-session-7"),
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].attempt.run_session_id.as_deref(),
+            Some("run-session-7")
+        );
+    }
 }

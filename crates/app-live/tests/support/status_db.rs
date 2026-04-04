@@ -148,6 +148,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(active_operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed");

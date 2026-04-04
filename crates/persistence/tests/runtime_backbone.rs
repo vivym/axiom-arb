@@ -204,7 +204,7 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None, None)
         .await
         .unwrap();
 
@@ -218,6 +218,44 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(progress.operator_target_revision, None);
     assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_round_trips_active_run_session_id() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            Some("run-session-1"),
+        )
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.last_journal_seq, 41);
+    assert_eq!(progress.last_state_version, 7);
+    assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
+    assert_eq!(
+        progress.active_run_session_id.as_deref(),
+        Some("run-session-1")
+    );
 
     db.cleanup().await;
 }
@@ -259,7 +297,14 @@ async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
     seed_run_session(&db.pool, "run-session-1").await;
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
         .await
         .unwrap();
     RuntimeProgressRepo
@@ -290,7 +335,14 @@ async fn runtime_progress_round_trips_operator_target_revision() {
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
         .await
         .unwrap();
 
@@ -312,41 +364,14 @@ async fn runtime_progress_round_trips_operator_target_revision() {
 }
 
 #[tokio::test]
-async fn execution_attempt_row_exposes_run_session_id_through_repo() {
+async fn execution_attempts_round_trip_run_session_id() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
     seed_run_session(&db.pool, "run-session-1").await;
 
-    sqlx::query(
-        r#"
-        INSERT INTO execution_attempts (
-            attempt_id,
-            plan_id,
-            snapshot_id,
-            route,
-            scope,
-            matched_rule_id,
-            execution_mode,
-            attempt_no,
-            idempotency_key,
-            run_session_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
-    )
-    .bind("attempt-live-run-session-1")
-    .bind("plan-attempt-live-run-session-1")
-    .bind("snapshot-7")
-    .bind("neg-risk")
-    .bind("family:family-1")
-    .bind(Option::<String>::None)
-    .bind("live")
-    .bind(1_i32)
-    .bind("idem-attempt-live-run-session-1")
-    .bind(Some("run-session-1"))
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    let mut row = sample_attempt("attempt-live-run-session-1", ExecutionMode::Live);
+    row.run_session_id = Some("run-session-1".to_owned());
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
 
     let attempt = ExecutionAttemptRepo
         .get_by_attempt_id(&db.pool, "attempt-live-run-session-1")
@@ -389,11 +414,18 @@ async fn runtime_progress_preserves_operator_target_revision_when_update_omits_i
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
         .await
         .unwrap();
     RuntimeProgressRepo
-        .record_progress(&db.pool, 42, 8, Some("snapshot-8"), None)
+        .record_progress(&db.pool, 42, 8, Some("snapshot-8"), None, None)
         .await
         .unwrap();
 
@@ -421,7 +453,14 @@ async fn runtime_progress_can_clear_active_run_session_id_explicitly() {
     seed_run_session(&db.pool, "run-session-1").await;
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
         .await
         .unwrap();
     RuntimeProgressRepo
