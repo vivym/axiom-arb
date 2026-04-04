@@ -113,3 +113,70 @@ fn run_session_state_labels_are_stable() {
     assert_eq!(RunSessionState::Exited.as_str(), "exited");
     assert_eq!(RunSessionState::Failed.as_str(), "failed");
 }
+
+#[tokio::test]
+async fn run_sessions_reject_invalid_state_labels() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let err = sqlx::query(
+        r#"
+        INSERT INTO run_sessions (
+            run_session_id,
+            invoked_by,
+            mode,
+            state,
+            started_at,
+            last_seen_at,
+            ended_at,
+            exit_status,
+            exit_reason,
+            config_path,
+            config_fingerprint,
+            target_source_kind,
+            startup_target_revision_at_start,
+            configured_operator_target_revision,
+            active_operator_target_revision_at_start,
+            rollout_state_at_start,
+            real_user_shadow_smoke
+        )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            NOW(),
+            NOW(),
+            NULL,
+            NULL,
+            NULL,
+            $5,
+            $6,
+            $7,
+            $8,
+            NULL,
+            NULL,
+            NULL,
+            false
+        )
+        "#,
+    )
+    .bind("run-session-invalid-1")
+    .bind("tester")
+    .bind("daemon")
+    .bind("paused")
+    .bind("/tmp/run-session-config.toml")
+    .bind("fingerprint-1")
+    .bind("source")
+    .bind("rev-start")
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+
+    assert!(
+        err.to_string().contains("state") || err.to_string().contains("check constraint"),
+        "unexpected database error: {err}"
+    );
+
+    db.cleanup().await;
+}

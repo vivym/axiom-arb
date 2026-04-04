@@ -2,7 +2,7 @@ CREATE TABLE run_sessions (
   run_session_id TEXT PRIMARY KEY,
   invoked_by TEXT NOT NULL,
   mode TEXT NOT NULL,
-  state TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('starting', 'running', 'exited', 'failed')),
   started_at TIMESTAMPTZ NOT NULL,
   last_seen_at TIMESTAMPTZ NOT NULL,
   ended_at TIMESTAMPTZ,
