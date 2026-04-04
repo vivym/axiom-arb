@@ -518,9 +518,37 @@ This preserves the current safety principle:
 
 ### 11.1 Session Write Failure
 
-If `run` cannot create or update its `run_session`, the run should fail.
+The first phase should distinguish between:
 
-Lifecycle truth is too fundamental to silently drop.
+- critical lifecycle writes
+- periodic freshness writes
+
+Critical lifecycle writes must fail closed:
+
+- initial session creation
+- the `starting -> running` transition
+- terminal `exited` / `failed` close-out writes
+
+If `run` cannot persist one of those critical lifecycle writes, the run should fail.
+
+Lifecycle truth is too fundamental to silently drop at those boundaries.
+
+Periodic freshness writes are different.
+
+The `last_seen_at` heartbeat update should be allowed to retry and temporarily degrade without immediately killing the foreground runtime on the first transient persistence failure.
+
+That is consistent with the rest of this design:
+
+- `stale` is already reader-projected from freshness
+- heartbeat freshness is an availability signal, not a second startup authority
+
+So the first version should treat `last_seen_at` refresh failures as:
+
+- retryable
+- operator-visible if they accumulate
+- eventually reflected through stale/degraded read semantics
+
+rather than as an unconditional immediate runtime abort.
 
 ### 11.2 Missing Or Partial Snapshot
 
@@ -610,7 +638,9 @@ The first implementation should cover:
 
 ### 13.5 Failure Tests
 
-- run fails if session creation fails
+- run fails if initial session creation fails
+- run fails if critical lifecycle transitions cannot be persisted
+- heartbeat freshness write failures can retry/degrade without immediate abort
 - stale sessions are interpreted as stale
 - missing linkage degrades rather than fabricates strong truth
 
