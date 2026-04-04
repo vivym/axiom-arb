@@ -103,7 +103,7 @@ fn sample_starting_session_for_target(
     config_path: &str,
     config_fingerprint: &str,
     startup_target_revision_at_start: &str,
-    configured_operator_target_revision: &str,
+    configured_operator_target_revision: Option<&str>,
     started_at: chrono::DateTime<Utc>,
 ) -> RunSessionRow {
     RunSessionRow {
@@ -120,10 +120,9 @@ fn sample_starting_session_for_target(
         config_fingerprint: config_fingerprint.to_owned(),
         target_source_kind: "adopted".to_owned(),
         startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
-        configured_operator_target_revision: Some(configured_operator_target_revision.to_owned()),
-        active_operator_target_revision_at_start: Some(
-            configured_operator_target_revision.to_owned(),
-        ),
+        configured_operator_target_revision: configured_operator_target_revision.map(str::to_owned),
+        active_operator_target_revision_at_start: configured_operator_target_revision
+            .map(str::to_owned),
         rollout_state_at_start: Some("ready".to_owned()),
         real_user_shadow_smoke: false,
     }
@@ -356,7 +355,7 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
                 "config/axiom-arb.local.toml",
                 "fp-old",
                 "startup-target-1",
-                "targets-rev-1",
+                Some("targets-rev-1"),
                 old_started_at,
             ),
         )
@@ -375,7 +374,7 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
                 "config/axiom-arb.local.toml",
                 "fp-new",
                 "startup-target-2",
-                "targets-rev-2",
+                Some("targets-rev-2"),
                 new_started_at,
             ),
         )
@@ -402,9 +401,10 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
             "live",
             "config/axiom-arb.local.toml",
             "fp-new",
-            "targets-rev-2",
+            Some("targets-rev-2"),
             "startup-target-2",
             Some("ready"),
+            Duration::minutes(5),
         )
         .await
         .unwrap()
@@ -438,6 +438,130 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
         .unwrap()
         .unwrap();
     assert_eq!(resolved.run_session_id, "rs-new");
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_latest_relevant_treats_overdue_running_session_as_stale_for_ranking() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let stale_started_at = Utc::now() - Duration::minutes(20);
+    let fresh_started_at = Utc::now() - Duration::minutes(2);
+
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-stale-running",
+                "config/axiom-arb.local.toml",
+                "fp-shared",
+                "startup-target-shared",
+                Some("targets-rev-shared"),
+                stale_started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-stale-running", stale_started_at)
+        .await
+        .unwrap();
+
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-fresh-exited",
+                "config/axiom-arb.local.toml",
+                "fp-shared",
+                "startup-target-shared",
+                Some("targets-rev-shared"),
+                fresh_started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-fresh-exited", fresh_started_at)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_exited(
+            &db.pool,
+            "rs-fresh-exited",
+            fresh_started_at + Duration::seconds(30),
+            "success",
+            None,
+        )
+        .await
+        .unwrap();
+
+    let relevant = RunSessionRepo
+        .latest_relevant(
+            &db.pool,
+            "live",
+            "config/axiom-arb.local.toml",
+            "fp-shared",
+            Some("targets-rev-shared"),
+            "startup-target-shared",
+            Some("ready"),
+            Duration::minutes(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(relevant.run_session_id, "rs-fresh-exited");
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_without_configured_target(
+) {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let started_at = Utc::now() - Duration::minutes(1);
+    let mut row = sample_starting_session_for_target(
+        "rs-explicit",
+        "config/axiom-arb.local.toml",
+        "fp-explicit",
+        "startup-target-explicit",
+        None,
+        started_at,
+    );
+    row.target_source_kind = "explicit".to_owned();
+    row.active_operator_target_revision_at_start = None;
+
+    RunSessionRepo
+        .create_starting(&db.pool, &row)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-explicit", started_at)
+        .await
+        .unwrap();
+
+    let relevant = RunSessionRepo
+        .latest_relevant(
+            &db.pool,
+            "live",
+            "config/axiom-arb.local.toml",
+            "fp-explicit",
+            None,
+            "startup-target-explicit",
+            Some("ready"),
+            Duration::minutes(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(relevant.run_session_id, "rs-explicit");
+    assert_eq!(relevant.configured_operator_target_revision, None);
 
     db.cleanup().await;
 }

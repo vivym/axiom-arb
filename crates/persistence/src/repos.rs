@@ -1760,9 +1760,10 @@ impl RunSessionRepo {
         mode: &str,
         config_path: &str,
         config_fingerprint: &str,
-        configured_target: &str,
+        configured_target: Option<&str>,
         startup_target_revision_at_start: &str,
         rollout_state: Option<&str>,
+        stale_after: chrono::Duration,
     ) -> Result<Option<RunSessionRow>> {
         let row = sqlx::query(
             r#"
@@ -1788,16 +1789,24 @@ impl RunSessionRepo {
             WHERE mode = $1
               AND config_path = $2
               AND config_fingerprint = $3
-              AND configured_operator_target_revision = $4
+              AND configured_operator_target_revision IS NOT DISTINCT FROM $4
               AND startup_target_revision_at_start = $5
               AND rollout_state_at_start IS NOT DISTINCT FROM $6
             ORDER BY
                 CASE state
-                    WHEN 'running' THEN 0
-                    WHEN 'starting' THEN 1
+                    WHEN 'running'
+                        THEN CASE
+                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 0
+                            ELSE 3
+                        END
+                    WHEN 'starting'
+                        THEN CASE
+                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 1
+                            ELSE 3
+                        END
                     WHEN 'exited' THEN 2
                     WHEN 'failed' THEN 2
-                    ELSE 3
+                    ELSE 4
                 END,
                 COALESCE(ended_at, started_at) DESC,
                 started_at DESC,
@@ -1811,6 +1820,7 @@ impl RunSessionRepo {
         .bind(configured_target)
         .bind(startup_target_revision_at_start)
         .bind(rollout_state)
+        .bind(stale_after.num_seconds())
         .fetch_optional(pool)
         .await?;
 
