@@ -1570,13 +1570,18 @@ impl RuntimeProgressRepo {
                 last_journal_seq,
                 last_state_version,
                 last_snapshot_id,
+                active_run_session_id,
                 operator_target_revision
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, NULL, $5)
             ON CONFLICT (progress_key) DO UPDATE
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
                 last_snapshot_id = EXCLUDED.last_snapshot_id,
+                active_run_session_id = COALESCE(
+                    EXCLUDED.active_run_session_id,
+                    runtime_apply_progress.active_run_session_id
+                ),
                 operator_target_revision = COALESCE(
                     EXCLUDED.operator_target_revision,
                     runtime_apply_progress.operator_target_revision
@@ -1602,7 +1607,8 @@ impl RuntimeProgressRepo {
                 last_journal_seq,
                 last_state_version,
                 last_snapshot_id,
-                operator_target_revision
+                operator_target_revision,
+                active_run_session_id
             FROM runtime_apply_progress
             WHERE progress_key = $1
             "#,
@@ -2041,6 +2047,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE attempt_id = $1
@@ -2071,6 +2078,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE created_at >= $1
@@ -2111,6 +2119,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1
@@ -2144,6 +2153,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1
@@ -2178,6 +2188,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE snapshot_id = $1
@@ -2211,6 +2222,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE snapshot_id = $1
@@ -2247,6 +2259,7 @@ impl ExecutionAttemptRepo {
                     execution_mode,
                     attempt_no,
                     idempotency_key,
+                    run_session_id,
                     created_at
                 FROM execution_attempts
                 WHERE execution_mode = $1
@@ -2271,6 +2284,7 @@ impl ExecutionAttemptRepo {
                     execution_mode,
                     attempt_no,
                     idempotency_key,
+                    run_session_id,
                     created_at
                 FROM execution_attempts
                 ORDER BY created_at DESC, attempt_id DESC
@@ -2341,7 +2355,8 @@ impl ExecutionAttemptRepo {
                 matched_rule_id,
                 execution_mode,
                 attempt_no,
-                idempotency_key
+                idempotency_key,
+                run_session_id
             FROM execution_attempts
             WHERE execution_mode = $1
             ORDER BY created_at, attempt_id
@@ -3056,9 +3071,10 @@ where
             matched_rule_id,
             execution_mode,
             attempt_no,
-            idempotency_key
+            idempotency_key,
+            run_session_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(&row.attempt_id)
@@ -3070,6 +3086,7 @@ where
     .bind(execution_mode_to_str(row.execution_mode))
     .bind(row.attempt_no)
     .bind(&row.idempotency_key)
+    .bind(&row.run_session_id)
     .execute(executor)
     .await;
 
@@ -3235,6 +3252,7 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
         last_state_version: row.try_get("last_state_version")?,
         last_snapshot_id: row.try_get("last_snapshot_id")?,
         operator_target_revision: row.try_get("operator_target_revision")?,
+        active_run_session_id: row.try_get("active_run_session_id")?,
     })
 }
 
@@ -3261,6 +3279,7 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
+        run_session_id: row.try_get("run_session_id")?,
     })
 }
 

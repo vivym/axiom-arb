@@ -110,6 +110,7 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode) -> ExecutionAttemptRow 
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 
@@ -148,6 +149,55 @@ fn sample_live_submission_record(
     }
 }
 
+async fn seed_run_session(pool: &PgPool, run_session_id: &str) {
+    sqlx::query(
+        r#"
+        INSERT INTO run_sessions (
+            run_session_id,
+            invoked_by,
+            mode,
+            state,
+            started_at,
+            last_seen_at,
+            ended_at,
+            exit_status,
+            exit_reason,
+            config_path,
+            config_fingerprint,
+            target_source_kind,
+            startup_target_revision_at_start,
+            configured_operator_target_revision,
+            active_operator_target_revision_at_start,
+            rollout_state_at_start,
+            real_user_shadow_smoke
+        )
+        VALUES (
+            $1,
+            'tester',
+            'daemon',
+            'running',
+            NOW(),
+            NOW(),
+            NULL,
+            NULL,
+            NULL,
+            '/tmp/run-session-config.toml',
+            'fingerprint-1',
+            'source',
+            'rev-start',
+            NULL,
+            NULL,
+            NULL,
+            false
+        )
+        "#,
+    )
+    .bind(run_session_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     let db = TestDatabase::new().await;
@@ -167,6 +217,47 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     assert_eq!(progress.last_state_version, 7);
     assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(progress.operator_target_revision, None);
+    assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO runtime_apply_progress (
+            progress_key,
+            last_journal_seq,
+            last_state_version,
+            last_snapshot_id,
+            active_run_session_id
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        "#,
+    )
+    .bind("default")
+    .bind(41_i64)
+    .bind(7_i64)
+    .bind(Some("snapshot-7"))
+    .bind(Some("run-session-1"))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        progress.active_run_session_id.as_deref(),
+        Some("run-session-1")
+    );
 
     db.cleanup().await;
 }
@@ -193,6 +284,55 @@ async fn runtime_progress_round_trips_operator_target_revision() {
         progress.operator_target_revision.as_deref(),
         Some("targets-rev-3")
     );
+    assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_row_exposes_run_session_id_through_repo() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            route,
+            scope,
+            matched_rule_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key,
+            run_session_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind("attempt-live-run-session-1")
+    .bind("plan-attempt-live-run-session-1")
+    .bind("snapshot-7")
+    .bind("neg-risk")
+    .bind("family:family-1")
+    .bind(Option::<String>::None)
+    .bind("live")
+    .bind(1_i32)
+    .bind("idem-attempt-live-run-session-1")
+    .bind(Some("run-session-1"))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let attempt = ExecutionAttemptRepo
+        .get_by_attempt_id(&db.pool, "attempt-live-run-session-1")
+        .await
+        .unwrap()
+        .unwrap()
+        .attempt;
+    assert_eq!(attempt.run_session_id.as_deref(), Some("run-session-1"));
 
     db.cleanup().await;
 }
@@ -223,6 +363,7 @@ async fn runtime_progress_preserves_operator_target_revision_when_update_omits_i
         progress.operator_target_revision.as_deref(),
         Some("targets-rev-3")
     );
+    assert_eq!(progress.active_run_session_id, None);
 
     db.cleanup().await;
 }

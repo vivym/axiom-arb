@@ -273,6 +273,7 @@ pub struct RuntimeProgressRow {
     pub last_state_version: i64,
     pub last_snapshot_id: Option<String>,
     pub operator_target_revision: Option<String>,
+    pub active_run_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +372,7 @@ pub struct ExecutionAttemptRow {
     pub execution_mode: ExecutionMode,
     pub attempt_no: i32,
     pub idempotency_key: String,
+    pub run_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
