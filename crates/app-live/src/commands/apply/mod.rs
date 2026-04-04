@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, path::Path};
+use std::{collections::BTreeSet, error::Error, fmt, path::Path};
 
 use config_schema::{load_raw_config_from_path, ValidatedConfig};
 use persistence::connect_pool_from_env;
@@ -6,19 +6,27 @@ use persistence::connect_pool_from_env;
 use crate::cli::ApplyArgs;
 use crate::commands::{
     status::{self, evaluate::StatusOutcome},
-    targets::{adopt, state::load_target_candidates_catalog},
+    targets::{
+        adopt, config_file::rewrite_smoke_rollout_families, state::load_target_candidates_catalog,
+    },
 };
+use crate::startup;
 
 pub mod model;
 mod prompt;
 
 use self::model::{ApplyFailureKind, ApplyScenario, ApplyUnsupportedScenario};
-use self::prompt::{ApplyPrompt, InlineTargetAdoptionSelection};
+use self::prompt::{ApplyPrompt, InlineSmokeRolloutSelection, InlineTargetAdoptionSelection};
 
 enum InlineTargetAdoptionOutcome {
     Adopted,
     Cancelled,
     Unavailable,
+}
+
+enum InlineSmokeRolloutOutcome {
+    Enabled,
+    Declined,
 }
 
 #[derive(Debug)]
@@ -111,6 +119,28 @@ fn execute_smoke_apply(config_path: &Path) -> Result<(), Box<dyn Error>> {
                     }
                 }
 
+                if failure == ApplyFailureKind::Transition(model::ApplyStage::EnsureSmokeRollout) {
+                    if !prompt::stdin_is_interactive() {
+                        return Err(apply_failure(ApplyFailureKind::Transition(
+                            model::ApplyStage::EnsureSmokeRollout,
+                        )));
+                    }
+
+                    match inline_smoke_rollout_enablement(config_path, &mut prompt) {
+                        Ok(InlineSmokeRolloutOutcome::Enabled) => continue,
+                        Ok(InlineSmokeRolloutOutcome::Declined) => {
+                            return Err(apply_failure(ApplyFailureKind::ReadinessError(
+                                "inline smoke rollout enablement declined".to_owned(),
+                            )))
+                        }
+                        Err(error) => {
+                            return Err(apply_failure(ApplyFailureKind::ReadinessError(
+                                error.to_string(),
+                            )))
+                        }
+                    }
+                }
+
                 return Err(apply_failure(failure));
             }
             StatusOutcome::Deferred(deferred) => {
@@ -169,6 +199,46 @@ fn inline_target_adoption(
     );
 
     Ok(InlineTargetAdoptionOutcome::Adopted)
+}
+
+fn inline_smoke_rollout_enablement(
+    config_path: &Path,
+    prompt: &mut ApplyPrompt,
+) -> Result<InlineSmokeRolloutOutcome, Box<dyn Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    let family_ids = runtime.block_on(adopted_smoke_family_ids(config_path))?;
+    let selection = prompt::choose_smoke_rollout_confirmation(prompt, &family_ids)?;
+
+    match selection {
+        InlineSmokeRolloutSelection::Confirm => {
+            rewrite_smoke_rollout_families(config_path, &family_ids)?;
+            Ok(InlineSmokeRolloutOutcome::Enabled)
+        }
+        InlineSmokeRolloutSelection::Decline => Ok(InlineSmokeRolloutOutcome::Declined),
+    }
+}
+
+async fn adopted_smoke_family_ids(config_path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+    let raw = load_raw_config_from_path(config_path)?;
+    let validated = ValidatedConfig::new(raw)?;
+    let config = validated.for_app_live()?;
+    let pool = connect_pool_from_env().await?;
+    let resolved = startup::resolve_startup_targets(&pool, &config).await?;
+    let family_ids = resolved
+        .targets
+        .targets()
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if family_ids.is_empty() {
+        return Err("apply could not derive any adopted smoke families".into());
+    }
+    Ok(family_ids)
 }
 
 fn apply_failure(kind: ApplyFailureKind) -> Box<dyn Error> {

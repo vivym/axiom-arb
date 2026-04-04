@@ -115,12 +115,7 @@ fn apply_enters_inline_target_adoption_when_target_anchor_missing() {
         config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
     });
 
-    let output = run_apply_with_stdin(
-        &config_path,
-        database.database_url(),
-        "cancel\n",
-        true,
-    );
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
@@ -140,12 +135,7 @@ fn apply_cancelled_inline_target_adoption_stops_without_writes() {
         config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
     });
 
-    let output = run_apply_with_stdin(
-        &config_path,
-        database.database_url(),
-        "cancel\n",
-        true,
-    );
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
@@ -173,14 +163,24 @@ fn apply_can_inline_smoke_target_adoption() {
     let output = run_apply_with_stdin(
         &config_path,
         database.database_url(),
-        "adoptable-9\n",
+        "adoptable-9\ndecline\n",
         true,
     );
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("adopted adoptable revision adoptable-9"), "{text}");
-    assert!(text.contains("ensure-smoke-rollout"), "{text}");
+    assert!(
+        text.contains("adopted adoptable revision adoptable-9"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
     assert!(
@@ -250,6 +250,78 @@ fn apply_maps_smoke_rollout_required_to_ensure_smoke_rollout() {
     assert!(text.contains("ensure-smoke-rollout"), "{text}");
 
     database.cleanup();
+}
+
+#[test]
+fn apply_rollout_missing_smoke_config_enters_explicit_confirmation() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(text.contains("Adopted families:"), "{text}");
+    assert!(text.contains("family-a"), "{text}");
+    assert!(text.contains("confirm"), "{text}");
+    assert!(text.contains("decline"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_can_inline_smoke_rollout_enablement() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "confirm\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("run-preflight"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(
+        rewritten.contains("approved_families = [\"family-a\"]"),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("ready_families = [\"family-a\"]"),
+        "{rewritten}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_declining_inline_smoke_rollout_keeps_rollout_unchanged_and_stops_cleanly() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+
+    let rewritten = fs::read_to_string(&config_path).expect("config should still load");
+    assert!(!rewritten.contains("approved_families"), "{rewritten}");
+    assert!(!rewritten.contains("ready_families"), "{rewritten}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]

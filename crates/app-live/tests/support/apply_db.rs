@@ -12,7 +12,7 @@ use persistence::{
         OperatorTargetAdoptionHistoryRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
-    OperatorTargetAdoptionHistoryRepo,
+    OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -144,6 +144,29 @@ impl TestDatabase {
                 )
                 .await
                 .expect("candidate provenance should persist");
+        });
+    }
+
+    pub fn seed_adopted_target_with_active_revision(
+        &self,
+        operator_target_revision: &str,
+        active_operator_target_revision: Option<&str>,
+    ) {
+        self.seed_adoptable_revision("adoptable-9", "candidate-9", operator_target_revision);
+
+        self.runtime.block_on(async {
+            if let Some(active_operator_target_revision) = active_operator_target_revision {
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        41,
+                        7,
+                        Some("snapshot-7"),
+                        Some(active_operator_target_revision),
+                    )
+                    .await
+                    .expect("runtime progress should seed");
+            }
         });
     }
 

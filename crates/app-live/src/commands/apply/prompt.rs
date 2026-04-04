@@ -1,4 +1,6 @@
 use std::{
+    borrow::ToOwned,
+    collections::BTreeSet,
     io::{self, BufRead, IsTerminal, Write},
 };
 
@@ -8,6 +10,12 @@ use crate::commands::init::{InitError, PromptIo};
 pub enum InlineTargetAdoptionSelection {
     AdoptableRevision(String),
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineSmokeRolloutSelection {
+    Confirm,
+    Decline,
 }
 
 pub struct ApplyPrompt;
@@ -75,13 +83,53 @@ pub fn choose_adoptable_revision<P: PromptIo>(
     }
 }
 
+pub fn choose_smoke_rollout_confirmation<P: PromptIo>(
+    prompt: &mut P,
+    family_ids: &[String],
+) -> Result<InlineSmokeRolloutSelection, InitError> {
+    let normalized = family_ids
+        .iter()
+        .map(|family_id| family_id.trim())
+        .filter(|family_id| !family_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    if normalized.is_empty() {
+        return Err(InitError::new(
+            "apply could not derive any adopted smoke families",
+        ));
+    }
+
+    loop {
+        prompt.println("Smoke rollout readiness is not enabled for the adopted family set.")?;
+        prompt.println("Adopted families:")?;
+        for family_id in &normalized {
+            prompt.println(family_id)?;
+        }
+        prompt.println("Choose one:")?;
+        prompt.println("confirm")?;
+        prompt.println("decline")?;
+
+        match prompt.read_line()?.trim().to_lowercase().as_str() {
+            "confirm" => return Ok(InlineSmokeRolloutSelection::Confirm),
+            "decline" => return Ok(InlineSmokeRolloutSelection::Decline),
+            _ => prompt.println("Please choose confirm or decline.")?,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
     use crate::commands::init::{InitError, PromptIo};
 
-    use super::{choose_adoptable_revision, InlineTargetAdoptionSelection};
+    use super::{
+        choose_adoptable_revision, choose_smoke_rollout_confirmation, InlineSmokeRolloutSelection,
+        InlineTargetAdoptionSelection,
+    };
 
     struct TestPrompt {
         inputs: VecDeque<String>,
@@ -114,11 +162,9 @@ mod tests {
     fn choose_adoptable_revision_returns_selected_revision() {
         let mut prompt = TestPrompt::new(&["adoptable-2"]);
 
-        let selection = choose_adoptable_revision(
-            &mut prompt,
-            &["adoptable-1".into(), "adoptable-2".into()],
-        )
-        .expect("listed revision should be accepted");
+        let selection =
+            choose_adoptable_revision(&mut prompt, &["adoptable-1".into(), "adoptable-2".into()])
+                .expect("listed revision should be accepted");
 
         assert_eq!(
             selection,
@@ -149,11 +195,9 @@ mod tests {
     fn choose_adoptable_revision_reprompts_until_listed_revision_or_cancel() {
         let mut prompt = TestPrompt::new(&["nope", "adoptable-2"]);
 
-        let selection = choose_adoptable_revision(
-            &mut prompt,
-            &["adoptable-1".into(), "adoptable-2".into()],
-        )
-        .expect("second answer should be accepted");
+        let selection =
+            choose_adoptable_revision(&mut prompt, &["adoptable-1".into(), "adoptable-2".into()])
+                .expect("second answer should be accepted");
 
         assert_eq!(
             selection,
@@ -171,6 +215,57 @@ mod tests {
                 "adoptable-1",
                 "adoptable-2",
                 "cancel",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_smoke_rollout_confirmation_accepts_confirm() {
+        let mut prompt = TestPrompt::new(&["confirm"]);
+
+        let selection =
+            choose_smoke_rollout_confirmation(&mut prompt, &["family-b".into(), "family-a".into()])
+                .expect("confirm should be accepted");
+
+        assert_eq!(selection, InlineSmokeRolloutSelection::Confirm);
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Smoke rollout readiness is not enabled for the adopted family set.",
+                "Adopted families:",
+                "family-a",
+                "family-b",
+                "Choose one:",
+                "confirm",
+                "decline",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_smoke_rollout_confirmation_reprompts_until_confirm_or_decline() {
+        let mut prompt = TestPrompt::new(&["later", "decline"]);
+
+        let selection = choose_smoke_rollout_confirmation(&mut prompt, &["family-a".into()])
+            .expect("decline should be accepted");
+
+        assert_eq!(selection, InlineSmokeRolloutSelection::Decline);
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Smoke rollout readiness is not enabled for the adopted family set.",
+                "Adopted families:",
+                "family-a",
+                "Choose one:",
+                "confirm",
+                "decline",
+                "Please choose confirm or decline.",
+                "Smoke rollout readiness is not enabled for the adopted family set.",
+                "Adopted families:",
+                "family-a",
+                "Choose one:",
+                "confirm",
+                "decline",
             ]
         );
     }
