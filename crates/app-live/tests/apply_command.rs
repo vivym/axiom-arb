@@ -376,6 +376,30 @@ fn apply_maps_restart_required_to_restart_boundary_gate() {
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn apply_restart_required_with_rollout_missing_enters_inline_smoke_rollout_enablement_first() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+    assert!(!text.contains("confirm-manual-restart-boundary"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture(relative);
     let text = fs::read_to_string(&source).expect("fixture should be readable");

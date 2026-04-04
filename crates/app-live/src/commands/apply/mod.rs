@@ -5,7 +5,7 @@ use persistence::connect_pool_from_env;
 
 use crate::cli::ApplyArgs;
 use crate::commands::{
-    status::{self, evaluate::StatusOutcome},
+    status::{self, evaluate::StatusOutcome, model::StatusRolloutState},
     targets::{
         adopt, config_file::rewrite_smoke_rollout_families, state::load_target_candidates_catalog,
     },
@@ -90,7 +90,14 @@ fn execute_smoke_apply(config_path: &Path) -> Result<(), Box<dyn Error>> {
                     .details
                     .reason
                     .unwrap_or_else(|| "blocked".to_owned());
-                let failure = ApplyFailureKind::from_status_readiness(summary.readiness, reason);
+                let failure = if summary.readiness
+                    == status::model::StatusReadiness::RestartRequired
+                    && summary.details.rollout_state == Some(StatusRolloutState::Required)
+                {
+                    ApplyFailureKind::Transition(model::ApplyStage::EnsureSmokeRollout)
+                } else {
+                    ApplyFailureKind::from_status_readiness(summary.readiness, reason)
+                };
 
                 if failure == ApplyFailureKind::Transition(model::ApplyStage::EnsureTargetAnchor) {
                     if !prompt::stdin_is_interactive() {
