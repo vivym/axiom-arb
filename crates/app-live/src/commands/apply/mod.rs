@@ -205,6 +205,15 @@ fn finalize_smoke_apply(
     }
 
     if summary.readiness == status::model::StatusReadiness::RestartRequired {
+        if !prompt::stdin_is_interactive() {
+            output::render_outcome(
+                "Runtime not started; manual restart boundary requires interactive confirmation before foreground start.",
+            );
+            output::render_next_actions(&ready_next_actions(config_path, summary, true));
+            return Err(apply_failure(ApplyFailureKind::Transition(
+                model::ApplyStage::ConfirmManualRestartBoundary,
+            )));
+        }
         let configured_target = summary
             .details
             .configured_target

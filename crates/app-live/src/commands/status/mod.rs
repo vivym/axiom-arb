@@ -60,7 +60,7 @@ fn render_summary(summary: &model::StatusSummary, config_path: &Path) {
     }
     println!("Next Actions");
     for action in &summary.actions {
-        println!("Next: {}", render_action(action, config_path));
+        println!("Next: {}", render_action(action, summary.mode, config_path));
     }
 }
 
@@ -82,13 +82,26 @@ pub(crate) fn render_action_template(action: &model::StatusAction) -> String {
     }
 }
 
-fn render_action(action: &model::StatusAction, config_path: &Path) -> String {
+fn render_action(
+    action: &model::StatusAction,
+    mode: Option<model::StatusMode>,
+    config_path: &Path,
+) -> String {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    render_status_action_template(action, &quoted_config_path)
+    render_status_action_template(action, mode, &quoted_config_path)
 }
 
-fn render_status_action_template(action: &model::StatusAction, quoted_config_path: &str) -> String {
+fn render_status_action_template(
+    action: &model::StatusAction,
+    mode: Option<model::StatusMode>,
+    quoted_config_path: &str,
+) -> String {
     match action {
+        model::StatusAction::RunTargetsAdopt
+            if mode == Some(model::StatusMode::RealUserShadowSmoke) =>
+        {
+            "app-live apply --config {config}".replace("{config}", quoted_config_path)
+        }
         model::StatusAction::EnableSmokeRollout => {
             "app-live apply --config {config}".replace("{config}", quoted_config_path)
         }

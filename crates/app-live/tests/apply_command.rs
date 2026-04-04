@@ -14,6 +14,7 @@ use std::{
 use support::cli;
 use support::{apply_db, status_db::TestDatabase};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
+use toml_edit::{value, DocumentMut};
 
 #[test]
 fn apply_subcommand_is_exposed() {
@@ -444,6 +445,49 @@ fn apply_restart_required_with_start_requires_explicit_confirmation() {
 }
 
 #[test]
+fn apply_restart_required_with_start_fails_closed_when_not_interactive() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--start")
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::null())
+        .output()
+        .expect("app-live apply should execute for non-interactive restart boundary");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("confirm-manual-restart-boundary"), "{text}");
+    assert!(!text.contains("Choose one:"), "{text}");
+    assert!(
+        text.contains("manual restart boundary requires interactive confirmation"),
+        "{text}"
+    );
+
+    let progress = database
+        .runtime_progress()
+        .expect("runtime progress should remain seeded");
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-10")
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn apply_declining_restart_confirmation_stops_without_invoking_run() {
     let database = apply_db::TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
@@ -643,27 +687,34 @@ fn app_live_command() -> Command {
 }
 
 fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
-    config
-        .replace(
-            "clob_host = \"https://clob.polymarket.com\"",
-            &format!("clob_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "data_api_host = \"https://data-api.polymarket.com\"",
-            &format!("data_api_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "relayer_host = \"https://relayer-v2.polymarket.com\"",
-            &format!("relayer_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "market_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"",
-            &format!("market_ws_url = \"{}\"", venue.market_ws_url()),
-        )
-        .replace(
-            "user_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"",
-            &format!("user_ws_url = \"{}\"", venue.user_ws_url()),
-        )
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("smoke config fixture should parse as TOML");
+
+    let polymarket = document
+        .get_mut("polymarket")
+        .and_then(|item| item.as_table_like_mut())
+        .expect("smoke config fixture should contain [polymarket]");
+    let source = polymarket
+        .get_mut("source_overrides")
+        .and_then(|item| item.as_table_like_mut())
+        .expect("smoke config fixture should contain [polymarket.source_overrides]");
+
+    for (key, rewritten) in [
+        ("clob_host", venue.http_base_url()),
+        ("data_api_host", venue.http_base_url()),
+        ("relayer_host", venue.http_base_url()),
+        ("market_ws_url", venue.market_ws_url()),
+        ("user_ws_url", venue.user_ws_url()),
+    ] {
+        assert!(
+            source.get(key).is_some(),
+            "smoke config fixture should contain [polymarket.source_overrides].{key}"
+        );
+        source.insert(key, value(rewritten));
+    }
+
+    document.to_string()
 }
 
 struct MockDoctorVenue {

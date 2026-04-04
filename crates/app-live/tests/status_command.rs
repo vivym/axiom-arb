@@ -120,6 +120,44 @@ fn status_adopted_source_without_operator_target_revision_is_target_adoption_req
 }
 
 #[test]
+fn status_smoke_target_adoption_required_points_to_apply() {
+    let database = TestDatabase::new();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Mode: real-user shadow smoke"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Readiness: target-adoption-required"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));

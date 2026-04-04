@@ -50,7 +50,7 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 `status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
 
 - `targets adopt`
-- rollout enablement
+- `apply` for smoke Day 1+ rollout progression
 - controlled restart
 - `doctor`
 - `run`
@@ -131,16 +131,26 @@ After a successful adopt:
 
 1. re-run `status`
 2. re-run `targets status` if you need the lower-level control-plane details
-3. run `doctor`
-4. if `restart_needed = true`, perform a controlled restart
-5. start `run`
-6. verify the local result
+3. if this is a `real-user shadow smoke` config, prefer `apply` for the Day 1+ smoke flow
+4. otherwise run `doctor`
+5. if `restart_needed = true`, perform a controlled restart
+6. start `run`
+7. verify the local result
 
 ```bash
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
+cargo run -p app-live -- verify --config config/axiom-arb.local.toml
+```
+
+For `real-user shadow smoke`, the preferred Day 1+ follow-up is:
+
+```bash
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
@@ -199,14 +209,23 @@ cargo run -p app-live -- run --config config/axiom-arb.local.toml
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
+For `real-user shadow smoke`, replace the `doctor` / `run` pair with:
+
+```bash
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
+```
+
 Interpret `status` before `doctor` like this:
 
 - `target-adoption-required`
-  - run `targets candidates`, then `targets adopt`
+  - for `real-user shadow smoke`, prefer `apply`; it can inline the adopt step
+  - otherwise run `targets candidates`, then `targets adopt`
 - `restart-required`
   - perform a controlled restart before expecting the running daemon to pick up the configured revision
 - `live-rollout-required` or `smoke-rollout-required`
-  - fix rollout readiness first
+  - for smoke Day 1+ configs, prefer `apply`
+  - otherwise fix rollout readiness first
 - `live-config-ready` or `smoke-config-ready`
   - continue to `doctor`
 - `blocked`
@@ -243,7 +262,8 @@ If `status` shows:
 
 - `target-adoption-required`
   - no startup-scoped adopted target revision is currently configured
-  - inspect `targets candidates`, then adopt one
+  - for `real-user shadow smoke`, prefer `apply` to inline the adopt step
+  - otherwise inspect `targets candidates`, then adopt one
 
 - `restart-required`
   - the configured revision differs from the daemon's active revision
