@@ -9,7 +9,7 @@ use std::{
 use persistence::{
     models::{
         AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        OperatorTargetAdoptionHistoryRow,
+        OperatorTargetAdoptionHistoryRow, RuntimeProgressRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
     OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo,
@@ -185,6 +185,15 @@ impl TestDatabase {
                 .fetch_one(&self.pool)
                 .await
                 .expect("history count should load")
+        })
+    }
+
+    pub fn runtime_progress(&self) -> Option<RuntimeProgressRow> {
+        self.runtime.block_on(async {
+            RuntimeProgressRepo
+                .current(&self.pool)
+                .await
+                .expect("runtime progress lookup should succeed")
         })
     }
 

@@ -18,6 +18,12 @@ pub enum InlineSmokeRolloutSelection {
     Decline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartBoundarySelection {
+    Confirm,
+    Decline,
+}
+
 pub struct ApplyPrompt;
 
 impl ApplyPrompt {
@@ -120,6 +126,33 @@ pub fn choose_smoke_rollout_confirmation<P: PromptIo>(
     }
 }
 
+pub fn choose_restart_boundary_confirmation<P: PromptIo>(
+    prompt: &mut P,
+    configured_target: &str,
+    active_target: Option<&str>,
+) -> Result<RestartBoundarySelection, InitError> {
+    let active_target = active_target.unwrap_or("not running");
+
+    loop {
+        prompt.println("Apply reached the manual restart boundary.")?;
+        prompt.println(&format!("Configured target: {configured_target}"))?;
+        prompt.println(&format!("Active target: {active_target}"))?;
+        prompt.println(
+            "apply --start only continues in the foreground after explicit confirmation.",
+        )?;
+        prompt.println("It will not stop or replace an existing daemon.")?;
+        prompt.println("Choose one:")?;
+        prompt.println("confirm")?;
+        prompt.println("decline")?;
+
+        match prompt.read_line()?.trim().to_lowercase().as_str() {
+            "confirm" => return Ok(RestartBoundarySelection::Confirm),
+            "decline" => return Ok(RestartBoundarySelection::Decline),
+            _ => prompt.println("Please choose confirm or decline.")?,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -127,8 +160,9 @@ mod tests {
     use crate::commands::init::{InitError, PromptIo};
 
     use super::{
-        choose_adoptable_revision, choose_smoke_rollout_confirmation, InlineSmokeRolloutSelection,
-        InlineTargetAdoptionSelection,
+        choose_adoptable_revision, choose_restart_boundary_confirmation,
+        choose_smoke_rollout_confirmation, InlineSmokeRolloutSelection,
+        InlineTargetAdoptionSelection, RestartBoundarySelection,
     };
 
     struct TestPrompt {
@@ -263,6 +297,69 @@ mod tests {
                 "Smoke rollout readiness is not enabled for the adopted family set.",
                 "Adopted families:",
                 "family-a",
+                "Choose one:",
+                "confirm",
+                "decline",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_restart_boundary_confirmation_accepts_confirm() {
+        let mut prompt = TestPrompt::new(&["confirm"]);
+
+        let selection = choose_restart_boundary_confirmation(
+            &mut prompt,
+            "targets-rev-9",
+            Some("targets-rev-10"),
+        )
+        .expect("confirm should be accepted");
+
+        assert_eq!(selection, RestartBoundarySelection::Confirm);
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Apply reached the manual restart boundary.",
+                "Configured target: targets-rev-9",
+                "Active target: targets-rev-10",
+                "apply --start only continues in the foreground after explicit confirmation.",
+                "It will not stop or replace an existing daemon.",
+                "Choose one:",
+                "confirm",
+                "decline",
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_restart_boundary_confirmation_reprompts_until_confirm_or_decline() {
+        let mut prompt = TestPrompt::new(&["later", "decline"]);
+
+        let selection = choose_restart_boundary_confirmation(
+            &mut prompt,
+            "targets-rev-9",
+            Some("targets-rev-10"),
+        )
+        .expect("decline should be accepted");
+
+        assert_eq!(selection, RestartBoundarySelection::Decline);
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Apply reached the manual restart boundary.",
+                "Configured target: targets-rev-9",
+                "Active target: targets-rev-10",
+                "apply --start only continues in the foreground after explicit confirmation.",
+                "It will not stop or replace an existing daemon.",
+                "Choose one:",
+                "confirm",
+                "decline",
+                "Please choose confirm or decline.",
+                "Apply reached the manual restart boundary.",
+                "Configured target: targets-rev-9",
+                "Active target: targets-rev-10",
+                "apply --start only continues in the foreground after explicit confirmation.",
+                "It will not stop or replace an existing daemon.",
                 "Choose one:",
                 "confirm",
                 "decline",
