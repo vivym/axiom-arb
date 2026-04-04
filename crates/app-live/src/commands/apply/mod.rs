@@ -85,6 +85,12 @@ fn execute_smoke_apply(config_path: &Path) -> Result<(), Box<dyn Error>> {
                 let failure = ApplyFailureKind::from_status_readiness(summary.readiness, reason);
 
                 if failure == ApplyFailureKind::Transition(model::ApplyStage::EnsureTargetAnchor) {
+                    if !prompt::stdin_is_interactive() {
+                        return Err(apply_failure(ApplyFailureKind::Transition(
+                            model::ApplyStage::EnsureTargetAnchor,
+                        )));
+                    }
+
                     match inline_target_adoption(config_path, &mut prompt) {
                         Ok(InlineTargetAdoptionOutcome::Adopted) => continue,
                         Ok(InlineTargetAdoptionOutcome::Cancelled) => {
@@ -145,12 +151,22 @@ fn inline_target_adoption(
         InlineTargetAdoptionSelection::Cancel => return Ok(InlineTargetAdoptionOutcome::Cancelled),
     };
 
-    runtime.block_on(adopt::adopt_selected_revision(
+    let summary = runtime.block_on(adopt::adopt_selected_revision(
         &pool,
         config_path,
         None,
         Some(adoptable_revision.as_str()),
     ))?;
+
+    println!(
+        "adopted adoptable revision {} as operator_target_revision {}",
+        summary
+            .selection
+            .adoptable_revision
+            .as_deref()
+            .unwrap_or(adoptable_revision.as_str()),
+        summary.selection.operator_target_revision
+    );
 
     Ok(InlineTargetAdoptionOutcome::Adopted)
 }

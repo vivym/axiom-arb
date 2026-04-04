@@ -1,4 +1,6 @@
-use std::io::{self, BufRead, Write};
+use std::{
+    io::{self, BufRead, IsTerminal, Write},
+};
 
 use crate::commands::init::{InitError, PromptIo};
 
@@ -14,6 +16,14 @@ impl ApplyPrompt {
     pub fn new() -> Self {
         Self
     }
+}
+
+pub fn stdin_is_interactive() -> bool {
+    io::stdin().is_terminal()
+        || matches!(
+            std::env::var("APP_LIVE_APPLY_FORCE_INTERACTIVE").as_deref(),
+            Ok("1")
+        )
 }
 
 impl PromptIo for ApplyPrompt {
@@ -133,5 +143,35 @@ mod tests {
             choose_adoptable_revision(&mut prompt, &["adoptable-1".into()]).expect("cancel");
 
         assert_eq!(selection, InlineTargetAdoptionSelection::Cancel);
+    }
+
+    #[test]
+    fn choose_adoptable_revision_reprompts_until_listed_revision_or_cancel() {
+        let mut prompt = TestPrompt::new(&["nope", "adoptable-2"]);
+
+        let selection = choose_adoptable_revision(
+            &mut prompt,
+            &["adoptable-1".into(), "adoptable-2".into()],
+        )
+        .expect("second answer should be accepted");
+
+        assert_eq!(
+            selection,
+            InlineTargetAdoptionSelection::AdoptableRevision("adoptable-2".to_owned())
+        );
+        assert_eq!(
+            prompt.output,
+            vec![
+                "Choose an adoptable revision to adopt for apply:",
+                "adoptable-1",
+                "adoptable-2",
+                "cancel",
+                "Please choose one of the listed adoptable revisions or cancel.",
+                "Choose an adoptable revision to adopt for apply:",
+                "adoptable-1",
+                "adoptable-2",
+                "cancel",
+            ]
+        );
     }
 }
