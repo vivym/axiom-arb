@@ -669,6 +669,30 @@ async fn execution_attempt_round_trips_durable_audit_anchor_fields() {
 }
 
 #[tokio::test]
+async fn execution_attempt_rows_allow_optional_run_session_links() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_attempt("attempt-live-run-session-link-1", ExecutionMode::Live);
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let run_session_id: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT run_session_id
+        FROM execution_attempts
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-run-session-link-1")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn execution_attempt_anchor_migration_backfills_existing_rows_safely() {
     let db = TestDatabase::new().await;
 
