@@ -138,7 +138,6 @@ async fn create_legacy_live_schema(pool: &PgPool) {
             ),
             attempt_no INTEGER NOT NULL,
             idempotency_key TEXT NOT NULL,
-            run_session_id TEXT,
             outcome TEXT,
             payload JSONB NOT NULL DEFAULT '{}'::JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

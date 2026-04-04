@@ -228,26 +228,14 @@ async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
     run_migrations(&db.pool).await.unwrap();
     seed_run_session(&db.pool, "run-session-1").await;
 
-    sqlx::query(
-        r#"
-        INSERT INTO runtime_apply_progress (
-            progress_key,
-            last_journal_seq,
-            last_state_version,
-            last_snapshot_id,
-            active_run_session_id
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-    )
-    .bind("default")
-    .bind(41_i64)
-    .bind(7_i64)
-    .bind(Some("snapshot-7"))
-    .bind(Some("run-session-1"))
-    .execute(&db.pool)
-    .await
-    .unwrap();
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap();
 
     let progress = RuntimeProgressRepo
         .current(&db.pool)
@@ -387,6 +375,35 @@ async fn runtime_progress_preserves_operator_target_revision_when_update_omits_i
         progress.operator_target_revision.as_deref(),
         Some("targets-rev-3")
     );
+    assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_can_clear_active_run_session_id_explicitly() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    RuntimeProgressRepo
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .clear_active_run_session_id(&db.pool)
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(progress.active_run_session_id, None);
 
     db.cleanup().await;

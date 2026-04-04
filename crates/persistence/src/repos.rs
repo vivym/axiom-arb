@@ -1600,6 +1600,43 @@ impl RuntimeProgressRepo {
         Ok(())
     }
 
+    pub async fn set_active_run_session_id(
+        &self,
+        pool: &PgPool,
+        active_run_session_id: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE runtime_apply_progress
+            SET active_run_session_id = $2,
+                updated_at = NOW()
+            WHERE progress_key = $1
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .bind(active_run_session_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn clear_active_run_session_id(&self, pool: &PgPool) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE runtime_apply_progress
+            SET active_run_session_id = NULL,
+                updated_at = NOW()
+            WHERE progress_key = $1
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn current(&self, pool: &PgPool) -> Result<Option<RuntimeProgressRow>> {
         let row = sqlx::query(
             r#"
@@ -2345,29 +2382,59 @@ impl ExecutionAttemptRepo {
         pool: &PgPool,
         mode: domain::ExecutionMode,
     ) -> Result<Vec<ExecutionAttemptRow>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                attempt_id,
-                plan_id,
-                snapshot_id,
-                route,
-                scope,
-                matched_rule_id,
-                execution_mode,
-                attempt_no,
-                idempotency_key,
-                run_session_id
-            FROM execution_attempts
-            WHERE execution_mode = $1
-            ORDER BY created_at, attempt_id
-            "#,
-        )
-        .bind(execution_mode_to_str(mode))
-        .fetch_all(pool)
-        .await?;
+        let has_run_session_id = execution_attempts_has_run_session_id(pool).await?;
+        let rows = if has_run_session_id {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key,
+                    run_session_id
+                FROM execution_attempts
+                WHERE execution_mode = $1
+                ORDER BY created_at, attempt_id
+                "#,
+            )
+            .bind(execution_mode_to_str(mode))
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key
+                FROM execution_attempts
+                WHERE execution_mode = $1
+                ORDER BY created_at, attempt_id
+                "#,
+            )
+            .bind(execution_mode_to_str(mode))
+            .fetch_all(pool)
+            .await?
+        };
 
-        rows.into_iter().map(map_execution_attempt_row).collect()
+        if has_run_session_id {
+            rows.into_iter().map(map_execution_attempt_row).collect()
+        } else {
+            rows.into_iter()
+                .map(map_legacy_execution_attempt_row)
+                .collect()
+        }
     }
 }
 
@@ -3282,6 +3349,39 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         idempotency_key: row.try_get("idempotency_key")?,
         run_session_id: row.try_get("run_session_id")?,
     })
+}
+
+fn map_legacy_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
+    Ok(ExecutionAttemptRow {
+        attempt_id: row.try_get("attempt_id")?,
+        plan_id: row.try_get("plan_id")?,
+        snapshot_id: row.try_get("snapshot_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        matched_rule_id: row.try_get("matched_rule_id")?,
+        execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
+        attempt_no: row.try_get("attempt_no")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        run_session_id: None,
+    })
+}
+
+async fn execution_attempts_has_run_session_id(pool: &PgPool) -> Result<bool> {
+    let has_column = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'execution_attempts'
+              AND column_name = 'run_session_id'
+        )
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(has_column)
 }
 
 fn map_execution_attempt_with_created_at_row(
