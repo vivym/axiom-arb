@@ -26,7 +26,7 @@ real_user_shadow_smoke = true
 
 Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the `neg-risk` shadow-ready rollout state.
 
-If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists and `bootstrap --start` may continue into `run`.
+If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
 
 Before running the smoke with the lower-level path, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
 
@@ -45,16 +45,20 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 - `smoke-config-ready`
 - `blocked`
 
-Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary.
+Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary. For the preferred high-level path, hand the smoke back to `apply`; it can inline the same adopt and rollout work without changing startup authority.
 
 ## Run
 
-With the preferred high-level flow, stop after `bootstrap` or continue straight into runtime:
+With the preferred high-level flow, use `bootstrap` for Day 0, then `apply` for Day 1+ smoke progression:
 
 ```bash
 cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml
-cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml --start
+cargo run -p app-live -- status --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 ```
+
+`apply` is smoke-only. It reuses `status`, can inline an explicit adopt when the target anchor is missing, can explicitly enable smoke-only rollout for the adopted families, runs `doctor`, and stops at ready unless you also pass `--start`. It does not chain `verify`; run that explicitly after the runtime work you want to inspect.
 
 If you are using the lower-level path, preflight the smoke config, then start `app-live` with the smoke config:
 
@@ -64,21 +68,24 @@ cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
 cargo run -p app-live -- run --config config/axiom-arb.local.toml
 ```
 
-Interpret `status` before `doctor` like this:
+Interpret `status` before `apply` like this:
 
+- `target-adoption-required`
+  - `apply` can inline the adoptable revision selection for smoke
+  - or drop to `targets candidates` / `targets adopt` if you want lower-level control
 - `smoke-rollout-required`
   - config and adopted target are present, but rollout is still intentionally empty
-  - you are still in preflight-only smoke; follow the printed next action before expecting shadow work
+  - `apply` can explicitly enable the smoke-only rollout posture for the adopted family set
 - `smoke-config-ready`
   - config, adopted target, and smoke rollout are aligned
-  - continue to `doctor`
+  - `apply` will run `doctor` and stop at ready, or continue into `run` if you pass `--start`
 - `restart-required`
   - the configured revision is not the active revision yet
-  - perform a controlled restart before expecting the daemon to use the configured smoke target
+  - `apply --start` will stop at a manual restart boundary and require explicit confirmation before it enters foreground `run`
 - `blocked`
-  - fix the reported blocker first, then rerun `status`
+  - fix the reported blocker first, then rerun `status` or `apply`
 
-`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `bootstrap --start` reuses that same `doctor -> run` sequence; it does not bypass preflight.
+`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `apply` reuses that same `doctor -> run` sequence; it does not bypass preflight, and it does not claim any process-management ability beyond the foreground `run` it starts itself.
 
 After `run`, use the high-level verifier as the default happy path:
 
@@ -111,7 +118,13 @@ Interpret the ending of the `doctor` report like this:
 - `Overall: FAIL`
   - follow the printed next action first, then rerun `doctor`
 
-When `doctor` prints next actions for target setup, the normal follow-up is:
+When `doctor` prints next actions for target setup and you stay on the high-level smoke path, the normal follow-up is:
+
+```bash
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml
+```
+
+If you need the lower-level target workflow instead, use:
 
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml

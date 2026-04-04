@@ -16,6 +16,7 @@ use sqlx::PgPool;
 use super::window::VerifyWindowSelection;
 
 const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
+const VERIFY_ROUTE: &str = "neg-risk";
 
 #[derive(Debug, Clone, Default)]
 pub struct VerifyEvidenceWindow {
@@ -118,7 +119,7 @@ async fn select_observed_live_attempts(
             super::model::VerifyScenario::RealUserShadowSmoke,
         ) => {
             ExecutionAttemptRepo
-                .list_by_mode_with_created_at(pool, ExecutionMode::Live)
+                .list_by_mode_with_created_at_and_route(pool, ExecutionMode::Live, VERIFY_ROUTE)
                 .await
         }
         _ => Ok(Vec::new()),
@@ -132,9 +133,10 @@ async fn select_observed_shadow_attempts(
     match selection {
         VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Live) => {
             ExecutionAttemptRepo
-                .list_recent_by_mode(
+                .list_recent_by_mode_and_route(
                     pool,
-                    Some(ExecutionMode::Shadow),
+                    ExecutionMode::Shadow,
+                    VERIFY_ROUTE,
                     DEFAULT_RECENT_ATTEMPTS_LIMIT,
                 )
                 .await
@@ -187,9 +189,10 @@ async fn select_latest_attempts_for_scenario(
         super::model::VerifyScenario::Paper => Ok(Vec::new()),
         super::model::VerifyScenario::Live => {
             ExecutionAttemptRepo
-                .list_recent_by_mode(
+                .list_recent_by_mode_and_route(
                     pool,
-                    Some(ExecutionMode::Live),
+                    ExecutionMode::Live,
+                    VERIFY_ROUTE,
                     DEFAULT_RECENT_ATTEMPTS_LIMIT,
                 )
                 .await
@@ -229,7 +232,7 @@ async fn select_latest_smoke_run_attempts(
     pool: &PgPool,
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     let latest_shadow_attempt = ExecutionAttemptRepo
-        .list_recent_by_mode(pool, Some(ExecutionMode::Shadow), 1)
+        .list_recent_by_mode_and_route(pool, ExecutionMode::Shadow, VERIFY_ROUTE, 1)
         .await?
         .into_iter()
         .next();
@@ -239,6 +242,10 @@ async fn select_latest_smoke_run_attempts(
     };
 
     ExecutionAttemptRepo
-        .list_by_snapshot_id(pool, &latest_shadow_attempt.attempt.snapshot_id)
+        .list_by_snapshot_id_and_route(
+            pool,
+            &latest_shadow_attempt.attempt.snapshot_id,
+            VERIFY_ROUTE,
+        )
         .await
 }

@@ -1,0 +1,995 @@
+mod support;
+
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener as StdTcpListener,
+    path::PathBuf,
+    process::{Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+
+use support::cli;
+use support::{apply_db, status_db::TestDatabase};
+use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
+use toml_edit::{value, DocumentMut};
+
+#[test]
+fn apply_subcommand_is_exposed() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--help")
+        .output()
+        .expect("app-live apply --help should execute");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("--config"), "{text}");
+    assert!(text.contains("--start"), "{text}");
+}
+
+#[test]
+fn apply_rejects_non_smoke_config_with_specific_guidance() {
+    let paper_output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-paper.toml"))
+        .output()
+        .expect("app-live apply should execute for paper config");
+    let paper_text = cli::combined(&paper_output);
+    assert!(!paper_output.status.success(), "{paper_text}");
+    assert!(paper_text.contains("bootstrap"), "{paper_text}");
+    assert!(paper_text.contains("run"), "{paper_text}");
+
+    let live_output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-live.toml"))
+        .output()
+        .expect("app-live apply should execute for live config");
+    let live_text = cli::combined(&live_output);
+    assert!(!live_output.status.success(), "{live_text}");
+    assert!(live_text.contains("status -> doctor -> run"), "{live_text}");
+}
+
+#[test]
+fn apply_maps_invalid_config_to_parse_error() {
+    let config_path = temp_invalid_config_path();
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("app-live apply should execute for blocked config");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("toml parse error"), "{text}");
+
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_maps_smoke_blocked_readiness_to_concrete_reason() {
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env_remove("DATABASE_URL")
+        .output()
+        .expect("app-live apply should execute for smoke blocked readiness");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DATABASE_URL is not set"), "{text}");
+    assert!(!text.contains("readiness error"), "{text}");
+}
+
+#[test]
+fn apply_maps_target_adoption_required_to_ensure_target_anchor() {
+    let database = TestDatabase::new();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for target adoption required");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("ensure-target-anchor"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_enters_inline_target_adoption_when_target_anchor_missing() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Choose an adoptable revision"), "{text}");
+    assert!(text.contains("adoptable-9"), "{text}");
+    assert!(text.contains("cancel"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_cancelled_inline_target_adoption_stops_without_writes() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("cancelled"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("config should still load");
+    assert!(
+        !rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert_eq!(database.history_count(), 0);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_can_inline_smoke_target_adoption() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(
+        &config_path,
+        database.database_url(),
+        "adoptable-9\ndecline\n",
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("adopted adoptable revision adoptable-9"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(
+        rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+
+    let latest = database.latest_history().expect("history row should exist");
+    assert_eq!(latest.action_kind, "adopt");
+    assert_eq!(latest.operator_target_revision, "targets-rev-9");
+    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
+    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_non_interactive_target_adoption_required_stays_fail_closed_at_stage() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::null())
+        .output()
+        .expect("app-live apply should execute for non-interactive target adoption required");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("ensure-target-anchor"), "{text}");
+    assert!(!text.contains("Choose an adoptable revision"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("config should still load");
+    assert!(
+        !rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert_eq!(database.history_count(), 0);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_maps_smoke_rollout_required_to_ensure_smoke_rollout() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for smoke rollout required");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("ensure-smoke-rollout"), "{text}");
+
+    database.cleanup();
+}
+
+#[test]
+fn apply_rollout_missing_smoke_config_enters_explicit_confirmation() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(text.contains("Adopted families:"), "{text}");
+    assert!(text.contains("family-a"), "{text}");
+    assert!(text.contains("confirm"), "{text}");
+    assert!(text.contains("decline"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_can_inline_smoke_rollout_enablement() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        with_mock_doctor_venue(config, &venue)
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "confirm\n", true);
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("Runtime not started"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(
+        rewritten.contains("approved_families = [\"family-a\"]"),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("ready_families = [\"family-a\"]"),
+        "{rewritten}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_declining_inline_smoke_rollout_keeps_rollout_unchanged_and_stops_cleanly() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+
+    let rewritten = fs::read_to_string(&config_path).expect("config should still load");
+    assert!(!rewritten.contains("approved_families"), "{rewritten}");
+    assert!(!rewritten.contains("ready_families"), "{rewritten}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for smoke config ready without start");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Outcome"), "{text}");
+    assert!(text.contains("Next Actions"), "{text}");
+    assert!(text.contains("Readiness: smoke-config-ready"), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("Runtime not started"), "{text}");
+    assert!(text.contains("app-live apply --config"), "{text}");
+    assert!(!text.contains("run-preflight"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for restart required without start");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    assert!(text.contains("Outcome"), "{text}");
+    assert!(text.contains("Next Actions"), "{text}");
+    assert!(text.contains("Readiness: restart-required"), "{text}");
+    assert!(text.contains("manual restart boundary"), "{text}");
+    assert!(text.contains("Runtime not started"), "{text}");
+    assert!(text.contains("app-live apply --config"), "{text}");
+    assert!(!text.contains("Choose one:"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_restart_required_with_start_requires_explicit_confirmation() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "decline\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Choose one:"), "{text}");
+    assert!(text.contains("confirm"), "{text}");
+    assert!(text.contains("decline"), "{text}");
+    assert!(text.contains("manual restart boundary"), "{text}");
+    assert!(text.contains("foreground"), "{text}");
+    assert!(
+        text.contains("will not stop or replace an existing daemon"),
+        "{text}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_restart_required_with_start_fails_closed_when_not_interactive() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--start")
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::null())
+        .output()
+        .expect("app-live apply should execute for non-interactive restart boundary");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("confirm-manual-restart-boundary"), "{text}");
+    assert!(!text.contains("Choose one:"), "{text}");
+    assert!(
+        text.contains("manual restart boundary requires interactive confirmation"),
+        "{text}"
+    );
+
+    let progress = database
+        .runtime_progress()
+        .expect("runtime progress should remain seeded");
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-10")
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_declining_restart_confirmation_stops_without_invoking_run() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "decline\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Runtime not started"), "{text}");
+    assert!(text.contains("restart confirmation declined"), "{text}");
+
+    let progress = database
+        .runtime_progress()
+        .expect("runtime progress should remain seeded");
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-10")
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_accepting_restart_confirmation_enters_run() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(
+        text.contains("Starting runtime in the foreground"),
+        "{text}"
+    );
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
+
+    let progress = database
+        .runtime_progress()
+        .expect("run should persist updated runtime progress");
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-9")
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_restart_required_with_rollout_missing_enters_inline_smoke_rollout_enablement_first() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| config);
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("Smoke rollout readiness is not enabled"),
+        "{text}"
+    );
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+    assert!(!text.contains("confirm-manual-restart-boundary"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
+    let source = cli::config_fixture(relative);
+    let text = fs::read_to_string(&source).expect("fixture should be readable");
+    let edited = edit(text);
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "app-live-apply-{}-{}.toml",
+        std::process::id(),
+        NEXT_TEMP_CONFIG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    fs::write(&path, edited).expect("temp fixture should be writable");
+    path
+}
+
+fn temp_invalid_config_path() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "app-live-apply-{}-{}.toml",
+        std::process::id(),
+        NEXT_TEMP_CONFIG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    fs::write(&path, "runtime = [").expect("temp fixture should be writable");
+    path
+}
+
+static NEXT_TEMP_CONFIG_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn run_apply_with_stdin(
+    config_path: &std::path::Path,
+    database_url: &str,
+    stdin_input: &str,
+    force_interactive: bool,
+) -> std::process::Output {
+    run_apply_with_options(
+        config_path,
+        database_url,
+        stdin_input,
+        force_interactive,
+        false,
+    )
+}
+
+fn run_apply_with_options(
+    config_path: &std::path::Path,
+    database_url: &str,
+    stdin_input: &str,
+    force_interactive: bool,
+    start: bool,
+) -> std::process::Output {
+    let mut command = app_live_command();
+    command
+        .arg("apply")
+        .arg("--config")
+        .arg(config_path)
+        .env("DATABASE_URL", database_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if start {
+        command.arg("--start");
+    }
+    if force_interactive {
+        command.env("APP_LIVE_APPLY_FORCE_INTERACTIVE", "1");
+    }
+
+    let mut child = command.spawn().expect("app-live apply should spawn");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(stdin_input.as_bytes())
+        .expect("stdin should write");
+
+    child
+        .wait_with_output()
+        .expect("app-live apply should finish")
+}
+
+fn app_live_command() -> Command {
+    let mut command = Command::new(cli::app_live_binary());
+    for key in [
+        "all_proxy",
+        "ALL_PROXY",
+        "http_proxy",
+        "HTTP_PROXY",
+        "https_proxy",
+        "HTTPS_PROXY",
+    ] {
+        command.env_remove(key);
+    }
+    command
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env("NO_PROXY", "127.0.0.1,localhost");
+    command
+}
+
+fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("smoke config fixture should parse as TOML");
+
+    let polymarket = document
+        .get_mut("polymarket")
+        .and_then(|item| item.as_table_like_mut())
+        .expect("smoke config fixture should contain [polymarket]");
+    let source = polymarket
+        .get_mut("source_overrides")
+        .and_then(|item| item.as_table_like_mut())
+        .expect("smoke config fixture should contain [polymarket.source_overrides]");
+
+    for (key, rewritten) in [
+        ("clob_host", venue.http_base_url()),
+        ("data_api_host", venue.http_base_url()),
+        ("relayer_host", venue.http_base_url()),
+        ("market_ws_url", venue.market_ws_url()),
+        ("user_ws_url", venue.user_ws_url()),
+    ] {
+        assert!(
+            source.get(key).is_some(),
+            "smoke config fixture should contain [polymarket.source_overrides].{key}"
+        );
+        source.insert(key, value(rewritten));
+    }
+
+    document.to_string()
+}
+
+struct MockDoctorVenue {
+    http: ProbeHttpServer,
+    market_ws: ProbeWsServer,
+    user_ws: ProbeWsServer,
+}
+
+impl MockDoctorVenue {
+    fn success() -> Self {
+        Self {
+            http: ProbeHttpServer::spawn(ProbeHttpBehavior::success()),
+            market_ws: ProbeWsServer::spawn(WsProbeKind::Market),
+            user_ws: ProbeWsServer::spawn(WsProbeKind::User),
+        }
+    }
+
+    fn http_base_url(&self) -> &str {
+        self.http.base_url()
+    }
+
+    fn market_ws_url(&self) -> &str {
+        self.market_ws.url()
+    }
+
+    fn user_ws_url(&self) -> &str {
+        self.user_ws.url()
+    }
+}
+
+struct ProbeHttpServer {
+    base_url: String,
+    shutdown_tx: Option<mpsc::Sender<()>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl ProbeHttpServer {
+    fn spawn(behavior: ProbeHttpBehavior) -> Self {
+        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind http probe server");
+        let address = listener.local_addr().expect("http probe server address");
+        listener
+            .set_nonblocking(true)
+            .expect("http probe server should be nonblocking");
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let handle = thread::spawn(move || loop {
+            if shutdown_rx.try_recv().is_ok() {
+                break;
+            }
+
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("accepted http stream should be blocking");
+                    handle_http_probe_connection(stream, &behavior)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("http probe server accept failed: {error}"),
+            }
+        });
+
+        Self {
+            base_url: format!("http://{address}"),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for ProbeHttpServer {
+    fn drop(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("http probe server should join");
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ProbeHttpBehavior {
+    orders_status_line: String,
+    orders_body: String,
+    heartbeat_status_line: String,
+    heartbeat_body: String,
+    transactions_status_line: String,
+    transactions_body: String,
+}
+
+impl ProbeHttpBehavior {
+    fn success() -> Self {
+        Self {
+            orders_status_line: "200 OK".to_owned(),
+            orders_body: "[]".to_owned(),
+            heartbeat_status_line: "200 OK".to_owned(),
+            heartbeat_body: r#"{"success":true,"heartbeat_id":"hb-1"}"#.to_owned(),
+            transactions_status_line: "200 OK".to_owned(),
+            transactions_body: "[]".to_owned(),
+        }
+    }
+}
+
+fn handle_http_probe_connection(mut stream: std::net::TcpStream, behavior: &ProbeHttpBehavior) {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let mut header_end = None;
+    let mut content_length = 0_usize;
+
+    loop {
+        let read = stream.read(&mut chunk).expect("read probe request");
+        if read == 0 {
+            break;
+        }
+
+        buffer.extend_from_slice(&chunk[..read]);
+        if header_end.is_none() {
+            header_end = find_header_end(&buffer);
+            if let Some(index) = header_end {
+                let headers = String::from_utf8_lossy(&buffer[..index]);
+                content_length = content_length_from_headers(&headers);
+            }
+        }
+
+        if let Some(index) = header_end {
+            let body_bytes = buffer.len().saturating_sub(index + 4);
+            if body_bytes >= content_length {
+                break;
+            }
+        }
+    }
+
+    let request = String::from_utf8_lossy(&buffer);
+    let request_line = request.lines().next().unwrap_or_default();
+    let (status_line, body) = http_probe_response(request_line, behavior);
+    let response = format!(
+        "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(response.as_bytes())
+        .expect("write probe response");
+    stream.flush().expect("flush probe response");
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn content_length_from_headers(headers: &str) -> usize {
+    headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
+fn http_probe_response<'a>(
+    request_line: &str,
+    behavior: &'a ProbeHttpBehavior,
+) -> (&'a str, &'a str) {
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    let path = target.split('?').next().unwrap_or_default();
+
+    match (method, path) {
+        ("GET", "/orders") => (&behavior.orders_status_line, &behavior.orders_body),
+        ("POST", "/heartbeat") => (&behavior.heartbeat_status_line, &behavior.heartbeat_body),
+        ("GET", "/transactions") => (
+            &behavior.transactions_status_line,
+            &behavior.transactions_body,
+        ),
+        _ => ("404 Not Found", r#"{"error":"not found"}"#),
+    }
+}
+
+struct ProbeWsServer {
+    url: String,
+    shutdown_tx: Option<mpsc::Sender<()>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl ProbeWsServer {
+    fn spawn(kind: WsProbeKind) -> Self {
+        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind ws probe server");
+        let address = listener.local_addr().expect("ws probe server address");
+        listener
+            .set_nonblocking(true)
+            .expect("ws probe server should be nonblocking");
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let handle = thread::spawn(move || loop {
+            if shutdown_rx.try_recv().is_ok() {
+                break;
+            }
+
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("accepted ws stream should be blocking");
+                    let mut websocket =
+                        accept_websocket(stream).expect("accept ws probe websocket");
+                    let mut responded = false;
+                    loop {
+                        match websocket.read() {
+                            Ok(WsMessage::Text(_)) if !responded => {
+                                websocket
+                                    .send(WsMessage::Text(kind.response_payload().into()))
+                                    .expect("send ws probe response");
+                                responded = true;
+                            }
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("ws probe server accept failed: {error}"),
+            }
+        });
+
+        Self {
+            url: format!("ws://{address}"),
+            shutdown_tx: Some(shutdown_tx),
+            handle: Some(handle),
+        }
+    }
+
+    fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl Drop for ProbeWsServer {
+    fn drop(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("ws probe server should join");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WsProbeKind {
+    Market,
+    User,
+}
+
+impl WsProbeKind {
+    fn response_payload(self) -> &'static str {
+        match self {
+            Self::Market => {
+                r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
+            }
+            Self::User => {
+                r#"{"event":"trade","trade_id":"trade-1","order_id":"order-1","status":"MATCHED","condition_id":"condition-1","price":"0.41","size":"100","fee_rate_bps":"15","transaction_hash":"0xtrade"}"#
+            }
+        }
+    }
+}

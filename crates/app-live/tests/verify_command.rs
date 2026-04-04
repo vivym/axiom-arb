@@ -170,6 +170,37 @@ fn verify_live_passes_when_local_results_match_current_config_and_control_plane(
 }
 
 #[test]
+fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_attempt(verify_db::sample_attempt_for_route(
+        "attempt-live-other-route",
+        ExecutionMode::Live,
+        "other-route",
+    ));
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-neg-risk-only",
+        &verify_db::live_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: live"), "{text}");
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("no live results were observed"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_live_fails_when_results_conflict_with_current_mode_and_readiness() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
@@ -473,6 +504,42 @@ fn verify_smoke_default_window_reflects_the_latest_smoke_rerun_only() {
 }
 
 #[test]
+fn verify_smoke_latest_window_ignores_newer_non_neg_risk_shadow_snapshots() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_shadow_attempt_with_artifacts_in_snapshot(
+        "attempt-shadow-neg-risk",
+        "snapshot-smoke-neg-risk",
+    );
+    verify_db.seed_attempt(verify_db::sample_attempt_in_snapshot_for_route(
+        "attempt-shadow-other-route",
+        ExecutionMode::Shadow,
+        "snapshot-smoke-other-route",
+        "other-route",
+    ));
+    verify_db.seed_smoke_runtime_progress("targets-rev-9");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-smoke-neg-risk-anchor",
+        &verify_db::config_shapes::smoke_ready_config(),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: real-user shadow smoke"), "{text}");
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("shadow attempts: 1"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_smoke_latest_window_prefers_latest_shadow_attempt_per_scope_within_snapshot() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_non_working_smoke_run_window_in_snapshot("snapshot-smoke-shared");
@@ -550,7 +617,7 @@ fn verify_smoke_preflight_only_run_can_warn_without_failing() {
     assert!(text.contains("rollout not ready"), "{text}");
     assert!(
         text.contains(&format!(
-            "Next: app-live bootstrap --config {}",
+            "Next: app-live apply --config {}",
             cli::shell_quote_path(&config_path)
         )),
         "{text}"
