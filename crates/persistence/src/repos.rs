@@ -1578,6 +1578,21 @@ impl RunSessionRepo {
                 "terminal fields must be empty for starting sessions",
             ));
         }
+        match row.target_source_kind.as_str() {
+            "adopted" if row.configured_operator_target_revision.is_none() => {
+                return Err(PersistenceError::invalid_value(
+                    "run_session.configured_operator_target_revision",
+                    "adopted sessions require configured operator target revision",
+                ));
+            }
+            "explicit" | "adopted" => {}
+            other => {
+                return Err(PersistenceError::invalid_value(
+                    "run_session.target_source_kind",
+                    other,
+                ));
+            }
+        }
 
         sqlx::query(
             r#"
@@ -1691,8 +1706,9 @@ impl RunSessionRepo {
         let result = sqlx::query(
             r#"
             UPDATE run_sessions
-            SET last_seen_at = $2
+            SET last_seen_at = GREATEST(last_seen_at, $2)
             WHERE run_session_id = $1
+              AND state IN ('starting', 'running')
             "#,
         )
         .bind(run_session_id)
@@ -1701,9 +1717,9 @@ impl RunSessionRepo {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(PersistenceError::MissingRunSessionRow {
-                run_session_id: run_session_id.to_owned(),
-            });
+            return self
+                .classify_run_session_update_failure(pool, run_session_id, "refresh_last_seen")
+                .await;
         }
 
         Ok(())
@@ -1912,30 +1928,19 @@ impl RunSessionRepo {
         exit_status: Option<&str>,
         exit_reason: Option<&str>,
     ) -> Result<()> {
-        let Some(current_state) = self.current_state(pool, run_session_id).await? else {
-            return Err(PersistenceError::MissingRunSessionRow {
-                run_session_id: run_session_id.to_owned(),
-            });
-        };
-
-        if !allowed_from.contains(&current_state) {
-            return Err(PersistenceError::InvalidRunSessionTransition {
-                run_session_id: run_session_id.to_owned(),
-                from_state: current_state.as_str().to_owned(),
-                to_state: to_state.as_str().to_owned(),
-            });
-        }
-
         let is_terminal = matches!(to_state, RunSessionState::Exited | RunSessionState::Failed);
-        sqlx::query(
+        let allowed_from_labels: Vec<&str> =
+            allowed_from.iter().map(RunSessionState::as_str).collect();
+        let result = sqlx::query(
             r#"
             UPDATE run_sessions
             SET state = $2,
-                last_seen_at = $3,
+                last_seen_at = GREATEST(last_seen_at, $3),
                 ended_at = CASE WHEN $4 THEN $3 ELSE NULL END,
                 exit_status = $5,
                 exit_reason = $6
             WHERE run_session_id = $1
+              AND state = ANY($7)
             "#,
         )
         .bind(run_session_id)
@@ -1944,8 +1949,15 @@ impl RunSessionRepo {
         .bind(is_terminal)
         .bind(exit_status)
         .bind(exit_reason)
+        .bind(&allowed_from_labels)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return self
+                .classify_run_session_update_failure(pool, run_session_id, to_state.as_str())
+                .await;
+        }
 
         Ok(())
     }
@@ -1965,6 +1977,24 @@ impl RunSessionRepo {
         state
             .map(|value| run_session_state_from_str(&value))
             .transpose()
+    }
+
+    async fn classify_run_session_update_failure(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        to_state: &str,
+    ) -> Result<()> {
+        match self.current_state(pool, run_session_id).await? {
+            Some(current_state) => Err(PersistenceError::InvalidRunSessionTransition {
+                run_session_id: run_session_id.to_owned(),
+                from_state: current_state.as_str().to_owned(),
+                to_state: to_state.to_owned(),
+            }),
+            None => Err(PersistenceError::MissingRunSessionRow {
+                run_session_id: run_session_id.to_owned(),
+            }),
+        }
     }
 }
 

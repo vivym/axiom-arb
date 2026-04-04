@@ -565,3 +565,179 @@ async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_with
 
     db.cleanup().await;
 }
+
+#[tokio::test]
+async fn run_session_repo_refresh_last_seen_rejects_terminal_sessions() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let started_at = Utc::now() - Duration::minutes(2);
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-terminal",
+                "config/axiom-arb.local.toml",
+                "fp-terminal",
+                "startup-target-terminal",
+                Some("targets-rev-terminal"),
+                started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-terminal", started_at)
+        .await
+        .unwrap();
+    let ended_at = started_at + Duration::seconds(30);
+    RunSessionRepo
+        .mark_exited(&db.pool, "rs-terminal", ended_at, "success", None)
+        .await
+        .unwrap();
+
+    let err = RunSessionRepo
+        .refresh_last_seen(&db.pool, "rs-terminal", ended_at + Duration::seconds(5))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidRunSessionTransition { .. }
+    ));
+
+    let row = RunSessionRepo
+        .get(&db.pool, "rs-terminal")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.last_seen_at, ended_at);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_refresh_last_seen_is_monotonic_for_active_sessions() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let started_at = Utc::now() - Duration::minutes(1);
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-monotonic",
+                "config/axiom-arb.local.toml",
+                "fp-monotonic",
+                "startup-target-monotonic",
+                Some("targets-rev-monotonic"),
+                started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-monotonic", started_at)
+        .await
+        .unwrap();
+
+    let forward_seen_at = started_at + Duration::seconds(20);
+    RunSessionRepo
+        .refresh_last_seen(&db.pool, "rs-monotonic", forward_seen_at)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .refresh_last_seen(&db.pool, "rs-monotonic", started_at + Duration::seconds(5))
+        .await
+        .unwrap();
+
+    let row = RunSessionRepo
+        .get(&db.pool, "rs-monotonic")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.last_seen_at, forward_seen_at);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_terminal_state_cannot_be_overwritten_by_later_active_transition() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let started_at = Utc::now() - Duration::minutes(1);
+    RunSessionRepo
+        .create_starting(
+            &db.pool,
+            &sample_starting_session_for_target(
+                "rs-no-overwrite",
+                "config/axiom-arb.local.toml",
+                "fp-no-overwrite",
+                "startup-target-no-overwrite",
+                Some("targets-rev-no-overwrite"),
+                started_at,
+            ),
+        )
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-no-overwrite", started_at)
+        .await
+        .unwrap();
+
+    let ended_at = started_at + Duration::seconds(15);
+    RunSessionRepo
+        .mark_failed(&db.pool, "rs-no-overwrite", ended_at, "boom")
+        .await
+        .unwrap();
+
+    let err = RunSessionRepo
+        .mark_exited(
+            &db.pool,
+            "rs-no-overwrite",
+            ended_at + Duration::seconds(10),
+            "success",
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        PersistenceError::InvalidRunSessionTransition { .. }
+    ));
+
+    let row = RunSessionRepo
+        .get(&db.pool, "rs-no-overwrite")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RunSessionState::Failed);
+    assert_eq!(row.exit_reason.as_deref(), Some("boom"));
+    assert_eq!(row.last_seen_at, ended_at);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_rejects_malformed_adopted_target_snapshot() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let mut row = sample_starting_session_for_target(
+        "rs-bad-adopted",
+        "config/axiom-arb.local.toml",
+        "fp-bad-adopted",
+        "startup-target-bad-adopted",
+        None,
+        Utc::now(),
+    );
+    row.target_source_kind = "adopted".to_owned();
+
+    let err = RunSessionRepo
+        .create_starting(&db.pool, &row)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, PersistenceError::InvalidValue { .. }));
+
+    db.cleanup().await;
+}
