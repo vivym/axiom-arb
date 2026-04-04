@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use domain::{
@@ -1939,6 +1939,75 @@ impl RunSessionRepo {
         row.map(map_run_session_row).transpose()
     }
 
+    pub async fn resolve_unique_for_since(
+        &self,
+        pool: &PgPool,
+        since: DateTime<Utc>,
+    ) -> Result<Option<RunSessionRow>> {
+        let attempts = ExecutionAttemptRepo.list_created_since(pool, since).await?;
+        let run_session_ids = attempts
+            .iter()
+            .filter_map(|row| row.attempt.run_session_id.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        if run_session_ids.len() == 1 {
+            return self.get(pool, run_session_ids.iter().next().unwrap()).await;
+        }
+
+        if !run_session_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let journal_session_ids = JournalRepo
+            .list_since(pool, since)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                if row.source_session_id.is_empty() {
+                    None
+                } else {
+                    Some(row.source_session_id)
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        if journal_session_ids.len() == 1 {
+            return self
+                .get(pool, journal_session_ids.iter().next().unwrap())
+                .await;
+        }
+
+        Ok(None)
+    }
+
+    pub async fn resolve_unique_for_seq_range(
+        &self,
+        pool: &PgPool,
+        from_seq: i64,
+        to_seq: Option<i64>,
+    ) -> Result<Option<RunSessionRow>> {
+        let journal_session_ids = JournalRepo
+            .list_range(pool, from_seq, to_seq)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                if row.source_session_id.is_empty() {
+                    None
+                } else {
+                    Some(row.source_session_id)
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        if journal_session_ids.len() == 1 {
+            return self
+                .get(pool, journal_session_ids.iter().next().unwrap())
+                .await;
+        }
+
+        Ok(None)
+    }
+
     async fn transition_active_state(
         &self,
         pool: &PgPool,
@@ -2849,6 +2918,39 @@ impl ExecutionAttemptRepo {
         .bind(execution_mode_to_str(mode))
         .bind(route)
         .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
+    }
+
+    pub async fn list_by_run_session_id(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                attempt_id,
+                plan_id,
+                snapshot_id,
+                route,
+                scope,
+                matched_rule_id,
+                execution_mode,
+                attempt_no,
+                idempotency_key,
+                run_session_id,
+                created_at
+            FROM execution_attempts
+            WHERE run_session_id = $1
+            ORDER BY created_at DESC, attempt_id DESC
+            "#,
+        )
+        .bind(run_session_id)
         .fetch_all(pool)
         .await?;
 

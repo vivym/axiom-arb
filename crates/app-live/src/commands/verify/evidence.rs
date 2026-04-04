@@ -13,7 +13,7 @@ use persistence::{
 };
 use sqlx::PgPool;
 
-use super::window::VerifyWindowSelection;
+use super::{session::ResolvedVerifySession, window::VerifyWindowSelection};
 
 const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
 const VERIFY_ROUTE: &str = "neg-risk";
@@ -33,10 +33,14 @@ pub struct VerifyEvidenceWindow {
 pub async fn load(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
+    resolved_session: &ResolvedVerifySession,
 ) -> Result<VerifyEvidenceWindow> {
-    let attempts = select_attempts(pool, selection).await?;
-    let observed_live_attempts = select_observed_live_attempts(pool, selection).await?;
-    let observed_shadow_attempts = select_observed_shadow_attempts(pool, selection).await?;
+    let session_id = resolved_session.selected_session_id(selection);
+    let attempts = select_attempts(pool, selection, session_id).await?;
+    let observed_live_attempts =
+        select_observed_live_attempts(pool, selection, session_id, &attempts).await?;
+    let observed_shadow_attempts =
+        select_observed_shadow_attempts(pool, selection, session_id, &attempts).await?;
     let replay_shadow_attempt_artifacts =
         load_replay_shadow_attempt_artifacts(pool, selection, &attempts).await;
     let journal = select_journal(pool, selection).await?;
@@ -104,7 +108,17 @@ async fn load_replay_shadow_attempt_artifacts(
 async fn select_observed_live_attempts(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
+    session_id: Option<&str>,
+    attempts: &[ExecutionAttemptWithCreatedAtRow],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    if session_id.is_some() {
+        return Ok(attempts
+            .iter()
+            .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Live))
+            .cloned()
+            .collect());
+    }
+
     match selection {
         VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Paper) => {
             ExecutionAttemptRepo
@@ -129,7 +143,17 @@ async fn select_observed_live_attempts(
 async fn select_observed_shadow_attempts(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
+    session_id: Option<&str>,
+    attempts: &[ExecutionAttemptWithCreatedAtRow],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    if session_id.is_some() {
+        return Ok(attempts
+            .iter()
+            .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Shadow))
+            .cloned()
+            .collect());
+    }
+
     match selection {
         VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Live) => {
             ExecutionAttemptRepo
@@ -148,7 +172,14 @@ async fn select_observed_shadow_attempts(
 async fn select_attempts(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
+    session_id: Option<&str>,
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    if let Some(session_id) = session_id {
+        return ExecutionAttemptRepo
+            .list_by_run_session_id(pool, session_id)
+            .await;
+    }
+
     match selection {
         VerifyWindowSelection::LatestForScenario(scenario) => {
             select_latest_attempts_for_scenario(pool, *scenario).await

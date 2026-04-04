@@ -10,6 +10,7 @@ use crate::cli::VerifyArgs;
 pub mod context;
 pub mod evidence;
 pub mod model;
+pub mod session;
 pub mod window;
 
 pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
@@ -30,11 +31,49 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
         args.since,
         verify_context.scenario,
     )?;
-    let anchor_comparison =
-        context::compare_window_to_current_config_anchor(&verify_context, &selection);
 
-    let evidence = match load_evidence_window(&verify_context, &anchor_comparison, &selection) {
+    let runtime = Builder::new_current_thread().enable_all().build()?;
+    let (resolved_session, evidence_result) = match runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        let resolved_session =
+            session::resolve_session_window(&pool, &verify_context, &selection).await?;
+        let evidence = evidence::load(&pool, &selection, &resolved_session).await;
+        Ok::<_, Box<dyn Error>>((resolved_session, evidence))
+    }) {
+        Ok(value) => value,
+        Err(error) => {
+            let reason = format!("failed to connect to local verification database: {error}");
+            let next_actions = next_actions_from_context(
+                &verify_context,
+                &["run app-live doctor --config {config}"],
+            );
+            render_foundation_report(
+                &verify_context,
+                model::VerifyVerdict::Fail,
+                Some(&reason),
+                &next_actions,
+                &evidence::VerifyEvidenceWindow::default(),
+                &args.config,
+            );
+            return Err(io::Error::other(reason).into());
+        }
+    };
+
+    apply_session_resolution(&mut verify_context, &selection, &resolved_session);
+    let anchor_comparison = context::compare_window_to_current_config_anchor(
+        &verify_context,
+        &selection,
+        &resolved_session,
+    );
+
+    let evidence = match evidence_result {
         Ok(evidence) => evidence,
+        Err(error)
+            if verify_context.control_plane.target_source
+                == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets) =>
+        {
+            evidence::VerifyEvidenceWindow::default()
+        }
         Err(error) => {
             let reason = verify_context
                 .reason
@@ -76,27 +115,32 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn load_evidence_window(
-    verify_context: &context::VerifyContext,
-    _anchor_comparison: &context::ConfigAnchorComparison,
+fn apply_session_resolution(
+    verify_context: &mut context::VerifyContext,
     selection: &window::VerifyWindowSelection,
-) -> Result<evidence::VerifyEvidenceWindow, Box<dyn Error>> {
-    let runtime = Builder::new_current_thread().enable_all().build()?;
-    let result = runtime.block_on(async {
-        let pool = connect_pool_from_env().await?;
-        evidence::load(&pool, selection).await
-    });
+    resolved_session: &session::ResolvedVerifySession,
+) {
+    let selected_session = resolved_session.selected_session_id(selection);
+    verify_context.control_plane.run_session_id = selected_session.map(ToOwned::to_owned);
+    verify_context.control_plane.run_session_state = if selected_session.is_some() {
+        session_state_label(resolved_session, selection)
+    } else {
+        verify_context.control_plane.run_session_state.clone()
+    };
+}
 
-    match result {
-        Ok(evidence) => Ok(evidence),
-        Err(error)
-            if verify_context.control_plane.target_source
-                == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets) =>
-        {
-            Ok(evidence::VerifyEvidenceWindow::default())
-        }
-        Err(error) => Err(error.into()),
-    }
+fn session_state_label(
+    resolved_session: &session::ResolvedVerifySession,
+    selection: &window::VerifyWindowSelection,
+) -> Option<String> {
+    let session = if selection.is_historical_explicit() && resolved_session.historical_window_unique
+    {
+        resolved_session.historical_window_session.as_ref()
+    } else {
+        resolved_session.relevant_session.as_ref()
+    };
+
+    session.map(|row| row.state.as_str().to_owned())
 }
 
 fn evaluate_foundation_outcome(
@@ -495,6 +539,14 @@ fn render_foundation_report(
             .rollout_state
             .map(|value| value.label()),
     );
+    render_context_line(
+        "Run Session",
+        verify_context.control_plane.run_session_id.as_deref(),
+    );
+    render_context_line(
+        "Run Session State",
+        verify_context.control_plane.run_session_state.as_deref(),
+    );
     if let Some(reason) = reason {
         println!("Reason: {reason}");
     }
@@ -748,6 +800,12 @@ fn render_context(rendered: &mut String, context: &model::VerifyControlPlaneCont
         "Rollout State",
         context.rollout_state.map(|value| value.label()),
     );
+    render_optional(rendered, "Run Session", context.run_session_id.as_deref());
+    render_optional(
+        rendered,
+        "Run Session State",
+        context.run_session_state.as_deref(),
+    );
 }
 
 fn render_list(rendered: &mut String, label: &str, values: &[String]) {
@@ -843,6 +901,11 @@ mod tests {
         );
         assert!(rendered.contains("Restart Needed: false\n"), "{rendered}");
         assert!(rendered.contains("Rollout State: ready\n"), "{rendered}");
+        assert!(rendered.contains("Run Session: rs-live-1\n"), "{rendered}");
+        assert!(
+            rendered.contains("Run Session State: running\n"),
+            "{rendered}"
+        );
         assert!(
             rendered
                 .contains("Next: app-live status --config 'config/axiom arb'\\''s local.toml'\n"),
@@ -1087,6 +1150,8 @@ mod tests {
                 active_target: Some("targets-rev-9".to_owned()),
                 restart_needed: Some(false),
                 rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
+                run_session_id: Some("rs-live-1".to_owned()),
+                run_session_state: Some("running".to_owned()),
             },
             next_actions: vec![
                 "app-live status --config {config}".to_owned(),
@@ -1115,6 +1180,7 @@ mod tests {
         VerifyContext {
             scenario,
             expectation,
+            config_path: "config/live.toml".to_owned(),
             control_plane: VerifyControlPlaneContext {
                 mode: Some(mode),
                 target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),
@@ -1122,6 +1188,8 @@ mod tests {
                 active_target: Some("targets-rev-9".to_owned()),
                 restart_needed: Some(false),
                 rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
+                run_session_id: Some("rs-live-1".to_owned()),
+                run_session_state: Some("running".to_owned()),
             },
             readiness,
             actions,

@@ -114,6 +114,8 @@ pub struct VerifyControlPlaneContext {
     pub active_target: Option<String>,
     pub restart_needed: Option<bool>,
     pub rollout_state: Option<VerifyControlPlaneRolloutState>,
+    pub run_session_id: Option<String>,
+    pub run_session_state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
