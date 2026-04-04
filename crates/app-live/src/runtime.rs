@@ -850,6 +850,7 @@ fn durable_shadow_execution_state(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_shadow_execution_records(
     attempts: &[ExecutionAttemptRow],
     artifacts: &[ShadowExecutionArtifactRow],
@@ -876,6 +877,7 @@ pub(crate) fn persist_shadow_execution_records_with_run_session_id(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_live_execution_records(
     records: &[NegRiskLiveExecutionRecord],
 ) -> Result<(), Box<dyn std::error::Error>> {

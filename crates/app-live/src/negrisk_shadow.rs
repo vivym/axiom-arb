@@ -37,6 +37,7 @@ impl std::fmt::Display for NegRiskShadowError {
 
 impl std::error::Error for NegRiskShadowError {}
 
+#[allow(dead_code)]
 pub fn eligible_shadow_records(
     snapshot_id: &str,
     targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,

@@ -15,11 +15,12 @@ use crate::{
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
-    negrisk_shadow::eligible_shadow_records,
+    negrisk_shadow::eligible_shadow_records_with_run_session_id,
     posture::SupervisorPosture,
     queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
     runtime::{
-        persist_live_execution_records, persist_shadow_execution_records, AppRunResult, AppRuntime,
+        persist_live_execution_records_with_run_session_id,
+        persist_shadow_execution_records_with_run_session_id, AppRunResult, AppRuntime,
         AppRuntimeMode,
     },
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
@@ -169,6 +170,7 @@ pub struct AppSupervisor {
     real_user_shadow_smoke_enabled: bool,
     durable_live_persistence_enabled: bool,
     durable_shadow_persistence_enabled: bool,
+    run_session_id: Option<String>,
     neg_risk_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
@@ -216,6 +218,7 @@ impl AppSupervisor {
             real_user_shadow_smoke_enabled: false,
             durable_live_persistence_enabled: false,
             durable_shadow_persistence_enabled: false,
+            run_session_id: None,
             neg_risk_live_targets: BTreeMap::new(),
             neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
@@ -398,6 +401,10 @@ impl AppSupervisor {
 
     pub fn enable_durable_live_persistence(&mut self) {
         self.durable_live_persistence_enabled = true;
+    }
+
+    pub fn set_run_session_id(&mut self, run_session_id: &str) {
+        self.run_session_id = Some(run_session_id.to_owned());
     }
 
     pub fn seed_neg_risk_live_approval(&mut self, family_id: &str) {
@@ -810,12 +817,13 @@ impl AppSupervisor {
         }
 
         if self.real_user_shadow_smoke_enabled {
-            let records = eligible_shadow_records(
+            let records = eligible_shadow_records_with_run_session_id(
                 snapshot_id,
                 &self.neg_risk_live_targets,
                 &self.neg_risk_live_approved_families,
                 &self.neg_risk_live_ready_families,
                 self.metrics_recorder.clone(),
+                self.run_session_id.as_deref(),
             )
             .map_err(|err| SupervisorError::new(err.to_string()))?;
             let attempts = records
@@ -827,8 +835,12 @@ impl AppSupervisor {
                 .flat_map(|record| record.artifacts)
                 .collect::<Vec<_>>();
             if self.durable_shadow_persistence_enabled {
-                persist_shadow_execution_records(&attempts, &artifacts)
-                    .map_err(|err| SupervisorError::new(err.to_string()))?;
+                persist_shadow_execution_records_with_run_session_id(
+                    &attempts,
+                    &artifacts,
+                    self.run_session_id.as_deref(),
+                )
+                .map_err(|err| SupervisorError::new(err.to_string()))?;
             }
             self.neg_risk_shadow_execution_attempts = attempts;
             self.neg_risk_shadow_execution_artifacts = artifacts;
@@ -851,8 +863,11 @@ impl AppSupervisor {
             .take(applied_record_count)
             .collect::<Vec<_>>();
         if self.durable_live_persistence_enabled {
-            persist_live_execution_records(&applied_records)
-                .map_err(|err| SupervisorError::new(err.to_string()))?;
+            persist_live_execution_records_with_run_session_id(
+                &applied_records,
+                self.run_session_id.as_deref(),
+            )
+            .map_err(|err| SupervisorError::new(err.to_string()))?;
         }
         self.neg_risk_live_execution_records = applied_records;
         self.neg_risk_live_state_source = if self.neg_risk_live_execution_records.is_empty() {

@@ -91,7 +91,8 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
         } else {
             output::print_starting_runtime(&config_path);
         }
-        run::run_from_config_path(&config_path).map_err(BootstrapError::Run)?;
+        run::run_from_config_path_with_invoked_by(&config_path, "bootstrap")
+            .map_err(BootstrapError::Run)?;
     } else {
         match smoke_state {
             Some(SmokeBootstrapState::PreflightOnly { family_ids }) => {

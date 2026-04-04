@@ -11,6 +11,7 @@ pub mod negrisk_live;
 mod negrisk_shadow;
 pub mod posture;
 pub mod queues;
+pub mod run_session;
 pub mod runtime;
 pub mod smoke;
 mod snapshot_meta;
@@ -40,6 +41,7 @@ pub use queues::{
     CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth, FollowUpQueue, FollowUpWork,
     IngressQueue, SnapshotDispatchQueue, SnapshotNotice,
 };
+pub use run_session::RunSessionHandle;
 pub use runtime::{
     run_live, run_live_from_durable_store_instrumented,
     run_live_from_durable_store_with_neg_risk_live_targets_instrumented, run_live_instrumented,

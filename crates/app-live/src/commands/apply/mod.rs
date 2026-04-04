@@ -241,7 +241,7 @@ fn finalize_smoke_apply(
         output::render_execution_line("Starting runtime in the foreground.");
     }
 
-    match run::run_from_config_path(config_path) {
+    match run::run_from_config_path_with_invoked_by(config_path, "apply") {
         Ok(()) => {
             output::render_outcome("Foreground runtime startup completed.");
             output::render_next_actions(&started_next_actions(config_path));

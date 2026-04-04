@@ -7,7 +7,7 @@ use crate::{
     config::NegRiskLiveTargetSet,
     runtime::{
         load_durable_live_startup_state, operator_target_revision_for,
-        persist_operator_target_revision_anchor, AppRunResult, AppRuntimeMode,
+        persist_operator_target_revision_anchor_with_run_session_id, AppRunResult, AppRuntimeMode,
     },
     smoke::RealUserShadowSmokeConfig,
     AppInstrumentation, AppSupervisor, SupervisorError, SupervisorSummary,
@@ -160,6 +160,31 @@ pub fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumente
 where
     S: BootstrapSource,
 {
+    run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented(
+        source,
+        instrumentation,
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+        real_user_shadow_smoke,
+        None,
+    )
+}
+
+pub(crate) fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented<
+    S,
+>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+    run_session_id: Option<&str>,
+) -> Result<AppRunResult, Box<dyn Error>>
+where
+    S: BootstrapSource,
+{
     let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
@@ -172,6 +197,9 @@ where
         }
         None => AppSupervisor::new(AppRuntimeMode::Live, source.snapshot()),
     };
+    if let Some(run_session_id) = run_session_id {
+        supervisor.set_run_session_id(run_session_id);
+    }
     seed_live_supervisor_from_durable_state(
         &mut supervisor,
         durable_state,
@@ -185,7 +213,11 @@ where
     let result = AppDaemon::new(supervisor)
         .run_startup()
         .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
-    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    persist_operator_target_revision_anchor_with_run_session_id(
+        &result.summary,
+        operator_target_revision.as_deref(),
+        run_session_id,
+    )?;
     Ok(result)
 }
 
