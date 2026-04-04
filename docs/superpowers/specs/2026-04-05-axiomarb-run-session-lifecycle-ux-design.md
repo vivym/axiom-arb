@@ -139,6 +139,7 @@ Add a dedicated durable `run_session` record as the lifecycle truth source.
 
 Hard rules:
 
+- the first version persists `run_session` in the existing Postgres durability plane
 - only `app-live run` creates a `run_session`
 - only `run` advances its lifecycle state
 - high-level commands such as `bootstrap --start` and `apply --start` only pass `invoked_by` context
@@ -160,6 +161,24 @@ A dedicated session record provides:
 - a stable operator-visible handle
 - a durable snapshot of startup intent
 - a clean join point for high-value result surfaces
+
+Using the existing Postgres durability plane is part of that recommendation.
+
+The first phase should not introduce:
+
+- a second local session store
+- a paper-only session backend
+- or a split-brain lifecycle model between paper and live
+
+That means `paper` also joins the DB-backed lifecycle world in the first phase.
+
+Its operator contract should therefore be understood as:
+
+- `run`
+- `status`
+- `verify`
+
+all rely on the same durability store for session truth, even if paper remains much lighter than live in every other respect.
 
 ### 5.3 Why `run` Must Own Session Creation
 
@@ -306,12 +325,22 @@ This means:
 
 The session should move from `starting` to `running` only after startup-critical work has completed.
 
-The exact code boundary should align with runtime reality, but conceptually it must mean:
+The exact code boundary should align with runtime reality, but it must be mode-scoped.
+
+For `live` and `real-user shadow smoke`, it must mean:
 
 - config was accepted
 - startup target resolution succeeded
 - runtime/supervisor main loop was established
 - initial runtime truth was durable enough for the session to represent a real running instance
+
+For `paper`, it must mean:
+
+- config was accepted
+- paper runtime main loop was established
+- initial runtime truth was durable enough for the session to represent a real running instance
+
+The first phase must not force `paper` through live-only prerequisites such as startup target resolution just to satisfy session semantics.
 
 ### 7.3 `exited`
 
