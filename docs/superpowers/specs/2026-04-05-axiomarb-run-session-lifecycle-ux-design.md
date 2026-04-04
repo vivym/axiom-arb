@@ -34,8 +34,12 @@ The recommended architecture is:
 - only `app-live run` creates and closes `run_session`
 - `run_session` stores explicit lifecycle state plus a de-sensitized startup snapshot
 - high-value local result surfaces attach `run_session_id`
-- `status` and `verify` default to the latest relevant session for the current config/mode
+- `status` uses both:
+  - the latest relevant session for the current config/mode
+  - the currently active conflicting session, when restart drift exists
+- `verify` defaults to the latest relevant session for the current config/mode
 - historical explicit windows only receive strong config/lifecycle interpretation if they can be uniquely mapped to a session
+- stale runtime is a heartbeat-derived read-model interpretation, not a second writer-owned shutdown path in the first phase
 
 This is not a process supervisor and not a new startup authority.
 
@@ -105,10 +109,10 @@ This design should guarantee the following:
   - `running`
   - `exited`
   - `failed`
-  - `stale`
+- derive `stale` from overdue `last_seen_at` in the read model
 - persist a de-sensitized startup snapshot per session
 - attach `run_session_id` to high-value local result surfaces
-- let `status` explain the latest relevant session for the current config/mode
+- let `status` explain both the latest relevant session and any conflicting active session
 - let `verify` use session truth by default for latest-run verification
 - let historical explicit windows degrade safely when they cannot be uniquely mapped to a session
 - make `run_session_id` operator-visible without making it the primary UX concept
@@ -185,6 +189,15 @@ The first version should introduce a durable `run_session` record with at least 
 - `exit_status`
 - `exit_reason`
 
+In the first phase, the durable lifecycle enum should cover only:
+
+- `starting`
+- `running`
+- `exited`
+- `failed`
+
+`stale` is intentionally defined later as a read-model interpretation derived from heartbeat freshness.
+
 ### 6.2 De-Sensitized Startup Snapshot
 
 Each session should also persist a normalized startup snapshot that is strong enough for later interpretation without storing raw config or secrets:
@@ -192,6 +205,7 @@ Each session should also persist a normalized startup snapshot that is strong en
 - `config_path`
 - `config_fingerprint`
 - `target_source_kind`
+- `startup_target_revision_at_start`
 - `configured_operator_target_revision`
 - `active_operator_target_revision_at_start`
 - `rollout_state_at_start`
@@ -202,6 +216,27 @@ This snapshot exists to support:
 - trustworthy latest-run interpretation
 - historical session-aware verification
 - operator-readable lifecycle debugging
+
+The startup snapshot must support both currently valid startup families:
+
+- adopted target source
+- low-level explicit-target startup
+
+For adopted-target startup:
+
+- `target_source_kind = adopted`
+- `startup_target_revision_at_start` should identify the resolved startup target set
+- `configured_operator_target_revision` should be populated
+- `active_operator_target_revision_at_start` should be populated when available
+
+For explicit-target startup:
+
+- `target_source_kind = explicit`
+- `startup_target_revision_at_start` must still record the resolved startup target identity
+- `configured_operator_target_revision` may be absent
+- `active_operator_target_revision_at_start` may be absent
+
+This keeps the lifecycle layer truthful even while high-level UX continues to treat explicit-target startup as a legacy/unsupported path.
 
 ### 6.3 `invoked_by`
 
@@ -226,6 +261,26 @@ The spec does not require a specific encoding beyond:
 - globally unique
 - stable across reads
 - easy to surface in CLI output
+
+### 6.5 Relationship To Existing `source_session_id`
+
+The repository already uses `source_session_id` in journal, discovery, and external-fact-style records.
+
+That existing field and the new `run_session_id` are not the same concept.
+
+- `source_session_id`
+  - identifies upstream source/feed/input sessions
+  - remains the authority for ingestion/discovery provenance
+
+- `run_session_id`
+  - identifies one specific `app-live run` lifecycle instance
+  - becomes the authority for runtime lifecycle interpretation
+
+The first version must not rename or repurpose existing `source_session_id` usage.
+
+Where `verify` still falls back to low-level evidence windows, `source_session_id` may remain useful as supplementary grouping context.
+
+It must not replace `run_session_id` as lifecycle truth.
 
 ## 7. Lifecycle State Machine
 
@@ -265,14 +320,22 @@ If startup or runtime terminates due to a recognized failure path, the session s
 - `exit_status`
 - `exit_reason`
 
-### 7.5 `stale`
+### 7.5 Derived `stale` Interpretation
 
 The first version should use heartbeat-style freshness rather than a full supervisor:
 
 - `run` periodically updates `last_seen_at`
 - readers treat a stale heartbeat as a stale/abandoned session
 
-The durable row may still physically hold `state=running` until a compensating path tightens it.
+In the first phase, `stale` should be treated as a reader-projected lifecycle interpretation rather than a separate writer-owned durable enum state.
+
+That means:
+
+- the durable row may still physically hold `state=running`
+- high-level readers project `stale` when `last_seen_at` is overdue
+- a later compensating path may tighten the durable row if desired
+
+This avoids pretending that the crashed process itself can always durably mark its own abandonment.
 
 What matters for the high-level UX is that:
 
@@ -326,10 +389,28 @@ Relevance should be determined from the session snapshot, especially:
 - `mode`
 - `config_path`
 - `config_fingerprint`
+- `startup_target_revision_at_start`
 - `configured_operator_target_revision`
 - `rollout_state_at_start`
 
-### 9.2 Selection Priority
+### 9.2 Conflicting Active Session
+
+`status` has one responsibility that `verify` does not:
+
+- explain restart drift between configured truth and currently active runtime truth
+
+Because of that, `status` must not only expose the latest relevant session for the current config.
+
+It must also surface the currently active conflicting session when:
+
+- runtime progress points to active truth owned by a different session
+- and that session conflicts with the current config's startup intent
+
+This is especially important for `restart-required` UX.
+
+If the old active daemon is still running under a now-conflicting startup snapshot, `status` must keep showing that fact rather than hiding it behind “not relevant to current config”.
+
+### 9.3 Selection Priority
 
 Within that relevant set, readers should prefer:
 
@@ -339,19 +420,27 @@ Within that relevant set, readers should prefer:
 
 This matches operator intent better than a raw “latest row” heuristic.
 
-### 9.3 `status`
+### 9.4 `status`
 
-`status` should use that latest relevant session to improve answers such as:
+`status` should use both:
+
+- the latest relevant session for the current config
+- the conflicting active session, when one exists
+
+This improves answers such as:
 
 - is there a real current running session for this startup intent
+- is there an old still-active session that conflicts with current configured intent
 - what was the latest relevant run for this config
 - is the current lifecycle truth fresh, finished, or stale
 
-### 9.4 `verify`
+### 9.5 `verify`
 
 `verify` should also default to the latest relevant session.
 
 That lets it produce a stronger latest-run verdict without pretending that arbitrary local evidence always belongs to the current config.
+
+Unlike `status`, `verify` does not need to elevate a conflicting active session unless the verified evidence window itself resolves to that session.
 
 ## 10. Historical Range Handling
 
@@ -404,6 +493,16 @@ If readers encounter a session missing key snapshot fields, they should:
 - avoid strong lifecycle/config claims
 - continue only as far as the evidence still supports
 
+This is especially important for explicit-target sessions, where:
+
+- `target_source_kind = explicit`
+- adopted-target-only fields may be absent by design
+
+Readers must distinguish between:
+
+- expected absence for explicit-target startup
+- unexpected corruption or partial writes
+
 ### 11.3 Stale Session Interpretation
 
 If `last_seen_at` exceeds the stale threshold:
@@ -454,6 +553,8 @@ The first implementation should cover:
 - normalized startup snapshot is written
 - secrets are not persisted
 - session ownership remains on `run`
+- adopted-target and explicit-target startup both serialize valid snapshots
+- `source_session_id` and `run_session_id` remain distinct concepts
 
 ### 13.3 Result-Linkage Tests
 
@@ -464,6 +565,7 @@ The first implementation should cover:
 ### 13.4 Reader Tests
 
 - `status` picks the correct latest relevant session
+- `status` also surfaces the conflicting active session when restart drift exists
 - `verify` picks the correct latest relevant session
 - historical ranges degrade safely when session mapping is ambiguous
 
@@ -481,7 +583,7 @@ This subproject is complete when:
 - only `run` creates and closes it
 - the session stores explicit lifecycle state and a de-sensitized startup snapshot
 - high-value local result surfaces attach `run_session_id`
-- `status` can explain the latest relevant session for the current config/mode
+- `status` can explain both the latest relevant session and any conflicting active session
 - `verify` can default to latest relevant session for stronger latest-run interpretation
 - explicit historical ranges degrade safely when unique session mapping is unavailable
 - `run_session_id` is operator-visible but remains a secondary handle
