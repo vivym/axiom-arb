@@ -617,7 +617,7 @@ fn verify_smoke_preflight_only_run_can_warn_without_failing() {
     assert!(text.contains("rollout not ready"), "{text}");
     assert!(
         text.contains(&format!(
-            "Next: app-live bootstrap --config {}",
+            "Next: app-live apply --config {}",
             cli::shell_quote_path(&config_path)
         )),
         "{text}"

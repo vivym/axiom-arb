@@ -1,7 +1,7 @@
 use std::{error::Error, fmt::Write as _, io, path::Path};
 
-use crate::commands::status::model::StatusAction;
-use crate::commands::status::render_action_template as render_status_action_template;
+use crate::commands::status::model::{StatusAction, StatusMode};
+use crate::commands::status::render_action_template_with_mode as render_status_action_template;
 use persistence::connect_pool_from_env;
 use tokio::runtime::Builder;
 
@@ -657,7 +657,7 @@ fn next_actions_from_context(
     let actions = verify_context
         .actions
         .iter()
-        .map(|action| status_action_label(*action))
+        .map(|action| status_action_label(*action, verify_context.control_plane.mode))
         .collect::<Vec<_>>();
 
     if actions.is_empty() {
@@ -681,8 +681,22 @@ fn next_actions_with_prefix(
     actions
 }
 
-fn status_action_label(action: StatusAction) -> String {
-    render_status_action_template(&action)
+fn status_action_label(
+    action: StatusAction,
+    mode: Option<model::VerifyControlPlaneMode>,
+) -> String {
+    render_status_action_template(&action, map_verify_mode_to_status(mode))
+}
+
+fn map_verify_mode_to_status(mode: Option<model::VerifyControlPlaneMode>) -> Option<StatusMode> {
+    match mode {
+        Some(model::VerifyControlPlaneMode::Paper) => Some(StatusMode::Paper),
+        Some(model::VerifyControlPlaneMode::RealUserShadowSmoke) => {
+            Some(StatusMode::RealUserShadowSmoke)
+        }
+        Some(model::VerifyControlPlaneMode::Live) => Some(StatusMode::Live),
+        None => None,
+    }
 }
 
 pub fn render_report(report: &model::VerifyReport, config_path: &Path) -> String {
@@ -1029,10 +1043,31 @@ mod tests {
 
         assert!(smoke_actions
             .iter()
-            .any(|action| action.contains("app-live bootstrap --config")));
+            .any(|action| action.contains("app-live apply --config")));
         assert!(live_actions.iter().any(|action| {
             action.contains("approved_families") && action.contains("ready_families")
         }));
+    }
+
+    #[test]
+    fn smoke_target_adoption_actions_use_apply_guidance() {
+        let smoke_context = verify_context(
+            VerifyScenario::RealUserShadowSmoke,
+            VerifyExpectation::SmokeShadowOnly,
+            VerifyControlPlaneMode::RealUserShadowSmoke,
+            Some(StatusReadiness::TargetAdoptionRequired),
+            vec![StatusAction::RunTargetsAdopt],
+        );
+
+        let smoke_actions =
+            next_actions_from_context(&smoke_context, &["run app-live status --config {config}"]);
+
+        assert!(smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
+        assert!(!smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live targets adopt --config")));
     }
 
     fn populated_report_fixture() -> VerifyReport {
