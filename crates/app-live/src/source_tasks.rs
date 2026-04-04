@@ -112,7 +112,25 @@ mod tests {
 mode = "live"
 real_user_shadow_smoke = true
 
-[polymarket.source]
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://data-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
@@ -120,22 +138,7 @@ market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
 heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
-
-[signer]
-address = "0x1111111111111111111111111111111111111111"
-funder_address = "0x2222222222222222222222222222222222222222"
-signature_type = "EOA"
-wallet_route = "direct"
-
-[signer.l2_auth]
-api_key = "key"
-passphrase = "pass"
-secret = "secret"
-
-[signer.relayer_auth]
-api_key = "relayer-key"
-secret = "relayer-secret"
-passphrase = "relayer-pass"
+metadata_refresh_interval_seconds = 60
 "#,
         )
         .expect("raw config should parse");

@@ -264,10 +264,8 @@ mod tests {
     #[test]
     fn runtime_heartbeat_group_uses_runtime_defaults_instead_of_test_seeds() {
         let before = Utc::now();
-        let group = HeartbeatTaskGroup::for_runtime(
-            ScriptedHeartbeatSource::timeout(),
-            Some("run-session-9"),
-        );
+        let group =
+            HeartbeatTaskGroup::for_runtime(ScriptedHeartbeatSource::timeout(), "run-session-9");
         let after = Utc::now();
 
         assert_eq!(group.session_id, "run-session-9");

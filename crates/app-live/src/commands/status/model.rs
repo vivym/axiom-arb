@@ -106,6 +106,14 @@ pub struct StatusDetails {
     pub target_source: Option<StatusTargetSource>,
     pub rollout_state: Option<StatusRolloutState>,
     pub restart_needed: Option<bool>,
+    pub relevant_run_session_id: Option<String>,
+    pub relevant_run_state: Option<String>,
+    pub relevant_run_started_at: Option<DateTime<Utc>>,
+    pub relevant_startup_target_revision: Option<String>,
+    pub conflicting_active_run_session_id: Option<String>,
+    pub conflicting_active_run_state: Option<String>,
+    pub conflicting_active_started_at: Option<DateTime<Utc>>,
+    pub conflicting_active_startup_target_revision: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -116,3 +124,4 @@ pub struct StatusSummary {
     pub details: StatusDetails,
     pub actions: Vec<StatusAction>,
 }
+use chrono::{DateTime, Utc};

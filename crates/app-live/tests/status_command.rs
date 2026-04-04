@@ -1,7 +1,14 @@
 mod support;
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
+use chrono::{Duration, Utc};
+use persistence::{RunSessionRow, RunSessionState};
+use sha2::{Digest, Sha256};
 use support::{cli, status_db::TestDatabase};
 
 #[test]
@@ -235,6 +242,81 @@ fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already
 
     database.cleanup();
     let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(smoke_run_session(
+        "rs-new",
+        &config,
+        "targets-rev-9",
+        RunSessionState::Exited,
+        Utc::now() - Duration::minutes(1),
+    ));
+    database.seed_run_session(smoke_run_session(
+        "rs-old",
+        &config,
+        "targets-rev-8",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(2),
+    ));
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-old"));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-new"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Conflicting active run session: rs-old"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Conflicting active state: running"),
+        "{combined}"
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn status_projects_overdue_running_session_as_stale() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    database.seed_run_session(smoke_run_session(
+        "rs-stale",
+        &config,
+        "targets-rev-9",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(20),
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Relevant run state: stale"), "{combined}");
+
+    database.cleanup();
 }
 
 #[test]
@@ -653,6 +735,14 @@ fn status_details_use_structured_key_fields() {
         target_source: Some(StatusTargetSource::LegacyExplicitTargets),
         rollout_state: Some(StatusRolloutState::Ready),
         restart_needed: Some(true),
+        relevant_run_session_id: Some("rs-relevant".to_owned()),
+        relevant_run_state: Some("running".to_owned()),
+        relevant_run_started_at: None,
+        relevant_startup_target_revision: Some("startup-target-a".to_owned()),
+        conflicting_active_run_session_id: Some("rs-conflict".to_owned()),
+        conflicting_active_run_state: Some("stale".to_owned()),
+        conflicting_active_started_at: None,
+        conflicting_active_startup_target_revision: Some("startup-target-b".to_owned()),
         reason: Some("blocked until rollout is enabled".to_owned()),
     };
 
@@ -669,6 +759,29 @@ fn status_details_use_structured_key_fields() {
     assert_eq!(details.rollout_state, Some(StatusRolloutState::Ready));
     assert_eq!(details.rollout_state.unwrap().label(), "ready");
     assert_eq!(details.restart_needed, Some(true));
+    assert_eq!(
+        details.relevant_run_session_id.as_deref(),
+        Some("rs-relevant")
+    );
+    assert_eq!(details.relevant_run_state.as_deref(), Some("running"));
+    assert_eq!(
+        details.relevant_startup_target_revision.as_deref(),
+        Some("startup-target-a")
+    );
+    assert_eq!(
+        details.conflicting_active_run_session_id.as_deref(),
+        Some("rs-conflict")
+    );
+    assert_eq!(
+        details.conflicting_active_run_state.as_deref(),
+        Some("stale")
+    );
+    assert_eq!(
+        details
+            .conflicting_active_startup_target_revision
+            .as_deref(),
+        Some("startup-target-b")
+    );
     assert_eq!(
         details.reason.as_deref(),
         Some("blocked until rollout is enabled")
@@ -730,6 +843,40 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     ));
     fs::write(&path, edited).expect("temp fixture should be writable");
     path
+}
+
+fn smoke_run_session(
+    run_session_id: &str,
+    config_path: &Path,
+    startup_target_revision_at_start: &str,
+    state: RunSessionState,
+    started_at: chrono::DateTime<Utc>,
+) -> RunSessionRow {
+    RunSessionRow {
+        run_session_id: run_session_id.to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state,
+        started_at,
+        last_seen_at: started_at,
+        ended_at: matches!(state, RunSessionState::Exited | RunSessionState::Failed)
+            .then(|| started_at + Duration::seconds(30)),
+        exit_status: (state == RunSessionState::Exited).then(|| "success".to_owned()),
+        exit_reason: (state == RunSessionState::Failed).then(|| "seeded failure".to_owned()),
+        config_path: config_path.display().to_string(),
+        config_fingerprint: config_fingerprint(config_path),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
+        configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
+        active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
+        rollout_state_at_start: Some("required".to_owned()),
+        real_user_shadow_smoke: true,
+    }
+}
+
+fn config_fingerprint(config_path: &Path) -> String {
+    let raw = std::fs::read(config_path).expect("config fixture should read");
+    format!("{:x}", Sha256::digest(raw))
 }
 
 #[allow(dead_code)]

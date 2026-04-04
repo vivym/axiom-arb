@@ -33,7 +33,7 @@ pub struct ConfigAnchorComparison {
 
 pub fn load(config_path: &Path) -> VerifyContext {
     match evaluate::evaluate(config_path) {
-        StatusOutcome::Summary(summary) => from_summary(summary),
+        StatusOutcome::Summary(summary) => from_summary(*summary),
         StatusOutcome::Deferred(deferred) => from_deferred(deferred),
     }
 }
@@ -81,6 +81,7 @@ fn from_summary(summary: StatusSummary) -> VerifyContext {
         rollout_state,
         restart_needed,
         reason,
+        ..
     } = summary.details;
 
     VerifyContext {
