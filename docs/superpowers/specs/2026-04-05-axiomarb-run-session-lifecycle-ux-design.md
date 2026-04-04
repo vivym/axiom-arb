@@ -282,6 +282,15 @@ Where `verify` still falls back to low-level evidence windows, `source_session_i
 
 It must not replace `run_session_id` as lifecycle truth.
 
+For runtime-originated facts emitted by `app-live` itself, the first version should directly reuse `run_session_id` as the emitted `source_session_id`.
+
+That gives the system the simplest and cleanest rule:
+
+- upstream/discovery/feed-originated facts keep their own upstream `source_session_id`
+- runtime-originated facts reuse the owning `run_session_id`
+
+This avoids creating a second local runtime-session identifier that would only need to be mapped back later.
+
 ## 7. Lifecycle State Machine
 
 ### 7.1 `starting`
@@ -352,7 +361,7 @@ The first version should attach `run_session_id` only to high-value local result
 
 - runtime progress / runtime truth surfaces
 - neg-risk execution attempts
-- the key artifacts or summaries needed by `verify`
+- true session-level verify summaries, when such summary surfaces exist
 
 ### 8.2 Why This Scope Is Correct
 
@@ -367,6 +376,16 @@ At the same time, it avoids turning the first version into:
 - a full data-model rewrite
 - a global session-backfill project
 - a mandatory session foreign key on every low-level table
+
+Attempt-scoped artifacts should not all receive direct `run_session_id` foreign keys in the first phase.
+
+The preferred first-phase ownership chain is:
+
+- `run_session_id` attaches directly to execution attempts
+- attempt-scoped artifacts remain attached to attempts
+- session-level verification uses the attempt -> session chain
+
+Only genuinely session-level summary surfaces should attach `run_session_id` directly.
 
 ### 8.3 Journal And Other Low-Level Streams
 
@@ -433,6 +452,24 @@ This improves answers such as:
 - is there an old still-active session that conflicts with current configured intent
 - what was the latest relevant run for this config
 - is the current lifecycle truth fresh, finished, or stale
+
+The first-phase `status` read model should therefore have an explicit minimum contract for both views.
+
+For the latest relevant session view:
+
+- `relevant_run_session_id`
+- `relevant_run_state`
+- `relevant_run_started_at`
+- `relevant_startup_target_revision`
+
+For the conflicting active session view, when present:
+
+- `conflicting_active_run_session_id`
+- `conflicting_active_run_state`
+- `conflicting_active_started_at`
+- `conflicting_active_startup_target_revision`
+
+This is the minimum needed to make `restart-required` interpretation stable rather than ad hoc.
 
 ### 9.5 `verify`
 
@@ -560,7 +597,8 @@ The first implementation should cover:
 
 - runtime progress can be tied to a session
 - neg-risk attempts can be tied to a session
-- verify-critical artifacts/summaries can be tied to a session
+- attempt-scoped artifacts can be interpreted through attempt -> session linkage
+- genuinely session-level verify summaries can be tied directly to a session when present
 
 ### 13.4 Reader Tests
 
@@ -568,6 +606,7 @@ The first implementation should cover:
 - `status` also surfaces the conflicting active session when restart drift exists
 - `verify` picks the correct latest relevant session
 - historical ranges degrade safely when session mapping is ambiguous
+- runtime-originated `source_session_id` values match their owning `run_session_id`
 
 ### 13.5 Failure Tests
 
