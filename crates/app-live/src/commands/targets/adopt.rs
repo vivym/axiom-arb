@@ -2,8 +2,9 @@ use std::{error::Error, path::Path};
 
 use chrono::Utc;
 use persistence::{
-    connect_pool_from_env, models::OperatorTargetAdoptionHistoryRow,
-    OperatorTargetAdoptionHistoryRepo,
+    connect_pool_from_env,
+    models::{CandidateAdoptionProvenanceRow, OperatorTargetAdoptionHistoryRow},
+    CandidateAdoptionRepo, OperatorTargetAdoptionHistoryRepo,
 };
 use sqlx::PgPool;
 
@@ -127,25 +128,28 @@ pub(crate) async fn adopt_selected_revision(
         .as_deref()
         .map(|active| active != selection.operator_target_revision);
 
+    ensure_canonical_provenance(pool, &selection).await?;
+
+    let history_row = OperatorTargetAdoptionHistoryRow {
+        adoption_id: format!(
+            "adopt-{}-{}",
+            Utc::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000),
+            selection.operator_target_revision
+        ),
+        action_kind: "adopt".to_owned(),
+        operator_target_revision: selection.operator_target_revision.clone(),
+        previous_operator_target_revision: previous_operator_target_revision.clone(),
+        adoptable_revision: selection.adoptable_revision.clone(),
+        candidate_revision: selection.candidate_revision.clone(),
+        adopted_at: Utc::now(),
+    };
+    OperatorTargetAdoptionHistoryRepo
+        .append(pool, &history_row)
+        .await?;
+
     if changed {
-        let history_row = OperatorTargetAdoptionHistoryRow {
-            adoption_id: format!(
-                "adopt-{}-{}",
-                Utc::now()
-                    .timestamp_nanos_opt()
-                    .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000),
-                selection.operator_target_revision
-            ),
-            action_kind: "adopt".to_owned(),
-            operator_target_revision: selection.operator_target_revision.clone(),
-            previous_operator_target_revision: previous_operator_target_revision.clone(),
-            adoptable_revision: selection.adoptable_revision.clone(),
-            candidate_revision: selection.candidate_revision.clone(),
-            adopted_at: Utc::now(),
-        };
-        OperatorTargetAdoptionHistoryRepo
-            .append(pool, &history_row)
-            .await?;
         rewrite_operator_target_revision(config_path, &selection.operator_target_revision)?;
     }
 
@@ -158,4 +162,32 @@ pub(crate) async fn adopt_selected_revision(
         },
         restart_required,
     })
+}
+
+async fn ensure_canonical_provenance(
+    pool: &PgPool,
+    selection: &ResolvedAdoptionSelection,
+) -> Result<(), Box<dyn Error>> {
+    let (Some(adoptable_revision), Some(candidate_revision)) = (
+        selection.adoptable_revision.as_deref(),
+        selection.candidate_revision.as_deref(),
+    ) else {
+        return Ok(());
+    };
+
+    let canonical = CandidateAdoptionProvenanceRow {
+        operator_target_revision: selection.operator_target_revision.clone(),
+        adoptable_revision: adoptable_revision.to_owned(),
+        candidate_revision: candidate_revision.to_owned(),
+    };
+
+    if CandidateAdoptionRepo
+        .get_by_operator_target_revision(pool, &canonical.operator_target_revision)
+        .await?
+        .is_none()
+    {
+        CandidateAdoptionRepo.upsert_provenance(pool, &canonical).await?;
+    }
+
+    Ok(())
 }

@@ -110,35 +110,21 @@ pub async fn resolve_adoption_selection(
                 &adoptable.payload,
                 &adoptable.rendered_operator_target_revision,
             )?;
-            let provenance = CandidateAdoptionRepo
-                .get_by_operator_target_revision(
-                    pool,
-                    &adoptable.rendered_operator_target_revision,
-                )
+            CandidateArtifactRepo
+                .get_candidate_target_set(pool, &adoptable.candidate_revision)
                 .await?
                 .ok_or_else(|| {
                     TargetStateError::new(format!(
-                        "rendered operator_target_revision {} for adoptable_revision {adoptable_revision} has no durable adoption provenance",
-                        adoptable.rendered_operator_target_revision
+                        "candidate_revision {} is unavailable",
+                        adoptable.candidate_revision
                     ))
                 })?;
 
-            if provenance.adoptable_revision != adoptable.adoptable_revision
-                || provenance.candidate_revision != adoptable.candidate_revision
-            {
-                return Err(TargetStateError::new(format!(
-                    "adoptable_revision {adoptable_revision} does not match durable adoption provenance"
-                ))
-                .into());
-            }
-
-            selection_from_lineage(
-                pool,
-                &adoptable.rendered_operator_target_revision,
-                &adoptable.adoptable_revision,
-                &adoptable.candidate_revision,
-            )
-            .await
+            Ok(ResolvedAdoptionSelection {
+                operator_target_revision: adoptable.rendered_operator_target_revision,
+                adoptable_revision: Some(adoptable.adoptable_revision),
+                candidate_revision: Some(adoptable.candidate_revision),
+            })
         }
     }
 }
