@@ -179,9 +179,172 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     assert!(output.status.success(), "{}", combined(&output));
 
     let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let polymarket = raw
+        .polymarket
+        .as_ref()
+        .expect("polymarket section should exist");
     assert!(text.contains("[polymarket.source]"));
     assert!(text.contains("clob_host = \"https://custom-clob.example\""));
     assert!(text.contains("metadata_refresh_interval_seconds = 99"));
+    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(polymarket.source.as_ref().is_some());
+    assert!(polymarket.source_overrides.is_none());
+}
+
+#[test]
+fn init_preserve_keeps_existing_source_overrides_block_when_present() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.source_overrides]
+clob_host = "https://override-clob.example"
+data_api_host = "https://override-data-api.example"
+relayer_host = "https://override-relayer.example"
+market_ws_url = "wss://override-market.example/ws"
+user_ws_url = "wss://override-user.example/ws"
+heartbeat_interval_seconds = 41
+relayer_poll_interval_seconds = 17
+metadata_refresh_interval_seconds = 23
+
+[polymarket.account]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "existing-account-api-key"
+secret = "existing-account-secret"
+passphrase = "existing-account-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "existing-relay-key"
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+"#,
+    )
+    .expect("seed existing config");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let polymarket = raw
+        .polymarket
+        .as_ref()
+        .expect("polymarket section should exist");
+    assert!(text.contains("[polymarket.source_overrides]"));
+    assert!(text.contains("clob_host = \"https://override-clob.example\""));
+    assert!(text.contains("metadata_refresh_interval_seconds = 23"));
+    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(polymarket.source.is_none());
+    assert!(polymarket.source_overrides.as_ref().is_some());
+}
+
+#[test]
+fn init_preserve_keeps_existing_source_and_source_overrides_blocks_when_present() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.source]
+clob_host = "https://source-clob.example"
+data_api_host = "https://source-data-api.example"
+relayer_host = "https://source-relayer.example"
+market_ws_url = "wss://source-market.example/ws"
+user_ws_url = "wss://source-user.example/ws"
+heartbeat_interval_seconds = 42
+relayer_poll_interval_seconds = 24
+metadata_refresh_interval_seconds = 60
+
+[polymarket.source_overrides]
+clob_host = "https://override-clob.example"
+data_api_host = "https://override-data-api.example"
+relayer_host = "https://override-relayer.example"
+market_ws_url = "wss://override-market.example/ws"
+user_ws_url = "wss://override-user.example/ws"
+heartbeat_interval_seconds = 41
+relayer_poll_interval_seconds = 17
+metadata_refresh_interval_seconds = 23
+
+[polymarket.account]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "existing-account-api-key"
+secret = "existing-account-secret"
+passphrase = "existing-account-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "existing-relay-key"
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+"#,
+    )
+    .expect("seed existing config");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let polymarket = raw
+        .polymarket
+        .as_ref()
+        .expect("polymarket section should exist");
+    assert!(text.contains("[polymarket.source]"));
+    assert!(text.contains("clob_host = \"https://source-clob.example\""));
+    assert!(text.contains("[polymarket.source_overrides]"));
+    assert!(text.contains("clob_host = \"https://override-clob.example\""));
+    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(polymarket.source.as_ref().is_some());
+    assert!(polymarket.source_overrides.as_ref().is_some());
 }
 
 #[test]

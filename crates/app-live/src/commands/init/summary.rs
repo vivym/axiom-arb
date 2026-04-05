@@ -3,6 +3,8 @@ use std::path::Path;
 pub struct InitSummary<'a> {
     pub mode: WizardMode,
     pub config_path: &'a Path,
+    pub has_existing_polymarket_source: bool,
+    pub has_existing_polymarket_source_overrides: bool,
     pub configured_operator_target_revision: Option<&'a str>,
     pub rollout_is_empty: bool,
 }
@@ -61,7 +63,10 @@ fn render_live_summary(summary: InitSummary<'_>) -> WizardSummary {
     lines.extend([
         "[polymarket.account]".to_string(),
         "[polymarket.relayer_auth]".to_string(),
-        "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence.".to_string(),
+        polymarket_source_summary_line(
+            summary.has_existing_polymarket_source,
+            summary.has_existing_polymarket_source_overrides,
+        ),
         "[negrisk.target_source]".to_string(),
     ]);
     if let Some(revision) = summary.configured_operator_target_revision {
@@ -114,4 +119,19 @@ pub(crate) fn paper_config_lines() -> &'static [&'static str] {
 fn shell_quote(value: String) -> String {
     let escaped = value.replace('\'', r"'\''");
     format!("'{escaped}'")
+}
+
+fn polymarket_source_summary_line(
+    has_existing_polymarket_source: bool,
+    has_existing_polymarket_source_overrides: bool,
+) -> String {
+    match (
+        has_existing_polymarket_source,
+        has_existing_polymarket_source_overrides,
+    ) {
+        (false, false) => "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence.".to_string(),
+        (true, true) => "preserved existing [polymarket.source] and [polymarket.source_overrides].".to_string(),
+        (true, false) => "preserved existing [polymarket.source].".to_string(),
+        (false, true) => "preserved existing [polymarket.source_overrides].".to_string(),
+    }
 }

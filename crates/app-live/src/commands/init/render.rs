@@ -104,6 +104,10 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
         polymarket.source = Some(existing_source.clone());
     }
 
+    if let Some(existing_source_overrides) = &existing_polymarket.source_overrides {
+        polymarket.source_overrides = Some(existing_source_overrides.clone());
+    }
+
     if let Some(existing_account) = &existing_polymarket.account {
         if let Some(account) = polymarket.account.as_mut() {
             if account.funder_address.is_none() {
