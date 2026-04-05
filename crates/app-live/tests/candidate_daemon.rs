@@ -189,7 +189,7 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
         summary.latest_candidate_operator_target_revision.as_deref(),
         Some(operator_target_revision.as_str())
     );
-    assert!(summary.adoption_provenance_resolved);
+    assert!(!summary.adoption_provenance_resolved);
 
     let candidate = database
         .load_candidate_target_set("candidate-pub-2")
