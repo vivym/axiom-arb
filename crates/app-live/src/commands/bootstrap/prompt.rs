@@ -13,6 +13,11 @@ pub enum BootstrapModeInput {
     Piped(Option<String>),
 }
 
+pub enum AdoptableRevisionInput {
+    Terminal,
+    Piped(Option<String>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmokeRolloutSelection {
     PreflightOnly,
@@ -121,6 +126,36 @@ pub fn choose_adoptable_revision<P: PromptIo>(
         }
 
         prompt.println("Please choose one of the listed adoptable revisions.")?;
+    }
+}
+
+pub fn maybe_choose_adoptable_revision<P: PromptIo>(
+    prompt: &mut P,
+    input: AdoptableRevisionInput,
+    revisions: &[String],
+) -> Result<Option<String>, InitError> {
+    if revisions.is_empty() {
+        return Err(InitError::new(
+            "bootstrap could not find any adoptable revisions",
+        ));
+    }
+
+    match input {
+        AdoptableRevisionInput::Terminal => choose_adoptable_revision(prompt, revisions).map(Some),
+        AdoptableRevisionInput::Piped(None) => Ok(None),
+        AdoptableRevisionInput::Piped(Some(line)) => {
+            let selected = line.trim();
+            if selected.is_empty() {
+                return Ok(None);
+            }
+            if revisions.iter().any(|revision| revision == selected) {
+                Ok(Some(selected.to_owned()))
+            } else {
+                Err(InitError::new(format!(
+                    "bootstrap requires an explicit listed adoptable revision; got {selected}"
+                )))
+            }
+        }
     }
 }
 
@@ -286,6 +321,36 @@ mod tests {
                 "adoptable-1",
             ]
         );
+    }
+
+    #[test]
+    fn maybe_choose_adoptable_revision_returns_none_for_empty_piped_input() {
+        let mut prompt = TestPrompt::new(&[]);
+
+        let selection = super::maybe_choose_adoptable_revision(
+            &mut prompt,
+            super::AdoptableRevisionInput::Piped(None),
+            &["adoptable-1".into()],
+        )
+        .expect("missing piped input should defer selection");
+
+        assert_eq!(selection, None);
+        assert!(prompt.output.is_empty());
+    }
+
+    #[test]
+    fn maybe_choose_adoptable_revision_accepts_listed_piped_input() {
+        let mut prompt = TestPrompt::new(&[]);
+
+        let selection = super::maybe_choose_adoptable_revision(
+            &mut prompt,
+            super::AdoptableRevisionInput::Piped(Some("adoptable-1\n".to_owned())),
+            &["adoptable-1".into(), "adoptable-2".into()],
+        )
+        .expect("listed piped revision should be accepted");
+
+        assert_eq!(selection.as_deref(), Some("adoptable-1"));
+        assert!(prompt.output.is_empty());
     }
 
     #[test]

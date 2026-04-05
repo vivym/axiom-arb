@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DiscoverSummary {
+pub(crate) struct DiscoverSummary {
     candidate_count: usize,
     adoptable_count: usize,
     recommended_adoptable_revision: Option<String>,
@@ -25,7 +25,9 @@ pub fn execute(args: DiscoverArgs) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_discover_from_config(config_path: &Path) -> Result<DiscoverSummary, Box<dyn Error>> {
+pub(crate) async fn run_discover_from_config(
+    config_path: &Path,
+) -> Result<DiscoverSummary, Box<dyn Error>> {
     let raw = load_raw_config_from_path(config_path)?;
     let validated = ValidatedConfig::new(raw)?;
     let config = validated.for_app_live()?;

@@ -5,7 +5,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use persistence::run_migrations;
+use persistence::{
+    models::{AdoptableTargetRevisionRow, CandidateTargetSetRow},
+    run_migrations, CandidateArtifactRepo,
+};
+use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 use super::cli::default_test_database_url;
@@ -81,6 +85,97 @@ impl TestDatabase {
 
     pub fn has_candidate_provenance_rows(&self) -> bool {
         self.count_rows("candidate_adoption_provenance") > 0
+    }
+
+    pub fn seed_advisory_candidate(&self, candidate_revision: &str, reason: &str) {
+        self.runtime.block_on(async {
+            CandidateArtifactRepo
+                .upsert_candidate_target_set(
+                    &self.pool,
+                    &CandidateTargetSetRow {
+                        candidate_revision: candidate_revision.to_owned(),
+                        snapshot_id: format!("snapshot-{candidate_revision}"),
+                        source_revision: format!("discovery-{candidate_revision}"),
+                        payload: json!({
+                            "candidate_revision": candidate_revision,
+                            "snapshot_id": format!("snapshot-{candidate_revision}"),
+                            "targets": [
+                                {
+                                    "target_id": format!("target-{candidate_revision}"),
+                                    "family_id": "family-a",
+                                    "validation": {
+                                        "status": "deferred",
+                                        "reason": reason,
+                                    }
+                                }
+                            ]
+                        }),
+                    },
+                )
+                .await
+                .expect("advisory candidate row should persist");
+        });
+    }
+
+    pub fn seed_adoptable_revision_without_provenance(
+        &self,
+        adoptable_revision: &str,
+        candidate_revision: &str,
+        operator_target_revision: &str,
+    ) {
+        self.runtime.block_on(async {
+            CandidateArtifactRepo
+                .upsert_candidate_target_set(
+                    &self.pool,
+                    &CandidateTargetSetRow {
+                        candidate_revision: candidate_revision.to_owned(),
+                        snapshot_id: format!("snapshot-{candidate_revision}"),
+                        source_revision: format!("discovery-{candidate_revision}"),
+                        payload: json!({
+                            "candidate_revision": candidate_revision,
+                            "snapshot_id": format!("snapshot-{candidate_revision}"),
+                            "targets": [
+                                {
+                                    "target_id": format!("target-{candidate_revision}"),
+                                    "family_id": "family-a",
+                                }
+                            ]
+                        }),
+                    },
+                )
+                .await
+                .expect("candidate row should persist");
+
+            CandidateArtifactRepo
+                .upsert_adoptable_target_revision(
+                    &self.pool,
+                    &AdoptableTargetRevisionRow {
+                        adoptable_revision: adoptable_revision.to_owned(),
+                        candidate_revision: candidate_revision.to_owned(),
+                        rendered_operator_target_revision: operator_target_revision.to_owned(),
+                        payload: json!({
+                            "adoptable_revision": adoptable_revision,
+                            "candidate_revision": candidate_revision,
+                            "rendered_operator_target_revision": operator_target_revision,
+                            "rendered_live_targets": {
+                                "family-a": {
+                                    "family_id": "family-a",
+                                    "members": [
+                                        {
+                                            "condition_id": "condition-1",
+                                            "token_id": "token-1",
+                                            "price": "0.43",
+                                            "quantity": "5",
+                                        }
+                                    ]
+                                }
+                            }
+                        }),
+                    },
+                )
+                .await
+                .expect("adoptable row should persist");
+        });
     }
 
     pub fn cleanup(self) {
