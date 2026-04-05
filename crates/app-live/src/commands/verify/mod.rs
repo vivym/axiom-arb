@@ -1118,8 +1118,8 @@ mod tests {
             VerifyScenario::RealUserShadowSmoke,
             VerifyExpectation::SmokeShadowOnly,
             VerifyControlPlaneMode::RealUserShadowSmoke,
-            Some(StatusReadiness::TargetAdoptionRequired),
-            vec![StatusAction::RunTargetsAdopt],
+            Some(StatusReadiness::AdoptableReady),
+            vec![StatusAction::ChooseAndAdoptRevision],
         );
 
         let smoke_actions =

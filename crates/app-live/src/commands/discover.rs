@@ -5,8 +5,7 @@ use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig}
 use persistence::{connect_pool_from_env, CandidateArtifactRepo};
 
 use crate::{
-    cli::DiscoverArgs,
-    load_real_user_shadow_smoke_config, source_tasks::build_polymarket_rest_client,
+    cli::DiscoverArgs, config::PolymarketSourceConfig, source_tasks::build_polymarket_rest_client,
     task_groups::MetadataTaskGroup, AppSupervisor, LocalSignerConfig,
 };
 
@@ -37,15 +36,10 @@ async fn run_discover_from_config(config_path: &Path) -> Result<DiscoverSummary,
         )
         .into());
     }
-    let smoke = load_real_user_shadow_smoke_config(&config)?.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "discover requires a real-user shadow smoke config",
-        )
-    })?;
+    let source = PolymarketSourceConfig::try_from(&config)?;
     let _signer = LocalSignerConfig::try_from(&config)?;
 
-    let rest = build_polymarket_rest_client(&smoke.source_config);
+    let rest = build_polymarket_rest_client(&source);
     let metadata_rows = rest.try_fetch_neg_risk_metadata_rows().await?;
     let source_session_id = format!(
         "discover-session-{}",

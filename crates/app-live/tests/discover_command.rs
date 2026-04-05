@@ -63,6 +63,40 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_smoke_config() {
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn discover_materializes_candidate_and_adoptable_artifacts_from_live_adopted_config() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::spawn();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = format!(
+            "{config}\n[polymarket.source_overrides]\nclob_host = \"https://clob.polymarket.com\"\ndata_api_host = \"https://data-api.polymarket.com\"\nrelayer_host = \"https://relayer-v2.polymarket.com\"\nmarket_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"\nuser_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"\nheartbeat_interval_seconds = 15\nrelayer_poll_interval_seconds = 5\nmetadata_refresh_interval_seconds = 60\n"
+        );
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live discover should execute");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("candidate_count = 1"), "{text}");
+    assert!(text.contains("adoptable_count = 1"), "{text}");
+    assert!(text.contains("recommended_adoptable_revision = "), "{text}");
+
+    assert!(database.has_candidate_rows());
+    assert!(database.has_adoptable_rows());
+    assert!(!database.has_candidate_provenance_rows());
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture(relative);
     let text = fs::read_to_string(&source).expect("fixture should be readable");
@@ -104,10 +138,14 @@ fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String
         .get_mut("polymarket")
         .and_then(|item| item.as_table_like_mut())
         .expect("smoke config fixture should contain [polymarket]");
-    let source = polymarket
-        .get_mut("source_overrides")
-        .and_then(|item| item.as_table_like_mut())
-        .expect("smoke config fixture should contain [polymarket.source_overrides]");
+    let source = if let Some(item) = polymarket.get_mut("source_overrides") {
+        item.as_table_like_mut()
+    } else if let Some(item) = polymarket.get_mut("source") {
+        item.as_table_like_mut()
+    } else {
+        None
+    }
+    .expect("config fixture should contain [polymarket.source] or [polymarket.source_overrides]");
 
     for key in ["clob_host", "data_api_host", "relayer_host"] {
         source.insert(key, value(venue.base_url()));
