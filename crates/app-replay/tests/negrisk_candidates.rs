@@ -320,7 +320,14 @@ async fn replay_summary_prefers_runtime_progress_adoption_anchor_over_revision_s
         .await
         .unwrap();
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-41"), Some("targets-rev-a"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-41"),
+            Some("targets-rev-a"),
+            None,
+        )
         .await
         .unwrap();
 
@@ -360,6 +367,7 @@ async fn replay_summary_fails_closed_when_runtime_progress_anchor_does_not_resol
             7,
             Some("snapshot-41"),
             Some("targets-rev-unrelated"),
+            None,
         )
         .await
         .unwrap();
@@ -446,6 +454,7 @@ async fn replay_summary_fails_closed_when_runtime_progress_anchors_malformed_pro
             7,
             Some("snapshot-malformed-1"),
             Some("targets-rev-anchor"),
+            None,
         )
         .await
         .unwrap();
