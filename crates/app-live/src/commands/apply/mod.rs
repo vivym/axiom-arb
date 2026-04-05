@@ -212,7 +212,9 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             output::quoted_config_path(config_path)
         )];
         if has_conflicting_active_session {
-            next_actions.push(format!("Conflicting active run session: {blocking_run_session_id}"));
+            next_actions.push(format!(
+                "Conflicting active run session: {blocking_run_session_id}"
+            ));
         }
         output::render_next_actions(&next_actions);
         return Err(apply_failure(ApplyFailureKind::ReadinessError(
@@ -702,7 +704,7 @@ fn active_conflicting_run_session_id(summary: &StatusSummary) -> Option<&str> {
 }
 
 fn live_start_blocking_run_session_id(summary: &StatusSummary) -> Option<&str> {
-    active_conflicting_run_session_id(summary).or_else(|| {
+    active_conflicting_run_session_id(summary).or({
         match summary.details.relevant_run_state.as_deref() {
             Some("starting" | "running") => summary.details.relevant_run_session_id.as_deref(),
             _ => None,

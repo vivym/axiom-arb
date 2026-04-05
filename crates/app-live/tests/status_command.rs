@@ -386,8 +386,14 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
 
     let combined = cli::combined(&output);
     assert!(output.status.success(), "{combined}");
-    assert!(combined.contains("Relevant run session: rs-same"), "{combined}");
-    assert!(!combined.contains("Conflicting active run session: rs-same"), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-same"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Conflicting active run session: rs-same"),
+        "{combined}"
+    );
 
     database.cleanup();
 }

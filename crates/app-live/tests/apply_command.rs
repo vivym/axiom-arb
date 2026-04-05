@@ -659,10 +659,19 @@ fn apply_live_config_ready_with_start_blocks_when_matching_active_run_session_is
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Current State"), "{text}");
     assert!(text.contains("Relevant run session: rs-active"), "{text}");
-    assert!(!text.contains("Conflicting active run session: rs-active"), "{text}");
+    assert!(
+        !text.contains("Conflicting active run session: rs-active"),
+        "{text}"
+    );
     assert!(text.contains("Blocked"), "{text}");
-    assert!(text.contains("resolve the existing runtime outside apply"), "{text}");
-    assert!(!text.contains("Starting runtime in the foreground."), "{text}");
+    assert!(
+        text.contains("resolve the existing runtime outside apply"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Starting runtime in the foreground."),
+        "{text}"
+    );
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
