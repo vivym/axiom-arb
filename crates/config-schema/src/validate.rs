@@ -127,16 +127,7 @@ impl<'a> AppLiveConfigView<'a> {
     }
 
     pub fn has_polymarket_source(&self) -> bool {
-        self.raw
-            .polymarket
-            .as_ref()
-            .and_then(|polymarket| {
-                polymarket
-                    .source_overrides
-                    .as_ref()
-                    .or(polymarket.source.as_ref())
-            })
-            .is_some()
+        explicit_polymarket_source(&self.raw).is_some()
     }
 
     pub fn has_polymarket_signer(&self) -> bool {
@@ -164,25 +155,14 @@ impl<'a> AppLiveConfigView<'a> {
     }
 
     pub fn polymarket_source(&self) -> Option<AppLivePolymarketSourceView<'a>> {
-        self.raw
-            .polymarket
-            .as_ref()
-            .and_then(|polymarket| {
-                polymarket
-                    .source_overrides
-                    .as_ref()
-                    .or(polymarket.source.as_ref())
-            })
-            .map(|raw| AppLivePolymarketSourceView { raw })
+        explicit_polymarket_source(&self.raw).map(|raw| AppLivePolymarketSourceView { raw })
     }
 
     pub fn effective_polymarket_source(&self) -> Option<AppLivePolymarketSourceView<'a>> {
-        let polymarket = self.raw.polymarket.as_ref()?;
-        let raw = match polymarket
-            .source_overrides
-            .as_ref()
-            .or(polymarket.source.as_ref())
-        {
+        if self.raw.polymarket.is_none() {
+            return None;
+        }
+        let raw = match explicit_polymarket_source(&self.raw) {
             Some(raw) => raw,
             None => builtin_polymarket_source(),
         };
@@ -583,6 +563,15 @@ fn require_target_source(
         .and_then(|negrisk| negrisk.target_source.as_ref())
         .map(|raw| AppLiveNegRiskTargetSourceView { raw })
         .ok_or_else(|| validation_error("missing required section: negrisk.target_source"))
+}
+
+fn explicit_polymarket_source(raw: &RawAxiomConfig) -> Option<&PolymarketSourceToml> {
+    raw.polymarket.as_ref().and_then(|polymarket| {
+        polymarket
+            .source_overrides
+            .as_ref()
+            .or(polymarket.source.as_ref())
+    })
 }
 
 fn builtin_polymarket_source() -> &'static PolymarketSourceToml {
