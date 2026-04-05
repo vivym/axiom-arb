@@ -1,5 +1,7 @@
 mod support;
 
+use std::{io::Read, net::TcpListener, thread, time::Duration};
+
 use domain::{OrderId, RuntimeMode, RuntimeOverlay, SignedOrderIdentity};
 use reqwest::StatusCode;
 use support::{
@@ -238,6 +240,29 @@ async fn fetch_open_orders_preserves_authenticated_error_body() {
 }
 
 #[tokio::test]
+async fn rest_client_fails_hanging_http_request_with_timeout() {
+    let server = HangingServer::spawn();
+    let client = PolymarketRestClient::new(
+        server.base_url(),
+        server.base_url(),
+        server.base_url(),
+        None,
+        None,
+    )
+    .expect("client should build");
+
+    let finished = tokio::time::timeout(Duration::from_secs(6), client.fetch_clob_status()).await;
+    let err = finished
+        .expect("request should fail before outer timeout")
+        .expect_err("hanging request should time out");
+
+    match err {
+        RestError::Http(inner) => assert!(inner.is_timeout(), "{inner}"),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn fetch_recent_transactions_uses_builder_auth_and_documented_shape() {
     let server = MockServer::spawn(
         "200 OK",
@@ -340,4 +365,39 @@ fn header_value(headers: &reqwest::header::HeaderMap, key: &str) -> String {
         .to_str()
         .expect("header is valid utf-8")
         .to_owned()
+}
+
+struct HangingServer {
+    base_url: reqwest::Url,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl HangingServer {
+    fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind hanging server");
+        let address = listener.local_addr().expect("server addr");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            thread::sleep(Duration::from_secs(10));
+        });
+
+        Self {
+            base_url: reqwest::Url::parse(&format!("http://{address}/")).expect("base url"),
+            handle: Some(handle),
+        }
+    }
+
+    fn base_url(&self) -> reqwest::Url {
+        self.base_url.clone()
+    }
+}
+
+impl Drop for HangingServer {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("join hanging server thread");
+        }
+    }
 }

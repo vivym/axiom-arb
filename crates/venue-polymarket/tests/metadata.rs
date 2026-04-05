@@ -313,7 +313,7 @@ fn sample_empty_refreshing_neg_risk_payloads() -> Vec<ScriptedResponse> {
 }
 
 fn sample_augmented_neg_risk_payloads() -> Vec<ScriptedResponse> {
-    vec![augmented_page_one_ok()]
+    vec![augmented_page_one_ok(), single_page_tail_empty()]
 }
 
 fn sample_out_of_order_refreshing_neg_risk_payloads() -> Vec<ScriptedResponse> {
@@ -328,7 +328,7 @@ fn sample_out_of_order_refreshing_neg_risk_payloads() -> Vec<ScriptedResponse> {
 }
 
 fn sample_array_payloads() -> Vec<ScriptedResponse> {
-    vec![array_payload_page_one_ok()]
+    vec![array_payload_page_one_ok(), single_page_tail_empty()]
 }
 
 fn sample_conflicting_duplicate_payloads() -> Vec<ScriptedResponse> {
@@ -337,7 +337,7 @@ fn sample_conflicting_duplicate_payloads() -> Vec<ScriptedResponse> {
 
 fn page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -345,7 +345,7 @@ fn page_one_ok() -> ScriptedResponse {
 
 fn page_two_retry_needed() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "503 Service Unavailable",
         body: r#"{"error":"temporary upstream failure"}"#,
     }
@@ -353,7 +353,7 @@ fn page_two_retry_needed() -> ScriptedResponse {
 
 fn page_two_retry_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "200 OK",
         body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -361,7 +361,7 @@ fn page_two_retry_ok() -> ScriptedResponse {
 
 fn page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=200"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -369,7 +369,7 @@ fn page_three_empty() -> ScriptedResponse {
 
 fn first_refresh_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -377,7 +377,7 @@ fn first_refresh_page_one_ok() -> ScriptedResponse {
 
 fn first_refresh_page_two_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "200 OK",
         body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -385,7 +385,7 @@ fn first_refresh_page_two_ok() -> ScriptedResponse {
 
 fn first_refresh_page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=200"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -393,7 +393,7 @@ fn first_refresh_page_three_empty() -> ScriptedResponse {
 
 fn empty_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -401,7 +401,7 @@ fn empty_page_one_ok() -> ScriptedResponse {
 
 fn second_refresh_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -409,7 +409,7 @@ fn second_refresh_page_one_ok() -> ScriptedResponse {
 
 fn second_refresh_page_two_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "200 OK",
         body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -417,7 +417,7 @@ fn second_refresh_page_two_ok() -> ScriptedResponse {
 
 fn second_refresh_page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=200"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -425,7 +425,7 @@ fn second_refresh_page_three_empty() -> ScriptedResponse {
 
 fn retryable_failure_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -433,15 +433,23 @@ fn retryable_failure_page_one_ok() -> ScriptedResponse {
 
 fn retryable_failure_page_two_unavailable() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "503 Service Unavailable",
         body: r#"{"error":"temporary upstream failure"}"#,
     }
 }
 
+fn single_page_tail_empty() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
+        status_line: "200 OK",
+        body: r#"[]"#,
+    }
+}
+
 fn augmented_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-aug-1","parentEvent":"family-aug","negRisk":true,"enableNegRisk":true,"negRiskAugmented":true,"markets":[{"conditionId":"condition-aug-1","clobTokenIds":"token-aug-1","outcomes":"Augmented","shortOutcomes":"Augmented","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -449,7 +457,7 @@ fn augmented_page_one_ok() -> ScriptedResponse {
 
 fn out_of_order_first_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -457,7 +465,7 @@ fn out_of_order_first_page_one_ok() -> ScriptedResponse {
 
 fn out_of_order_first_page_two_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "200 OK",
         body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -465,7 +473,7 @@ fn out_of_order_first_page_two_ok() -> ScriptedResponse {
 
 fn out_of_order_first_page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=200"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -473,7 +481,7 @@ fn out_of_order_first_page_three_empty() -> ScriptedResponse {
 
 fn out_of_order_second_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-3","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]},{"id":"event-1","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -481,7 +489,7 @@ fn out_of_order_second_page_one_ok() -> ScriptedResponse {
 
 fn out_of_order_second_page_two_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         status_line: "200 OK",
         body: r#"[{"id":"event-4","parentEvent":"family-2","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-4","clobTokenIds":"token-4","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-1","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Other","shortOutcomes":"Other","negRisk":true,"negRiskOther":true}]}]"#,
     }
@@ -489,7 +497,7 @@ fn out_of_order_second_page_two_ok() -> ScriptedResponse {
 
 fn out_of_order_second_page_three_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=4"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=200"],
         status_line: "200 OK",
         body: r#"[]"#,
     }
@@ -497,7 +505,7 @@ fn out_of_order_second_page_three_empty() -> ScriptedResponse {
 
 fn array_payload_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-array","title":"Who will win the election?","parentEvent":"family-array","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-array","groupItemTitle":"Alice","question":"Will Alice win the election?","clobTokenIds":["token-yes-array","token-no-array"],"outcomes":["Yes","No"],"shortOutcomes":["Yes","No"],"negRisk":true,"negRiskOther":false}]}]"#,
     }
@@ -505,7 +513,7 @@ fn array_payload_page_one_ok() -> ScriptedResponse {
 
 fn conflicting_duplicate_page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-dup-a","title":"Who will win?","parentEvent":"family-dup","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-dup","groupItemTitle":"Alice","question":"Will Alice win?","clobTokenIds":["token-yes-dup","token-no-dup"],"outcomes":["Yes","No"],"shortOutcomes":["Yes","No"],"negRisk":true,"negRiskOther":false}]},{"id":"event-dup-b","title":"Who will win?","parentEvent":"family-dup","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-dup","groupItemTitle":"Bob","question":"Will Bob win?","clobTokenIds":["token-yes-dup","token-no-dup"],"outcomes":["Yes","No"],"shortOutcomes":["Yes","No"],"negRisk":true,"negRiskOther":false}]}]"#,
     }

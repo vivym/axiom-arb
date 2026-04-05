@@ -101,12 +101,12 @@ pub fn sample_client_with_instrumentation(
     sample_metadata_client(
         vec![
             ScriptedResponse {
-                expected_query_fragments: &["limit=2", "offset=0"],
+                expected_query_fragments: &["limit=100", "offset=0"],
                 status_line: "200 OK",
                 body: SUCCESS_METADATA_PAGE_ONE,
             },
             ScriptedResponse {
-                expected_query_fragments: &["limit=2", "offset=2"],
+                expected_query_fragments: &["limit=100", "offset=100"],
                 status_line: "200 OK",
                 body: SUCCESS_METADATA_PAGE_TWO,
             },
@@ -121,7 +121,7 @@ pub fn sample_failing_client_with_instrumentation(
 ) -> (PolymarketRestClient, ScriptedServer) {
     sample_metadata_client(
         vec![ScriptedResponse {
-            expected_query_fragments: &["limit=2", "offset=0"],
+            expected_query_fragments: &["limit=100", "offset=0"],
             status_line: "200 OK",
             body: FAILURE_METADATA_PAGE,
         }],
@@ -136,17 +136,17 @@ pub fn sample_refresh_then_fail_client_with_instrumentation(
     sample_metadata_client(
         vec![
             ScriptedResponse {
-                expected_query_fragments: &["limit=2", "offset=0"],
+                expected_query_fragments: &["limit=100", "offset=0"],
                 status_line: "200 OK",
                 body: SUCCESS_METADATA_PAGE_ONE,
             },
             ScriptedResponse {
-                expected_query_fragments: &["limit=2", "offset=2"],
+                expected_query_fragments: &["limit=100", "offset=100"],
                 status_line: "200 OK",
                 body: SUCCESS_METADATA_PAGE_TWO,
             },
             ScriptedResponse {
-                expected_query_fragments: &["limit=2", "offset=0"],
+                expected_query_fragments: &["limit=100", "offset=0"],
                 status_line: "200 OK",
                 body: FAILURE_METADATA_PAGE,
             },

@@ -2,6 +2,7 @@ use std::{
     error::Error as StdError,
     fmt,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use reqwest::header::HeaderMap;
@@ -19,6 +20,8 @@ use crate::proxy::ProxyConfigError;
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
 };
+
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct PolymarketRestClient {
@@ -360,7 +363,7 @@ impl PolymarketRestClient {
 }
 
 fn build_default_http_client(proxy_url: Option<&Url>) -> Result<Client, RestClientBuildError> {
-    let mut builder = Client::builder();
+    let mut builder = Client::builder().timeout(DEFAULT_HTTP_TIMEOUT);
     if let Some(proxy_url) = proxy_url {
         builder = builder.proxy(Proxy::all(proxy_url.as_str())?);
     }

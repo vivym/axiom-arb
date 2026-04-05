@@ -774,14 +774,14 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
 
 fn page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
 
 fn page_two_empty() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=100"],
         body: r#"[]"#,
     }
 }

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::rest::{PolymarketRestClient, RestError};
 
-const NEG_RISK_PAGE_LIMIT: usize = 2;
+const NEG_RISK_PAGE_LIMIT: usize = 100;
 const NEG_RISK_PAGE_MAX_ATTEMPTS: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +280,7 @@ impl PolymarketRestClient {
         loop {
             let page = self.fetch_neg_risk_metadata_page(offset).await?;
             let page_count = page.len();
+            tracing::debug!(offset, page_count, "discover fetched metadata page");
 
             for event in page {
                 let event_id = event
@@ -358,7 +359,7 @@ impl PolymarketRestClient {
                 }
             }
 
-            if page_count < NEG_RISK_PAGE_LIMIT {
+            if page_count == 0 {
                 break;
             }
 
