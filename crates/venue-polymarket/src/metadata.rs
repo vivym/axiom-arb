@@ -44,6 +44,9 @@ pub enum NegRiskMetadataError {
         existing_outcome_label: String,
         incoming_outcome_label: String,
     },
+    NoValidRowsAfterFiltering {
+        skipped_rows: usize,
+    },
 }
 
 impl fmt::Display for NegRiskMetadataError {
@@ -70,6 +73,10 @@ impl fmt::Display for NegRiskMetadataError {
             } => write!(
                 f,
                 "conflicting neg-risk metadata for family {event_family_id} condition {condition_id} token {token_id}: {existing_outcome_label:?} vs {incoming_outcome_label:?}"
+            ),
+            Self::NoValidRowsAfterFiltering { skipped_rows } => write!(
+                f,
+                "neg-risk discovery produced no valid rows after filtering {skipped_rows} malformed rows"
             ),
         }
     }
@@ -276,6 +283,7 @@ impl PolymarketRestClient {
         let mut rows = Vec::<CanonicalNegRiskRow>::new();
         let mut seen = HashMap::<NegRiskMemberKey, usize>::new();
         let mut offset = 0usize;
+        let mut skipped_malformed_rows = 0usize;
 
         loop {
             let page = self.fetch_neg_risk_metadata_page(offset).await?;
@@ -283,13 +291,26 @@ impl PolymarketRestClient {
             tracing::debug!(offset, page_count, "discover fetched metadata page");
 
             for event in page {
-                let event_id = event
-                    .id
-                    .clone()
-                    .ok_or(NegRiskMetadataError::MissingEventId)?;
+                let Some(event_id) = normalized_optional_string(event.id.clone()) else {
+                    let skipped_rows = event
+                        .markets
+                        .iter()
+                        .filter(|market| {
+                            event.neg_risk.unwrap_or(false) || market.neg_risk.unwrap_or(false)
+                        })
+                        .count()
+                        .max(1);
+                    skipped_malformed_rows += skipped_rows;
+                    tracing::warn!(
+                        skipped_rows,
+                        "skipping malformed neg-risk event missing id"
+                    );
+                    continue;
+                };
                 let family_id = event
                     .parent_event_id
                     .clone()
+                    .and_then(|value| normalized_optional_string(Some(value)))
                     .unwrap_or_else(|| event_id.clone());
 
                 for market in event.markets {
@@ -299,17 +320,27 @@ impl PolymarketRestClient {
                         continue;
                     }
 
-                    let condition_id = market.condition_id.clone().ok_or_else(|| {
-                        NegRiskMetadataError::MissingConditionId {
-                            event_id: event_id.clone(),
-                        }
-                    })?;
-                    let token_id = market.yes_token_id().ok_or_else(|| {
-                        NegRiskMetadataError::MissingTokenId {
-                            event_id: event_id.clone(),
-                            condition_id: condition_id.clone(),
-                        }
-                    })?;
+                    let Some(condition_id) = normalized_optional_string(market.condition_id.clone())
+                    else {
+                        skipped_malformed_rows += 1;
+                        tracing::warn!(
+                            event_id,
+                            raw_condition_id = ?market.condition_id,
+                            raw_clob_token_ids = ?market.clob_token_ids.clone().into_vec(),
+                            "skipping malformed neg-risk market missing condition id"
+                        );
+                        continue;
+                    };
+                    let Some(token_id) = market.yes_token_id() else {
+                        skipped_malformed_rows += 1;
+                        tracing::warn!(
+                            event_id,
+                            condition_id,
+                            raw_clob_token_ids = ?market.clob_token_ids.clone().into_vec(),
+                            "skipping malformed neg-risk market missing token id"
+                        );
+                        continue;
+                    };
                     let outcome_label = market.outcome_label(event.title.as_deref());
                     let is_other = market.neg_risk_other.unwrap_or(false)
                         || outcome_label.eq_ignore_ascii_case("other");
@@ -364,6 +395,13 @@ impl PolymarketRestClient {
             }
 
             offset += NEG_RISK_PAGE_LIMIT;
+        }
+
+        if rows.is_empty() && skipped_malformed_rows > 0 {
+            return Err(NegRiskMetadataError::NoValidRowsAfterFiltering {
+                skipped_rows: skipped_malformed_rows,
+            }
+            .into());
         }
 
         canonicalize_rows(&mut rows);
@@ -575,6 +613,12 @@ fn is_retryable_metadata_error(error: &RestError) -> bool {
         | RestError::Url(_)
         | RestError::MissingField(_) => false,
     }
+}
+
+fn normalized_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|entry| entry.trim().to_owned())
+        .filter(|entry| !entry.is_empty())
 }
 
 impl GammaMarket {

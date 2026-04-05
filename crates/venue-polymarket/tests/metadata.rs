@@ -166,6 +166,40 @@ async fn conflicting_duplicate_rows_within_one_revision_are_reported() {
     }
 }
 
+#[tokio::test]
+async fn malformed_neg_risk_rows_are_skipped_when_valid_rows_exist() {
+    let server = spawn_local_listener(sample_malformed_then_valid_payloads());
+    let client = test_client(server.base_url());
+
+    let rows = client
+        .try_fetch_neg_risk_metadata_rows()
+        .await
+        .expect("valid rows should survive malformed peers");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].event_id, "event-valid-1");
+    assert_eq!(rows[0].condition_id, "condition-valid-1");
+    assert_eq!(rows[0].token_id, "token-valid-1");
+}
+
+#[tokio::test]
+async fn discovery_fails_closed_when_all_neg_risk_rows_are_malformed() {
+    let server = spawn_local_listener(sample_all_malformed_payloads());
+    let client = test_client(server.base_url());
+
+    let err = client
+        .try_fetch_neg_risk_metadata_rows()
+        .await
+        .expect_err("all-malformed discovery should fail closed");
+
+    match err {
+        RestError::Metadata(NegRiskMetadataError::NoValidRowsAfterFiltering { skipped_rows }) => {
+            assert_eq!(skipped_rows, 1);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
 fn test_client(base_url: Url) -> PolymarketRestClient {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -333,6 +367,14 @@ fn sample_array_payloads() -> Vec<ScriptedResponse> {
 
 fn sample_conflicting_duplicate_payloads() -> Vec<ScriptedResponse> {
     vec![conflicting_duplicate_page_one_ok()]
+}
+
+fn sample_malformed_then_valid_payloads() -> Vec<ScriptedResponse> {
+    vec![malformed_and_valid_page_one_ok(), single_page_tail_empty()]
+}
+
+fn sample_all_malformed_payloads() -> Vec<ScriptedResponse> {
+    vec![all_malformed_page_one_ok(), single_page_tail_empty()]
 }
 
 fn page_one_ok() -> ScriptedResponse {
@@ -516,5 +558,21 @@ fn conflicting_duplicate_page_one_ok() -> ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         status_line: "200 OK",
         body: r#"[{"id":"event-dup-a","title":"Who will win?","parentEvent":"family-dup","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-dup","groupItemTitle":"Alice","question":"Will Alice win?","clobTokenIds":["token-yes-dup","token-no-dup"],"outcomes":["Yes","No"],"shortOutcomes":["Yes","No"],"negRisk":true,"negRiskOther":false}]},{"id":"event-dup-b","title":"Who will win?","parentEvent":"family-dup","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-dup","groupItemTitle":"Bob","question":"Will Bob win?","clobTokenIds":["token-yes-dup","token-no-dup"],"outcomes":["Yes","No"],"shortOutcomes":["Yes","No"],"negRisk":true,"negRiskOther":false}]}]"#,
+    }
+}
+
+fn malformed_and_valid_page_one_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
+        status_line: "200 OK",
+        body: r#"[{"id":"316248","title":"Malformed family","parentEvent":"family-bad","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"","clobTokenIds":"","outcomes":"Broken","shortOutcomes":"Broken","negRisk":true,"negRiskOther":false}]},{"id":"event-valid-1","title":"Valid family","parentEvent":"family-valid","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-valid-1","clobTokenIds":"token-valid-1","outcomes":"Valid","shortOutcomes":"Valid","negRisk":true,"negRiskOther":false}]}]"#,
+    }
+}
+
+fn all_malformed_page_one_ok() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
+        status_line: "200 OK",
+        body: r#"[{"id":"316248","title":"Malformed family","parentEvent":"family-bad","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"","clobTokenIds":"","outcomes":"Broken","shortOutcomes":"Broken","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
