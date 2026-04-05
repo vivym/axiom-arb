@@ -2,6 +2,8 @@
 
 This runbook covers the operator-facing control-plane workflow for startup-scoped `neg-risk` target revisions.
 
+For a fresh database, the preferred Day 0 entrypoint is `app-live bootstrap`. This runbook is the lower-level fallback once you want direct control over `discover -> targets candidates -> targets adopt`, or when you need to inspect or change already-discovered target state.
+
 Use it when you need to:
 
 - inspect advisory candidates and adoptable revisions
@@ -25,9 +27,10 @@ export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
 
 ## 1. Inspect Candidate And Adoptable State
 
-List advisory candidates, adoptable revisions, and the currently adopted revision:
+First materialize or refresh discovery artifacts, then list advisory candidates, adoptable revisions, and the currently adopted revision:
 
 ```bash
+cargo run -p app-live -- discover --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 ```
 
@@ -37,7 +40,7 @@ Expected output shape:
 - `adoptable adoptable_revision = ... candidate_revision = ... operator_target_revision = ...`
 - `adopted operator_target_revision = ... adoptable_revision = ... candidate_revision = ...`
 
-Use this command to choose the revision you want to adopt. `advisory` rows are not yet adopted. `adoptable` rows are eligible inputs to `targets adopt`.
+Use this command to choose the revision you want to adopt. `advisory` rows are discovery artifacts only; they are not yet adopted. `adoptable` rows are eligible inputs to `targets adopt`.
 
 ## 2. Check High-Level Readiness First
 
@@ -49,6 +52,8 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 
 `status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
 
+- `discover`
+- `targets candidates`
 - `targets adopt`
 - `apply` for Day 1+ progression
 - controlled restart
@@ -102,7 +107,7 @@ The normal path is to adopt from an `adoptable_revision`:
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
 ```
 
-This rewrites `[negrisk.target_source].operator_target_revision` in the TOML and records adoption history.
+This rewrites `[negrisk.target_source].operator_target_revision` in the TOML, writes or reuses canonical adoption provenance for that startup revision, and appends adoption history.
 
 The command prints:
 
@@ -124,6 +129,12 @@ Fail-closed cases:
 - providing neither selector flag
 - selecting an adoptable revision that does not resolve to exactly one rendered operator target revision
 - selecting a revision whose durable provenance is missing or malformed
+
+Discovery and adoption are intentionally different lifecycle steps:
+
+- `discover` persists advisory candidate rows and adoptable revision rows
+- `targets adopt` writes canonical provenance that links the chosen `operator_target_revision` back to its adoptable and candidate revisions
+- repeated adoption of the same `operator_target_revision` preserves that canonical provenance and still appends a new adoption-history row
 
 ## 5. Restart To Activate The Newly Adopted Revision
 
@@ -194,6 +205,7 @@ For day-to-day target control-plane operations, use this sequence:
 
 ```bash
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
+cargo run -p app-live -- discover --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
@@ -206,9 +218,14 @@ For live configs, use that high-level flow only after adoption is complete and r
 
 Interpret `status` before `apply` like this:
 
-- `target-adoption-required`
-  - for `real-user shadow smoke`, `apply` can inline the adopt step
-  - for live configs, run `targets candidates`, then `targets adopt`
+- `discovery-required`
+  - run `bootstrap` for the preferred Day 0 flow, or run `discover` if you are intentionally on the low-level fallback
+- `discovery-ready-not-adoptable`
+  - discovery artifacts exist, but adoption is still blocked by the recorded reasons
+  - inspect `targets candidates` before trying anything else
+- `adoptable-ready`
+  - for `real-user shadow smoke`, prefer `apply`; it can inline the adopt step now that adoptable artifacts already exist
+  - otherwise run `targets adopt`
 - `restart-required`
   - perform a controlled restart before expecting the running daemon to pick up the configured revision
 - `live-rollout-required` or `smoke-rollout-required`
@@ -248,10 +265,18 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 
 If `status` shows:
 
-- `target-adoption-required`
-  - no startup-scoped adopted target revision is currently configured
-  - inspect `targets candidates`, then adopt one
-  - after adoption and rollout posture exist, continue with `apply`
+- `discovery-required`
+  - no discovery artifacts exist yet for the adopted-target path
+  - run `bootstrap` for the preferred Day 0 flow, or `discover` if you are intentionally using the low-level fallback
+
+- `discovery-ready-not-adoptable`
+  - discovery artifacts exist, but the recorded reasons still block adoption
+  - inspect `targets candidates` before trying to adopt anything
+
+- `adoptable-ready`
+  - no startup-scoped adopted target revision is currently configured yet, but discoverable adoptable input now exists
+  - for `real-user shadow smoke`, prefer `apply` to inline the adopt step
+  - otherwise inspect `targets candidates`, then adopt one
 
 - `restart-required`
   - the configured revision differs from the daemon's active revision
@@ -265,7 +290,7 @@ If `targets status` shows:
 
 - `configured_operator_target_revision = unavailable`
   - no startup-scoped target revision is currently configured
-  - inspect `targets candidates`, then adopt one
+  - if this is a fresh database, run `discover` first, then inspect `targets candidates`, then adopt one
 
 - `provenance = unavailable`
   - the configured revision exists but cannot be resolved back through durable provenance

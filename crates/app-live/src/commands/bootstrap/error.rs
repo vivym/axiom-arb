@@ -14,9 +14,6 @@ pub enum BootstrapError {
         config_path: PathBuf,
         follow_up: SmokeFollowUp,
     },
-    SmokeStartUnsupported {
-        config_path: PathBuf,
-    },
     SmokeStartRequiresRolloutReadiness {
         config_path: PathBuf,
     },
@@ -52,31 +49,24 @@ impl fmt::Display for BootstrapError {
                 match follow_up {
                     SmokeFollowUp::NeedsAdoption => write!(
                         f,
-                        "bootstrap smoke follow-through is not implemented yet; {} already exists, so continue with: app-live targets candidates --config {} ; app-live targets adopt --config {} --adoptable-revision ADOPTABLE_REVISION",
+                        "bootstrap is waiting for explicit adoption confirmation for {}; rerun app-live bootstrap --config {} and enter one of the listed adoptable revisions",
                         config_path.display(),
-                        quoted_config_path,
                         quoted_config_path,
                     ),
                     SmokeFollowUp::AlreadyAdopted => write!(
                         f,
-                        "bootstrap smoke follow-through is not implemented yet; {} already has an adopted target anchor, so continue with: app-live targets status --config {} ; app-live targets show-current --config {}",
+                        "bootstrap detected an already adopted smoke target for {}; continue with app-live bootstrap --config {}",
                         config_path.display(),
-                        quoted_config_path,
                         quoted_config_path,
                     ),
                     SmokeFollowUp::LegacyExplicitTargets => write!(
                         f,
-                        "bootstrap smoke follow-through is not implemented yet; {} still uses legacy explicit targets, so move it aside or rewrite it to an adopted target source, then rerun app-live bootstrap --config {} before continuing with targets candidates/adopt",
+                        "{} still uses legacy explicit targets, so move it aside or rewrite it to an adopted target source, then rerun app-live bootstrap --config {}",
                         config_path.display(),
                         quoted_config_path,
                     ),
                 }
             }
-            Self::SmokeStartUnsupported { config_path } => write!(
-                f,
-                "bootstrap smoke does not support --start yet; complete config first, then continue with targets workflow using {}",
-                config_path.display()
-            ),
             Self::SmokeStartRequiresRolloutReadiness { config_path } => write!(
                 f,
                 "bootstrap smoke --start requires rollout readiness; {} is still preflight-only, so rerun without --start or enable rollout readiness first",

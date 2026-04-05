@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use super::flow::DiscoveryArtifactsSource;
+
 pub fn print_ready_summary(config_path: &Path) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
     println!("Paper bootstrap ready");
@@ -21,14 +23,54 @@ pub fn print_starting_smoke_runtime(config_path: &Path) {
     );
 }
 
-pub fn print_smoke_ready_summary(config_path: &Path) {
-    let quoted_config_path = shell_quote(config_path.display().to_string());
-    println!("Smoke bootstrap config written");
-    println!("Config: {}", config_path.display());
-    println!("Next: app-live targets candidates --config {quoted_config_path}");
+pub fn print_smoke_discovery_completed(
+    source: DiscoveryArtifactsSource,
+    adoptable_revisions: &[String],
+    recommended_adoptable_revision: Option<&str>,
+) {
+    match source {
+        DiscoveryArtifactsSource::FreshDiscover => println!("Discovery completed"),
+        DiscoveryArtifactsSource::Persisted => println!("Using persisted discovery artifacts"),
+    }
+    println!("Adoptable revisions: {}", adoptable_revisions.join(", "));
     println!(
-        "Next: app-live targets adopt --config {quoted_config_path} --adoptable-revision ADOPTABLE_REVISION",
+        "Recommended: {}",
+        recommended_adoptable_revision.unwrap_or("none")
     );
+}
+
+pub fn print_waiting_for_explicit_adoption_confirmation(config_path: &Path) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    println!("Waiting for explicit adoption confirmation");
+    println!(
+        "Next: rerun app-live bootstrap --config {quoted_config_path} and enter one of the listed adoptable revisions"
+    );
+}
+
+pub fn print_smoke_discovery_ready_not_adoptable(
+    source: DiscoveryArtifactsSource,
+    config_path: &Path,
+    reasons: &[String],
+) {
+    let quoted_config_path = shell_quote(config_path.display().to_string());
+    match source {
+        DiscoveryArtifactsSource::FreshDiscover => {
+            println!("Discovery completed but no adoptable revisions were produced")
+        }
+        DiscoveryArtifactsSource::Persisted => {
+            println!("Using persisted discovery artifacts");
+            println!("No adoptable revisions were produced");
+        }
+    }
+    println!(
+        "Reasons: {}",
+        if reasons.is_empty() {
+            "none recorded".to_owned()
+        } else {
+            reasons.join(", ")
+        }
+    );
+    println!("Next: rerun app-live discover --config {quoted_config_path}");
 }
 
 pub fn print_smoke_preflight_only_summary(config_path: &Path, family_ids: &[String]) {

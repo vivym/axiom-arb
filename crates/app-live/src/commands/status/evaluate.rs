@@ -12,7 +12,10 @@ use super::model::{
     StatusAction, StatusDetails, StatusMode, StatusReadiness, StatusRolloutState, StatusSummary,
     StatusTargetSource,
 };
-use crate::commands::targets::state::load_target_control_plane_state;
+use crate::commands::targets::state::{
+    load_target_candidates_catalog, load_target_control_plane_state, summarize_target_candidates,
+    TargetCandidatesSummary, TargetControlPlaneState,
+};
 use crate::startup::resolve_startup_targets;
 
 const RUN_SESSION_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(5);
@@ -35,9 +38,6 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
         Ok(raw) => {
             if let Some(legacy_summary) = legacy_explicit_targets_summary_from_raw(&raw) {
                 return StatusOutcome::Summary(Box::new(legacy_summary));
-            }
-            if let Some(adopted_summary) = adopted_target_adoption_required_summary_from_raw(&raw) {
-                return StatusOutcome::Summary(Box::new(adopted_summary));
             }
 
             match ValidatedConfig::new(raw) {
@@ -131,20 +131,43 @@ fn adopted_summary(
     config: &config_schema::AppLiveConfigView<'_>,
     smoke_mode: bool,
 ) -> Result<StatusOutcome, String> {
-    let config_path_string = config_path.display().to_string();
-    let config_fingerprint = config_fingerprint(config_path).map_err(|error| error.to_string())?;
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    let (state, resolved_targets, relevant_run_session, conflicting_active_run_session) =
-        runtime.block_on(async {
-            let pool = connect_pool_from_env()
-                .await
-                .map_err(|error| error.to_string())?;
-            let state = load_target_control_plane_state(&pool, config_path)
-                .await
-                .map_err(|error| error.to_string())?;
+    let (pool, state) = runtime.block_on(async {
+        let pool = connect_pool_from_env()
+            .await
+            .map_err(|error| error.to_string())?;
+        let state = load_target_control_plane_state(&pool, config_path)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok::<_, String>((pool, state))
+    })?;
+
+    let mode = if smoke_mode {
+        StatusMode::RealUserShadowSmoke
+    } else {
+        StatusMode::Live
+    };
+    let configured_target = match state.configured_operator_target_revision.clone() {
+        Some(revision) => revision,
+        None => {
+            let catalog = runtime.block_on(async {
+                load_target_candidates_catalog(&pool)
+                    .await
+                    .map_err(|error| error.to_string())
+            })?;
+            let summary = summarize_target_candidates(&catalog);
+            return Ok(StatusOutcome::Summary(Box::new(pre_adoption_summary(
+                mode, &state, &summary,
+            ))));
+        }
+    };
+    let config_path_string = config_path.display().to_string();
+    let config_fingerprint = config_fingerprint(config_path).map_err(|error| error.to_string())?;
+    let (resolved_targets, relevant_run_session, conflicting_active_run_session) = runtime
+        .block_on(async {
             let resolved_targets = resolve_startup_targets(&pool, config)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -170,7 +193,7 @@ fn adopted_summary(
                         mode: "live",
                         config_path: &config_path_string,
                         config_fingerprint: &config_fingerprint,
-                        configured_target: state.configured_operator_target_revision.as_deref(),
+                        configured_target: Some(configured_target.as_str()),
                         startup_target_revision_at_start: &startup_target_revision,
                         rollout_state,
                         stale_after: RUN_SESSION_STALE_AFTER,
@@ -198,32 +221,8 @@ fn adopted_summary(
                 None => None,
             };
 
-            Ok::<_, String>((state, resolved_targets, relevant, conflicting))
+            Ok::<_, String>((resolved_targets, relevant, conflicting))
         })?;
-
-    let mode = if smoke_mode {
-        StatusMode::RealUserShadowSmoke
-    } else {
-        StatusMode::Live
-    };
-    let configured_target = match state.configured_operator_target_revision {
-        Some(revision) => revision,
-        None => {
-            let mut details =
-                session_details(&relevant_run_session, &conflicting_active_run_session);
-            details.active_target = state.active_operator_target_revision;
-            details.target_source = Some(StatusTargetSource::AdoptedTargets);
-            details.reason =
-                Some("operator_target_revision is required for adopted target source".to_owned());
-
-            return Ok(StatusOutcome::Summary(Box::new(StatusSummary {
-                mode: Some(mode),
-                readiness: StatusReadiness::TargetAdoptionRequired,
-                details,
-                actions: vec![StatusAction::RunTargetsAdopt],
-            })));
-        }
-    };
     let family_ids = resolved_targets
         .targets
         .targets()
@@ -402,34 +401,54 @@ fn legacy_explicit_targets_summary_from_raw(
     ))
 }
 
-fn adopted_target_adoption_required_summary_from_raw(
-    raw: &config_schema::RawAxiomConfig,
-) -> Option<StatusSummary> {
-    if raw.runtime.mode != RuntimeModeToml::Live {
-        return None;
-    }
-
-    let target_source = raw.negrisk.as_ref()?.target_source.as_ref()?;
-    if target_source.source != config_schema::NegRiskTargetSourceKindToml::Adopted {
-        return None;
-    }
-    if target_source.operator_target_revision.is_some() {
-        return None;
-    }
-
-    Some(StatusSummary {
-        mode: Some(if raw.runtime.real_user_shadow_smoke {
-            StatusMode::RealUserShadowSmoke
+fn pre_adoption_summary(
+    mode: StatusMode,
+    state: &TargetControlPlaneState,
+    summary: &TargetCandidatesSummary,
+) -> StatusSummary {
+    let (readiness, actions, reason) = if summary.adoptable_revision_count > 0 {
+        let recommendation = summary
+            .recommended_adoptable_revision
+            .as_deref()
+            .unwrap_or("unavailable");
+        (
+            StatusReadiness::AdoptableReady,
+            vec![StatusAction::ChooseAndAdoptRevision],
+            Some(format!(
+                "adoptable revisions are available; recommended_adoptable_revision = {recommendation}"
+            )),
+        )
+    } else if summary.advisory_candidate_count > 0 {
+        let reason = if summary.non_adoptable_reasons.is_empty() {
+            "discovery artifacts exist but no adoptable revisions were produced".to_owned()
         } else {
-            StatusMode::Live
-        }),
-        readiness: StatusReadiness::TargetAdoptionRequired,
+            format!(
+                "discovery artifacts exist but no adoptable revisions were produced; reasons: {}",
+                summary.non_adoptable_reasons.join("; ")
+            )
+        };
+        (
+            StatusReadiness::DiscoveryReadyNotAdoptable,
+            vec![StatusAction::InspectDiscoveryReasons],
+            Some(reason),
+        )
+    } else {
+        (
+            StatusReadiness::DiscoveryRequired,
+            vec![StatusAction::RunDiscover],
+            Some("no persisted discovery artifacts exist yet".to_owned()),
+        )
+    };
+
+    StatusSummary {
+        mode: Some(mode),
+        readiness,
         details: StatusDetails {
             configured_target: None,
-            active_target: None,
+            active_target: state.active_operator_target_revision.clone(),
             target_source: Some(StatusTargetSource::AdoptedTargets),
             rollout_state: None,
-            restart_needed: None,
+            restart_needed: state.restart_needed,
             relevant_run_session_id: None,
             relevant_run_state: None,
             relevant_run_started_at: None,
@@ -438,12 +457,10 @@ fn adopted_target_adoption_required_summary_from_raw(
             conflicting_active_run_state: None,
             conflicting_active_started_at: None,
             conflicting_active_startup_target_revision: None,
-            reason: Some(
-                "operator_target_revision is required for adopted target source".to_owned(),
-            ),
+            reason,
         },
-        actions: vec![StatusAction::RunTargetsAdopt],
-    })
+        actions,
+    }
 }
 
 fn rollout_covers_families(

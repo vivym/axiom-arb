@@ -1,11 +1,14 @@
-use std::{future::Future, pin::Pin};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use rust_decimal::Decimal;
 use venue_polymarket::{
-    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
+    HeartbeatFetchResult, HeartbeatReconcileReason, NegRiskMarketMetadata, OrderHeartbeatMonitor,
+    OrderHeartbeatState,
 };
 
 use crate::{
+    config::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget},
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     queues::{FollowUpQueue, FollowUpWork, SnapshotNotice},
@@ -48,6 +51,12 @@ pub struct RelayerTaskGroup;
 
 #[derive(Debug, Default)]
 pub struct MetadataTaskGroup;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataDiscoveryBatch {
+    pub inputs: Vec<InputTaskEvent>,
+    pub rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+}
 
 #[derive(Debug, Default)]
 pub struct DecisionTaskGroup {
@@ -188,6 +197,65 @@ impl DecisionTaskGroup {
 }
 
 impl MetadataTaskGroup {
+    pub fn authoritative_discovery_batch(
+        rows: &[NegRiskMarketMetadata],
+        source_session_id: &str,
+        observed_at: DateTime<Utc>,
+    ) -> MetadataDiscoveryBatch {
+        let mut grouped = BTreeMap::<String, Vec<&NegRiskMarketMetadata>>::new();
+        for row in rows {
+            grouped
+                .entry(row.event_family_id.clone())
+                .or_default()
+                .push(row);
+        }
+
+        let mut inputs = Vec::new();
+        let mut rendered_live_targets = BTreeMap::new();
+        let mut journal_seq = 1_i64;
+
+        for (family_id, mut family_rows) in grouped {
+            family_rows.sort_by(|left, right| {
+                left.condition_id
+                    .cmp(&right.condition_id)
+                    .then_with(|| left.token_id.cmp(&right.token_id))
+            });
+            let anchor = family_rows[0];
+            let discovery_event_id = format!(
+                "metadata-{}-{}-discovery",
+                anchor.metadata_snapshot_hash, family_id
+            );
+
+            inputs.push(Self::discovery_input(
+                journal_seq,
+                source_session_id,
+                &discovery_event_id,
+                &family_id,
+                observed_at,
+            ));
+            journal_seq += 1;
+
+            let members = family_rows
+                .into_iter()
+                .map(|row| NegRiskMemberLiveTarget {
+                    condition_id: row.condition_id.clone(),
+                    token_id: row.token_id.clone(),
+                    price: Decimal::new(43, 2),
+                    quantity: Decimal::new(5, 0),
+                })
+                .collect();
+            rendered_live_targets.insert(
+                family_id.clone(),
+                NegRiskFamilyLiveTarget { family_id, members },
+            );
+        }
+
+        MetadataDiscoveryBatch {
+            inputs,
+            rendered_live_targets,
+        }
+    }
+
     pub fn discovery_input(
         journal_seq: i64,
         source_session_id: impl Into<String>,
@@ -241,10 +309,11 @@ fn heartbeat_attention_reason(reason: HeartbeatReconcileReason) -> &'static str 
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
-    use venue_polymarket::HeartbeatFetchResult;
+    use chrono::{Duration, TimeZone, Utc};
+    use domain::{MarketRoute, NegRiskVariant};
+    use venue_polymarket::{HeartbeatFetchResult, NegRiskMarketMetadata};
 
-    use super::{HeartbeatSource, HeartbeatTaskGroup};
+    use super::{HeartbeatSource, HeartbeatTaskGroup, MetadataTaskGroup};
 
     #[test]
     fn runtime_originated_heartbeat_fact_uses_run_session_id_as_source_session_id() {
@@ -275,6 +344,61 @@ mod tests {
         assert!(group.now <= after);
         assert!(group.state.last_success_at >= before - Duration::seconds(1));
         assert!(group.state.last_success_at <= after + Duration::seconds(1));
+    }
+
+    #[test]
+    fn authoritative_discovery_batch_emits_only_discovery_inputs() {
+        let batch = MetadataTaskGroup::authoritative_discovery_batch(
+            &[
+                NegRiskMarketMetadata {
+                    event_family_id: "family-a".to_owned(),
+                    event_id: "event-1".to_owned(),
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    outcome_label: "Alpha".to_owned(),
+                    route: MarketRoute::NegRisk,
+                    enable_neg_risk: Some(true),
+                    neg_risk_augmented: Some(false),
+                    neg_risk_variant: NegRiskVariant::Standard,
+                    is_placeholder: false,
+                    is_other: false,
+                    discovery_revision: 1,
+                    metadata_snapshot_hash: "snapshot-hash-1".to_owned(),
+                },
+                NegRiskMarketMetadata {
+                    event_family_id: "family-a".to_owned(),
+                    event_id: "event-2".to_owned(),
+                    condition_id: "condition-2".to_owned(),
+                    token_id: "token-2".to_owned(),
+                    outcome_label: "Beta".to_owned(),
+                    route: MarketRoute::NegRisk,
+                    enable_neg_risk: Some(true),
+                    neg_risk_augmented: Some(false),
+                    neg_risk_variant: NegRiskVariant::Standard,
+                    is_placeholder: false,
+                    is_other: false,
+                    discovery_revision: 1,
+                    metadata_snapshot_hash: "snapshot-hash-1".to_owned(),
+                },
+            ],
+            "discover-session-1",
+            Utc.with_ymd_and_hms(2026, 4, 5, 10, 0, 0).unwrap(),
+        );
+
+        assert_eq!(batch.inputs.len(), 1);
+        assert_eq!(
+            batch.inputs[0].event.payload.kind(),
+            "family_discovery_observed"
+        );
+        assert_eq!(
+            batch.inputs[0].event.source_session_id,
+            "discover-session-1"
+        );
+        assert_eq!(
+            batch.inputs[0].event.source_event_id,
+            "metadata-snapshot-hash-1-family-a-discovery"
+        );
+        assert_eq!(batch.rendered_live_targets.len(), 1);
     }
 
     #[derive(Debug)]

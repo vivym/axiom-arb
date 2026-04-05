@@ -1,18 +1,13 @@
 #![allow(dead_code)]
 
 use std::{
-    borrow::ToOwned,
     env,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use persistence::{
-    models::{
-        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        OperatorTargetAdoptionHistoryRow, RuntimeProgressRow,
-    },
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
-    OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo,
+    models::{AdoptableTargetRevisionRow, CandidateTargetSetRow},
+    run_migrations, CandidateArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -45,7 +40,7 @@ impl TestDatabase {
                 .await
                 .expect("test database should connect");
             let schema = format!(
-                "app_live_apply_{}_{}",
+                "app_live_discover_{}_{}",
                 std::process::id(),
                 NEXT_SCHEMA_ID.fetch_add(1, Ordering::Relaxed)
             );
@@ -80,7 +75,49 @@ impl TestDatabase {
         &self.database_url
     }
 
-    pub fn seed_adoptable_revision(
+    pub fn has_candidate_rows(&self) -> bool {
+        self.count_rows("candidate_target_sets") > 0
+    }
+
+    pub fn has_adoptable_rows(&self) -> bool {
+        self.count_rows("adoptable_target_revisions") > 0
+    }
+
+    pub fn has_candidate_provenance_rows(&self) -> bool {
+        self.count_rows("candidate_adoption_provenance") > 0
+    }
+
+    pub fn seed_advisory_candidate(&self, candidate_revision: &str, reason: &str) {
+        self.runtime.block_on(async {
+            CandidateArtifactRepo
+                .upsert_candidate_target_set(
+                    &self.pool,
+                    &CandidateTargetSetRow {
+                        candidate_revision: candidate_revision.to_owned(),
+                        snapshot_id: format!("snapshot-{candidate_revision}"),
+                        source_revision: format!("discovery-{candidate_revision}"),
+                        payload: json!({
+                            "candidate_revision": candidate_revision,
+                            "snapshot_id": format!("snapshot-{candidate_revision}"),
+                            "targets": [
+                                {
+                                    "target_id": format!("target-{candidate_revision}"),
+                                    "family_id": "family-a",
+                                    "validation": {
+                                        "status": "deferred",
+                                        "reason": reason,
+                                    }
+                                }
+                            ]
+                        }),
+                    },
+                )
+                .await
+                .expect("advisory candidate row should persist");
+        });
+    }
+
+    pub fn seed_adoptable_revision_without_provenance(
         &self,
         adoptable_revision: &str,
         candidate_revision: &str,
@@ -97,6 +134,12 @@ impl TestDatabase {
                         payload: json!({
                             "candidate_revision": candidate_revision,
                             "snapshot_id": format!("snapshot-{candidate_revision}"),
+                            "targets": [
+                                {
+                                    "target_id": format!("target-{candidate_revision}"),
+                                    "family_id": "family-a",
+                                }
+                            ]
                         }),
                     },
                 )
@@ -132,100 +175,7 @@ impl TestDatabase {
                 )
                 .await
                 .expect("adoptable row should persist");
-
-            CandidateAdoptionRepo
-                .upsert_provenance(
-                    &self.pool,
-                    &CandidateAdoptionProvenanceRow {
-                        operator_target_revision: operator_target_revision.to_owned(),
-                        adoptable_revision: adoptable_revision.to_owned(),
-                        candidate_revision: candidate_revision.to_owned(),
-                    },
-                )
-                .await
-                .expect("candidate provenance should persist");
         });
-    }
-
-    pub fn seed_adopted_target_with_active_revision(
-        &self,
-        operator_target_revision: &str,
-        active_operator_target_revision: Option<&str>,
-    ) {
-        self.seed_adoptable_revision("adoptable-9", "candidate-9", operator_target_revision);
-
-        self.runtime.block_on(async {
-            if let Some(active_operator_target_revision) = active_operator_target_revision {
-                RuntimeProgressRepo
-                    .record_progress(
-                        &self.pool,
-                        41,
-                        7,
-                        Some("snapshot-7"),
-                        Some(active_operator_target_revision),
-                        None,
-                    )
-                    .await
-                    .expect("runtime progress should seed");
-            }
-        });
-    }
-
-    pub fn seed_advisory_candidate(&self, candidate_revision: &str, reason: &str) {
-        self.runtime.block_on(async {
-            CandidateArtifactRepo
-                .upsert_candidate_target_set(
-                    &self.pool,
-                    &CandidateTargetSetRow {
-                        candidate_revision: candidate_revision.to_owned(),
-                        snapshot_id: format!("snapshot-{candidate_revision}"),
-                        source_revision: format!("discovery-{candidate_revision}"),
-                        payload: json!({
-                            "candidate_revision": candidate_revision,
-                            "snapshot_id": format!("snapshot-{candidate_revision}"),
-                            "targets": [
-                                {
-                                    "target_id": format!("target-{candidate_revision}"),
-                                    "family_id": "family-a",
-                                    "validation": {
-                                        "status": "deferred",
-                                        "reason": reason,
-                                    }
-                                }
-                            ]
-                        }),
-                    },
-                )
-                .await
-                .expect("advisory candidate row should persist");
-        });
-    }
-
-    pub fn latest_history(&self) -> Option<OperatorTargetAdoptionHistoryRow> {
-        self.runtime.block_on(async {
-            OperatorTargetAdoptionHistoryRepo
-                .latest(&self.pool)
-                .await
-                .expect("history lookup should succeed")
-        })
-    }
-
-    pub fn history_count(&self) -> i64 {
-        self.runtime.block_on(async {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operator_target_adoption_history")
-                .fetch_one(&self.pool)
-                .await
-                .expect("history count should load")
-        })
-    }
-
-    pub fn runtime_progress(&self) -> Option<RuntimeProgressRow> {
-        self.runtime.block_on(async {
-            RuntimeProgressRepo
-                .current(&self.pool)
-                .await
-                .expect("runtime progress lookup should succeed")
-        })
     }
 
     pub fn cleanup(self) {
@@ -239,18 +189,22 @@ impl TestDatabase {
             self.admin_pool.close().await;
         });
     }
+
+    fn count_rows(&self, table: &str) -> i64 {
+        self.runtime.block_on(async {
+            sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&self.pool)
+                .await
+                .expect("row count should load")
+        })
+    }
 }
 
 fn schema_scoped_database_url(database_url: &str, schema: &str) -> String {
-    if let Some((base, query)) = database_url.split_once('?') {
-        let mut params: Vec<String> = query
-            .split('&')
-            .filter(|entry| !entry.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        params.push(format!("options=-csearch_path%3D{schema}"));
-        format!("{base}?{}", params.join("&"))
+    let options = format!("options=-csearch_path%3D{schema}");
+    if database_url.contains('?') {
+        format!("{database_url}&{options}")
     } else {
-        format!("{database_url}?options=-csearch_path%3D{schema}")
+        format!("{database_url}?{options}")
     }
 }

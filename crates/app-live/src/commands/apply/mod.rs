@@ -99,10 +99,29 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
     };
 
     match summary.readiness {
-        StatusReadiness::TargetAdoptionRequired => {
+        StatusReadiness::DiscoveryRequired => {
             return stop_live_apply(
                 &summary,
-                "Stop because target adoption is still required.".to_owned(),
+                "Stop because discovery artifacts are still required before live apply can continue."
+                    .to_owned(),
+                "Blocked".to_owned(),
+                status_next_actions(config_path, &summary),
+                ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
+            );
+        }
+        StatusReadiness::DiscoveryReadyNotAdoptable => {
+            return stop_live_apply(
+                &summary,
+                "Stop because discovery has not produced an adoptable revision yet.".to_owned(),
+                "Blocked".to_owned(),
+                status_next_actions(config_path, &summary),
+                ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
+            );
+        }
+        StatusReadiness::AdoptableReady => {
+            return stop_live_apply(
+                &summary,
+                "Stop because live target adoption is still required.".to_owned(),
                 "Blocked".to_owned(),
                 status_next_actions(config_path, &summary),
                 ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
@@ -280,24 +299,14 @@ fn execute_smoke_apply(config_path: &Path, start_requested: bool) -> Result<(), 
     loop {
         match status::evaluate::evaluate(config_path) {
             StatusOutcome::Summary(summary) => {
-                let reason = summary
-                    .details
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| "blocked".to_owned());
-                let failure = if summary.readiness
-                    == status::model::StatusReadiness::RestartRequired
-                    && summary.details.rollout_state == Some(StatusRolloutState::Required)
-                {
-                    ApplyFailureKind::Transition(model::ApplyStage::EnsureSmokeRollout)
-                } else {
-                    ApplyFailureKind::from_status_readiness(summary.readiness, reason)
-                };
+                let failure = smoke_readiness_failure(config_path, &summary);
 
-                if failure == ApplyFailureKind::Transition(model::ApplyStage::EnsureTargetAnchor) {
+                if failure
+                    == ApplyFailureKind::Transition(model::ApplyStage::ChooseAdoptableRevision)
+                {
                     if !prompt::stdin_is_interactive() {
                         return Err(apply_failure(ApplyFailureKind::Transition(
-                            model::ApplyStage::EnsureTargetAnchor,
+                            model::ApplyStage::ChooseAdoptableRevision,
                         )));
                     }
 
@@ -310,7 +319,7 @@ fn execute_smoke_apply(config_path: &Path, start_requested: bool) -> Result<(), 
                         }
                         Ok(InlineTargetAdoptionOutcome::Unavailable) => {
                             return Err(apply_failure(ApplyFailureKind::Transition(
-                                model::ApplyStage::EnsureTargetAnchor,
+                                model::ApplyStage::ChooseAdoptableRevision,
                             )))
                         }
                         Err(error) => {
@@ -583,6 +592,38 @@ fn status_next_actions(config_path: &Path, summary: &StatusSummary) -> Vec<Strin
                 .replace("{config}", &quoted_config_path)
         })
         .collect()
+}
+
+fn smoke_readiness_failure(
+    config_path: &Path,
+    summary: &status::model::StatusSummary,
+) -> ApplyFailureKind {
+    let reason = summary
+        .details
+        .reason
+        .clone()
+        .unwrap_or_else(|| "blocked".to_owned());
+    let quoted_config_path = output::quoted_config_path(config_path);
+
+    if summary.readiness == status::model::StatusReadiness::RestartRequired
+        && summary.details.rollout_state == Some(StatusRolloutState::Required)
+    {
+        return ApplyFailureKind::Transition(model::ApplyStage::EnsureSmokeRollout);
+    }
+
+    match summary.readiness {
+        status::model::StatusReadiness::DiscoveryRequired => ApplyFailureKind::ReadinessError(
+            format!(
+                "{reason}; run app-live bootstrap --config {quoted_config_path} or app-live discover --config {quoted_config_path}"
+            ),
+        ),
+        status::model::StatusReadiness::DiscoveryReadyNotAdoptable => {
+            ApplyFailureKind::ReadinessError(format!(
+                "{reason}; inspect discovery reasons with app-live targets candidates --config {quoted_config_path}"
+            ))
+        }
+        _ => ApplyFailureKind::from_status_readiness(summary.readiness, reason),
+    }
 }
 
 fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool) -> Vec<String> {

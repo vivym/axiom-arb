@@ -49,7 +49,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-7".to_owned()),
             adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
-            operator_target_revision: Some("targets-rev-operator".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 1,
             adoptable_target_count: 1,
             deferred_target_count: 0,
@@ -62,7 +62,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
 }
 
 #[test]
-fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
+fn candidate_bridge_derives_future_operator_target_revision_from_rendered_live_targets() {
     let bridge = CandidateBridge::for_tests();
     let candidate_set = CandidateTargetSet::new(
         "candidate-bridge-9",
@@ -83,11 +83,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
     ));
 
     let render = bridge
-        .render(
-            &candidate_set,
-            Some("targets-rev-9"),
-            &sample_rendered_live_targets(),
-        )
+        .render(&candidate_set, None, &sample_rendered_live_targets())
         .expect("candidate render");
 
     assert_eq!(
@@ -125,11 +121,12 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
             adoptable: persistence::models::AdoptableTargetRevisionRow {
                 adoptable_revision: "adoptable-candidate-bridge-9".to_owned(),
                 candidate_revision: "candidate-bridge-9".to_owned(),
-                rendered_operator_target_revision: "targets-rev-9".to_owned(),
+                rendered_operator_target_revision: sample_rendered_live_target_revision()
+                    .to_owned(),
                 payload: json!({
                     "adoptable_revision": "adoptable-candidate-bridge-9",
                     "candidate_revision": "candidate-bridge-9",
-                    "rendered_operator_target_revision": "targets-rev-9",
+                    "rendered_operator_target_revision": sample_rendered_live_target_revision(),
                     "snapshot_id": "snapshot-9",
                     "source_anchor": {
                         "source_kind": "metadata_refresh",
@@ -140,7 +137,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
                     "bridge_policy_version": "bridge-policy-v1",
                     "candidate_policy_version": "policy-v1",
                     "compatibility": {
-                        "operator_target_revision_supplied": true,
+                        "operator_target_revision_supplied": false,
                         "advisory_only": true,
                     },
                     "rendered_live_targets": sample_rendered_live_targets(),
@@ -247,14 +244,13 @@ fn candidate_bridge_rejects_non_adoptable_candidate_set_even_with_operator_targe
 }
 
 #[test]
-fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_operator_revision_missing(
-) {
+fn discovery_supervisor_materializes_adoptable_output_without_prior_operator_revision() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
         None,
-        BTreeMap::new(),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -273,8 +269,98 @@ fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_o
         report,
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-7".to_owned()),
+            adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
+            target_count: 1,
+            adoptable_target_count: 1,
+            deferred_target_count: 0,
+            excluded_target_count: 0,
+            live_dispatch_woken: false,
+            disposition: "adoptable".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn discovery_supervisor_defers_non_authoritative_notice_when_backfill_is_missing() {
+    let publication = discovery_only_candidate_publication();
+    assert!(publication
+        .view
+        .as_ref()
+        .expect("candidate publication view")
+        .discovery_records[0]
+        .backfill_completed_at
+        .is_none());
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
             adoptable_revision: None,
             operator_target_revision: None,
+            target_count: 1,
+            adoptable_target_count: 0,
+            deferred_target_count: 1,
+            excluded_target_count: 0,
+            live_dispatch_woken: false,
+            disposition: "deferred".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_backfill_facts() {
+    let publication = discovery_only_candidate_publication();
+    assert!(publication
+        .view
+        .as_ref()
+        .expect("candidate publication view")
+        .discovery_records[0]
+        .backfill_completed_at
+        .is_none());
+    let candidate_notice = CandidateNotice::authoritative_from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
+            adoptable_revision: Some("adoptable-candidate-pub-discovery-only".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 1,
             adoptable_target_count: 1,
             deferred_target_count: 0,
@@ -404,7 +490,7 @@ fn discovery_supervisor_keeps_all_discovery_records_in_candidate_targets() {
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-multi".to_owned()),
             adoptable_revision: Some("adoptable-candidate-pub-multi".to_owned()),
-            operator_target_revision: Some("targets-rev-multi".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 2,
             adoptable_target_count: 2,
             deferred_target_count: 0,
@@ -485,6 +571,30 @@ fn candidate_notice_queue_coalesced_keeps_distinct_operator_or_restriction_varia
 }
 
 #[test]
+fn candidate_notice_queue_coalesced_keeps_authoritative_notices_distinct() {
+    let publication = ready_candidate_publication();
+    let mut queue = CandidateNoticeQueue::default();
+    queue.push(CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-a"),
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    ));
+    queue.push(CandidateNotice::authoritative_from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-a"),
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    ));
+
+    let coalesced = queue.coalesced();
+
+    assert_eq!(coalesced.len(), 2);
+}
+
+#[test]
 fn discovery_and_backfill_input_helpers_emit_through_ingress_path() {
     let discovered_at = Utc.with_ymd_and_hms(2026, 3, 28, 12, 0, 0).unwrap();
 
@@ -522,6 +632,25 @@ fn discovery_and_backfill_input_helpers_emit_through_ingress_path() {
 
 fn ready_candidate_publication() -> CandidatePublication {
     ready_candidate_publication_with_family_id("family-7")
+}
+
+fn discovery_only_candidate_publication() -> CandidatePublication {
+    let discovered_at = Utc.with_ymd_and_hms(2026, 3, 28, 10, 0, 0).unwrap();
+    let mut store = StateStore::default();
+    let discovery = domain::ExternalFactEvent::family_discovery_observed(
+        "metadata-refresh-1",
+        "evt-discovery-only-0",
+        "family-a",
+        discovered_at,
+    );
+    StateApplier::new(&mut store)
+        .apply(7, discovery)
+        .expect("discovery fact applies");
+
+    CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::ready("candidate-pub-discovery-only"),
+    )
 }
 
 fn ready_candidate_publication_with_family_id(family_id: &str) -> CandidatePublication {
@@ -596,4 +725,8 @@ fn sample_rendered_live_targets() -> BTreeMap<String, NegRiskFamilyLiveTarget> {
             }],
         },
     )])
+}
+
+fn sample_rendered_live_target_revision() -> &'static str {
+    "sha256:50ec69009b6695d74391623b20a7fc8e9902fcb99bcd9be15a3defbda864110c"
 }

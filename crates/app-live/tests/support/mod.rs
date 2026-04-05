@@ -8,6 +8,7 @@ use std::{
 
 pub mod apply_db;
 pub mod cli;
+pub mod discover_db;
 pub mod run_session_db;
 pub mod status_db;
 pub mod verify_db;

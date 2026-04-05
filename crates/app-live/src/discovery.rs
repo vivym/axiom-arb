@@ -10,7 +10,7 @@ use persistence::{
 use serde_json::json;
 use state::{CandidatePublication, DirtyDomain};
 
-use crate::config::NegRiskFamilyLiveTarget;
+use crate::config::{neg_risk_live_target_revision_from_targets, NegRiskFamilyLiveTarget};
 use crate::queues::{CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,14 +57,11 @@ impl CandidateBridge {
     pub fn render(
         &self,
         candidate_set: &CandidateTargetSet,
-        operator_target_revision: Option<&str>,
+        _operator_target_revision: Option<&str>,
         rendered_live_targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
     ) -> Result<CandidateArtifactRender, String> {
-        let Some(operator_target_revision) = operator_target_revision.map(str::to_owned) else {
-            return Err(
-                "candidate bridge requires explicit rendered operator target revision".to_owned(),
-            );
-        };
+        let rendered_operator_target_revision =
+            neg_risk_live_target_revision_from_targets(rendered_live_targets);
         let candidate_revision = candidate_set.target_set_id.clone();
         let Some(adoptable_revision) = candidate_set
             .adoptable_revision
@@ -79,11 +76,11 @@ impl CandidateBridge {
             adoptable: AdoptableTargetRevisionRow {
                 adoptable_revision: adoptable_revision.clone(),
                 candidate_revision: candidate_revision.clone(),
-                rendered_operator_target_revision: operator_target_revision.clone(),
+                rendered_operator_target_revision: rendered_operator_target_revision.clone(),
                 payload: json!({
                     "adoptable_revision": adoptable_revision,
                     "candidate_revision": candidate_revision,
-                    "rendered_operator_target_revision": operator_target_revision,
+                    "rendered_operator_target_revision": rendered_operator_target_revision,
                     "snapshot_id": candidate_set.source_snapshot_id.clone(),
                     "source_anchor": {
                         "source_kind": candidate_set.discovery_record.source.source_kind.clone(),
@@ -94,7 +91,7 @@ impl CandidateBridge {
                     "bridge_policy_version": "bridge-policy-v1",
                     "candidate_policy_version": candidate_set.policy.policy_version.clone(),
                     "compatibility": {
-                        "operator_target_revision_supplied": true,
+                        "operator_target_revision_supplied": false,
                         "advisory_only": true,
                     },
                     "rendered_live_targets": rendered_live_targets,
@@ -182,6 +179,7 @@ impl CandidateValidationEngine {
         publication: &CandidatePublication,
         restriction: &CandidateRestrictionTruth,
         _operator_target_revision: Option<&str>,
+        authoritative: bool,
     ) -> Result<(CandidateTargetSet, String, ValidationSummary), String> {
         let Some(view) = publication.view.as_ref() else {
             return Err("candidate publication is not ready".to_owned());
@@ -198,7 +196,7 @@ impl CandidateValidationEngine {
                 CandidateTarget::new(
                     format!("candidate-target-{}", record.family_id.as_str()),
                     EventFamilyId::from(record.family_id.as_str()),
-                    validation_for_record(record, restriction),
+                    validation_for_record(record, restriction, authoritative),
                 )
             })
             .collect();
@@ -309,6 +307,7 @@ impl DiscoverySupervisor {
             operator_target_revision,
             rendered_live_targets,
             restriction,
+            authoritative,
         } = notice;
 
         if !dirty_domains.contains(&DirtyDomain::Candidates) {
@@ -336,10 +335,11 @@ impl DiscoverySupervisor {
                 &publication,
                 &restriction,
                 operator_target_revision.as_deref(),
+                authoritative,
             )?;
         let candidate = self.bridge.render_candidate(&candidate_set);
 
-        if disposition != "adoptable" || operator_target_revision.is_none() {
+        if disposition != "adoptable" {
             return Ok(DiscoveryOutcome {
                 report: DiscoveryReport {
                     candidate_revision: Some(candidate.candidate_revision.clone()),
@@ -378,14 +378,7 @@ impl DiscoverySupervisor {
                 live_dispatch_woken: false,
                 disposition,
             },
-            provenance: Some(CandidateAdoptionProvenanceRow {
-                operator_target_revision: rendered
-                    .adoptable
-                    .rendered_operator_target_revision
-                    .clone(),
-                adoptable_revision: rendered.adoptable.adoptable_revision.clone(),
-                candidate_revision: rendered.candidate.candidate_revision.clone(),
-            }),
+            provenance: None,
             candidate: Some(rendered.candidate),
             adoptable: Some(rendered.adoptable),
         })
@@ -432,9 +425,10 @@ impl ValidationSummary {
 fn validation_for_record(
     discovery_record: &FamilyDiscoveryRecord,
     restriction: &CandidateRestrictionTruth,
+    authoritative: bool,
 ) -> CandidateValidationResult {
     if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
-        || discovery_record.backfill_completed_at.is_none()
+        || (!authoritative && discovery_record.backfill_completed_at.is_none())
     {
         CandidateValidationResult::Deferred {
             reason: deferred_reason(discovery_record, restriction),

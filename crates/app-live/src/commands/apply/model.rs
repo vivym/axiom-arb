@@ -5,7 +5,7 @@ use crate::commands::status::model::StatusReadiness;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyStage {
     LoadReadiness,
-    EnsureTargetAnchor,
+    ChooseAdoptableRevision,
     EnsureSmokeRollout,
     ConfirmManualRestartBoundary,
     RunPreflight,
@@ -17,7 +17,7 @@ impl ApplyStage {
     pub fn label(self) -> &'static str {
         match self {
             Self::LoadReadiness => "load-readiness",
-            Self::EnsureTargetAnchor => "ensure-target-anchor",
+            Self::ChooseAdoptableRevision => "choose-adoptable-revision",
             Self::EnsureSmokeRollout => "ensure-smoke-rollout",
             Self::ConfirmManualRestartBoundary => "confirm-manual-restart-boundary",
             Self::RunPreflight => "run-preflight",
@@ -78,8 +78,10 @@ impl ApplyFailureKind {
     pub fn from_status_readiness(readiness: StatusReadiness, reason: String) -> Self {
         match readiness {
             StatusReadiness::Blocked => Self::ReadinessError(reason),
-            StatusReadiness::TargetAdoptionRequired => {
-                Self::Transition(ApplyStage::EnsureTargetAnchor)
+            StatusReadiness::DiscoveryRequired => Self::ReadinessError(reason),
+            StatusReadiness::DiscoveryReadyNotAdoptable => Self::ReadinessError(reason),
+            StatusReadiness::AdoptableReady => {
+                Self::Transition(ApplyStage::ChooseAdoptableRevision)
             }
             StatusReadiness::SmokeRolloutRequired => {
                 Self::Transition(ApplyStage::EnsureSmokeRollout)
@@ -103,8 +105,8 @@ mod tests {
     fn apply_stage_labels_use_operator_vocabulary() {
         assert_eq!(ApplyStage::LoadReadiness.label(), "load-readiness");
         assert_eq!(
-            ApplyStage::EnsureTargetAnchor.label(),
-            "ensure-target-anchor"
+            ApplyStage::ChooseAdoptableRevision.label(),
+            "choose-adoptable-revision"
         );
         assert_eq!(
             ApplyStage::EnsureSmokeRollout.label(),

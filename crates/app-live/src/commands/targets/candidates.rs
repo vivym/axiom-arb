@@ -5,8 +5,8 @@ use persistence::connect_pool_from_env;
 use crate::{
     cli::TargetCandidatesArgs,
     commands::targets::state::{
-        load_target_candidates_catalog, load_target_control_plane_state, TargetCandidatesCatalog,
-        TargetControlPlaneState,
+        load_target_candidates_catalog, load_target_control_plane_state,
+        summarize_target_candidates, TargetCandidatesCatalog, TargetControlPlaneState,
     },
 };
 
@@ -27,6 +27,19 @@ pub fn execute(args: TargetCandidatesArgs) -> Result<(), Box<dyn Error>> {
 }
 
 fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesCatalog) {
+    let summary = summarize_target_candidates(catalog);
+    println!(
+        "recommended_adoptable_revision = {}",
+        summary
+            .recommended_adoptable_revision
+            .as_deref()
+            .unwrap_or("none")
+    );
+    println!(
+        "non_adoptable_summary = {}",
+        summary.non_adoptable_summary()
+    );
+
     if catalog.advisory_candidates.is_empty() {
         println!("advisory = none");
     } else {

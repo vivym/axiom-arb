@@ -8,8 +8,11 @@ use persistence::connect_pool_from_env;
 
 use crate::cli::{BootstrapArgs, DoctorArgs};
 use crate::commands::{
-    doctor, init, run,
-    targets::{adopt, state::load_target_candidates_catalog},
+    discover, doctor, init, run,
+    targets::{
+        adopt,
+        state::{load_target_candidates_catalog, summarize_target_candidates},
+    },
 };
 use crate::startup;
 
@@ -30,6 +33,17 @@ enum MissingConfigOutcome {
     SmokeWritten,
 }
 
+enum SmokeAdoptionOutcome {
+    AwaitingConfirmation,
+    Adopted,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum DiscoveryArtifactsSource {
+    FreshDiscover,
+    Persisted,
+}
+
 enum SmokeBootstrapState {
     PreflightOnly { family_ids: Vec<String> },
     ShadowWorkReady { family_ids: Vec<String> },
@@ -44,20 +58,19 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     if !config_path.exists() {
         match complete_missing_config(&config_path, args.start)? {
             MissingConfigOutcome::PaperWritten => {}
-            MissingConfigOutcome::SmokeWritten => {
-                output::print_smoke_ready_summary(&config_path);
-                return Ok(());
-            }
+            MissingConfigOutcome::SmokeWritten => {}
         }
     }
 
     match detect_existing_bootstrap_mode(&config_path)? {
         ExistingBootstrapMode::Paper => {}
         ExistingBootstrapMode::Smoke(follow_up) => match follow_up {
-            SmokeFollowUp::NeedsAdoption => {
-                inline_smoke_adoption(&config_path)?;
-                smoke_mode = true;
-            }
+            SmokeFollowUp::NeedsAdoption => match inline_smoke_adoption(&config_path)? {
+                SmokeAdoptionOutcome::AwaitingConfirmation => return Ok(()),
+                SmokeAdoptionOutcome::Adopted => {
+                    smoke_mode = true;
+                }
+            },
             SmokeFollowUp::AlreadyAdopted => {
                 smoke_mode = true;
             }
@@ -110,7 +123,7 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
 
 fn complete_missing_config(
     config_path: &std::path::Path,
-    start_requested: bool,
+    _start_requested: bool,
 ) -> Result<MissingConfigOutcome, BootstrapError> {
     let mut prompt = prompt::BootstrapPrompt::new(None);
     let selection = if prompt::stdin_is_terminal() {
@@ -127,11 +140,6 @@ fn complete_missing_config(
         prompt::BootstrapModeSelection::Paper => init::paper_wizard_result(config_path)
             .map_err(|error| BootstrapError::Init(Box::new(error)))?,
         prompt::BootstrapModeSelection::Smoke => {
-            if start_requested {
-                return Err(BootstrapError::SmokeStartUnsupported {
-                    config_path: config_path.to_path_buf(),
-                });
-            }
             let mut prompt = prompt::BootstrapPrompt::new(None);
             init::smoke_wizard_with_prompt(&mut prompt, config_path)
                 .map_err(|error| BootstrapError::Init(Box::new(error)))?
@@ -193,25 +201,35 @@ fn detect_existing_bootstrap_mode(
     }
 }
 
-fn inline_smoke_adoption(config_path: &Path) -> Result<(), BootstrapError> {
+fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, BootstrapError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| BootstrapError::Init(Box::new(error)))?;
 
-    let (pool, catalog) = runtime
+    let (pool, catalog, artifacts_source) = runtime
         .block_on(async {
             let pool = connect_pool_from_env().await?;
-            let catalog = load_target_candidates_catalog(&pool).await?;
-            Ok::<_, Box<dyn std::error::Error>>((pool, catalog))
+            let mut catalog = load_target_candidates_catalog(&pool).await?;
+            let mut artifacts_source = DiscoveryArtifactsSource::Persisted;
+            if catalog.advisory_candidates.is_empty() && catalog.adoptable_revisions.is_empty() {
+                let _ = discover::run_discover_from_config(config_path).await?;
+                catalog = load_target_candidates_catalog(&pool).await?;
+                artifacts_source = DiscoveryArtifactsSource::FreshDiscover;
+            }
+            Ok::<_, Box<dyn std::error::Error>>((pool, catalog, artifacts_source))
         })
         .map_err(BootstrapError::Init)?;
 
+    let summary = summarize_target_candidates(&catalog);
+
     if catalog.adoptable_revisions.is_empty() {
-        return Err(BootstrapError::SmokeConfigCompletionOnly {
-            config_path: config_path.to_path_buf(),
-            follow_up: SmokeFollowUp::NeedsAdoption,
-        });
+        output::print_smoke_discovery_ready_not_adoptable(
+            artifacts_source,
+            config_path,
+            &summary.non_adoptable_reasons,
+        );
+        return Ok(SmokeAdoptionOutcome::AwaitingConfirmation);
     }
 
     let adoptable_revisions = catalog
@@ -219,10 +237,34 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<(), BootstrapError> {
         .iter()
         .map(|adoptable| adoptable.adoptable_revision.clone())
         .collect::<Vec<_>>();
+    output::print_smoke_discovery_completed(
+        artifacts_source,
+        &adoptable_revisions,
+        summary.recommended_adoptable_revision.as_deref(),
+    );
+
     let mut prompt = prompt::BootstrapPrompt::new(None);
-    let selected_adoptable_revision =
-        prompt::choose_adoptable_revision(&mut prompt, &adoptable_revisions)
+    let selected_adoptable_revision = if prompt::stdin_is_terminal() {
+        prompt::maybe_choose_adoptable_revision(
+            &mut prompt,
+            prompt::AdoptableRevisionInput::Terminal,
+            &adoptable_revisions,
+        )
+    } else {
+        let first_line = prompt::read_piped_first_line()
             .map_err(|error| BootstrapError::Init(Box::new(error)))?;
+        prompt::maybe_choose_adoptable_revision(
+            &mut prompt,
+            prompt::AdoptableRevisionInput::Piped(first_line),
+            &adoptable_revisions,
+        )
+    }
+    .map_err(|error| BootstrapError::Init(Box::new(error)))?;
+
+    let Some(selected_adoptable_revision) = selected_adoptable_revision else {
+        output::print_waiting_for_explicit_adoption_confirmation(config_path);
+        return Ok(SmokeAdoptionOutcome::AwaitingConfirmation);
+    };
 
     runtime
         .block_on(adopt::adopt_selected_revision(
@@ -231,8 +273,9 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<(), BootstrapError> {
             None,
             Some(selected_adoptable_revision.as_str()),
         ))
-        .map(|_| ())
-        .map_err(BootstrapError::Init)
+        .map_err(BootstrapError::Init)?;
+
+    Ok(SmokeAdoptionOutcome::Adopted)
 }
 
 fn ensure_smoke_rollout_state(

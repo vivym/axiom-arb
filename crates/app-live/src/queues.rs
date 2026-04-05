@@ -148,6 +148,8 @@ pub struct CandidateNotice {
     pub operator_target_revision: Option<String>,
     pub rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     pub restriction: CandidateRestrictionTruth,
+    // Authoritative discovery may render adoptable output without observed backfill completion.
+    pub authoritative: bool,
 }
 
 impl CandidateNotice {
@@ -158,12 +160,48 @@ impl CandidateNotice {
         rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
         restriction: CandidateRestrictionTruth,
     ) -> Self {
+        Self::from_publication_with_authority(
+            publication,
+            dirty_domains,
+            operator_target_revision,
+            rendered_live_targets,
+            restriction,
+            false,
+        )
+    }
+
+    pub fn authoritative_from_publication(
+        publication: &CandidatePublication,
+        dirty_domains: impl IntoIterator<Item = DirtyDomain>,
+        operator_target_revision: Option<&str>,
+        rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+        restriction: CandidateRestrictionTruth,
+    ) -> Self {
+        Self::from_publication_with_authority(
+            publication,
+            dirty_domains,
+            operator_target_revision,
+            rendered_live_targets,
+            restriction,
+            true,
+        )
+    }
+
+    fn from_publication_with_authority(
+        publication: &CandidatePublication,
+        dirty_domains: impl IntoIterator<Item = DirtyDomain>,
+        operator_target_revision: Option<&str>,
+        rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+        restriction: CandidateRestrictionTruth,
+        authoritative: bool,
+    ) -> Self {
         Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
             rendered_live_targets,
             restriction,
+            authoritative,
         }
     }
 }
@@ -195,6 +233,7 @@ impl CandidateNoticeQueue {
                     notice.publication.state_version,
                     notice.operator_target_revision.clone(),
                     notice.restriction.clone(),
+                    notice.authoritative,
                 ),
                 notice.clone(),
             );

@@ -28,6 +28,25 @@ pub struct TargetCandidatesCatalog {
     pub adoptable_revisions: Vec<AdoptableTargetRevisionRow>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetCandidatesSummary {
+    pub advisory_candidate_count: usize,
+    pub adoptable_revision_count: usize,
+    pub deferred_target_count: usize,
+    pub excluded_target_count: usize,
+    pub recommended_adoptable_revision: Option<String>,
+    pub non_adoptable_reasons: Vec<String>,
+}
+
+impl TargetCandidatesSummary {
+    pub fn non_adoptable_summary(&self) -> String {
+        format!(
+            "deferred:{} excluded:{}",
+            self.deferred_target_count, self.excluded_target_count
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedAdoptionSelection {
     pub operator_target_revision: String,
@@ -110,35 +129,21 @@ pub async fn resolve_adoption_selection(
                 &adoptable.payload,
                 &adoptable.rendered_operator_target_revision,
             )?;
-            let provenance = CandidateAdoptionRepo
-                .get_by_operator_target_revision(
-                    pool,
-                    &adoptable.rendered_operator_target_revision,
-                )
+            CandidateArtifactRepo
+                .get_candidate_target_set(pool, &adoptable.candidate_revision)
                 .await?
                 .ok_or_else(|| {
                     TargetStateError::new(format!(
-                        "rendered operator_target_revision {} for adoptable_revision {adoptable_revision} has no durable adoption provenance",
-                        adoptable.rendered_operator_target_revision
+                        "candidate_revision {} is unavailable",
+                        adoptable.candidate_revision
                     ))
                 })?;
 
-            if provenance.adoptable_revision != adoptable.adoptable_revision
-                || provenance.candidate_revision != adoptable.candidate_revision
-            {
-                return Err(TargetStateError::new(format!(
-                    "adoptable_revision {adoptable_revision} does not match durable adoption provenance"
-                ))
-                .into());
-            }
-
-            selection_from_lineage(
-                pool,
-                &adoptable.rendered_operator_target_revision,
-                &adoptable.adoptable_revision,
-                &adoptable.candidate_revision,
-            )
-            .await
+            Ok(ResolvedAdoptionSelection {
+                operator_target_revision: adoptable.rendered_operator_target_revision,
+                adoptable_revision: Some(adoptable.adoptable_revision),
+                candidate_revision: Some(adoptable.candidate_revision),
+            })
         }
     }
 }
@@ -275,6 +280,50 @@ pub async fn load_target_candidates_catalog(
         advisory_candidates,
         adoptable_revisions,
     })
+}
+
+pub fn summarize_target_candidates(catalog: &TargetCandidatesCatalog) -> TargetCandidatesSummary {
+    let mut deferred_target_count = 0usize;
+    let mut excluded_target_count = 0usize;
+    let mut reasons = std::collections::BTreeSet::new();
+
+    for candidate in &catalog.advisory_candidates {
+        let Some(targets) = candidate
+            .payload
+            .get("targets")
+            .and_then(|value| value.as_array())
+        else {
+            continue;
+        };
+
+        for target in targets {
+            let Some(validation) = target.get("validation") else {
+                continue;
+            };
+
+            match validation.get("status").and_then(|value| value.as_str()) {
+                Some("deferred") => deferred_target_count += 1,
+                Some("excluded") => excluded_target_count += 1,
+                _ => {}
+            }
+
+            if let Some(reason) = validation.get("reason").and_then(|value| value.as_str()) {
+                reasons.insert(reason.to_owned());
+            }
+        }
+    }
+
+    TargetCandidatesSummary {
+        advisory_candidate_count: catalog.advisory_candidates.len(),
+        adoptable_revision_count: catalog.adoptable_revisions.len(),
+        deferred_target_count,
+        excluded_target_count,
+        recommended_adoptable_revision: catalog
+            .adoptable_revisions
+            .first()
+            .map(|adoptable| adoptable.adoptable_revision.clone()),
+        non_adoptable_reasons: reasons.into_iter().collect(),
+    }
 }
 
 pub fn configured_operator_target_revision(
@@ -433,8 +482,11 @@ fn validate_rendered_live_targets(
 mod tests {
     use chrono::Utc;
     use persistence::models::OperatorTargetAdoptionHistoryRow;
+    use serde_json::json;
 
-    use super::latest_history_lineage_from_rows;
+    use super::{
+        latest_history_lineage_from_rows, summarize_target_candidates, TargetCandidatesCatalog,
+    };
 
     fn history_row(
         action_kind: &str,
@@ -486,5 +538,56 @@ mod tests {
             error.to_string(),
             "operator_target_revision targets-rev-7 has history but no durable lineage"
         );
+    }
+
+    #[test]
+    fn target_candidates_summary_prefers_first_adoptable_and_collects_non_adoptable_reasons() {
+        let catalog = TargetCandidatesCatalog {
+            advisory_candidates: vec![persistence::models::CandidateTargetSetRow {
+                candidate_revision: "candidate-8".to_owned(),
+                snapshot_id: "snapshot-8".to_owned(),
+                source_revision: "discovery-8".to_owned(),
+                payload: json!({
+                    "targets": [
+                        {
+                            "validation": {
+                                "status": "deferred",
+                                "reason": "candidate generation deferred until discovery backfill completes",
+                            }
+                        },
+                        {
+                            "validation": {
+                                "status": "excluded",
+                                "reason": "candidate excluded by conservative discovery policy",
+                            }
+                        }
+                    ]
+                }),
+            }],
+            adoptable_revisions: vec![persistence::models::AdoptableTargetRevisionRow {
+                adoptable_revision: "adoptable-9".to_owned(),
+                candidate_revision: "candidate-9".to_owned(),
+                rendered_operator_target_revision: "targets-rev-9".to_owned(),
+                payload: json!({}),
+            }],
+        };
+
+        let summary = summarize_target_candidates(&catalog);
+        assert_eq!(summary.advisory_candidate_count, 1);
+        assert_eq!(summary.adoptable_revision_count, 1);
+        assert_eq!(summary.deferred_target_count, 1);
+        assert_eq!(summary.excluded_target_count, 1);
+        assert_eq!(
+            summary.recommended_adoptable_revision.as_deref(),
+            Some("adoptable-9")
+        );
+        assert_eq!(
+            summary.non_adoptable_reasons,
+            vec![
+                "candidate excluded by conservative discovery policy".to_owned(),
+                "candidate generation deferred until discovery backfill completes".to_owned(),
+            ]
+        );
+        assert_eq!(summary.non_adoptable_summary(), "deferred:1 excluded:1");
     }
 }

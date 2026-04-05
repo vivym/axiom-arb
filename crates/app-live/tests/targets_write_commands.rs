@@ -56,9 +56,9 @@ fn targets_adopt_requires_exactly_one_selector_flag() {
 }
 
 #[test]
-fn targets_adopt_from_adoptable_revision_rewrites_config_and_records_history() {
+fn targets_adopt_from_fresh_adoptable_revision_writes_canonical_provenance_and_records_history() {
     let database = TestDatabase::new();
-    database.seed_adoptable_revision_with_active_runtime(
+    database.seed_fresh_adoptable_revision_with_active_runtime(
         "adoptable-9",
         "candidate-9",
         "targets-rev-9",
@@ -103,6 +103,76 @@ fn targets_adopt_from_adoptable_revision_rewrites_config_and_records_history() {
     );
     assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
     assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+    assert_eq!(database.history_count(), 1);
+
+    let provenance = database
+        .provenance_for("targets-rev-9")
+        .expect("provenance lookup should succeed")
+        .expect("canonical provenance should be written");
+    assert_eq!(provenance.adoptable_revision, "adoptable-9");
+    assert_eq!(provenance.candidate_revision, "candidate-9");
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_adopt_same_operator_target_revision_preserves_canonical_provenance_and_appends_history()
+{
+    let database = TestDatabase::new();
+    database.seed_adoptable_revision_with_active_runtime(
+        "adoptable-7",
+        "candidate-7",
+        "targets-rev-7",
+    );
+    database.seed_fresh_adoptable_revision_with_active_runtime(
+        "adoptable-9",
+        "candidate-9",
+        "targets-rev-7",
+    );
+    let config = temp_config(MINIMAL_TARGET_SOURCE_CONFIG);
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("adopt")
+        .arg("--config")
+        .arg(&config)
+        .arg("--adoptable-revision")
+        .arg("adoptable-9")
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets adopt should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("operator_target_revision = targets-rev-7"),
+        "{text}"
+    );
+    assert_eq!(database.history_count(), 1);
+
+    let latest = database.latest_history().expect("history row should exist");
+    assert_eq!(latest.action_kind, "adopt");
+    assert_eq!(latest.operator_target_revision, "targets-rev-7");
+    assert_eq!(
+        latest.previous_operator_target_revision.as_deref(),
+        Some("targets-rev-7")
+    );
+    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
+    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+
+    let provenance = database
+        .provenance_for("targets-rev-7")
+        .expect("provenance lookup should succeed")
+        .expect("canonical provenance should remain available");
+    assert_eq!(provenance.adoptable_revision, "adoptable-7");
+    assert_eq!(provenance.candidate_revision, "candidate-7");
+
+    let rewritten = fs::read_to_string(&config).expect("rewritten config should load");
+    assert!(
+        rewritten.contains("operator_target_revision = \"targets-rev-7\""),
+        "{rewritten}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -137,7 +207,15 @@ fn targets_adopt_allows_direct_operator_target_revision_from_history_lineage() {
     );
 
     let latest = database.latest_history().expect("history row should exist");
-    assert_eq!(latest.adoption_id, "history-only-7");
+    assert_eq!(database.history_count(), 2);
+    assert_eq!(latest.action_kind, "adopt");
+    assert_eq!(latest.operator_target_revision, "targets-rev-7");
+    assert_eq!(
+        latest.previous_operator_target_revision.as_deref(),
+        Some("targets-rev-7")
+    );
+    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-7"));
+    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-7"));
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -388,6 +466,26 @@ impl TestDatabase {
         })
     }
 
+    fn history_count(&self) -> i64 {
+        self.runtime.block_on(async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operator_target_adoption_history")
+                .fetch_one(&self.pool)
+                .await
+                .expect("history count should succeed")
+        })
+    }
+
+    fn provenance_for(
+        &self,
+        operator_target_revision: &str,
+    ) -> persistence::Result<Option<CandidateAdoptionProvenanceRow>> {
+        self.runtime.block_on(async {
+            CandidateAdoptionRepo
+                .get_by_operator_target_revision(&self.pool, operator_target_revision)
+                .await
+        })
+    }
+
     fn seed_adoptable_revision_with_active_runtime(
         &self,
         adoptable_revision: &str,
@@ -395,38 +493,12 @@ impl TestDatabase {
         operator_target_revision: &str,
     ) {
         self.runtime.block_on(async {
-            let artifacts = CandidateArtifactRepo;
-            artifacts
-                .upsert_candidate_target_set(
-                    &self.pool,
-                    &CandidateTargetSetRow {
-                        candidate_revision: candidate_revision.to_owned(),
-                        snapshot_id: "snapshot-9".to_owned(),
-                        source_revision: "discovery-9".to_owned(),
-                        payload: json!({
-                            "candidate_revision": candidate_revision,
-                        }),
-                    },
-                )
-                .await
-                .expect("candidate should seed");
-            artifacts
-                .upsert_adoptable_target_revision(
-                    &self.pool,
-                    &AdoptableTargetRevisionRow {
-                        adoptable_revision: adoptable_revision.to_owned(),
-                        candidate_revision: candidate_revision.to_owned(),
-                        rendered_operator_target_revision: operator_target_revision.to_owned(),
-                        payload: json!({
-                            "adoptable_revision": adoptable_revision,
-                            "candidate_revision": candidate_revision,
-                            "rendered_operator_target_revision": operator_target_revision,
-                            "rendered_live_targets": sample_rendered_live_targets_json(),
-                        }),
-                    },
-                )
-                .await
-                .expect("adoptable row should seed");
+            self.seed_adoptable_artifacts(
+                adoptable_revision,
+                candidate_revision,
+                operator_target_revision,
+            )
+            .await;
             CandidateAdoptionRepo
                 .upsert_provenance(
                     &self.pool,
@@ -438,6 +510,33 @@ impl TestDatabase {
                 )
                 .await
                 .expect("adoption provenance should seed");
+            RuntimeProgressRepo
+                .record_progress(
+                    &self.pool,
+                    41,
+                    7,
+                    Some("snapshot-7"),
+                    Some("targets-rev-7"),
+                    None,
+                )
+                .await
+                .expect("runtime progress should seed");
+        });
+    }
+
+    fn seed_fresh_adoptable_revision_with_active_runtime(
+        &self,
+        adoptable_revision: &str,
+        candidate_revision: &str,
+        operator_target_revision: &str,
+    ) {
+        self.runtime.block_on(async {
+            self.seed_adoptable_artifacts(
+                adoptable_revision,
+                candidate_revision,
+                operator_target_revision,
+            )
+            .await;
             RuntimeProgressRepo
                 .record_progress(
                     &self.pool,
@@ -665,6 +764,46 @@ impl TestDatabase {
             let _ = sqlx::query(&drop_schema).execute(&self.admin_pool).await;
             self.admin_pool.close().await;
         });
+    }
+
+    async fn seed_adoptable_artifacts(
+        &self,
+        adoptable_revision: &str,
+        candidate_revision: &str,
+        operator_target_revision: &str,
+    ) {
+        let artifacts = CandidateArtifactRepo;
+        artifacts
+            .upsert_candidate_target_set(
+                &self.pool,
+                &CandidateTargetSetRow {
+                    candidate_revision: candidate_revision.to_owned(),
+                    snapshot_id: "snapshot-9".to_owned(),
+                    source_revision: "discovery-9".to_owned(),
+                    payload: json!({
+                        "candidate_revision": candidate_revision,
+                    }),
+                },
+            )
+            .await
+            .expect("candidate should seed");
+        artifacts
+            .upsert_adoptable_target_revision(
+                &self.pool,
+                &AdoptableTargetRevisionRow {
+                    adoptable_revision: adoptable_revision.to_owned(),
+                    candidate_revision: candidate_revision.to_owned(),
+                    rendered_operator_target_revision: operator_target_revision.to_owned(),
+                    payload: json!({
+                        "adoptable_revision": adoptable_revision,
+                        "candidate_revision": candidate_revision,
+                        "rendered_operator_target_revision": operator_target_revision,
+                        "rendered_live_targets": sample_rendered_live_targets_json(),
+                    }),
+                },
+            )
+            .await
+            .expect("adoptable row should seed");
     }
 }
 

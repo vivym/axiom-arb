@@ -113,16 +113,22 @@ pub(crate) fn render_action_template_with_mode(
     mode: Option<model::StatusMode>,
 ) -> String {
     match action {
-        model::StatusAction::RunTargetsAdopt
+        model::StatusAction::RunDiscover => "app-live discover --config {config}".to_owned(),
+        model::StatusAction::InspectDiscoveryReasons => {
+            "app-live targets candidates --config {config}".to_owned()
+        }
+        model::StatusAction::ChooseAndAdoptRevision
             if mode == Some(model::StatusMode::RealUserShadowSmoke) =>
         {
             "app-live apply --config {config}".to_owned()
+        }
+        model::StatusAction::ChooseAndAdoptRevision => {
+            "app-live targets adopt --config {config}".to_owned()
         }
         model::StatusAction::RunAppLiveApply => "app-live apply --config {config}".to_owned(),
         model::StatusAction::EnableSmokeRollout => "app-live apply --config {config}".to_owned(),
         model::StatusAction::RunAppLiveRun => "app-live run --config {config}".to_owned(),
         model::StatusAction::RunDoctor => "app-live doctor --config {config}".to_owned(),
-        model::StatusAction::RunTargetsAdopt => "app-live targets adopt --config {config}".to_owned(),
         model::StatusAction::PerformControlledRestart => "perform controlled restart".to_owned(),
         model::StatusAction::FixBlockingIssueAndRerunStatus => {
             "fix the blocking issue, then rerun app-live status --config {config}".to_owned()
