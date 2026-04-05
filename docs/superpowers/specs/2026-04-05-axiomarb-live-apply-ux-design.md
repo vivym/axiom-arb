@@ -233,7 +233,7 @@ It only means `apply` can continue into the same foreground `run` path that an o
 If `status` says `restart-required`, live `apply` should still respect a manual boundary:
 
 - it may explain that the currently active runtime is not aligned with current config
-- with `--start`, it may continue into a new foreground `run` only after explicit manual-boundary confirmation
+- with `--start`, it may continue into a new foreground `run` only after `doctor` succeeds and after explicit manual-boundary confirmation
 - it must not claim to stop or replace an already-running daemon
 
 This is the same operational honesty that smoke `apply` already uses.
@@ -250,6 +250,12 @@ The first live phase should distinguish two restart cases:
 - it must instruct the operator to resolve the existing active runtime outside `apply`
 
 This keeps `apply` out of process-management authority while still giving a high-level path for non-conflicting restart work.
+
+The ordering matters:
+
+- `restart-required` without `--start` still runs `doctor` first and then stops at `Ready to start`
+- `restart-required` with `--start` runs `doctor` first and only then enters `ConfirmManualRestartBoundary`
+- live should not ask for restart-boundary confirmation before preflight has passed
 
 ## 8. State Machine
 
@@ -269,9 +275,9 @@ The live-specific internal stages should be:
 - `RejectIfAdoptionRequired`
 - `RejectIfRolloutRequired`
 - `RejectIfBlocked`
-- `ConfirmManualRestartBoundary`
 - `RunPreflight`
 - `Ready`
+- `ConfirmManualRestartBoundary`
 - `RunRuntime`
 
 The live path must not include smoke-only stages:
@@ -306,10 +312,19 @@ The live path should map current `status` truth to stages as follows:
   - next action: follow the existing blocking guidance from `status`
 
 - `restart-required` with rollout ready
-  - continue into `ConfirmManualRestartBoundary`
+  - continue into `RunPreflight`
 
 - `live-config-ready`
   - continue directly into `RunPreflight`
+
+- post-`RunPreflight`, if `--start` is not present
+  - stop in `Ready`
+
+- post-`RunPreflight`, if `--start` is present and `restart-required` was true
+  - continue into `ConfirmManualRestartBoundary`
+
+- post-`RunPreflight`, if `--start` is present and `restart-required` was false
+  - continue directly into `RunRuntime`
 
 ## 9. Output and Next Actions
 
@@ -343,7 +358,10 @@ For live first phase, valid planned actions are:
 - stop because legacy explicit targets must be migrated
 - run doctor preflight
 - explicitly confirm the manual restart boundary when applicable
-- optionally start foreground runtime
+- optionally start foreground runtime when and only when:
+  - `--start` is present
+  - `doctor` has passed
+  - no conflicting active running session is blocking the manual boundary
 
 ### 9.3 Outcome
 
@@ -373,6 +391,43 @@ Next actions should remain aligned with `status` vocabulary:
 - doctor failed => fix doctor-reported issue and rerun `apply`
 
 `apply` must not invent a second operator language.
+
+### 9.5 `status` Ownership Changes
+
+This live-apply feature is only coherent if `status` stops routing ready live operators back into the old multi-command path.
+
+The first live phase should therefore move next-action ownership as follows:
+
+- `StatusReadiness::LiveConfigReady`
+  - preferred high-level next action becomes `app-live apply --config {config}`
+  - not `app-live doctor --config {config}`
+
+- `StatusReadiness::RestartRequired` with `rollout_state = ready`
+  - preferred high-level next action becomes `app-live apply --config {config}`
+  - not a generic `perform controlled restart`
+
+- `StatusReadiness::TargetAdoptionRequired`
+  - stays on `targets candidates` / `targets adopt`
+
+- `StatusReadiness::LiveRolloutRequired`
+  - stays on explicit rollout preparation outside `apply`
+
+- `StatusReadiness::Blocked` with legacy explicit targets
+  - stays on migration/lower-level guidance
+
+This preserves a single high-level Day 1+ entry for live while keeping adoption and live rollout posture outside `apply`.
+
+Implementation contract:
+
+- the implementation must make live-ready `status` outputs route to `app-live apply --config {config}` through one explicit mechanism
+- acceptable first-phase mechanisms are:
+  - add a dedicated `RunApply`/equivalent status action for high-level live/smoke progression, or
+  - keep the existing action enum but make `status` evaluation/rendering details-aware enough to rewrite the live-ready and restart-ready next actions to `apply`
+- the implementation must not rely on ambiguous prose-only rewrites in docs while leaving `status` action rendering unchanged
+- whatever mechanism is chosen, it must preserve the existing low-level actions for:
+  - `TargetAdoptionRequired`
+  - `LiveRolloutRequired`
+  - legacy explicit-target migration
 
 ## 10. Authority Boundaries
 
@@ -450,6 +505,15 @@ Tests should verify the live path still renders:
 
 and that those outputs use the same operator vocabulary as `status`.
 
+### 12.5 Status Integration
+
+Tests should verify the live-ready status path now points into `apply`:
+
+- `live-config-ready` => `app-live apply --config {config}`
+- `restart-required` with rollout ready => `app-live apply --config {config}`
+- `live-rollout-required` => still points to manual rollout preparation
+- `target-adoption-required` => still points to `targets candidates` / `targets adopt`
+
 ## 13. Acceptance Criteria
 
 This design is complete when:
@@ -461,7 +525,9 @@ This design is complete when:
 - live `apply` reuses `doctor` and optionally `run`
 - `--start` continues into foreground `run`
 - `restart-required` remains an explicit manual boundary
+- `doctor` runs before any restart-boundary confirmation
 - conflicting active running sessions are surfaced and not auto-overridden by `apply`
+- `status` routes live-ready Day 1+ operators into `apply`, not back into the old `doctor`/manual-restart wording
 - no live control-plane mutation authority is added
 - no process-management authority is added
 - smoke behavior remains intact
