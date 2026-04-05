@@ -284,6 +284,10 @@ impl TestDatabase {
                 .map(ToOwned::to_owned),
             active_operator_target_revision_at_start: active_operator_target_revision_at_start
                 .map(ToOwned::to_owned),
+            configured_operator_strategy_revision: configured_operator_target_revision
+                .map(ToOwned::to_owned),
+            active_operator_strategy_revision_at_start: active_operator_target_revision_at_start
+                .map(ToOwned::to_owned),
             rollout_state_at_start: rollout_state_at_start.map(ToOwned::to_owned),
             real_user_shadow_smoke,
         }

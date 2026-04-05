@@ -2647,38 +2647,37 @@ impl OperatorStrategyAdoptionHistoryRepo {
                 adoptable_strategy_revision,
                 strategy_candidate_revision,
                 adopted_at
-            FROM operator_strategy_adoption_history
-            ORDER BY history_seq DESC
+            FROM (
+                SELECT
+                    adoption_id,
+                    action_kind,
+                    operator_strategy_revision,
+                    previous_operator_strategy_revision,
+                    adoptable_strategy_revision,
+                    strategy_candidate_revision,
+                    adopted_at,
+                    0 AS source_priority
+                FROM operator_strategy_adoption_history
+                UNION ALL
+                SELECT
+                    adoption_id,
+                    action_kind,
+                    operator_target_revision AS operator_strategy_revision,
+                    previous_operator_target_revision AS previous_operator_strategy_revision,
+                    adoptable_revision AS adoptable_strategy_revision,
+                    candidate_revision AS strategy_candidate_revision,
+                    adopted_at,
+                    1 AS source_priority
+                FROM operator_target_adoption_history
+            ) AS combined_history
+            ORDER BY adopted_at DESC, source_priority ASC, adoption_id DESC
             LIMIT 1
             "#,
         )
         .fetch_optional(pool)
         .await?;
 
-        if let Some(row) = row {
-            return Ok(Some(map_operator_strategy_adoption_history_row(row)?));
-        }
-
-        let legacy_row = sqlx::query(
-            r#"
-            SELECT
-                adoption_id,
-                action_kind,
-                operator_target_revision AS operator_strategy_revision,
-                previous_operator_target_revision AS previous_operator_strategy_revision,
-                adoptable_revision AS adoptable_strategy_revision,
-                candidate_revision AS strategy_candidate_revision,
-                adopted_at
-            FROM operator_target_adoption_history
-            ORDER BY history_seq DESC
-            LIMIT 1
-            "#,
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        legacy_row
-            .map(map_operator_strategy_adoption_history_row)
+        row.map(map_operator_strategy_adoption_history_row)
             .transpose()
     }
 
@@ -2690,11 +2689,28 @@ impl OperatorStrategyAdoptionHistoryRepo {
         let row = sqlx::query(
             r#"
             SELECT previous_operator_strategy_revision
-            FROM operator_strategy_adoption_history
-            WHERE operator_strategy_revision = $1
-              AND previous_operator_strategy_revision IS NOT NULL
-              AND previous_operator_strategy_revision <> $1
-            ORDER BY history_seq DESC
+            FROM (
+                SELECT
+                    adoption_id,
+                    previous_operator_strategy_revision,
+                    adopted_at,
+                    0 AS source_priority
+                FROM operator_strategy_adoption_history
+                WHERE operator_strategy_revision = $1
+                  AND previous_operator_strategy_revision IS NOT NULL
+                  AND previous_operator_strategy_revision <> $1
+                UNION ALL
+                SELECT
+                    adoption_id,
+                    previous_operator_target_revision AS previous_operator_strategy_revision,
+                    adopted_at,
+                    1 AS source_priority
+                FROM operator_target_adoption_history
+                WHERE operator_target_revision = $1
+                  AND previous_operator_target_revision IS NOT NULL
+                  AND previous_operator_target_revision <> $1
+            ) AS combined_history
+            ORDER BY adopted_at DESC, source_priority ASC, adoption_id DESC
             LIMIT 1
             "#,
         )
@@ -2702,30 +2718,7 @@ impl OperatorStrategyAdoptionHistoryRepo {
         .fetch_optional(pool)
         .await?;
 
-        if let Some(row) = row {
-            return row
-                .try_get("previous_operator_strategy_revision")
-                .map(Some)
-                .map_err(Into::into);
-        }
-
-        let legacy_row = sqlx::query(
-            r#"
-            SELECT previous_operator_target_revision AS previous_operator_strategy_revision
-            FROM operator_target_adoption_history
-            WHERE operator_target_revision = $1
-              AND previous_operator_target_revision IS NOT NULL
-              AND previous_operator_target_revision <> $1
-            ORDER BY history_seq DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(current_revision)
-        .fetch_optional(pool)
-        .await?;
-
-        legacy_row
-            .map(|row| row.try_get("previous_operator_strategy_revision"))
+        row.map(|row| row.try_get("previous_operator_strategy_revision"))
             .transpose()
             .map_err(Into::into)
     }

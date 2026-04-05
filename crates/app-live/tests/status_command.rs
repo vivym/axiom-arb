@@ -448,6 +448,8 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
         startup_target_revision_at_start: "targets-rev-9".to_owned(),
         configured_operator_target_revision: Some("targets-rev-9".to_owned()),
         active_operator_target_revision_at_start: Some("targets-rev-8".to_owned()),
+        configured_operator_strategy_revision: Some("targets-rev-9".to_owned()),
+        active_operator_strategy_revision_at_start: Some("targets-rev-8".to_owned()),
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: false,
     });
@@ -1068,6 +1070,10 @@ fn smoke_run_session(
         startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
         configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
         active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
+        configured_operator_strategy_revision: Some(startup_target_revision_at_start.to_owned()),
+        active_operator_strategy_revision_at_start: Some(
+            startup_target_revision_at_start.to_owned(),
+        ),
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: true,
     }

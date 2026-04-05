@@ -338,3 +338,155 @@ async fn operator_strategy_adoption_history_repo_reads_legacy_history_when_neutr
 
     db.cleanup().await;
 }
+
+#[tokio::test]
+async fn strategy_history_repo_prefers_newer_legacy_rows_over_backfilled_neutral_history() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO operator_strategy_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_strategy_revision,
+            previous_operator_strategy_revision,
+            adoptable_strategy_revision,
+            strategy_candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("backfilled-adoption-1")
+    .bind("adopt")
+    .bind("targets-rev-11")
+    .bind("targets-rev-10")
+    .bind("adoptable-11")
+    .bind("candidate-11")
+    .bind(
+        chrono::DateTime::parse_from_rfc3339("2026-04-06T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO operator_target_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_target_revision,
+            previous_operator_target_revision,
+            adoptable_revision,
+            candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("legacy-adoption-2")
+    .bind("adopt")
+    .bind("targets-rev-12")
+    .bind("targets-rev-11")
+    .bind("adoptable-12")
+    .bind("candidate-12")
+    .bind(
+        chrono::DateTime::parse_from_rfc3339("2026-04-06T02:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let latest = OperatorStrategyAdoptionHistoryRepo
+        .latest(&db.pool)
+        .await
+        .unwrap()
+        .expect("mixed-state repo should return latest legacy row");
+
+    assert_eq!(latest.adoption_id, "legacy-adoption-2");
+    assert_eq!(latest.operator_strategy_revision, "targets-rev-12");
+    assert_eq!(
+        latest.previous_operator_strategy_revision.as_deref(),
+        Some("targets-rev-11")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn strategy_history_repo_uses_legacy_previous_distinct_revision_when_newer_than_backfill() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO operator_strategy_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_strategy_revision,
+            previous_operator_strategy_revision,
+            adoptable_strategy_revision,
+            strategy_candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("backfilled-adoption-11")
+    .bind("adopt")
+    .bind("targets-rev-11")
+    .bind("targets-rev-10")
+    .bind("adoptable-11")
+    .bind("candidate-11")
+    .bind(
+        chrono::DateTime::parse_from_rfc3339("2026-04-06T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO operator_target_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_target_revision,
+            previous_operator_target_revision,
+            adoptable_revision,
+            candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("legacy-adoption-11b")
+    .bind("adopt")
+    .bind("targets-rev-11")
+    .bind("targets-rev-9")
+    .bind("adoptable-11b")
+    .bind("candidate-11b")
+    .bind(
+        chrono::DateTime::parse_from_rfc3339("2026-04-06T02:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let previous = OperatorStrategyAdoptionHistoryRepo
+        .previous_distinct_revision(&db.pool, "targets-rev-11")
+        .await
+        .unwrap();
+
+    assert_eq!(previous.as_deref(), Some("targets-rev-9"));
+
+    db.cleanup().await;
+}
