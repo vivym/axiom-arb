@@ -1092,7 +1092,8 @@ mod tests {
             vec![StatusAction::RunAppLiveApply],
         );
 
-        let actions = next_actions_from_context(&context, &["run app-live status --config {config}"]);
+        let actions =
+            next_actions_from_context(&context, &["run app-live status --config {config}"]);
 
         assert!(actions
             .iter()

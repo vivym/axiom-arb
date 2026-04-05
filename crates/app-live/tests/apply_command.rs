@@ -528,10 +528,7 @@ fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
         planned.contains("Stop at ready without starting the runtime."),
         "{text}"
     );
-    assert!(
-        !planned.contains("to continue in the foreground"),
-        "{text}"
-    );
+    assert!(!planned.contains("to continue in the foreground"), "{text}");
     assert!(!text.contains("run-preflight"), "{text}");
 
     database.cleanup();
@@ -616,7 +613,10 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
         "{text}"
     );
     assert!(text.contains("Execution"), "{text}");
-    assert!(section_text(&text, "Outcome").contains("Outcome\nStarted"), "{text}");
+    assert!(
+        section_text(&text, "Outcome").contains("Outcome\nStarted"),
+        "{text}"
+    );
     assert!(
         text.contains("Starting runtime in the foreground."),
         "{text}"
@@ -925,7 +925,10 @@ fn apply_live_restart_required_with_start_fails_closed_when_not_interactive() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
-    assert!(section_text(&text, "Outcome").contains("Outcome\nBlocked"), "{text}");
+    assert!(
+        section_text(&text, "Outcome").contains("Outcome\nBlocked"),
+        "{text}"
+    );
     assert!(text.contains("confirm-manual-restart-boundary"), "{text}");
     assert!(
         text.contains("manual restart boundary requires interactive confirmation"),
@@ -998,7 +1001,10 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
-    assert!(section_text(&text, "Outcome").contains("Outcome\nStarted"), "{text}");
+    assert!(
+        section_text(&text, "Outcome").contains("Outcome\nStarted"),
+        "{text}"
+    );
     assert!(
         text.contains("Manual restart boundary confirmed. Starting runtime in the foreground."),
         "{text}"
@@ -1040,7 +1046,10 @@ fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
-    assert!(section_text(&text, "Outcome").contains("Outcome\nBlocked"), "{text}");
+    assert!(
+        section_text(&text, "Outcome").contains("Outcome\nBlocked"),
+        "{text}"
+    );
     assert!(text.contains("Planned Actions"), "{text}");
     assert!(
         text.contains(
@@ -1169,7 +1178,11 @@ fn section_text<'a>(text: &'a str, title: &str) -> &'a str {
     let next_start = section_titles
         .iter()
         .filter(|candidate| **candidate != title)
-        .filter_map(|candidate| text[start + title.len()..].find(candidate).map(|idx| start + title.len() + idx))
+        .filter_map(|candidate| {
+            text[start + title.len()..]
+                .find(candidate)
+                .map(|idx| start + title.len() + idx)
+        })
         .min()
         .unwrap_or(text.len());
     &text[start..next_start]
@@ -1287,7 +1300,10 @@ fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
     for (key, rewritten) in [
         ("heartbeat_interval_seconds", toml_edit::Value::from(15)),
         ("relayer_poll_interval_seconds", toml_edit::Value::from(5)),
-        ("metadata_refresh_interval_seconds", toml_edit::Value::from(60)),
+        (
+            "metadata_refresh_interval_seconds",
+            toml_edit::Value::from(60),
+        ),
     ] {
         source.insert(key, toml_edit::Item::Value(rewritten));
     }

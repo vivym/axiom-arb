@@ -155,7 +155,10 @@ fn status_smoke_target_adoption_required_points_to_apply() {
         combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
-    assert!(!combined.contains("Next: app-live doctor --config"), "{combined}");
+    assert!(
+        !combined.contains("Next: app-live doctor --config"),
+        "{combined}"
+    );
     assert!(
         !combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
@@ -196,7 +199,10 @@ fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
         combined.contains("Next: perform controlled restart"),
         "{combined}"
     );
-    assert!(!combined.contains("Next: app-live apply --config"), "{combined}");
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
 
     database.cleanup();
 }
@@ -235,7 +241,10 @@ fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already
         combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
-    assert!(!combined.contains("Next: perform controlled restart"), "{combined}");
+    assert!(
+        !combined.contains("Next: perform controlled restart"),
+        "{combined}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -274,7 +283,10 @@ fn status_smoke_restart_required_with_ready_rollout_keeps_restart_guidance() {
         combined.contains("Next: perform controlled restart"),
         "{combined}"
     );
-    assert!(!combined.contains("Next: app-live apply --config"), "{combined}");
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -435,7 +447,10 @@ fn status_adopted_source_with_live_rollout_enabled_is_live_config_ready() {
         combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
-    assert!(!combined.contains("Next: app-live doctor --config"), "{combined}");
+    assert!(
+        !combined.contains("Next: app-live doctor --config"),
+        "{combined}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);

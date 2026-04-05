@@ -190,10 +190,8 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             output::render_execution_line(
                 "Stopping at the manual restart boundary because another run session is still active.",
             );
-            output::render_outcome(
-                "Blocked",
-            );
-            output::render_next_actions(&vec![
+            output::render_outcome("Blocked");
+            output::render_next_actions(&[
                 format!(
                     "Resolve the existing runtime outside apply, then rerun app-live apply --config {} --start.",
                     output::quoted_config_path(config_path)
@@ -211,9 +209,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             output::render_execution_line(
                 "Stopping at the manual restart boundary because manual restart boundary requires interactive confirmation before foreground start.",
             );
-            output::render_outcome(
-                "Blocked",
-            );
+            output::render_outcome("Blocked");
             output::render_next_actions(&ready_next_actions(config_path, &summary, true));
             return Err(apply_failure(ApplyFailureKind::Transition(
                 model::ApplyStage::ConfirmManualRestartBoundary,
@@ -549,7 +545,8 @@ fn render_live_current_state(summary: &StatusSummary) {
     if let Some(relevant_run_state) = &summary.details.relevant_run_state {
         println!("Relevant run state: {relevant_run_state}");
     }
-    if let Some(conflicting_active_run_session_id) = &summary.details.conflicting_active_run_session_id
+    if let Some(conflicting_active_run_session_id) =
+        &summary.details.conflicting_active_run_session_id
     {
         println!("Conflicting active run session: {conflicting_active_run_session_id}");
     }
@@ -654,7 +651,9 @@ fn live_ready_outcome(readiness: StatusReadiness, boundary_declined: bool) -> St
 
 fn active_conflicting_run_session_id(summary: &StatusSummary) -> Option<&str> {
     match summary.details.conflicting_active_run_state.as_deref() {
-        Some("starting" | "running") => summary.details.conflicting_active_run_session_id.as_deref(),
+        Some("starting" | "running") => {
+            summary.details.conflicting_active_run_session_id.as_deref()
+        }
         _ => None,
     }
 }
