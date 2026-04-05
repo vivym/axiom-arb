@@ -94,6 +94,8 @@ fn sample_starting_session(run_session_id: &str) -> RunSessionRow {
         startup_target_revision_at_start: "startup-target-default".to_owned(),
         configured_operator_target_revision: Some("targets-rev-default".to_owned()),
         active_operator_target_revision_at_start: Some("targets-rev-default".to_owned()),
+        configured_operator_strategy_revision: Some("strategy-rev-default".to_owned()),
+        active_operator_strategy_revision_at_start: Some("strategy-rev-default".to_owned()),
         rollout_state_at_start: Some("ready".to_owned()),
         real_user_shadow_smoke: false,
     }
@@ -124,6 +126,10 @@ fn sample_starting_session_for_target(
         configured_operator_target_revision: configured_operator_target_revision.map(str::to_owned),
         active_operator_target_revision_at_start: configured_operator_target_revision
             .map(str::to_owned),
+        configured_operator_strategy_revision: configured_operator_target_revision
+            .map(|value| value.replacen("targets-rev-", "strategy-rev-", 1)),
+        active_operator_strategy_revision_at_start: configured_operator_target_revision
+            .map(|value| value.replacen("targets-rev-", "strategy-rev-", 1)),
         rollout_state_at_start: Some("ready".to_owned()),
         real_user_shadow_smoke: false,
     }
@@ -167,6 +173,9 @@ async fn run_sessions_migration_creates_table_and_session_link_columns() {
     assert!(progress_columns
         .iter()
         .any(|name| name == "active_run_session_id"));
+    assert!(progress_columns
+        .iter()
+        .any(|name| name == "operator_strategy_revision"));
 
     let attempt_columns: Vec<String> = sqlx::query_scalar(
         "select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'execution_attempts'",
@@ -175,6 +184,19 @@ async fn run_sessions_migration_creates_table_and_session_link_columns() {
     .await
     .unwrap();
     assert!(attempt_columns.iter().any(|name| name == "run_session_id"));
+
+    let run_session_columns: Vec<String> = sqlx::query_scalar(
+        "select column_name from information_schema.columns where table_schema = current_schema() and table_name = 'run_sessions'",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert!(run_session_columns
+        .iter()
+        .any(|name| name == "configured_operator_strategy_revision"));
+    assert!(run_session_columns
+        .iter()
+        .any(|name| name == "active_operator_strategy_revision_at_start"));
 
     db.cleanup().await;
 }
@@ -547,6 +569,7 @@ async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_with
     );
     row.target_source_kind = "explicit".to_owned();
     row.active_operator_target_revision_at_start = None;
+    row.active_operator_strategy_revision_at_start = None;
 
     RunSessionRepo
         .create_starting(&db.pool, &row)

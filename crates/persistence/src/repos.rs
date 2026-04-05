@@ -10,14 +10,16 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use crate::{
     instrumentation::NegRiskPersistenceInstrumentation,
     models::{
-        execution_mode_from_str, execution_mode_to_str, AdoptableTargetRevisionRow,
-        ApprovalStateRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow, FamilyHaltRow, IdentifierRecordRow,
-        InventoryBucketRow, JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow,
-        LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
-        NegRiskFamilyValidationRow, NewOrderRow, OperatorTargetAdoptionHistoryRow, OrderRow,
+        execution_mode_from_str, execution_mode_to_str, AdoptableStrategyRevisionRow,
+        AdoptableTargetRevisionRow, ApprovalStateRow, CandidateAdoptionProvenanceRow,
+        CandidateTargetSetRow, ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow,
+        FamilyHaltRow, IdentifierRecordRow, InventoryBucketRow, JournalEntryInput, JournalEntryRow,
+        LiveExecutionArtifactRow, LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput,
+        NegRiskFamilyMemberRow, NegRiskFamilyValidationRow, NewOrderRow,
+        OperatorStrategyAdoptionHistoryRow, OperatorTargetAdoptionHistoryRow, OrderRow,
         PendingReconcileRow, ResolutionStateRow, RunSessionRow, RunSessionState,
         RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
+        StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
     },
     PersistenceError, Result,
 };
@@ -1600,10 +1602,13 @@ impl RunSessionRepo {
             ));
         }
         match row.target_source_kind.as_str() {
-            "adopted" if row.configured_operator_target_revision.is_none() => {
+            "adopted"
+                if row.configured_operator_target_revision.is_none()
+                    && row.configured_operator_strategy_revision.is_none() =>
+            {
                 return Err(PersistenceError::invalid_value(
-                    "run_session.configured_operator_target_revision",
-                    "adopted sessions require configured operator target revision",
+                    "run_session.configured_operator_strategy_revision",
+                    "adopted sessions require configured operator strategy revision",
                 ));
             }
             "explicit" | "adopted" => {}
@@ -1633,11 +1638,13 @@ impl RunSessionRepo {
                 startup_target_revision_at_start,
                 configured_operator_target_revision,
                 active_operator_target_revision_at_start,
+                configured_operator_strategy_revision,
+                active_operator_strategy_revision_at_start,
                 rollout_state_at_start,
                 real_user_shadow_smoke
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9, $10, $11, $12, $13, $14
+                $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
             )
             "#,
         )
@@ -1653,6 +1660,8 @@ impl RunSessionRepo {
         .bind(&row.startup_target_revision_at_start)
         .bind(&row.configured_operator_target_revision)
         .bind(&row.active_operator_target_revision_at_start)
+        .bind(&row.configured_operator_strategy_revision)
+        .bind(&row.active_operator_strategy_revision_at_start)
         .bind(&row.rollout_state_at_start)
         .bind(row.real_user_shadow_smoke)
         .execute(pool)
@@ -1771,6 +1780,8 @@ impl RunSessionRepo {
                 startup_target_revision_at_start,
                 configured_operator_target_revision,
                 active_operator_target_revision_at_start,
+                configured_operator_strategy_revision,
+                active_operator_strategy_revision_at_start,
                 rollout_state_at_start,
                 real_user_shadow_smoke
             FROM run_sessions
@@ -1820,6 +1831,8 @@ impl RunSessionRepo {
                 startup_target_revision_at_start,
                 configured_operator_target_revision,
                 active_operator_target_revision_at_start,
+                configured_operator_strategy_revision,
+                active_operator_strategy_revision_at_start,
                 rollout_state_at_start,
                 real_user_shadow_smoke
             FROM run_sessions
@@ -1887,6 +1900,8 @@ impl RunSessionRepo {
                 startup_target_revision_at_start,
                 configured_operator_target_revision,
                 active_operator_target_revision_at_start,
+                configured_operator_strategy_revision,
+                active_operator_strategy_revision_at_start,
                 rollout_state_at_start,
                 real_user_shadow_smoke
             FROM run_sessions
@@ -1924,6 +1939,8 @@ impl RunSessionRepo {
                 rs.startup_target_revision_at_start,
                 rs.configured_operator_target_revision,
                 rs.active_operator_target_revision_at_start,
+                rs.configured_operator_strategy_revision,
+                rs.active_operator_strategy_revision_at_start,
                 rs.rollout_state_at_start,
                 rs.real_user_shadow_smoke
             FROM execution_attempts ea
@@ -2111,9 +2128,10 @@ impl RuntimeProgressRepo {
                 last_state_version,
                 last_snapshot_id,
                 active_run_session_id,
-                operator_target_revision
+                operator_target_revision,
+                operator_strategy_revision
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (progress_key) DO UPDATE
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
@@ -2126,6 +2144,10 @@ impl RuntimeProgressRepo {
                     EXCLUDED.operator_target_revision,
                     runtime_apply_progress.operator_target_revision
                 ),
+                operator_strategy_revision = COALESCE(
+                    EXCLUDED.operator_strategy_revision,
+                    runtime_apply_progress.operator_strategy_revision
+                ),
                 updated_at = NOW()
             "#,
         )
@@ -2134,6 +2156,7 @@ impl RuntimeProgressRepo {
         .bind(last_state_version)
         .bind(last_snapshot_id)
         .bind(active_run_session_id)
+        .bind(operator_target_revision)
         .bind(operator_target_revision)
         .execute(pool)
         .await?;
@@ -2194,6 +2217,7 @@ impl RuntimeProgressRepo {
                 last_state_version,
                 last_snapshot_id,
                 operator_target_revision,
+                operator_strategy_revision,
                 active_run_session_id
             FROM runtime_apply_progress
             WHERE progress_key = $1
@@ -2204,6 +2228,362 @@ impl RuntimeProgressRepo {
         .await?;
 
         row.map(map_runtime_progress_row).transpose()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StrategyControlArtifactRepo;
+
+impl StrategyControlArtifactRepo {
+    pub async fn upsert_strategy_candidate_set(
+        &self,
+        pool: &PgPool,
+        row: &StrategyCandidateSetRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_strategy_candidate_set(pool, &row.strategy_candidate_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingStrategyCandidateSet {
+                strategy_candidate_revision: row.strategy_candidate_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO strategy_candidate_sets (
+                strategy_candidate_revision,
+                snapshot_id,
+                source_revision,
+                payload
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(&row.strategy_candidate_revision)
+        .bind(&row.snapshot_id)
+        .bind(&row.source_revision)
+        .bind(&row.payload)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("strategy_candidate_sets_pkey") => {
+                let existing = self
+                    .get_strategy_candidate_set(pool, &row.strategy_candidate_revision)
+                    .await?
+                    .expect(
+                        "strategy_candidate_sets primary key conflict should load existing row",
+                    );
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingStrategyCandidateSet {
+                        strategy_candidate_revision: row.strategy_candidate_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_strategy_candidate_set(
+        &self,
+        pool: &PgPool,
+        strategy_candidate_revision: &str,
+    ) -> Result<Option<StrategyCandidateSetRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT strategy_candidate_revision, snapshot_id, source_revision, payload
+            FROM strategy_candidate_sets
+            WHERE strategy_candidate_revision = $1
+            "#,
+        )
+        .bind(strategy_candidate_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_strategy_candidate_set_row).transpose()
+    }
+
+    pub async fn upsert_adoptable_strategy_revision(
+        &self,
+        pool: &PgPool,
+        row: &AdoptableStrategyRevisionRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_adoptable_strategy_revision(pool, &row.adoptable_strategy_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingAdoptableStrategyRevision {
+                adoptable_strategy_revision: row.adoptable_strategy_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO adoptable_strategy_revisions (
+                adoptable_strategy_revision,
+                strategy_candidate_revision,
+                rendered_operator_strategy_revision,
+                payload
+            )
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(&row.adoptable_strategy_revision)
+        .bind(&row.strategy_candidate_revision)
+        .bind(&row.rendered_operator_strategy_revision)
+        .bind(&row.payload)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("adoptable_strategy_revisions_pkey") => {
+                let existing = self
+                    .get_adoptable_strategy_revision(pool, &row.adoptable_strategy_revision)
+                    .await?
+                    .expect(
+                        "adoptable_strategy_revisions primary key conflict should load existing row",
+                    );
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingAdoptableStrategyRevision {
+                        adoptable_strategy_revision: row.adoptable_strategy_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_adoptable_strategy_revision(
+        &self,
+        pool: &PgPool,
+        adoptable_strategy_revision: &str,
+    ) -> Result<Option<AdoptableStrategyRevisionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                adoptable_strategy_revision,
+                strategy_candidate_revision,
+                rendered_operator_strategy_revision,
+                payload
+            FROM adoptable_strategy_revisions
+            WHERE adoptable_strategy_revision = $1
+            "#,
+        )
+        .bind(adoptable_strategy_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_adoptable_strategy_revision_row).transpose()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StrategyAdoptionRepo;
+
+impl StrategyAdoptionRepo {
+    pub async fn upsert_provenance(
+        &self,
+        pool: &PgPool,
+        row: &StrategyAdoptionProvenanceRow,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .get_by_operator_strategy_revision(pool, &row.operator_strategy_revision)
+            .await?
+        {
+            if existing == *row {
+                return Ok(());
+            }
+
+            return Err(PersistenceError::ConflictingStrategyAdoptionProvenance {
+                operator_strategy_revision: row.operator_strategy_revision.clone(),
+            });
+        }
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO strategy_adoption_provenance (
+                operator_strategy_revision,
+                adoptable_strategy_revision,
+                strategy_candidate_revision
+            )
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(&row.operator_strategy_revision)
+        .bind(&row.adoptable_strategy_revision)
+        .bind(&row.strategy_candidate_revision)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) if constraint_name(&err) == Some("strategy_adoption_provenance_pkey") => {
+                let existing = self
+                    .get_by_operator_strategy_revision(pool, &row.operator_strategy_revision)
+                    .await?
+                    .expect(
+                        "strategy_adoption_provenance primary key conflict should load existing row",
+                    );
+
+                if existing == *row {
+                    Ok(())
+                } else {
+                    Err(PersistenceError::ConflictingStrategyAdoptionProvenance {
+                        operator_strategy_revision: row.operator_strategy_revision.clone(),
+                    })
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub async fn get_by_operator_strategy_revision(
+        &self,
+        pool: &PgPool,
+        operator_strategy_revision: &str,
+    ) -> Result<Option<StrategyAdoptionProvenanceRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                provenance.operator_strategy_revision,
+                provenance.adoptable_strategy_revision,
+                provenance.strategy_candidate_revision
+            FROM strategy_adoption_provenance AS provenance
+            JOIN adoptable_strategy_revisions AS adoptable
+              ON adoptable.adoptable_strategy_revision = provenance.adoptable_strategy_revision
+             AND adoptable.strategy_candidate_revision = provenance.strategy_candidate_revision
+             AND adoptable.rendered_operator_strategy_revision = provenance.operator_strategy_revision
+            JOIN strategy_candidate_sets AS candidate
+              ON candidate.strategy_candidate_revision = provenance.strategy_candidate_revision
+            WHERE provenance.operator_strategy_revision = $1
+            "#,
+        )
+        .bind(operator_strategy_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(row) = row {
+            return Ok(Some(map_strategy_adoption_provenance_row(row)?));
+        }
+
+        if sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM strategy_adoption_provenance WHERE operator_strategy_revision = $1)",
+        )
+        .bind(operator_strategy_revision)
+        .fetch_one(pool)
+        .await?
+        {
+            return Err(PersistenceError::MissingStrategyAdoptionLink {
+                operator_strategy_revision: operator_strategy_revision.to_owned(),
+            });
+        }
+
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OperatorStrategyAdoptionHistoryRepo;
+
+impl OperatorStrategyAdoptionHistoryRepo {
+    pub async fn append(
+        &self,
+        pool: &PgPool,
+        row: &OperatorStrategyAdoptionHistoryRow,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO operator_strategy_adoption_history (
+                adoption_id,
+                action_kind,
+                operator_strategy_revision,
+                previous_operator_strategy_revision,
+                adoptable_strategy_revision,
+                strategy_candidate_revision,
+                adopted_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(&row.adoption_id)
+        .bind(&row.action_kind)
+        .bind(&row.operator_strategy_revision)
+        .bind(row.previous_operator_strategy_revision.as_deref())
+        .bind(row.adoptable_strategy_revision.as_deref())
+        .bind(row.strategy_candidate_revision.as_deref())
+        .bind(row.adopted_at)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn latest(
+        &self,
+        pool: &PgPool,
+    ) -> Result<Option<OperatorStrategyAdoptionHistoryRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                adoption_id,
+                action_kind,
+                operator_strategy_revision,
+                previous_operator_strategy_revision,
+                adoptable_strategy_revision,
+                strategy_candidate_revision,
+                adopted_at
+            FROM operator_strategy_adoption_history
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_operator_strategy_adoption_history_row)
+            .transpose()
+    }
+
+    pub async fn previous_distinct_revision(
+        &self,
+        pool: &PgPool,
+        current_revision: &str,
+    ) -> Result<Option<String>> {
+        let row = sqlx::query(
+            r#"
+            SELECT previous_operator_strategy_revision
+            FROM operator_strategy_adoption_history
+            WHERE operator_strategy_revision = $1
+              AND previous_operator_strategy_revision IS NOT NULL
+              AND previous_operator_strategy_revision <> $1
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(current_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(|row| row.try_get("previous_operator_strategy_revision"))
+            .transpose()
+            .map_err(Into::into)
     }
 }
 
@@ -3856,6 +4236,46 @@ fn map_resolution_state_row(row: PgRow) -> Result<ResolutionStateRow> {
     })
 }
 
+fn map_strategy_candidate_set_row(row: PgRow) -> Result<StrategyCandidateSetRow> {
+    Ok(StrategyCandidateSetRow {
+        strategy_candidate_revision: row.try_get("strategy_candidate_revision")?,
+        snapshot_id: row.try_get("snapshot_id")?,
+        source_revision: row.try_get("source_revision")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_adoptable_strategy_revision_row(row: PgRow) -> Result<AdoptableStrategyRevisionRow> {
+    Ok(AdoptableStrategyRevisionRow {
+        adoptable_strategy_revision: row.try_get("adoptable_strategy_revision")?,
+        strategy_candidate_revision: row.try_get("strategy_candidate_revision")?,
+        rendered_operator_strategy_revision: row.try_get("rendered_operator_strategy_revision")?,
+        payload: row.try_get("payload")?,
+    })
+}
+
+fn map_strategy_adoption_provenance_row(row: PgRow) -> Result<StrategyAdoptionProvenanceRow> {
+    Ok(StrategyAdoptionProvenanceRow {
+        operator_strategy_revision: row.try_get("operator_strategy_revision")?,
+        adoptable_strategy_revision: row.try_get("adoptable_strategy_revision")?,
+        strategy_candidate_revision: row.try_get("strategy_candidate_revision")?,
+    })
+}
+
+fn map_operator_strategy_adoption_history_row(
+    row: PgRow,
+) -> Result<OperatorStrategyAdoptionHistoryRow> {
+    Ok(OperatorStrategyAdoptionHistoryRow {
+        adoption_id: row.try_get("adoption_id")?,
+        action_kind: row.try_get("action_kind")?,
+        operator_strategy_revision: row.try_get("operator_strategy_revision")?,
+        previous_operator_strategy_revision: row.try_get("previous_operator_strategy_revision")?,
+        adoptable_strategy_revision: row.try_get("adoptable_strategy_revision")?,
+        strategy_candidate_revision: row.try_get("strategy_candidate_revision")?,
+        adopted_at: row.try_get("adopted_at")?,
+    })
+}
+
 fn map_candidate_target_set_row(row: PgRow) -> Result<CandidateTargetSetRow> {
     Ok(CandidateTargetSetRow {
         candidate_revision: row.try_get("candidate_revision")?,
@@ -3902,6 +4322,7 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
         last_state_version: row.try_get("last_state_version")?,
         last_snapshot_id: row.try_get("last_snapshot_id")?,
         operator_target_revision: row.try_get("operator_target_revision")?,
+        operator_strategy_revision: row.try_get("operator_strategy_revision")?,
         active_run_session_id: row.try_get("active_run_session_id")?,
     })
 }
@@ -3924,6 +4345,10 @@ fn map_run_session_row(row: PgRow) -> Result<RunSessionRow> {
         configured_operator_target_revision: row.try_get("configured_operator_target_revision")?,
         active_operator_target_revision_at_start: row
             .try_get("active_operator_target_revision_at_start")?,
+        configured_operator_strategy_revision: row
+            .try_get("configured_operator_strategy_revision")?,
+        active_operator_strategy_revision_at_start: row
+            .try_get("active_operator_strategy_revision_at_start")?,
         rollout_state_at_start: row.try_get("rollout_state_at_start")?,
         real_user_shadow_smoke: row.try_get("real_user_shadow_smoke")?,
     })

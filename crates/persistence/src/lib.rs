@@ -9,17 +9,19 @@ pub mod repos;
 
 pub use instrumentation::NegRiskPersistenceInstrumentation;
 pub use models::{
-    AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-    OperatorTargetAdoptionHistoryRow, RunSessionRow, RunSessionState, RuntimeProgressRow,
-    StoredOrder,
+    AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow,
+    CandidateTargetSetRow, OperatorStrategyAdoptionHistoryRow, OperatorTargetAdoptionHistoryRow,
+    RunSessionRow, RunSessionState, RuntimeProgressRow, StoredOrder, StrategyAdoptionProvenanceRow,
+    StrategyCandidateSetRow,
 };
 pub use repos::{
     append_shadow_execution_batch, persist_discovery_snapshot, reconcile_current_family_view,
     ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
     IdentifierRepo, InventoryRepo, JournalRepo, LatestRelevantRunSessionQuery, LiveArtifactRepo,
-    LiveSubmissionRepo, NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo,
-    PendingReconcileRepo, ResolutionRepo, RunSessionProjectedRow, RunSessionRepo,
-    RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
+    LiveSubmissionRepo, NegRiskFamilyRepo, OperatorStrategyAdoptionHistoryRepo,
+    OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo, ResolutionRepo,
+    RunSessionProjectedRow, RunSessionRepo, RuntimeProgressRepo, ShadowArtifactRepo,
+    SnapshotPublicationRepo, StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -68,14 +70,26 @@ pub enum PersistenceError {
     ConflictingCandidateTargetSet {
         candidate_revision: String,
     },
+    ConflictingStrategyCandidateSet {
+        strategy_candidate_revision: String,
+    },
     ConflictingAdoptableTargetRevision {
         adoptable_revision: String,
+    },
+    ConflictingAdoptableStrategyRevision {
+        adoptable_strategy_revision: String,
     },
     ConflictingCandidateAdoptionProvenance {
         operator_target_revision: String,
     },
+    ConflictingStrategyAdoptionProvenance {
+        operator_strategy_revision: String,
+    },
     MissingCandidateAdoptionLink {
         operator_target_revision: String,
+    },
+    MissingStrategyAdoptionLink {
+        operator_strategy_revision: String,
     },
     DuplicatePendingReconcile {
         pending_ref: String,
@@ -168,9 +182,21 @@ impl fmt::Display for PersistenceError {
                 f,
                 "candidate target set {candidate_revision} already exists with different fields"
             ),
+            Self::ConflictingStrategyCandidateSet {
+                strategy_candidate_revision,
+            } => write!(
+                f,
+                "strategy candidate set {strategy_candidate_revision} already exists with different fields"
+            ),
             Self::ConflictingAdoptableTargetRevision { adoptable_revision } => write!(
                 f,
                 "adoptable target revision {adoptable_revision} already exists with different fields"
+            ),
+            Self::ConflictingAdoptableStrategyRevision {
+                adoptable_strategy_revision,
+            } => write!(
+                f,
+                "adoptable strategy revision {adoptable_strategy_revision} already exists with different fields"
             ),
             Self::ConflictingCandidateAdoptionProvenance {
                 operator_target_revision,
@@ -178,11 +204,23 @@ impl fmt::Display for PersistenceError {
                 f,
                 "candidate adoption provenance {operator_target_revision} already exists with different linkage"
             ),
+            Self::ConflictingStrategyAdoptionProvenance {
+                operator_strategy_revision,
+            } => write!(
+                f,
+                "strategy adoption provenance {operator_strategy_revision} already exists with different linkage"
+            ),
             Self::MissingCandidateAdoptionLink {
                 operator_target_revision,
             } => write!(
                 f,
                 "operator target revision {operator_target_revision} could not be linked back to a candidate adoption provenance chain"
+            ),
+            Self::MissingStrategyAdoptionLink {
+                operator_strategy_revision,
+            } => write!(
+                f,
+                "operator strategy revision {operator_strategy_revision} could not be linked back to a strategy adoption provenance chain"
             ),
             Self::DuplicatePendingReconcile { pending_ref } => {
                 write!(f, "pending reconcile item {pending_ref} already exists")

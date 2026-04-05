@@ -8,6 +8,7 @@ mod negrisk;
 mod order;
 mod resolution;
 mod runtime_mode;
+mod strategy_control;
 
 pub use candidates::{
     AdoptableTargetRevision, CandidatePolicyAnchor, CandidateTarget, CandidateTargetSet,
@@ -46,4 +47,9 @@ pub use order::{
 pub use resolution::{DisputeState, ResolutionState, ResolutionStatus};
 pub use runtime_mode::{
     AccountTradingStatus, RuntimeMode, RuntimeOverlay, RuntimePolicy, VenueTradingStatus,
+};
+pub use strategy_control::{
+    canonical_strategy_artifact_semantic_digest, AdoptableStrategyRevision,
+    OperatorStrategyAdoptionRecord, StrategyAdoptionProvenance,
+    StrategyArtifactSemanticDigestInput, StrategyCandidateSet, StrategyKey,
 };
