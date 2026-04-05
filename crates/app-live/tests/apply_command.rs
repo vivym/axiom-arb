@@ -90,6 +90,8 @@ fn apply_live_target_adoption_required_stops_with_adopt_guidance() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Stopping before doctor preflight."), "{text}");
     assert!(text.contains("target-adoption-required"), "{text}");
     assert!(text.contains("app-live targets adopt --config"), "{text}");
     assert!(!text.contains("status -> doctor -> run"), "{text}");
@@ -557,6 +559,10 @@ fn apply_live_config_ready_without_start_stops_at_ready_to_start_outcome() {
     assert!(!text.contains("apply reached ready state"), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
     assert!(text.contains("app-live apply --config"), "{text}");
+    assert!(
+        !section_text(&text, "Next Actions").contains("app-live run --config"),
+        "{text}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -627,6 +633,41 @@ fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() 
     assert!(text.contains("Runtime not started"), "{text}");
     assert!(text.contains("app-live apply --config"), "{text}");
     assert!(!text.contains("Choose one:"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_restart_required_without_start_stops_at_ready_to_start() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live restart required without start");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Ready to start"), "{text}");
+    assert!(text.contains("manual restart boundary"), "{text}");
+    assert!(
+        !section_text(&text, "Next Actions").contains("app-live run --config"),
+        "{text}"
+    );
+    assert!(text.contains("app-live apply --config"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -876,6 +917,11 @@ fn apply_live_declining_restart_confirmation_stops_cleanly() {
     assert!(text.contains("Ready to start"), "{text}");
     assert!(text.contains("restart confirmation declined"), "{text}");
     assert!(!text.contains("apply reached ready state"), "{text}");
+    assert!(
+        !section_text(&text, "Next Actions").contains("app-live run --config"),
+        "{text}"
+    );
+    assert!(text.contains("app-live apply --config"), "{text}");
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
@@ -1060,6 +1106,11 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     ));
     fs::write(&path, edited).expect("temp fixture should be writable");
     path
+}
+
+fn section_text<'a>(text: &'a str, title: &str) -> &'a str {
+    let start = text.find(title).unwrap_or_else(|| panic!("{text}"));
+    &text[start..]
 }
 
 fn temp_invalid_config_path() -> PathBuf {

@@ -527,6 +527,8 @@ fn stop_live_apply(
 ) -> Result<(), Box<dyn Error>> {
     render_live_current_state(summary);
     output::render_planned_actions(&[planned_action]);
+    output::render_execution_header();
+    output::render_execution_line("Stopping before doctor preflight.");
     output::render_outcome(&outcome);
     output::render_next_actions(&next_actions);
     Err(apply_failure(failure))
@@ -682,9 +684,11 @@ fn ready_next_actions(
             "Re-run app-live apply --config {quoted_config_path} --start to continue in the foreground."
         ));
     }
-    actions.push(format!(
-        "Or run app-live run --config {quoted_config_path} through your normal operator workflow."
-    ));
+    if summary.mode != Some(status::model::StatusMode::Live) {
+        actions.push(format!(
+            "Or run app-live run --config {quoted_config_path} through your normal operator workflow."
+        ));
+    }
 
     actions
 }
