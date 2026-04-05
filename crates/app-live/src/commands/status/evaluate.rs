@@ -474,6 +474,18 @@ fn session_details(
     relevant_run_session: &Option<RunSessionProjectedRow>,
     conflicting_active_run_session: &Option<RunSessionProjectedRow>,
 ) -> StatusDetails {
+    let conflicting_active_run_session = match (
+        relevant_run_session.as_ref(),
+        conflicting_active_run_session.as_ref(),
+    ) {
+        (Some(relevant_session), Some(conflicting_session))
+            if relevant_session.row.run_session_id == conflicting_session.row.run_session_id =>
+        {
+            None
+        }
+        _ => conflicting_active_run_session.as_ref(),
+    };
+
     StatusDetails {
         configured_target: None,
         active_target: None,

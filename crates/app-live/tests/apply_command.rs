@@ -628,6 +628,48 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
 }
 
 #[test]
+fn apply_live_config_ready_with_start_blocks_when_matching_active_run_session_is_running() {
+    let database = TestDatabase::new();
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    database.seed_run_session(live_run_session(
+        "rs-active",
+        &config_path,
+        "targets-rev-9",
+        RunSessionState::Running,
+        Utc::now() - ChronoDuration::minutes(2),
+    ));
+    database.seed_runtime_progress(Some("targets-rev-9"), Some("rs-active"));
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Relevant run session: rs-active"), "{text}");
+    assert!(!text.contains("Conflicting active run session: rs-active"), "{text}");
+    assert!(text.contains("Blocked"), "{text}");
+    assert!(text.contains("resolve the existing runtime outside apply"), "{text}");
+    assert!(!text.contains("Starting runtime in the foreground."), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));

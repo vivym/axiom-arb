@@ -184,27 +184,43 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
         return Ok(());
     }
 
-    if summary.readiness == StatusReadiness::RestartRequired {
-        if let Some(conflicting_active_run_session_id) = active_conflicting_run_session_id(&summary)
-        {
+    let blocking_run_session_id = live_start_blocking_run_session_id(&summary);
+    if let Some(blocking_run_session_id) = blocking_run_session_id {
+        let has_conflicting_active_session = active_conflicting_run_session_id(&summary).is_some();
+        if summary.readiness == StatusReadiness::RestartRequired {
+            if has_conflicting_active_session {
+                output::render_execution_line(
+                    "Stopping at the manual restart boundary because another run session is still active.",
+                );
+            } else {
+                output::render_execution_line(
+                    "Stopping at the manual restart boundary because the relevant run session is still active.",
+                );
+            }
+        } else if has_conflicting_active_session {
             output::render_execution_line(
-                "Stopping at the manual restart boundary because another run session is still active.",
+                "Stopping before starting the runtime because another run session is still active.",
             );
-            output::render_outcome("Blocked");
-            output::render_next_actions(&[
-                format!(
-                    "Resolve the existing runtime outside apply, then rerun app-live apply --config {} --start.",
-                    output::quoted_config_path(config_path)
-                ),
-                format!(
-                    "Conflicting active run session: {conflicting_active_run_session_id}"
-                ),
-            ]);
-            return Err(apply_failure(ApplyFailureKind::ReadinessError(
-                "resolve the existing runtime outside apply".to_owned(),
-            )));
+        } else {
+            output::render_execution_line(
+                "Stopping before starting the runtime because the relevant run session is still active.",
+            );
         }
+        output::render_outcome("Blocked");
+        let mut next_actions = vec![format!(
+            "Resolve the existing runtime outside apply, then rerun app-live apply --config {} --start.",
+            output::quoted_config_path(config_path)
+        )];
+        if has_conflicting_active_session {
+            next_actions.push(format!("Conflicting active run session: {blocking_run_session_id}"));
+        }
+        output::render_next_actions(&next_actions);
+        return Err(apply_failure(ApplyFailureKind::ReadinessError(
+            "resolve the existing runtime outside apply".to_owned(),
+        )));
+    }
 
+    if summary.readiness == StatusReadiness::RestartRequired {
         if !prompt::stdin_is_interactive() {
             output::render_execution_line(
                 "Stopping at the manual restart boundary because manual restart boundary requires interactive confirmation before foreground start.",
@@ -575,6 +591,33 @@ fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool
             (status::model::StatusReadiness::LiveConfigReady, false) => {
                 actions.push("Stop at Ready to start without starting the runtime.".to_owned());
             }
+            (status::model::StatusReadiness::LiveConfigReady, true)
+                if active_conflicting_run_session_id(summary).is_some() =>
+            {
+                actions.push(
+                    "Stop before starting the runtime because another run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while a conflicting active run session is still running."
+                        .to_owned(),
+                );
+            }
+            (status::model::StatusReadiness::LiveConfigReady, true)
+                if matches!(
+                    summary.details.relevant_run_state.as_deref(),
+                    Some("starting" | "running")
+                ) =>
+            {
+                actions.push(
+                    "Stop before starting the runtime because the relevant run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while the current run session is still active."
+                        .to_owned(),
+                );
+            }
             (status::model::StatusReadiness::LiveConfigReady, true) => {
                 actions.push("Start the runtime in the foreground.".to_owned());
             }
@@ -656,6 +699,15 @@ fn active_conflicting_run_session_id(summary: &StatusSummary) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+fn live_start_blocking_run_session_id(summary: &StatusSummary) -> Option<&str> {
+    active_conflicting_run_session_id(summary).or_else(|| {
+        match summary.details.relevant_run_state.as_deref() {
+            Some("starting" | "running") => summary.details.relevant_run_session_id.as_deref(),
+            _ => None,
+        }
+    })
 }
 
 fn doctor_failure_next_actions(config_path: &Path) -> Vec<String> {

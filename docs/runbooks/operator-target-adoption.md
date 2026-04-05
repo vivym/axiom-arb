@@ -145,6 +145,7 @@ cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
 For `real-user shadow smoke`, `apply` can still inline smoke-only target adoption and rollout enablement here. For live configs, return to `apply` only after adoption is complete and rollout posture exists; it stays conservative, does not inline target adoption or live rollout mutation, and keeps `verify` as a separate post-run check.
+If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`.
 
 `doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
 
@@ -201,7 +202,7 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
-For live configs, use that high-level flow only after adoption is complete and rollout posture already exists. For `real-user shadow smoke`, `apply` can still inline the smoke-only adoption and rollout work when `status` reports it.
+For live configs, use that high-level flow only after adoption is complete and rollout posture already exists. If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`. For `real-user shadow smoke`, `apply` can still inline the smoke-only adoption and rollout work when `status` reports it.
 
 Interpret `status` before `apply` like this:
 

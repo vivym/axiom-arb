@@ -351,6 +351,48 @@ fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
 }
 
 #[test]
+fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflicting_active() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-live.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(RunSessionRow {
+        run_session_id: "rs-same".to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state: RunSessionState::Running,
+        started_at: Utc::now() - Duration::minutes(1),
+        last_seen_at: Utc::now() - Duration::minutes(1),
+        ended_at: None,
+        exit_status: None,
+        exit_reason: None,
+        config_path: config.display().to_string(),
+        config_fingerprint: config_fingerprint(&config),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: "targets-rev-9".to_owned(),
+        configured_operator_target_revision: Some("targets-rev-9".to_owned()),
+        active_operator_target_revision_at_start: Some("targets-rev-8".to_owned()),
+        rollout_state_at_start: Some("required".to_owned()),
+        real_user_shadow_smoke: false,
+    });
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-same"));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Relevant run session: rs-same"), "{combined}");
+    assert!(!combined.contains("Conflicting active run session: rs-same"), "{combined}");
+
+    database.cleanup();
+}
+
+#[test]
 fn status_projects_overdue_running_session_as_stale() {
     let database = TestDatabase::new();
     let config = cli::config_fixture("app-live-ux-smoke.toml");
