@@ -187,7 +187,11 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     assert!(text.contains("[polymarket.source]"));
     assert!(text.contains("clob_host = \"https://custom-clob.example\""));
     assert!(text.contains("metadata_refresh_interval_seconds = 99"));
-    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(
+        combined(&output).contains("preserved existing [polymarket.source]."),
+        "{}",
+        combined(&output)
+    );
     assert!(polymarket.source.as_ref().is_some());
     assert!(polymarket.source_overrides.is_none());
 }
@@ -259,7 +263,11 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     assert!(text.contains("[polymarket.source_overrides]"));
     assert!(text.contains("clob_host = \"https://override-clob.example\""));
     assert!(text.contains("metadata_refresh_interval_seconds = 23"));
-    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(
+        combined(&output).contains("preserved existing [polymarket.source_overrides]."),
+        "{}",
+        combined(&output)
+    );
     assert!(polymarket.source.is_none());
     assert!(polymarket.source_overrides.as_ref().is_some());
 }
@@ -342,7 +350,13 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     assert!(text.contains("clob_host = \"https://source-clob.example\""));
     assert!(text.contains("[polymarket.source_overrides]"));
     assert!(text.contains("clob_host = \"https://override-clob.example\""));
-    assert!(!combined(&output).contains("built-in defaults"));
+    assert!(
+        combined(&output).contains(
+            "preserved existing [polymarket.source] and [polymarket.source_overrides]."
+        ),
+        "{}",
+        combined(&output)
+    );
     assert!(polymarket.source.as_ref().is_some());
     assert!(polymarket.source_overrides.as_ref().is_some());
 }
