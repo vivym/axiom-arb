@@ -256,14 +256,16 @@ fn adopted_summary(
 
     if restart_needed == Some(true) {
         let mut actions = Vec::new();
-        if rollout_ready {
+        if rollout_ready && !smoke_mode {
             actions.push(StatusAction::RunAppLiveApply);
         } else {
-            actions.push(if smoke_mode {
-                StatusAction::EnableSmokeRollout
-            } else {
-                StatusAction::EnableLiveRollout
-            });
+            if !rollout_ready {
+                actions.push(if smoke_mode {
+                    StatusAction::EnableSmokeRollout
+                } else {
+                    StatusAction::EnableLiveRollout
+                });
+            }
             actions.push(StatusAction::PerformControlledRestart);
         }
 

@@ -239,6 +239,58 @@ fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
 }
 
 #[test]
+fn verify_live_restart_required_with_ready_rollout_renders_apply_next_action() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-restart-ready",
+        &verify_db::live_ready_config(),
+    );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let session = verify_db.sample_run_session(
+        "rs-live-restart-1",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "targets-rev-9",
+        Some("targets-rev-9"),
+        Some("targets-rev-8"),
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(2),
+        Utc::now() - Duration::minutes(1),
+    );
+    verify_db.seed_run_session(session);
+    verify_db.seed_live_attempt_with_artifacts_for_run_session(
+        "attempt-live-restart-ready-1",
+        "rs-live-restart-1",
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: live"), "{text}");
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "Next: app-live apply --config {}",
+            cli::shell_quote_path(&config_path)
+        )),
+        "{text}"
+    );
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_historical_attempt_window_without_unique_session_downgrades_to_evidence_only() {
     let verify_db = verify_db::TestDatabase::new();
     let config_path = verify_db::temp_config_path(
