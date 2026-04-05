@@ -1059,13 +1059,13 @@ mod tests {
     }
 
     #[test]
-    fn live_warning_actions_follow_readiness_context() {
+    fn live_restart_required_actions_route_to_apply_when_rollout_is_ready() {
         let mut context = verify_context(
             VerifyScenario::Live,
             VerifyExpectation::LiveConfigConsistent,
             VerifyControlPlaneMode::Live,
             Some(StatusReadiness::RestartRequired),
-            vec![StatusAction::PerformControlledRestart],
+            vec![StatusAction::RunAppLiveApply],
         );
         context.control_plane.active_target = Some("targets-rev-8".to_owned());
         let evidence = VerifyEvidenceWindow {
@@ -1079,7 +1079,25 @@ mod tests {
         assert_eq!(verdict, VerifyVerdict::PassWithWarnings);
         assert!(next_actions
             .iter()
-            .any(|action| action.contains("controlled restart")));
+            .any(|action| action.contains("app-live apply --config")));
+    }
+
+    #[test]
+    fn live_config_ready_actions_route_to_apply_guidance() {
+        let context = verify_context(
+            VerifyScenario::Live,
+            VerifyExpectation::LiveConfigConsistent,
+            VerifyControlPlaneMode::Live,
+            Some(StatusReadiness::LiveConfigReady),
+            vec![StatusAction::RunAppLiveApply],
+        );
+
+        let actions =
+            next_actions_from_context(&context, &["run app-live status --config {config}"]);
+
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
     }
 
     #[test]

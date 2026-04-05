@@ -50,12 +50,12 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 `status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
 
 - `targets adopt`
-- `apply` for conservative Day 1+ progression
+- `apply` for Day 1+ progression
 - controlled restart
 - `doctor`
 - `run`
 
-Once adoption is complete and rollout posture exists, Day 1+ live progression returns to `apply`.
+For `real-user shadow smoke`, `apply` can still inline smoke-only target adoption and rollout enablement. For live configs, once adoption is complete and rollout posture exists, Day 1+ progression returns to conservative `apply`.
 
 Then drop into the lower-level control-plane views when you need exact provenance.
 
@@ -133,21 +133,9 @@ After a successful adopt:
 
 1. re-run `status`
 2. re-run `targets status` if you need the lower-level control-plane details
-3. once adoption and rollout posture exist, return to `apply` for the conservative Day 1+ flow
-4. let `apply` run `doctor` after readiness is in place
-5. if `restart_needed = true`, perform a controlled restart before `run`
-6. start `run`
-7. verify the local result
-
-```bash
-cargo run -p app-live -- status --config config/axiom-arb.local.toml
-cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
-cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
-cargo run -p app-live -- run --config config/axiom-arb.local.toml
-cargo run -p app-live -- verify --config config/axiom-arb.local.toml
-```
-
-For `real-user shadow smoke`, the preferred Day 1+ follow-up is:
+3. once rollout posture exists, return to the high-level Day 1+ flow
+4. keep the controlled restart boundary explicit before `run`
+5. verify the local result
 
 ```bash
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
@@ -156,7 +144,8 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
-`apply` stays conservative here: it follows readiness, does not inline target adoption or rollout mutation, and keeps `verify` as a separate post-run check.
+For `real-user shadow smoke`, `apply` can still inline smoke-only target adoption and rollout enablement here. For live configs, return to `apply` only after adoption is complete and rollout posture exists; it stays conservative, does not inline target adoption or live rollout mutation, and keeps `verify` as a separate post-run check.
+If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`.
 
 `doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
 
@@ -208,30 +197,25 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
-cargo run -p app-live -- doctor --config config/axiom-arb.local.toml
-cargo run -p app-live -- run --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml
+cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
-For `real-user shadow smoke`, replace the `doctor` / `run` pair with:
+For live configs, use that high-level flow only after adoption is complete and rollout posture already exists. If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`. For `real-user shadow smoke`, `apply` can still inline the smoke-only adoption and rollout work when `status` reports it.
 
-```bash
-cargo run -p app-live -- apply --config config/axiom-arb.local.toml
-cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
-```
-
-Interpret `status` before `doctor` like this:
+Interpret `status` before `apply` like this:
 
 - `target-adoption-required`
-  - run `targets candidates`, then `targets adopt`
-  - once adoption and rollout posture exist, return to `apply` for Day 1+ progression
+  - for `real-user shadow smoke`, `apply` can inline the adopt step
+  - for live configs, run `targets candidates`, then `targets adopt`
 - `restart-required`
   - perform a controlled restart before expecting the running daemon to pick up the configured revision
 - `live-rollout-required` or `smoke-rollout-required`
-  - once rollout readiness is in place, return to `apply`
-  - otherwise fix rollout readiness first
+  - for `real-user shadow smoke`, `apply` can inline smoke-only rollout enablement
+  - for live configs, fix rollout readiness first, then return to `apply`
 - `live-config-ready` or `smoke-config-ready`
-  - continue to `apply`, which will run `doctor` after readiness is in place
+  - continue to `apply`; it will run `doctor` and stop at ready, or continue into `run` if you pass `--start`
 - `blocked`
   - follow the printed next action and rerun `status`
 

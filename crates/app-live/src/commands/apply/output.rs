@@ -39,15 +39,20 @@ pub(crate) fn render_current_state(summary: &StatusSummary) {
         detail_lines += 1;
     }
     if let Some(relevant_run_started_at) = summary.details.relevant_run_started_at {
-        println!("Relevant run started at: {}", relevant_run_started_at.to_rfc3339());
+        println!(
+            "Relevant run started at: {}",
+            relevant_run_started_at.to_rfc3339()
+        );
         detail_lines += 1;
     }
-    if let Some(relevant_startup_target_revision) = &summary.details.relevant_startup_target_revision
+    if let Some(relevant_startup_target_revision) =
+        &summary.details.relevant_startup_target_revision
     {
         println!("Relevant startup target: {relevant_startup_target_revision}");
         detail_lines += 1;
     }
-    if let Some(conflicting_active_run_session_id) = &summary.details.conflicting_active_run_session_id
+    if let Some(conflicting_active_run_session_id) =
+        &summary.details.conflicting_active_run_session_id
     {
         println!("Conflicting active run session: {conflicting_active_run_session_id}");
         detail_lines += 1;

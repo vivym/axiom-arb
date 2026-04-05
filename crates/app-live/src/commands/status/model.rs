@@ -61,6 +61,7 @@ impl StatusRolloutState {
 pub enum StatusAction {
     RunTargetsAdopt,
     RunDoctor,
+    RunAppLiveApply,
     PerformControlledRestart,
     RunAppLiveRun,
     FixBlockingIssueAndRerunStatus,
@@ -74,6 +75,7 @@ impl StatusAction {
         match self {
             Self::RunTargetsAdopt => "run targets adopt",
             Self::RunDoctor => "run doctor",
+            Self::RunAppLiveApply => "run app-live apply",
             Self::PerformControlledRestart => "perform controlled restart",
             Self::RunAppLiveRun => "run app-live run",
             Self::FixBlockingIssueAndRerunStatus => "fix blocking issue and rerun status",

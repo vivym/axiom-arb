@@ -156,6 +156,10 @@ fn status_smoke_target_adoption_required_points_to_apply() {
         "{combined}"
     );
     assert!(
+        !combined.contains("Next: app-live doctor --config"),
+        "{combined}"
+    );
+    assert!(
         !combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
@@ -195,6 +199,10 @@ fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
         combined.contains("Next: perform controlled restart"),
         "{combined}"
     );
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
 
     database.cleanup();
 }
@@ -230,13 +238,53 @@ fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already
         "{combined}"
     );
     assert!(
-        !combined.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
-        ),
+        combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
     assert!(
+        !combined.contains("Next: perform controlled restart"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_smoke_restart_required_with_ready_rollout_keeps_restart_guidance() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!(
+            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Mode: real-user shadow smoke"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Readiness: restart-required"),
+        "{combined}"
+    );
+    assert!(combined.contains("Rollout state: ready"), "{combined}");
+    assert!(
         combined.contains("Next: perform controlled restart"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
 
@@ -298,6 +346,54 @@ fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
         .unwrap_or_else(|| panic!("{combined}"));
     assert!(relevant_idx < next_actions_idx, "{combined}");
     assert!(conflicting_idx < next_actions_idx, "{combined}");
+
+    database.cleanup();
+}
+
+#[test]
+fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflicting_active() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-live.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(RunSessionRow {
+        run_session_id: "rs-same".to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state: RunSessionState::Running,
+        started_at: Utc::now() - Duration::minutes(1),
+        last_seen_at: Utc::now() - Duration::minutes(1),
+        ended_at: None,
+        exit_status: None,
+        exit_reason: None,
+        config_path: config.display().to_string(),
+        config_fingerprint: config_fingerprint(&config),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: "targets-rev-9".to_owned(),
+        configured_operator_target_revision: Some("targets-rev-9".to_owned()),
+        active_operator_target_revision_at_start: Some("targets-rev-8".to_owned()),
+        rollout_state_at_start: Some("required".to_owned()),
+        real_user_shadow_smoke: false,
+    });
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-same"));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-same"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Conflicting active run session: rs-same"),
+        "{combined}"
+    );
 
     database.cleanup();
 }
@@ -396,7 +492,11 @@ fn status_adopted_source_with_live_rollout_enabled_is_live_config_ready() {
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live doctor --config"),
+        combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live doctor --config"),
         "{combined}"
     );
 
@@ -615,7 +715,7 @@ fn status_output_uses_summary_key_details_next_actions_order() {
     );
     assert!(combined.contains("Rollout state: ready"), "{combined}");
     assert!(
-        combined.contains("Next: app-live doctor --config"),
+        combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
 
@@ -711,6 +811,7 @@ fn status_actions_are_concrete_operator_actions() {
     let cases = [
         (StatusAction::RunTargetsAdopt, "run targets adopt"),
         (StatusAction::RunDoctor, "run doctor"),
+        (StatusAction::RunAppLiveApply, "run app-live apply"),
         (
             StatusAction::PerformControlledRestart,
             "perform controlled restart",

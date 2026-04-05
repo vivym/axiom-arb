@@ -6,7 +6,11 @@ use persistence::connect_pool_from_env;
 use crate::cli::{ApplyArgs, DoctorArgs};
 use crate::commands::{
     doctor, run,
-    status::{self, evaluate::StatusOutcome, model::StatusRolloutState},
+    status::{
+        self,
+        evaluate::StatusOutcome,
+        model::{StatusReadiness, StatusRolloutState, StatusSummary, StatusTargetSource},
+    },
     targets::{
         adopt, config_file::rewrite_smoke_rollout_families, state::load_target_candidates_catalog,
     },
@@ -78,10 +82,195 @@ pub fn execute(args: ApplyArgs) -> Result<(), Box<dyn Error>> {
         ApplyScenario::Paper => Err(apply_failure(ApplyFailureKind::UnsupportedScenario(
             ApplyUnsupportedScenario::Paper,
         ))),
-        ApplyScenario::Live => Err(apply_failure(ApplyFailureKind::UnsupportedScenario(
-            ApplyUnsupportedScenario::Live,
-        ))),
+        ApplyScenario::Live => execute_live_apply(&args.config, args.start),
         ApplyScenario::Smoke => execute_smoke_apply(&args.config, args.start),
+    }
+}
+
+fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), Box<dyn Error>> {
+    let mut prompt = ApplyPrompt::new();
+    let summary = match status::evaluate::evaluate(config_path) {
+        StatusOutcome::Summary(summary) => summary,
+        StatusOutcome::Deferred(deferred) => {
+            return Err(apply_failure(ApplyFailureKind::ReadinessError(
+                deferred.reason,
+            )))
+        }
+    };
+
+    match summary.readiness {
+        StatusReadiness::TargetAdoptionRequired => {
+            return stop_live_apply(
+                &summary,
+                "Stop because target adoption is still required.".to_owned(),
+                "Blocked".to_owned(),
+                status_next_actions(config_path, &summary),
+                ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
+            );
+        }
+        StatusReadiness::LiveRolloutRequired => {
+            return stop_live_apply(
+                &summary,
+                "Stop because live rollout preparation is still required.".to_owned(),
+                "Blocked".to_owned(),
+                status_next_actions(config_path, &summary),
+                ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
+            );
+        }
+        StatusReadiness::Blocked => {
+            let planned_action = if summary.details.target_source
+                == Some(StatusTargetSource::LegacyExplicitTargets)
+            {
+                "Stop because legacy explicit targets must be migrated before live apply can continue."
+                    .to_owned()
+            } else {
+                "Stop because status reported a blocking issue.".to_owned()
+            };
+            return stop_live_apply(
+                &summary,
+                planned_action,
+                "Blocked".to_owned(),
+                status_next_actions(config_path, &summary),
+                ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
+            );
+        }
+        StatusReadiness::RestartRequired
+            if summary.details.rollout_state == Some(StatusRolloutState::Required) =>
+        {
+            return stop_live_apply(
+                &summary,
+                "Stop because live rollout preparation is still required before restart.".to_owned(),
+                "Blocked".to_owned(),
+                vec![
+                    format!(
+                        "Edit {} and set [negrisk.rollout].approved_families and ready_families for adopted families.",
+                        output::quoted_config_path(config_path)
+                    ),
+                    format!(
+                        "Re-run app-live apply --config {} after rollout preparation is complete.",
+                        output::quoted_config_path(config_path)
+                    ),
+                ],
+                ApplyFailureKind::ReadinessError("live-rollout-required".to_owned()),
+            );
+        }
+        StatusReadiness::RestartRequired | StatusReadiness::LiveConfigReady => {}
+        _ => {
+            return Err(apply_failure(ApplyFailureKind::ReadinessError(
+                summary.readiness.label().to_owned(),
+            )))
+        }
+    }
+
+    render_live_current_state(&summary);
+    output::render_planned_actions(&planned_actions(&summary, start_requested));
+    output::render_execution_header();
+    output::render_execution_line("Running doctor preflight.");
+
+    let doctor_args = DoctorArgs {
+        config: config_path.to_path_buf(),
+    };
+    let doctor_execution = doctor::run_report(&doctor_args);
+    doctor_execution.render();
+    if let Err(error) = doctor_execution.into_result() {
+        output::render_outcome("Apply stopped because doctor preflight failed.");
+        output::render_next_actions(&doctor_failure_next_actions(config_path));
+        return Err(error);
+    }
+
+    if !start_requested {
+        output::render_outcome(&live_ready_outcome(summary.readiness, false));
+        output::render_next_actions(&ready_next_actions(config_path, &summary, false));
+        return Ok(());
+    }
+
+    let blocking_run_session_id = live_start_blocking_run_session_id(&summary);
+    if let Some(blocking_run_session_id) = blocking_run_session_id {
+        let has_conflicting_active_session = active_conflicting_run_session_id(&summary).is_some();
+        if summary.readiness == StatusReadiness::RestartRequired {
+            if has_conflicting_active_session {
+                output::render_execution_line(
+                    "Stopping at the manual restart boundary because another run session is still active.",
+                );
+            } else {
+                output::render_execution_line(
+                    "Stopping at the manual restart boundary because the relevant run session is still active.",
+                );
+            }
+        } else if has_conflicting_active_session {
+            output::render_execution_line(
+                "Stopping before starting the runtime because another run session is still active.",
+            );
+        } else {
+            output::render_execution_line(
+                "Stopping before starting the runtime because the relevant run session is still active.",
+            );
+        }
+        output::render_outcome("Blocked");
+        let mut next_actions = vec![format!(
+            "Resolve the existing runtime outside apply, then rerun app-live apply --config {} --start.",
+            output::quoted_config_path(config_path)
+        )];
+        if has_conflicting_active_session {
+            next_actions.push(format!(
+                "Conflicting active run session: {blocking_run_session_id}"
+            ));
+        }
+        output::render_next_actions(&next_actions);
+        return Err(apply_failure(ApplyFailureKind::ReadinessError(
+            "resolve the existing runtime outside apply".to_owned(),
+        )));
+    }
+
+    if summary.readiness == StatusReadiness::RestartRequired {
+        if !prompt::stdin_is_interactive() {
+            output::render_execution_line(
+                "Stopping at the manual restart boundary because manual restart boundary requires interactive confirmation before foreground start.",
+            );
+            output::render_outcome("Blocked");
+            output::render_next_actions(&ready_next_actions(config_path, &summary, true));
+            return Err(apply_failure(ApplyFailureKind::Transition(
+                model::ApplyStage::ConfirmManualRestartBoundary,
+            )));
+        }
+
+        let configured_target = summary
+            .details
+            .configured_target
+            .as_deref()
+            .unwrap_or("unknown");
+        match prompt::choose_restart_boundary_confirmation(
+            &mut prompt,
+            configured_target,
+            summary.details.active_target.as_deref(),
+        )? {
+            RestartBoundarySelection::Confirm => {
+                output::render_execution_line(
+                    "Manual restart boundary confirmed. Starting runtime in the foreground.",
+                );
+            }
+            RestartBoundarySelection::Decline => {
+                output::render_outcome(&live_ready_outcome(summary.readiness, true));
+                output::render_next_actions(&ready_next_actions(config_path, &summary, true));
+                return Ok(());
+            }
+        }
+    } else {
+        output::render_execution_line("Starting runtime in the foreground.");
+    }
+
+    match run::run_from_config_path_with_invoked_by(config_path, "apply") {
+        Ok(()) => {
+            output::render_execution_line("Foreground runtime startup completed.");
+            output::render_outcome("Started");
+            output::render_next_actions(&started_next_actions(config_path));
+            Ok(())
+        }
+        Err(error) => {
+            output::render_outcome("Foreground runtime startup failed.");
+            output::render_next_actions(&run_failure_next_actions(config_path));
+            Err(error)
+        }
     }
 }
 
@@ -350,14 +539,124 @@ fn apply_failure(kind: ApplyFailureKind) -> Box<dyn Error> {
     Box::new(error)
 }
 
+fn stop_live_apply(
+    summary: &StatusSummary,
+    planned_action: String,
+    outcome: String,
+    next_actions: Vec<String>,
+    failure: ApplyFailureKind,
+) -> Result<(), Box<dyn Error>> {
+    render_live_current_state(summary);
+    output::render_planned_actions(&[planned_action]);
+    output::render_execution_header();
+    output::render_execution_line("Stopping before doctor preflight.");
+    output::render_outcome(&outcome);
+    output::render_next_actions(&next_actions);
+    Err(apply_failure(failure))
+}
+
+fn render_live_current_state(summary: &StatusSummary) {
+    output::render_current_state(summary);
+    if let Some(relevant_run_session_id) = &summary.details.relevant_run_session_id {
+        println!("Relevant run session: {relevant_run_session_id}");
+    }
+    if let Some(relevant_run_state) = &summary.details.relevant_run_state {
+        println!("Relevant run state: {relevant_run_state}");
+    }
+    if let Some(conflicting_active_run_session_id) =
+        &summary.details.conflicting_active_run_session_id
+    {
+        println!("Conflicting active run session: {conflicting_active_run_session_id}");
+    }
+    if let Some(conflicting_active_run_state) = &summary.details.conflicting_active_run_state {
+        println!("Conflicting active state: {conflicting_active_run_state}");
+    }
+}
+
+fn status_next_actions(config_path: &Path, summary: &StatusSummary) -> Vec<String> {
+    let quoted_config_path = output::quoted_config_path(config_path);
+    summary
+        .actions
+        .iter()
+        .map(|action| {
+            status::render_action_template_with_mode(action, summary.mode)
+                .replace("{config}", &quoted_config_path)
+        })
+        .collect()
+}
+
 fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool) -> Vec<String> {
     let mut actions = vec!["Run doctor preflight checks.".to_owned()];
+
+    if summary.mode == Some(status::model::StatusMode::Live) {
+        match (summary.readiness, start_requested) {
+            (status::model::StatusReadiness::LiveConfigReady, false) => {
+                actions.push("Stop at Ready to start without starting the runtime.".to_owned());
+            }
+            (status::model::StatusReadiness::LiveConfigReady, true)
+                if active_conflicting_run_session_id(summary).is_some() =>
+            {
+                actions.push(
+                    "Stop before starting the runtime because another run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while a conflicting active run session is still running."
+                        .to_owned(),
+                );
+            }
+            (status::model::StatusReadiness::LiveConfigReady, true)
+                if matches!(
+                    summary.details.relevant_run_state.as_deref(),
+                    Some("starting" | "running")
+                ) =>
+            {
+                actions.push(
+                    "Stop before starting the runtime because the relevant run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while the current run session is still active."
+                        .to_owned(),
+                );
+            }
+            (status::model::StatusReadiness::LiveConfigReady, true) => {
+                actions.push("Start the runtime in the foreground.".to_owned());
+            }
+            (status::model::StatusReadiness::RestartRequired, false) => {
+                actions.push("Stop at Ready to start at the manual restart boundary.".to_owned());
+            }
+            (status::model::StatusReadiness::RestartRequired, true)
+                if active_conflicting_run_session_id(summary).is_some() =>
+            {
+                actions.push(
+                    "Stop at the manual restart boundary because another run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while a conflicting active run session is still running."
+                        .to_owned(),
+                );
+            }
+            (status::model::StatusReadiness::RestartRequired, true) => {
+                actions.push(
+                    "Require explicit confirmation at the manual restart boundary.".to_owned(),
+                );
+                actions.push("Start the runtime in the foreground only if confirmed.".to_owned());
+            }
+            _ => {}
+        }
+
+        return actions;
+    }
 
     match (summary.readiness, start_requested) {
         (status::model::StatusReadiness::SmokeConfigReady, false) => {
             actions.push("Stop at ready without starting the runtime.".to_owned());
         }
-        (status::model::StatusReadiness::SmokeConfigReady, true) => {}
+        (status::model::StatusReadiness::SmokeConfigReady, true) => {
+            actions.push("Start the runtime in the foreground.".to_owned());
+        }
         (status::model::StatusReadiness::RestartRequired, false) => {
             actions.push(
                 "Stop at the manual restart boundary without starting the runtime.".to_owned(),
@@ -366,6 +665,7 @@ fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool
         (status::model::StatusReadiness::RestartRequired, true) => {
             actions
                 .push("Require explicit confirmation at the manual restart boundary.".to_owned());
+            actions.push("Start the runtime in the foreground only if confirmed.".to_owned());
         }
         _ => {}
     }
@@ -379,6 +679,37 @@ fn ready_outcome(summary: &status::model::StatusSummary) -> String {
     } else {
         "Runtime not started; apply reached ready state.".to_owned()
     }
+}
+
+fn live_ready_outcome(readiness: StatusReadiness, boundary_declined: bool) -> String {
+    match (readiness, boundary_declined) {
+        (StatusReadiness::RestartRequired, true) => {
+            "Ready to start; restart confirmation declined at the manual restart boundary."
+                .to_owned()
+        }
+        (StatusReadiness::RestartRequired, false) => {
+            "Ready to start; apply is waiting at the manual restart boundary.".to_owned()
+        }
+        _ => "Ready to start".to_owned(),
+    }
+}
+
+fn active_conflicting_run_session_id(summary: &StatusSummary) -> Option<&str> {
+    match summary.details.conflicting_active_run_state.as_deref() {
+        Some("starting" | "running") => {
+            summary.details.conflicting_active_run_session_id.as_deref()
+        }
+        _ => None,
+    }
+}
+
+fn live_start_blocking_run_session_id(summary: &StatusSummary) -> Option<&str> {
+    active_conflicting_run_session_id(summary).or({
+        match summary.details.relevant_run_state.as_deref() {
+            Some("starting" | "running") => summary.details.relevant_run_session_id.as_deref(),
+            _ => None,
+        }
+    })
 }
 
 fn doctor_failure_next_actions(config_path: &Path) -> Vec<String> {
@@ -413,9 +744,11 @@ fn ready_next_actions(
             "Re-run app-live apply --config {quoted_config_path} --start to continue in the foreground."
         ));
     }
-    actions.push(format!(
-        "Or run app-live run --config {quoted_config_path} through your normal operator workflow."
-    ));
+    if summary.mode != Some(status::model::StatusMode::Live) {
+        actions.push(format!(
+            "Or run app-live run --config {quoted_config_path} through your normal operator workflow."
+        ));
+    }
 
     actions
 }
