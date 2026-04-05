@@ -187,8 +187,11 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
     if summary.readiness == StatusReadiness::RestartRequired {
         if let Some(conflicting_active_run_session_id) = active_conflicting_run_session_id(&summary)
         {
+            output::render_execution_line(
+                "Stopping at the manual restart boundary because another run session is still active.",
+            );
             output::render_outcome(
-                "Runtime not started; apply stopped at the manual restart boundary because another run session is still active.",
+                "Blocked",
             );
             output::render_next_actions(&vec![
                 format!(
@@ -205,8 +208,11 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
         }
 
         if !prompt::stdin_is_interactive() {
+            output::render_execution_line(
+                "Stopping at the manual restart boundary because manual restart boundary requires interactive confirmation before foreground start.",
+            );
             output::render_outcome(
-                "Runtime not started; manual restart boundary requires interactive confirmation before foreground start.",
+                "Blocked",
             );
             output::render_next_actions(&ready_next_actions(config_path, &summary, true));
             return Err(apply_failure(ApplyFailureKind::Transition(
@@ -241,7 +247,8 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
 
     match run::run_from_config_path_with_invoked_by(config_path, "apply") {
         Ok(()) => {
-            output::render_outcome("Foreground runtime startup completed.");
+            output::render_execution_line("Foreground runtime startup completed.");
+            output::render_outcome("Started");
             output::render_next_actions(&started_next_actions(config_path));
             Ok(())
         }

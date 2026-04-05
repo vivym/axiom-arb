@@ -592,6 +592,7 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Execution"), "{text}");
+    assert!(section_text(&text, "Outcome").contains("Outcome\nStarted"), "{text}");
     assert!(
         text.contains("Starting runtime in the foreground."),
         "{text}"
@@ -879,6 +880,7 @@ fn apply_live_restart_required_with_start_fails_closed_when_not_interactive() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(section_text(&text, "Outcome").contains("Outcome\nBlocked"), "{text}");
     assert!(text.contains("confirm-manual-restart-boundary"), "{text}");
     assert!(
         text.contains("manual restart boundary requires interactive confirmation"),
@@ -951,6 +953,7 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
+    assert!(section_text(&text, "Outcome").contains("Outcome\nStarted"), "{text}");
     assert!(
         text.contains("Manual restart boundary confirmed. Starting runtime in the foreground."),
         "{text}"
@@ -992,6 +995,7 @@ fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(section_text(&text, "Outcome").contains("Outcome\nBlocked"), "{text}");
     assert!(text.contains("Planned Actions"), "{text}");
     assert!(
         text.contains(
