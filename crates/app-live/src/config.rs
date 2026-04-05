@@ -333,7 +333,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for PolymarketSourceConfig {
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
         let source = config
-            .polymarket_source()
+            .effective_polymarket_source()
             .ok_or(ConfigError::MissingPolymarketSourceConfig)?;
 
         source_config_from_view(source)

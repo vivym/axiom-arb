@@ -302,6 +302,129 @@ fn parses_polymarket_source_config_from_validated_view() {
 }
 
 #[test]
+fn operator_facing_live_config_without_source_uses_default_polymarket_source() {
+    let config = PolymarketSourceConfig::try_from(&operator_live_view_without_source()).unwrap();
+
+    assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
+    assert_eq!(
+        config.data_api_host.as_str(),
+        "https://data-api.polymarket.com/"
+    );
+    assert_eq!(
+        config.relayer_host.as_str(),
+        "https://relayer-v2.polymarket.com/"
+    );
+    assert_eq!(
+        config.market_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    );
+    assert_eq!(
+        config.user_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+    );
+    assert_eq!(config.heartbeat_interval_seconds, 15);
+    assert_eq!(config.relayer_poll_interval_seconds, 5);
+    assert_eq!(config.metadata_refresh_interval_seconds, 60);
+}
+
+#[test]
+fn operator_facing_smoke_config_without_source_uses_default_polymarket_source() {
+    let config = PolymarketSourceConfig::try_from(&smoke_view_without_source()).unwrap();
+
+    assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
+    assert_eq!(
+        config.data_api_host.as_str(),
+        "https://data-api.polymarket.com/"
+    );
+    assert_eq!(
+        config.relayer_host.as_str(),
+        "https://relayer-v2.polymarket.com/"
+    );
+    assert_eq!(
+        config.market_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    );
+    assert_eq!(
+        config.user_ws_url.as_str(),
+        "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+    );
+    assert_eq!(config.heartbeat_interval_seconds, 15);
+    assert_eq!(config.relayer_poll_interval_seconds, 5);
+    assert_eq!(config.metadata_refresh_interval_seconds, 60);
+}
+
+#[test]
+fn source_overrides_win_over_source_when_both_are_present() {
+    let config = PolymarketSourceConfig::try_from(&live_view_with_source_overrides()).unwrap();
+
+    assert_eq!(config.clob_host.as_str(), "https://override-clob.polymarket.com/");
+    assert_eq!(
+        config.data_api_host.as_str(),
+        "https://override-data-api.polymarket.com/"
+    );
+    assert_eq!(
+        config.relayer_host.as_str(),
+        "https://override-relayer.polymarket.com/"
+    );
+    assert_eq!(
+        config.market_ws_url.as_str(),
+        "wss://override-ws.polymarket.com/ws/market"
+    );
+    assert_eq!(
+        config.user_ws_url.as_str(),
+        "wss://override-ws.polymarket.com/ws/user"
+    );
+    assert_eq!(config.heartbeat_interval_seconds, 22);
+    assert_eq!(config.relayer_poll_interval_seconds, 11);
+    assert_eq!(config.metadata_refresh_interval_seconds, 99);
+}
+
+#[test]
+fn invalid_explicit_polymarket_source_still_fails() {
+    let error = source_config_err(
+        r#"
+[polymarket.source]
+clob_host = "ftp://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+"#,
+    );
+
+    assert!(error.contains("clob_host"));
+}
+
+#[test]
+fn signer_legacy_path_is_unchanged_when_source_is_omitted() {
+    let config = LocalSignerConfig::try_from(&operator_live_view_without_source()).unwrap();
+
+    assert_eq!(
+        config.signer,
+        LocalSignerIdentity {
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+            funder_address: "0x2222222222222222222222222222222222222222".to_owned(),
+            signature_type: "Eoa".to_owned(),
+            wallet_route: "Eoa".to_owned(),
+        }
+    );
+    assert_eq!(config.l2_auth.api_key, "poly-api-key");
+    assert_eq!(config.l2_auth.passphrase, "poly-passphrase");
+    assert!(!config.l2_auth.timestamp.is_empty());
+    assert!(!config.l2_auth.signature.is_empty());
+    assert_eq!(
+        config.relayer_auth,
+        LocalRelayerAuth::RelayerApiKey {
+            api_key: "relay-key".to_owned(),
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+        }
+    );
+}
+
+#[test]
 fn rejects_polymarket_source_config_with_non_http_hosts() {
     let error = source_config_err(
         r#"
@@ -487,6 +610,60 @@ fn smoke_view() -> config_schema::AppLiveConfigView<'static> {
         .expect("smoke view should validate")
 }
 
+fn smoke_view_without_source() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+        )
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated
+        .for_app_live()
+        .expect("smoke view should validate")
+}
+
 fn operator_live_view() -> config_schema::AppLiveConfigView<'static> {
     operator_live_view_from(
         r#"
@@ -508,6 +685,114 @@ secret = "builder-secret"
 passphrase = "builder-passphrase"
 "#,
     )
+}
+
+fn operator_live_view_without_source() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+        )
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
+}
+
+fn live_view_with_source_overrides() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source_overrides]
+clob_host = "https://override-clob.polymarket.com"
+data_api_host = "https://override-data-api.polymarket.com"
+relayer_host = "https://override-relayer.polymarket.com"
+market_ws_url = "wss://override-ws.polymarket.com/ws/market"
+user_ws_url = "wss://override-ws.polymarket.com/ws/user"
+heartbeat_interval_seconds = 22
+relayer_poll_interval_seconds = 11
+metadata_refresh_interval_seconds = 99
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://data-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+        )
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
 }
 
 fn operator_live_view_from(relayer_auth: &str) -> config_schema::AppLiveConfigView<'static> {
