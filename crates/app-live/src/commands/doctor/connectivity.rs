@@ -4,8 +4,8 @@ use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use domain::{SignatureType, WalletRoute};
 use persistence::connect_pool_from_env;
 use venue_polymarket::{
-    L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, RelayerAuth, SignerContext,
-    WsUserChannelAuth,
+    L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, RelayerAuth, RestClientBuildError,
+    SignerContext, WsUserChannelAuth,
 };
 
 use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig, ResolvedTargets};
@@ -313,11 +313,12 @@ impl RealConnectivityProbeBackend {
         }
     }
 
-    fn rest_client(&self) -> PolymarketRestClient {
+    fn rest_client(&self) -> Result<PolymarketRestClient, RestClientBuildError> {
         PolymarketRestClient::new(
             self.source_config.clob_host.clone(),
             self.source_config.data_api_host.clone(),
             self.source_config.relayer_host.clone(),
+            self.source_config.outbound_proxy_url.clone(),
             None,
         )
     }
@@ -326,10 +327,15 @@ impl RealConnectivityProbeBackend {
         if self.ws_client.is_none() {
             let market_ws_url = self.source_config.market_ws_url.clone();
             let user_ws_url = self.source_config.user_ws_url.clone();
+            let outbound_proxy_url = self.source_config.outbound_proxy_url.clone();
             let client = timeout_probe("websocket connection", async move {
-                PolymarketWsClient::connect(market_ws_url, user_ws_url)
-                    .await
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
+                PolymarketWsClient::connect_with_proxy(
+                    market_ws_url,
+                    user_ws_url,
+                    outbound_proxy_url,
+                )
+                .await
+                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
             })
             .await?;
             self.ws_client = Some(client);
@@ -348,7 +354,9 @@ impl ConnectivityProbeBackend for RealConnectivityProbeBackend {
         signer_config: &'a LocalSignerConfig,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
-            let rest = self.rest_client();
+            let rest = self
+                .rest_client()
+                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
             let auth = l2_auth_headers_from_signer_config(signer_config)?;
             timeout_probe("authenticated REST", async move {
                 rest.fetch_open_orders(&auth)
@@ -416,7 +424,9 @@ impl ConnectivityProbeBackend for RealConnectivityProbeBackend {
         signer_config: &'a LocalSignerConfig,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
-            let rest = self.rest_client();
+            let rest = self
+                .rest_client()
+                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
             let auth = l2_auth_headers_from_signer_config(signer_config)?;
             timeout_probe("heartbeat", async move {
                 rest.post_order_heartbeat(&auth, HEARTBEAT_PREVIOUS_ID)
@@ -433,7 +443,9 @@ impl ConnectivityProbeBackend for RealConnectivityProbeBackend {
         signer_config: &'a LocalSignerConfig,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
-            let rest = self.rest_client();
+            let rest = self
+                .rest_client()
+                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
             let auth = relayer_auth_from_signer_config(signer_config)?;
             timeout_probe("relayer reachability", async move {
                 rest.fetch_recent_transactions(&auth)

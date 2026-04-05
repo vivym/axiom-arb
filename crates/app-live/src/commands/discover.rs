@@ -28,6 +28,7 @@ pub fn execute(args: DiscoverArgs) -> Result<(), Box<dyn Error>> {
 pub(crate) async fn run_discover_from_config(
     config_path: &Path,
 ) -> Result<DiscoverSummary, Box<dyn Error>> {
+    println!("Starting discovery");
     let raw = load_raw_config_from_path(config_path)?;
     let validated = ValidatedConfig::new(raw)?;
     let config = validated.for_app_live()?;
@@ -40,9 +41,18 @@ pub(crate) async fn run_discover_from_config(
     }
     let source = PolymarketSourceConfig::try_from(&config)?;
     let _signer = LocalSignerConfig::try_from(&config)?;
+    tracing::debug!(
+        config_path = %config_path.display(),
+        "discover loaded live config"
+    );
 
-    let rest = build_polymarket_rest_client(&source);
+    let rest = build_polymarket_rest_client(&source)?;
+    println!("Fetching Polymarket metadata");
     let metadata_rows = rest.try_fetch_neg_risk_metadata_rows().await?;
+    tracing::debug!(
+        metadata_row_count = metadata_rows.len(),
+        "discover fetched metadata rows"
+    );
     let source_session_id = format!(
         "discover-session-{}",
         Utc::now()
@@ -54,8 +64,15 @@ pub(crate) async fn run_discover_from_config(
         &source_session_id,
         Utc::now(),
     );
+    println!("Materializing discovery artifacts");
     let discovery_summary =
         AppSupervisor::materialize_authoritative_discovery_batch(batch, &source_session_id)?;
+    tracing::debug!(
+        source_session_id,
+        candidate_revision = ?discovery_summary.latest_candidate_revision,
+        adoptable_revision = ?discovery_summary.latest_adoptable_revision,
+        "discover materialized authoritative discovery batch"
+    );
 
     let pool = connect_pool_from_env().await?;
     let artifacts = CandidateArtifactRepo;

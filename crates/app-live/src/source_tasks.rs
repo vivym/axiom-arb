@@ -1,5 +1,5 @@
 use state::RemoteSnapshot;
-use venue_polymarket::{HeartbeatFetchResult, PolymarketRestClient};
+use venue_polymarket::{HeartbeatFetchResult, PolymarketRestClient, RestClientBuildError};
 
 use crate::{
     config::PolymarketSourceConfig,
@@ -80,11 +80,14 @@ pub fn build_real_user_shadow_smoke_sources(
     })
 }
 
-pub fn build_polymarket_rest_client(source: &PolymarketSourceConfig) -> PolymarketRestClient {
+pub fn build_polymarket_rest_client(
+    source: &PolymarketSourceConfig,
+) -> Result<PolymarketRestClient, RestClientBuildError> {
     PolymarketRestClient::new(
         source.clob_host.clone(),
         source.data_api_host.clone(),
         source.relayer_host.clone(),
+        source.outbound_proxy_url.clone(),
         None,
     )
 }
@@ -141,7 +144,7 @@ operator_target_revision = "targets-rev-9"
 
 [polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"

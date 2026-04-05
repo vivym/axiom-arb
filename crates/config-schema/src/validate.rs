@@ -4,9 +4,9 @@ use std::sync::OnceLock;
 use crate::error::ConfigSchemaError;
 use crate::raw::{
     NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetSourceKindToml,
-    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml, PolymarketRelayerAuthToml,
-    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
-    RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml,
+    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
+    RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -48,6 +48,11 @@ pub struct AppReplayConfigView<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AppLivePolymarketSourceView<'a> {
     raw: &'a PolymarketSourceToml,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppLivePolymarketHttpView<'a> {
+    raw: &'a PolymarketHttpToml,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +141,14 @@ impl<'a> AppLiveConfigView<'a> {
             .as_ref()
             .and_then(|polymarket| polymarket.signer.as_ref())
             .is_some()
+    }
+
+    pub fn polymarket_http(&self) -> Option<AppLivePolymarketHttpView<'a>> {
+        self.raw
+            .polymarket
+            .as_ref()
+            .and_then(|polymarket| polymarket.http.as_ref())
+            .map(|raw| AppLivePolymarketHttpView { raw })
     }
 
     pub fn has_target_source(&self) -> bool {
@@ -252,6 +265,12 @@ impl<'a> AppLivePolymarketSourceView<'a> {
 
     pub fn metadata_refresh_interval_seconds(&self) -> u64 {
         self.raw.metadata_refresh_interval_seconds
+    }
+}
+
+impl<'a> AppLivePolymarketHttpView<'a> {
+    pub fn proxy_url(&self) -> Option<&'a str> {
+        self.raw.proxy_url.as_deref()
     }
 }
 
@@ -576,7 +595,7 @@ fn builtin_polymarket_source() -> &'static PolymarketSourceToml {
     static BUILTIN: OnceLock<PolymarketSourceToml> = OnceLock::new();
     BUILTIN.get_or_init(|| PolymarketSourceToml {
         clob_host: "https://clob.polymarket.com".to_owned(),
-        data_api_host: "https://data-api.polymarket.com".to_owned(),
+        data_api_host: "https://gamma-api.polymarket.com".to_owned(),
         relayer_host: "https://relayer-v2.polymarket.com".to_owned(),
         market_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market".to_owned(),
         user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user".to_owned(),

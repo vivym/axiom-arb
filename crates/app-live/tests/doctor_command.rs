@@ -144,7 +144,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -211,7 +211,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -650,7 +650,7 @@ real_user_shadow_smoke = true
 
 [polymarket.source]
 clob_host = "ftp://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"

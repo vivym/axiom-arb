@@ -26,6 +26,15 @@ real_user_shadow_smoke = true
 
 Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the `neg-risk` shadow-ready rollout state. Discovery persistence and adoption lineage are different lifecycle facts: `discover` writes candidate/adoptable artifacts, while `targets adopt` writes canonical provenance and adoption history for the chosen startup revision.
 
+If Polymarket traffic must traverse an outbound proxy, add this operator-local block:
+
+```toml
+[polymarket.http]
+proxy_url = "http://127.0.0.1:7897"
+```
+
+The built-in Polymarket data API default now points at `https://gamma-api.polymarket.com`. The Rust REST and websocket clients honor the explicit `[polymarket.http]` proxy setting, but they do not automatically read macOS system proxy settings.
+
 If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
 
 The runtime now records a durable `run_session`, so the operator-facing lifecycle summary is session-aware instead of purely heuristic:

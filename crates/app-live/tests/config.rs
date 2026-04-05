@@ -86,7 +86,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -282,7 +282,7 @@ fn parses_polymarket_source_config_from_validated_view() {
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
     assert_eq!(
         config.data_api_host.as_str(),
-        "https://data-api.polymarket.com/"
+        "https://gamma-api.polymarket.com/"
     );
     assert_eq!(
         config.relayer_host.as_str(),
@@ -308,7 +308,7 @@ fn operator_facing_live_config_without_source_uses_default_polymarket_source() {
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
     assert_eq!(
         config.data_api_host.as_str(),
-        "https://data-api.polymarket.com/"
+        "https://gamma-api.polymarket.com/"
     );
     assert_eq!(
         config.relayer_host.as_str(),
@@ -334,7 +334,7 @@ fn operator_facing_smoke_fixture_without_source_uses_default_polymarket_source()
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
     assert_eq!(
         config.data_api_host.as_str(),
-        "https://data-api.polymarket.com/"
+        "https://gamma-api.polymarket.com/"
     );
     assert_eq!(
         config.relayer_host.as_str(),
@@ -383,6 +383,22 @@ fn source_overrides_win_over_source_when_both_are_present() {
 }
 
 #[test]
+fn parses_optional_polymarket_http_proxy_from_validated_view() {
+    let config = PolymarketSourceConfig::try_from(&live_view(
+        r#"
+[polymarket.http]
+proxy_url = "http://127.0.0.1:7897"
+"#,
+    ))
+    .unwrap();
+
+    assert_eq!(
+        config.outbound_proxy_url.as_ref().map(|url| url.as_str()),
+        Some("http://127.0.0.1:7897/")
+    );
+}
+
+#[test]
 fn signer_legacy_path_is_unchanged_when_source_is_omitted() {
     let config = LocalSignerConfig::try_from(&operator_live_view_without_source()).unwrap();
 
@@ -414,7 +430,7 @@ fn rejects_polymarket_source_config_with_non_http_hosts() {
         r#"
 [polymarket.source]
 clob_host = "ftp://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -433,7 +449,7 @@ fn rejects_polymarket_source_config_with_non_ws_urls() {
         r#"
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "https://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -452,7 +468,7 @@ fn rejects_polymarket_source_config_with_zero_cadence() {
         r#"
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -471,7 +487,7 @@ fn rejects_polymarket_source_config_with_non_root_host_path() {
         r#"
 [polymarket.source]
 clob_host = "https://clob.polymarket.com/api"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -490,7 +506,7 @@ fn rejects_polymarket_source_config_with_host_query_or_fragment() {
         r#"
 [polymarket.source]
 clob_host = "https://clob.polymarket.com?foo=bar"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -503,7 +519,7 @@ metadata_refresh_interval_seconds = 60
         r#"
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com#fragment"
+data_api_host = "https://gamma-api.polymarket.com#fragment"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -727,7 +743,7 @@ metadata_refresh_interval_seconds = 99
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -789,7 +805,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -852,7 +868,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -912,7 +928,7 @@ real_user_shadow_smoke = true
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"

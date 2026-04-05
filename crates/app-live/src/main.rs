@@ -11,12 +11,23 @@ use app_live::commands::status::execute as status_execute;
 use app_live::commands::targets::execute as targets_execute;
 use app_live::commands::verify::execute as verify_execute;
 use clap::Parser;
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    init_tracing();
     if let Err(error) = run() {
         tracing::error!(error = %error, "app-live bootstrap failed");
         process::exit(1);
     }
+}
+
+fn init_tracing() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .without_time()
+        .with_env_filter(env_filter)
+        .try_init();
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {

@@ -116,6 +116,7 @@ pub struct PolymarketSourceConfig {
     pub relayer_host: Url,
     pub market_ws_url: Url,
     pub user_ws_url: Url,
+    pub outbound_proxy_url: Option<Url>,
     pub heartbeat_interval_seconds: u64,
     pub relayer_poll_interval_seconds: u64,
     pub metadata_refresh_interval_seconds: u64,
@@ -336,7 +337,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for PolymarketSourceConfig {
             .effective_polymarket_source()
             .ok_or(ConfigError::MissingPolymarketSourceConfig)?;
 
-        source_config_from_view(source)
+        source_config_from_view(config, source)
     }
 }
 
@@ -417,6 +418,7 @@ fn parse_positive_interval(
 }
 
 fn source_config_from_view(
+    config: &AppLiveConfigView<'_>,
     source: AppLivePolymarketSourceView<'_>,
 ) -> Result<PolymarketSourceConfig, ConfigError> {
     Ok(PolymarketSourceConfig {
@@ -450,6 +452,17 @@ fn source_config_from_view(
             &["ws", "wss"],
             "app_live",
         )?,
+        outbound_proxy_url: config
+            .polymarket_http()
+            .map(|http| {
+                http.proxy_url()
+                    .map(|value| {
+                        parse_host_url("polymarket.http.proxy_url", value, &["http"], "app_live")
+                    })
+                    .transpose()
+            })
+            .transpose()?
+            .flatten(),
         heartbeat_interval_seconds: parse_positive_interval(
             "polymarket.source.heartbeat_interval_seconds",
             source.heartbeat_interval_seconds(),

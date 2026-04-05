@@ -1,10 +1,11 @@
 use std::{
+    error::Error as StdError,
     fmt,
     sync::{Arc, Mutex},
 };
 
 use reqwest::header::HeaderMap;
-use reqwest::{Client, Request, Response, StatusCode};
+use reqwest::{Client, Proxy, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
@@ -14,6 +15,7 @@ use crate::heartbeat::HeartbeatFetchResult;
 use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
+use crate::proxy::ProxyConfigError;
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
 };
@@ -27,6 +29,12 @@ pub struct PolymarketRestClient {
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
     pub(crate) instrumentation: VenueProducerInstrumentation,
+}
+
+#[derive(Debug)]
+pub enum RestClientBuildError {
+    HttpClient(reqwest::Error),
+    Proxy(ProxyConfigError),
 }
 
 #[derive(Debug)]
@@ -83,7 +91,15 @@ impl fmt::Display for RestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Auth(err) => write!(f, "auth error: {err}"),
-            Self::Http(err) => write!(f, "http error: {err}"),
+            Self::Http(err) => {
+                write!(f, "http error: {err}")?;
+                let mut source = err.source();
+                while let Some(cause) = source {
+                    write!(f, ": {cause}")?;
+                    source = cause.source();
+                }
+                Ok(())
+            }
             Self::HttpResponse { status, body } => {
                 write!(f, "http response error {status}: {body}")
             }
@@ -95,6 +111,17 @@ impl fmt::Display for RestError {
 }
 
 impl std::error::Error for RestError {}
+
+impl fmt::Display for RestClientBuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HttpClient(err) => write!(f, "http client configuration error: {err}"),
+            Self::Proxy(err) => write!(f, "proxy configuration error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for RestClientBuildError {}
 
 impl From<AuthError> for RestError {
     fn from(value: AuthError) -> Self {
@@ -114,20 +141,34 @@ impl From<url::ParseError> for RestError {
     }
 }
 
+impl From<reqwest::Error> for RestClientBuildError {
+    fn from(value: reqwest::Error) -> Self {
+        Self::HttpClient(value)
+    }
+}
+
+impl From<ProxyConfigError> for RestClientBuildError {
+    fn from(value: ProxyConfigError) -> Self {
+        Self::Proxy(value)
+    }
+}
+
 impl PolymarketRestClient {
     pub fn new(
         clob_host: Url,
         data_api_host: Url,
         relayer_host: Url,
+        proxy_url: Option<Url>,
         instrumentation: Option<VenueProducerInstrumentation>,
-    ) -> Self {
-        Self::with_http_client(
-            Client::new(),
+    ) -> Result<Self, RestClientBuildError> {
+        let http = build_default_http_client(proxy_url.as_ref())?;
+        Ok(Self::with_http_client(
+            http,
             clob_host,
             data_api_host,
             relayer_host,
             instrumentation,
-        )
+        ))
     }
 
     pub fn with_http_client(
@@ -316,6 +357,14 @@ impl PolymarketRestClient {
         let body = response.text().await?;
         Err(RestError::HttpResponse { status, body })
     }
+}
+
+fn build_default_http_client(proxy_url: Option<&Url>) -> Result<Client, RestClientBuildError> {
+    let mut builder = Client::builder();
+    if let Some(proxy_url) = proxy_url {
+        builder = builder.proxy(Proxy::all(proxy_url.as_str())?);
+    }
+    Ok(builder.build()?)
 }
 
 #[derive(Debug, Serialize)]

@@ -4,6 +4,7 @@ real_user_shadow_smoke = false
 
 # Operators normally omit source config; the built-in defaults apply.
 # Use [polymarket.source_overrides] only for non-default endpoints or cadence.
+# Use [polymarket.http] only when Polymarket traffic must traverse an outbound proxy.
 
 [polymarket.account]
 address = "0xYOUR_ADDRESS"

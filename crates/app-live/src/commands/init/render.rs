@@ -49,6 +49,7 @@ pub fn render_live_config(
                 signature: None,
                 address: answers.relayer_address,
             }),
+            http: None,
             source_overrides: None,
             source: None,
             signer: None,
@@ -102,6 +103,10 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
 
     if let Some(existing_source) = &existing_polymarket.source {
         polymarket.source = Some(existing_source.clone());
+    }
+
+    if let Some(existing_http) = &existing_polymarket.http {
+        polymarket.http = Some(existing_http.clone());
     }
 
     if let Some(existing_source_overrides) = &existing_polymarket.source_overrides {

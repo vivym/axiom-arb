@@ -4,6 +4,7 @@ mod instrumentation;
 mod metadata;
 mod negrisk_live;
 mod orders;
+mod proxy;
 mod relayer;
 mod rest;
 mod retry;
@@ -32,8 +33,8 @@ pub use orders::{
 };
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
-    BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestError,
-    VenueStatusResponse,
+    BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestClientBuildError,
+    RestError, VenueStatusResponse,
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
 pub use url::Url as PolymarketUrl;

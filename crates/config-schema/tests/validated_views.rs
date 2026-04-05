@@ -128,7 +128,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
@@ -227,6 +227,7 @@ operator_target_revision = "targets-rev-9"
         .effective_polymarket_source()
         .expect("operator smoke config should use built-in source defaults");
     assert_eq!(source.clob_host(), "https://clob.polymarket.com");
+    assert_eq!(source.data_api_host(), "https://gamma-api.polymarket.com");
     assert_eq!(source.metadata_refresh_interval_seconds(), 60);
 }
 
@@ -456,7 +457,7 @@ real_user_shadow_smoke = false
 
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
 relayer_host = "https://relayer-v2.polymarket.com"
 market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"

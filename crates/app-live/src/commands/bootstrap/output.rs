@@ -23,6 +23,10 @@ pub fn print_starting_smoke_runtime(config_path: &Path) {
     );
 }
 
+pub fn print_smoke_starting_discovery() {
+    println!("Smoke bootstrap needs discovery artifacts; starting discovery");
+}
+
 pub fn print_smoke_discovery_completed(
     source: DiscoveryArtifactsSource,
     adoptable_revisions: &[String],

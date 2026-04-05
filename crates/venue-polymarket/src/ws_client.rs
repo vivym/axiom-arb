@@ -1,9 +1,15 @@
 use std::{collections::VecDeque, fmt, future::Future, pin::Pin};
 
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    client_async_tls_with_config, connect_async, tungstenite::client::IntoClientRequest,
+    tungstenite::Message, Connector, MaybeTlsStream, WebSocketStream,
+};
 use url::Url;
 
+use crate::proxy::{resolve_proxy_url, ProxyConfigError, ProxyEnvironment};
 use crate::{
     parse_user_message, ws_market::parse_market_messages, MarketWsEvent, UserWsEvent, WsParseError,
 };
@@ -91,6 +97,12 @@ impl From<tokio_tungstenite::tungstenite::Error> for WsClientError {
     }
 }
 
+impl From<ProxyConfigError> for WsClientError {
+    fn from(value: ProxyConfigError) -> Self {
+        Self::Transport(value.to_string())
+    }
+}
+
 #[derive(Debug)]
 pub struct RealWsMessageSource {
     stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
@@ -107,6 +119,17 @@ pub struct PolymarketWsClient<T = RealWsMessageSource> {
 
 impl RealWsMessageSource {
     pub async fn connect(url: Url) -> Result<Self, WsClientError> {
+        Self::connect_with_proxy(url, None).await
+    }
+
+    pub async fn connect_with_proxy(
+        url: Url,
+        explicit_proxy_url: Option<&Url>,
+    ) -> Result<Self, WsClientError> {
+        let env = ProxyEnvironment::from_env();
+        if let Some(proxy_url) = resolve_proxy_url(&url, explicit_proxy_url, &env)? {
+            return connect_via_http_proxy(url, proxy_url).await;
+        }
         let (stream, _) = connect_async(url.as_str()).await?;
         Ok(Self { stream })
     }
@@ -141,8 +164,24 @@ impl WsMessageSource for RealWsMessageSource {
 
 impl PolymarketWsClient<RealWsMessageSource> {
     pub async fn connect(market_ws_url: Url, user_ws_url: Url) -> Result<Self, WsClientError> {
-        let market_transport = RealWsMessageSource::connect(market_ws_url.clone()).await?;
-        let user_transport = RealWsMessageSource::connect(user_ws_url.clone()).await?;
+        Self::connect_with_proxy(market_ws_url, user_ws_url, None).await
+    }
+
+    pub async fn connect_with_proxy(
+        market_ws_url: Url,
+        user_ws_url: Url,
+        explicit_proxy_url: Option<Url>,
+    ) -> Result<Self, WsClientError> {
+        let market_transport = RealWsMessageSource::connect_with_proxy(
+            market_ws_url.clone(),
+            explicit_proxy_url.as_ref(),
+        )
+        .await?;
+        let user_transport = RealWsMessageSource::connect_with_proxy(
+            user_ws_url.clone(),
+            explicit_proxy_url.as_ref(),
+        )
+        .await?;
         Ok(Self {
             market_ws_url,
             user_ws_url,
@@ -356,6 +395,107 @@ fn transport_message_to_payload(message: WsTransportMessage) -> Result<String, W
     }
 }
 
+async fn connect_via_http_proxy(
+    url: Url,
+    proxy_url: Url,
+) -> Result<RealWsMessageSource, WsClientError> {
+    let proxy_authority = authority_for_url(&proxy_url, 80)?;
+    let target_authority = authority_for_target(&url)?;
+    let mut stream = TcpStream::connect(proxy_authority.as_str())
+        .await
+        .map_err(|error| {
+            WsClientError::Transport(format!(
+                "failed to connect to proxy {proxy_authority}: {error}"
+            ))
+        })?;
+
+    let connect_request = format!(
+        "CONNECT {target_authority} HTTP/1.1\r\nHost: {target_authority}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
+    );
+    stream
+        .write_all(connect_request.as_bytes())
+        .await
+        .map_err(|error| {
+            WsClientError::Transport(format!(
+                "failed to write proxy CONNECT request for {target_authority}: {error}"
+            ))
+        })?;
+    stream.flush().await.map_err(|error| {
+        WsClientError::Transport(format!(
+            "failed to flush proxy CONNECT request for {target_authority}: {error}"
+        ))
+    })?;
+
+    let response = read_proxy_connect_response(&mut stream).await?;
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        let status_line = response.lines().next().unwrap_or("unknown proxy response");
+        return Err(WsClientError::Transport(format!(
+            "proxy CONNECT {target_authority} failed via {proxy_authority}: {status_line}"
+        )));
+    }
+
+    let request = url.as_str().into_client_request()?;
+    let connector = match url.scheme() {
+        "ws" => Some(Connector::Plain),
+        "wss" => None,
+        scheme => {
+            return Err(WsClientError::Transport(format!(
+                "unsupported websocket URL scheme '{scheme}'"
+            )))
+        }
+    };
+    let (stream, _) = client_async_tls_with_config(request, stream, None, connector).await?;
+    Ok(RealWsMessageSource { stream })
+}
+
+fn authority_for_target(url: &Url) -> Result<String, WsClientError> {
+    let port = url.port_or_known_default().ok_or_else(|| {
+        WsClientError::Transport(format!(
+            "websocket URL {} is missing a known port",
+            url.as_str()
+        ))
+    })?;
+    authority_for_url(url, port)
+}
+
+fn authority_for_url(url: &Url, default_port: u16) -> Result<String, WsClientError> {
+    let host = url.host_str().ok_or_else(|| {
+        WsClientError::Transport(format!("URL {} is missing a host", url.as_str()))
+    })?;
+    let port = url.port().unwrap_or(default_port);
+    Ok(format!("{host}:{port}"))
+}
+
+async fn read_proxy_connect_response(stream: &mut TcpStream) -> Result<String, WsClientError> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 1024];
+
+    loop {
+        let bytes_read = stream.read(&mut chunk).await.map_err(|error| {
+            WsClientError::Transport(format!("failed to read proxy CONNECT response: {error}"))
+        })?;
+        if bytes_read == 0 {
+            return Err(WsClientError::Transport(
+                "proxy closed the connection before CONNECT completed".to_owned(),
+            ));
+        }
+
+        buffer.extend_from_slice(&chunk[..bytes_read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            return String::from_utf8(buffer).map_err(|error| {
+                WsClientError::Transport(format!(
+                    "proxy CONNECT response was not valid UTF-8: {error}"
+                ))
+            });
+        }
+        if buffer.len() >= 16 * 1024 {
+            return Err(WsClientError::Transport(
+                "proxy CONNECT response exceeded 16 KiB without terminating headers".to_owned(),
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,5 +530,63 @@ mod tests {
                 reason: "session replaced".to_owned(),
             }))
         );
+    }
+
+    #[test]
+    fn resolve_ws_proxy_prefers_explicit_proxy_over_environment() {
+        let target = Url::parse("wss://ws-subscriptions-clob.polymarket.com/ws/market")
+            .expect("target url should parse");
+        let explicit_proxy =
+            Url::parse("http://127.0.0.1:7897").expect("explicit proxy should parse");
+        let env = ProxyEnvironment {
+            http_proxy: None,
+            https_proxy: Some("http://127.0.0.1:9999".to_owned()),
+            all_proxy: None,
+            no_proxy: None,
+        };
+
+        let resolved = resolve_proxy_url(&target, Some(&explicit_proxy), &env)
+            .expect("explicit proxy should resolve");
+
+        assert_eq!(
+            resolved.as_ref().map(Url::as_str),
+            Some("http://127.0.0.1:7897/")
+        );
+    }
+
+    #[test]
+    fn resolve_ws_proxy_uses_https_proxy_for_secure_websocket_targets() {
+        let target = Url::parse("wss://ws-subscriptions-clob.polymarket.com/ws/market")
+            .expect("target url should parse");
+        let env = ProxyEnvironment {
+            http_proxy: Some("http://127.0.0.1:8888".to_owned()),
+            https_proxy: Some("http://127.0.0.1:7897".to_owned()),
+            all_proxy: Some("http://127.0.0.1:6666".to_owned()),
+            no_proxy: None,
+        };
+
+        let resolved =
+            resolve_proxy_url(&target, None, &env).expect("environment proxy should resolve");
+
+        assert_eq!(
+            resolved.as_ref().map(Url::as_str),
+            Some("http://127.0.0.1:7897/")
+        );
+    }
+
+    #[test]
+    fn resolve_ws_proxy_respects_no_proxy_for_environment_proxy() {
+        let target = Url::parse("wss://api.polymarket.com/ws").expect("target url should parse");
+        let env = ProxyEnvironment {
+            http_proxy: None,
+            https_proxy: Some("http://127.0.0.1:7897".to_owned()),
+            all_proxy: None,
+            no_proxy: Some("polymarket.com".to_owned()),
+        };
+
+        let resolved = resolve_proxy_url(&target, None, &env)
+            .expect("no_proxy should still be a valid resolution path");
+
+        assert!(resolved.is_none());
     }
 }

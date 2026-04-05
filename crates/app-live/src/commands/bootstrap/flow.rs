@@ -213,6 +213,11 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
             let mut catalog = load_target_candidates_catalog(&pool).await?;
             let mut artifacts_source = DiscoveryArtifactsSource::Persisted;
             if catalog.advisory_candidates.is_empty() && catalog.adoptable_revisions.is_empty() {
+                output::print_smoke_starting_discovery();
+                tracing::debug!(
+                    config_path = %config_path.display(),
+                    "bootstrap invoking inline discover"
+                );
                 let _ = discover::run_discover_from_config(config_path).await?;
                 catalog = load_target_candidates_catalog(&pool).await?;
                 artifacts_source = DiscoveryArtifactsSource::FreshDiscover;

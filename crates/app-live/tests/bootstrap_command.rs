@@ -36,6 +36,13 @@ fn bootstrap_empty_db_runs_discover_then_waits_for_explicit_adoption_confirmatio
 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("Smoke bootstrap needs discovery artifacts; starting discovery"),
+        "{text}"
+    );
+    assert!(text.contains("Starting discovery"), "{text}");
+    assert!(text.contains("Fetching Polymarket metadata"), "{text}");
+    assert!(text.contains("Materializing discovery artifacts"), "{text}");
     assert!(text.contains("Discovery completed"), "{text}");
     assert!(text.contains("Adoptable revisions:"), "{text}");
     assert!(text.contains("Recommended:"), "{text}");
