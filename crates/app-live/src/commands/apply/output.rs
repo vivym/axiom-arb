@@ -30,6 +30,45 @@ pub(crate) fn render_current_state(summary: &StatusSummary) {
         println!("Restart needed: {restart_needed}");
         detail_lines += 1;
     }
+    if let Some(relevant_run_session_id) = &summary.details.relevant_run_session_id {
+        println!("Relevant run session: {relevant_run_session_id}");
+        detail_lines += 1;
+    }
+    if let Some(relevant_run_state) = &summary.details.relevant_run_state {
+        println!("Relevant run state: {relevant_run_state}");
+        detail_lines += 1;
+    }
+    if let Some(relevant_run_started_at) = summary.details.relevant_run_started_at {
+        println!("Relevant run started at: {}", relevant_run_started_at.to_rfc3339());
+        detail_lines += 1;
+    }
+    if let Some(relevant_startup_target_revision) = &summary.details.relevant_startup_target_revision
+    {
+        println!("Relevant startup target: {relevant_startup_target_revision}");
+        detail_lines += 1;
+    }
+    if let Some(conflicting_active_run_session_id) = &summary.details.conflicting_active_run_session_id
+    {
+        println!("Conflicting active run session: {conflicting_active_run_session_id}");
+        detail_lines += 1;
+    }
+    if let Some(conflicting_active_run_state) = &summary.details.conflicting_active_run_state {
+        println!("Conflicting active state: {conflicting_active_run_state}");
+        detail_lines += 1;
+    }
+    if let Some(conflicting_active_started_at) = summary.details.conflicting_active_started_at {
+        println!(
+            "Conflicting active started at: {}",
+            conflicting_active_started_at.to_rfc3339()
+        );
+        detail_lines += 1;
+    }
+    if let Some(conflicting_active_startup_target_revision) =
+        &summary.details.conflicting_active_startup_target_revision
+    {
+        println!("Conflicting active startup target: {conflicting_active_startup_target_revision}");
+        detail_lines += 1;
+    }
     if let Some(reason) = &summary.details.reason {
         println!("Reason: {reason}");
         detail_lines += 1;

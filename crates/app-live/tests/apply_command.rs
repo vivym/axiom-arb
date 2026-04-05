@@ -11,8 +11,15 @@ use std::{
     time::Duration,
 };
 
+use chrono::{Duration as ChronoDuration, Utc};
+use persistence::{
+    models::{RunSessionRow, RunSessionState},
+    RunSessionRepo, RuntimeProgressRepo,
+};
 use support::cli;
 use support::{apply_db, status_db::TestDatabase};
+use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
 use toml_edit::{value, DocumentMut};
 
@@ -430,6 +437,11 @@ fn apply_restart_required_with_start_requires_explicit_confirmation() {
 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    assert!(
+        !text.contains("Start the runtime in the foreground only if confirmed."),
+        "{text}"
+    );
     assert!(text.contains("Choose one:"), "{text}");
     assert!(text.contains("confirm"), "{text}");
     assert!(text.contains("decline"), "{text}");
@@ -437,6 +449,52 @@ fn apply_restart_required_with_start_requires_explicit_confirmation() {
     assert!(text.contains("foreground"), "{text}");
     assert!(
         text.contains("will not stop or replace an existing daemon"),
+        "{text}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_restart_required_with_conflicting_active_session_shows_status_details_and_stays_conservative()
+{
+    let database = apply_db::TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        format!("{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n", with_mock_doctor_venue(config, &venue))
+    });
+    seed_running_conflict_session(
+        database.database_url(),
+        &config_path,
+        "rs-conflict",
+        "targets-rev-10",
+    );
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "decline\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Outcome"), "{text}");
+    assert!(text.contains("Next Actions"), "{text}");
+    assert!(text.contains("Conflicting active run session: rs-conflict"), "{text}");
+    assert!(text.contains("Conflicting active state: running"), "{text}");
+    assert!(
+        !text.contains("Start the runtime in the foreground only if confirmed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Require explicit confirmation at the manual restart boundary."),
         "{text}"
     );
 
@@ -668,6 +726,62 @@ fn run_apply_with_options(
         .expect("app-live apply should finish")
 }
 
+fn seed_running_conflict_session(
+    database_url: &str,
+    config_path: &std::path::Path,
+    run_session_id: &str,
+    startup_target_revision: &str,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("conflict seeding runtime should build");
+
+    let config_fingerprint = config_fingerprint(config_path);
+    let started_at = Utc::now() - ChronoDuration::minutes(2);
+
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(database_url)
+            .await
+            .expect("conflict seed pool should connect");
+
+        let row = RunSessionRow {
+            run_session_id: run_session_id.to_owned(),
+            invoked_by: "apply".to_owned(),
+            mode: "live".to_owned(),
+            state: RunSessionState::Starting,
+            started_at,
+            last_seen_at: started_at,
+            ended_at: None,
+            exit_status: None,
+            exit_reason: None,
+            config_path: config_path.display().to_string(),
+            config_fingerprint,
+            target_source_kind: "adopted".to_owned(),
+            startup_target_revision_at_start: startup_target_revision.to_owned(),
+            configured_operator_target_revision: Some(startup_target_revision.to_owned()),
+            active_operator_target_revision_at_start: Some(startup_target_revision.to_owned()),
+            rollout_state_at_start: Some("required".to_owned()),
+            real_user_shadow_smoke: true,
+        };
+
+        RunSessionRepo
+            .create_starting(&pool, &row)
+            .await
+            .expect("conflict run session should seed");
+        RunSessionRepo
+            .mark_running(&pool, run_session_id, started_at)
+            .await
+            .expect("conflict run session should become running");
+        RuntimeProgressRepo
+            .set_active_run_session_id(&pool, run_session_id)
+            .await
+            .expect("conflicting active run session should seed");
+    });
+}
+
 fn app_live_command() -> Command {
     let mut command = Command::new(cli::app_live_binary());
     for key in [
@@ -715,6 +829,11 @@ fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
     }
 
     document.to_string()
+}
+
+fn config_fingerprint(config_path: &std::path::Path) -> String {
+    let raw = std::fs::read(config_path).expect("config fixture should read");
+    format!("{:x}", Sha256::digest(raw))
 }
 
 struct MockDoctorVenue {

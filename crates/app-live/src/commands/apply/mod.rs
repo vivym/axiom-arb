@@ -357,9 +357,7 @@ fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool
         (status::model::StatusReadiness::SmokeConfigReady, false) => {
             actions.push("Stop at ready without starting the runtime.".to_owned());
         }
-        (status::model::StatusReadiness::SmokeConfigReady, true) => {
-            actions.push("Start the runtime in the foreground.".to_owned());
-        }
+        (status::model::StatusReadiness::SmokeConfigReady, true) => {}
         (status::model::StatusReadiness::RestartRequired, false) => {
             actions.push(
                 "Stop at the manual restart boundary without starting the runtime.".to_owned(),
@@ -368,7 +366,6 @@ fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool
         (status::model::StatusReadiness::RestartRequired, true) => {
             actions
                 .push("Require explicit confirmation at the manual restart boundary.".to_owned());
-            actions.push("Start the runtime in the foreground only if confirmed.".to_owned());
         }
         _ => {}
     }
