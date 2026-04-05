@@ -29,22 +29,16 @@ pub fn execute(args: TargetCandidatesArgs) -> Result<(), Box<dyn Error>> {
 fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesCatalog) {
     let summary = summarize_target_candidates(catalog);
     println!(
-        "summary advisory_candidate_count = {} adoptable_revision_count = {} deferred_target_count = {} excluded_target_count = {}",
-        summary.advisory_candidate_count,
-        summary.adoptable_revision_count,
-        summary.deferred_target_count,
-        summary.excluded_target_count
-    );
-    println!(
         "recommended_adoptable_revision = {}",
         summary
             .recommended_adoptable_revision
             .as_deref()
             .unwrap_or("none")
     );
-    for reason in &summary.non_adoptable_reasons {
-        println!("non_adoptable_reason = {reason}");
-    }
+    println!(
+        "non_adoptable_summary = {}",
+        summary.non_adoptable_summary()
+    );
 
     if catalog.advisory_candidates.is_empty() {
         println!("advisory = none");

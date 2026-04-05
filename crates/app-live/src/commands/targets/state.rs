@@ -38,6 +38,15 @@ pub struct TargetCandidatesSummary {
     pub non_adoptable_reasons: Vec<String>,
 }
 
+impl TargetCandidatesSummary {
+    pub fn non_adoptable_summary(&self) -> String {
+        format!(
+            "deferred:{} excluded:{}",
+            self.deferred_target_count, self.excluded_target_count
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedAdoptionSelection {
     pub operator_target_revision: String,
@@ -579,5 +588,6 @@ mod tests {
                 "candidate generation deferred until discovery backfill completes".to_owned(),
             ]
         );
+        assert_eq!(summary.non_adoptable_summary(), "deferred:1 excluded:1");
     }
 }
