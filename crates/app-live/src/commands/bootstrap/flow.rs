@@ -38,6 +38,12 @@ enum SmokeAdoptionOutcome {
     Adopted,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum DiscoveryArtifactsSource {
+    FreshDiscover,
+    Persisted,
+}
+
 enum SmokeBootstrapState {
     PreflightOnly { family_ids: Vec<String> },
     ShadowWorkReady { family_ids: Vec<String> },
@@ -201,15 +207,17 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
         .build()
         .map_err(|error| BootstrapError::Init(Box::new(error)))?;
 
-    let (pool, catalog) = runtime
+    let (pool, catalog, artifacts_source) = runtime
         .block_on(async {
             let pool = connect_pool_from_env().await?;
             let mut catalog = load_target_candidates_catalog(&pool).await?;
+            let mut artifacts_source = DiscoveryArtifactsSource::Persisted;
             if catalog.advisory_candidates.is_empty() && catalog.adoptable_revisions.is_empty() {
                 let _ = discover::run_discover_from_config(config_path).await?;
                 catalog = load_target_candidates_catalog(&pool).await?;
+                artifacts_source = DiscoveryArtifactsSource::FreshDiscover;
             }
-            Ok::<_, Box<dyn std::error::Error>>((pool, catalog))
+            Ok::<_, Box<dyn std::error::Error>>((pool, catalog, artifacts_source))
         })
         .map_err(BootstrapError::Init)?;
 
@@ -217,6 +225,7 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
 
     if catalog.adoptable_revisions.is_empty() {
         output::print_smoke_discovery_ready_not_adoptable(
+            artifacts_source,
             config_path,
             &summary.non_adoptable_reasons,
         );
@@ -229,6 +238,7 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
         .map(|adoptable| adoptable.adoptable_revision.clone())
         .collect::<Vec<_>>();
     output::print_smoke_discovery_completed(
+        artifacts_source,
         &adoptable_revisions,
         summary.recommended_adoptable_revision.as_deref(),
     );

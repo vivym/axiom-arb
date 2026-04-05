@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use super::flow::DiscoveryArtifactsSource;
+
 pub fn print_ready_summary(config_path: &Path) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
     println!("Paper bootstrap ready");
@@ -22,10 +24,14 @@ pub fn print_starting_smoke_runtime(config_path: &Path) {
 }
 
 pub fn print_smoke_discovery_completed(
+    source: DiscoveryArtifactsSource,
     adoptable_revisions: &[String],
     recommended_adoptable_revision: Option<&str>,
 ) {
-    println!("Discovery completed");
+    match source {
+        DiscoveryArtifactsSource::FreshDiscover => println!("Discovery completed"),
+        DiscoveryArtifactsSource::Persisted => println!("Using persisted discovery artifacts"),
+    }
     println!("Adoptable revisions: {}", adoptable_revisions.join(", "));
     println!(
         "Recommended: {}",
@@ -41,9 +47,21 @@ pub fn print_waiting_for_explicit_adoption_confirmation(config_path: &Path) {
     );
 }
 
-pub fn print_smoke_discovery_ready_not_adoptable(config_path: &Path, reasons: &[String]) {
+pub fn print_smoke_discovery_ready_not_adoptable(
+    source: DiscoveryArtifactsSource,
+    config_path: &Path,
+    reasons: &[String],
+) {
     let quoted_config_path = shell_quote(config_path.display().to_string());
-    println!("Discovery completed but no adoptable revisions were produced");
+    match source {
+        DiscoveryArtifactsSource::FreshDiscover => {
+            println!("Discovery completed but no adoptable revisions were produced")
+        }
+        DiscoveryArtifactsSource::Persisted => {
+            println!("Using persisted discovery artifacts");
+            println!("No adoptable revisions were produced");
+        }
+    }
     println!(
         "Reasons: {}",
         if reasons.is_empty() {
