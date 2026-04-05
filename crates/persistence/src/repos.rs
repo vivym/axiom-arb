@@ -2656,6 +2656,7 @@ impl OperatorStrategyAdoptionHistoryRepo {
                     adoptable_strategy_revision,
                     strategy_candidate_revision,
                     adopted_at,
+                    history_seq,
                     0 AS source_priority
                 FROM operator_strategy_adoption_history
                 UNION ALL
@@ -2667,10 +2668,11 @@ impl OperatorStrategyAdoptionHistoryRepo {
                     adoptable_revision AS adoptable_strategy_revision,
                     candidate_revision AS strategy_candidate_revision,
                     adopted_at,
+                    history_seq,
                     1 AS source_priority
                 FROM operator_target_adoption_history
             ) AS combined_history
-            ORDER BY adopted_at DESC, source_priority ASC, adoption_id DESC
+            ORDER BY adopted_at DESC, history_seq DESC, source_priority ASC
             LIMIT 1
             "#,
         )
@@ -2694,6 +2696,7 @@ impl OperatorStrategyAdoptionHistoryRepo {
                     adoption_id,
                     previous_operator_strategy_revision,
                     adopted_at,
+                    history_seq,
                     0 AS source_priority
                 FROM operator_strategy_adoption_history
                 WHERE operator_strategy_revision = $1
@@ -2704,13 +2707,14 @@ impl OperatorStrategyAdoptionHistoryRepo {
                     adoption_id,
                     previous_operator_target_revision AS previous_operator_strategy_revision,
                     adopted_at,
+                    history_seq,
                     1 AS source_priority
                 FROM operator_target_adoption_history
                 WHERE operator_target_revision = $1
                   AND previous_operator_target_revision IS NOT NULL
                   AND previous_operator_target_revision <> $1
             ) AS combined_history
-            ORDER BY adopted_at DESC, source_priority ASC, adoption_id DESC
+            ORDER BY adopted_at DESC, history_seq DESC, source_priority ASC
             LIMIT 1
             "#,
         )
