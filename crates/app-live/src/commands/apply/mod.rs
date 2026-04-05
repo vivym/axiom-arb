@@ -185,8 +185,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
     }
 
     if summary.readiness == StatusReadiness::RestartRequired {
-        if let Some(conflicting_active_run_session_id) =
-            &summary.details.conflicting_active_run_session_id
+        if let Some(conflicting_active_run_session_id) = active_conflicting_run_session_id(&summary)
         {
             output::render_outcome(
                 "Runtime not started; apply stopped at the manual restart boundary because another run session is still active.",
@@ -565,6 +564,41 @@ fn status_next_actions(config_path: &Path, summary: &StatusSummary) -> Vec<Strin
 fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool) -> Vec<String> {
     let mut actions = vec!["Run doctor preflight checks.".to_owned()];
 
+    if summary.mode == Some(status::model::StatusMode::Live) {
+        match (summary.readiness, start_requested) {
+            (status::model::StatusReadiness::LiveConfigReady, false) => {
+                actions.push("Stop at Ready to start without starting the runtime.".to_owned());
+            }
+            (status::model::StatusReadiness::LiveConfigReady, true) => {
+                actions.push("Start the runtime in the foreground.".to_owned());
+            }
+            (status::model::StatusReadiness::RestartRequired, false) => {
+                actions.push("Stop at Ready to start at the manual restart boundary.".to_owned());
+            }
+            (status::model::StatusReadiness::RestartRequired, true)
+                if active_conflicting_run_session_id(summary).is_some() =>
+            {
+                actions.push(
+                    "Stop at the manual restart boundary because another run session is still active."
+                        .to_owned(),
+                );
+                actions.push(
+                    "Do not start the runtime while a conflicting active run session is still running."
+                        .to_owned(),
+                );
+            }
+            (status::model::StatusReadiness::RestartRequired, true) => {
+                actions.push(
+                    "Require explicit confirmation at the manual restart boundary.".to_owned(),
+                );
+                actions.push("Start the runtime in the foreground only if confirmed.".to_owned());
+            }
+            _ => {}
+        }
+
+        return actions;
+    }
+
     match (summary.readiness, start_requested) {
         (status::model::StatusReadiness::SmokeConfigReady, false) => {
             actions.push("Stop at ready without starting the runtime.".to_owned());
@@ -606,6 +640,13 @@ fn live_ready_outcome(readiness: StatusReadiness, boundary_declined: bool) -> St
             "Ready to start; apply is waiting at the manual restart boundary.".to_owned()
         }
         _ => "Ready to start".to_owned(),
+    }
+}
+
+fn active_conflicting_run_session_id(summary: &StatusSummary) -> Option<&str> {
+    match summary.details.conflicting_active_run_state.as_deref() {
+        Some("starting" | "running") => summary.details.conflicting_active_run_session_id.as_deref(),
+        _ => None,
     }
 }
 

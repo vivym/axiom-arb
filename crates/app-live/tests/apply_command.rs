@@ -547,11 +547,50 @@ fn apply_live_config_ready_without_start_stops_at_ready_to_start_outcome() {
 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    assert!(
+        text.contains("Stop at Ready to start without starting the runtime."),
+        "{text}"
+    );
     assert!(text.contains("Outcome"), "{text}");
     assert!(text.contains("Ready to start"), "{text}");
     assert!(!text.contains("apply reached ready state"), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
     assert!(text.contains("app-live apply --config"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_config_ready_with_start_enters_run_successfully() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--start")
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live config ready with start");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Execution"), "{text}");
+    assert!(
+        text.contains("Starting runtime in the foreground."),
+        "{text}"
+    );
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -844,6 +883,39 @@ fn apply_live_declining_restart_confirmation_stops_cleanly() {
 }
 
 #[test]
+fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Choose one:"), "{text}");
+    assert!(
+        text.contains("Manual restart boundary confirmed. Starting runtime in the foreground."),
+        "{text}"
+    );
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() {
     let database = TestDatabase::new();
     let venue = MockDoctorVenue::success();
@@ -874,6 +946,17 @@ fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    assert!(
+        text.contains(
+            "Do not start the runtime while a conflicting active run session is still running."
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Start the runtime in the foreground only if confirmed."),
+        "{text}"
+    );
     assert!(
         text.contains("Conflicting active run session: rs-old"),
         "{text}"
@@ -884,6 +967,82 @@ fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() 
     );
     assert!(!text.contains("Choose one:"), "{text}");
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_stale_active_run_session_id_does_not_block_restart_path() {
+    let database = TestDatabase::new();
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(live_run_session(
+        "rs-stale",
+        &config_path,
+        "targets-rev-8",
+        RunSessionState::Running,
+        Utc::now() - ChronoDuration::minutes(20),
+    ));
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-stale"));
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Conflicting active state: stale"), "{text}");
+    assert!(text.contains("Choose one:"), "{text}");
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_exited_active_run_session_id_does_not_block_restart_path() {
+    let database = TestDatabase::new();
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(live_run_session(
+        "rs-exited",
+        &config_path,
+        "targets-rev-8",
+        RunSessionState::Exited,
+        Utc::now() - ChronoDuration::minutes(2),
+    ));
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-exited"));
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Conflicting active state: exited"), "{text}");
+    assert!(text.contains("Choose one:"), "{text}");
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
