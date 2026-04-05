@@ -210,6 +210,8 @@ Candidate generation should happen in two layers:
 1. route-local production
 - each route generates its own candidate artifacts and route payloads
 - unchanged route payloads should be stable and reusable across refreshes
+- route artifacts must be derived only from stable control-plane inputs such as authoritative discovery, static route config, and route policy version
+- route artifacts must not encode transient readiness facts such as connectivity, approval state, credential health, heartbeat freshness, or venue reachability
 
 2. neutral bundling
 - the control-plane kernel assembles those route artifacts into one `StrategyCandidateSet`
@@ -217,6 +219,58 @@ Candidate generation should happen in two layers:
 - unchanged route artifacts may be carried forward verbatim into a new global revision
 
 This keeps a single global authority while avoiding unnecessary recomputation or rediscovery of unaffected routes.
+
+Readiness remains a separate concern.
+
+Route readiness facts may block:
+
+- adoption
+- apply
+- doctor
+- startup
+- live activation
+
+But they must not mint a different candidate payload or a different adopted revision by themselves.
+
+### 6.5 Deterministic Global Revision Identity
+
+The neutral bundler must produce deterministic global revision identities.
+
+Required rules:
+
+- route artifacts are canonically ordered by `(route, scope)`
+- each route artifact exposes a stable semantic content digest over its canonicalized semantic payload and route policy version
+- the global candidate or adopted revision identity is derived from:
+  - the ordered set of `StrategyKey`
+  - the ordered set of route artifact digests
+  - the bundler version
+  - any explicit global control-plane policy version that affects bundling semantics
+
+The semantic content digest must exclude non-semantic metadata such as:
+
+- snapshot ids
+- source session ids
+- timestamps
+- candidate or adoptable revision ids
+- rendered provenance-only lineage fields
+- other fields whose only purpose is observability, replay context, or operator explainability
+
+If such metadata changes while the canonical semantic payload does not, the route artifact digest must remain unchanged.
+
+A new global revision must be emitted only when at least one of these changes:
+
+- a `StrategyKey` is added or removed
+- a route artifact digest changes
+- the bundler version changes
+- a global bundling policy version changes
+
+Pure readiness drift must not create a new global revision.
+
+When one route changes and another does not:
+
+- the unchanged route artifact should be carried forward byte-for-byte
+- the new global revision should still be deterministic from the full ordered bundle
+- restart boundaries should follow actual artifact changes, not incidental rerenders
 
 ## 7. Architecture
 
@@ -291,7 +345,7 @@ For v1:
 Expected behavior:
 
 - `neg-risk` continues to have real discovery and candidate generation
-- `full-set` may initially contribute deterministic route-local artifacts from static config and readiness state rather than external discovery
+- `full-set` may initially contribute deterministic route-local artifacts from static config and route policy state rather than external discovery
 - the bundler assembles route-local outputs into one candidate set and one adoptable revision lineage
 
 The bundler should preserve route-local artifact identity.
@@ -325,6 +379,10 @@ It should:
 
 `discover` should not require every route to support the same discovery mechanism.
 
+`discover` must not treat transient readiness as candidate content.
+
+It may report readiness-adjacent warnings separately, but those warnings must not change route artifact identity or bundle identity by themselves.
+
 ### 8.2 `app-live targets`
 
 `targets` becomes a pure control-plane namespace.
@@ -343,6 +401,15 @@ Default operator output should explain:
 - which `StrategyKey` entries are in the revision
 - which route artifacts were adopted
 - whether restart is required
+
+Legacy explicit compatibility rules:
+
+- `targets adopt` is the explicit migration path from legacy explicit config into the neutral adopted-revision model
+- in compatibility mode, `targets adopt` must synthesize the first deterministic neutral revision from the current legacy explicit config when no neutral adopted revision history exists yet
+- that synthetic migration revision must be persisted through the same neutral lineage model as any other adopted revision, with explicit provenance marking it as compatibility migration input
+- after creating that first neutral revision, `targets adopt` must rewrite config from the legacy explicit shape to the neutral control-plane anchor
+- `targets rollback` is unavailable until at least one neutral adopted revision exists in durable history
+- `targets show-current` and `targets status` should render compatibility state explicitly rather than pretending a neutral adopted revision already exists
 
 ### 8.3 `app-live run`
 
@@ -396,6 +463,13 @@ Its job becomes:
 - optionally start the runtime
 
 It should operate on the configured revision and route readiness, not on hardcoded `paper/smoke/live` assumptions alone.
+
+Compatibility rule:
+
+- `apply` must not silently auto-migrate legacy explicit config into the neutral adopted-revision model
+- if `apply` requires control-plane mutation while the operator is still on legacy explicit config, it should stop with explicit migration guidance
+- `apply` does not support compatibility-mode runtime start
+- operators in compatibility mode must either use the read-only compatibility path (`status` / `doctor` / `verify` / `run`) or explicitly migrate via `targets adopt`
 
 ### 8.6 `app-live doctor`
 
@@ -555,6 +629,10 @@ During migration:
 - legacy explicit config may still be read
 - startup may still materialize a compatibility startup bundle from it
 - `status`, `doctor`, and `verify` should label that mode as compatibility or legacy-explicit
+- `targets adopt` is the required explicit migration action out of compatibility mode when the operator wants to enter the neutral adopted-revision model
+- if no neutral adopted revision history exists yet, `targets adopt` must synthesize the first neutral revision deterministically from the legacy explicit config and persist normal neutral lineage for it
+- `targets rollback` is unavailable until neutral adoption history exists
+- `apply` must not auto-migrate this mode silently
 
 The design does not promote explicit static targets into a new permanent, strategy-neutral operator mode.
 
@@ -636,6 +714,8 @@ Cover:
 - neutral lineage tables and columns
 - backfill from legacy target-named lineage
 - compatibility reads during migration
+- deterministic revision identity and carry-forward behavior
+- semantic digests remaining stable under provenance-only metadata changes
 
 ### 12.2 Adapter Unit Tests
 
@@ -645,6 +725,7 @@ Cover:
 - `neg-risk` adapter with family scope
 - execution adapter behavior for both routes
 - artifact rendering and decoding
+- separation between candidate content and transient readiness facts
 - readiness logic
 - route-specific verify evidence loading
 
@@ -657,6 +738,7 @@ Every high-level command should cover:
 - `neg-risk` only
 - `both`
 - legacy explicit compatibility mode
+- deterministic no-op rediscovery where unchanged route artifacts do not create a new revision
 
 Priority commands:
 
@@ -675,6 +757,7 @@ Cover:
 - legacy config shapes still load
 - legacy adoption lineage still resolves
 - historical run-session and verify windows remain comparable before and after migration
+- `targets adopt` creating the first synthetic neutral revision from legacy explicit config
 
 ## 13. Implementation Order
 
