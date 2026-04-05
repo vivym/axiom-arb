@@ -168,6 +168,7 @@ venv.bak/
 # Local operator config
 /config/*.local.toml
 !/config/*.example.toml
+.worktrees/
 
 # Spyder project settings
 .spyderproject
