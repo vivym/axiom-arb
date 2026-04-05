@@ -19,6 +19,8 @@ pub(crate) fn paper(config_path: &Path) -> WizardResult {
         summary: summary::render(InitSummary {
             mode: WizardMode::Paper,
             config_path,
+            has_existing_polymarket_source: false,
+            has_existing_polymarket_source_overrides: false,
             configured_operator_target_revision: None,
             rollout_is_empty: true,
         }),
@@ -101,6 +103,16 @@ fn build_summary_view<'a>(
         .and_then(|negrisk| negrisk.rollout.as_ref())
         .map(|rollout| rollout.approved_families.is_empty() && rollout.ready_families.is_empty())
         .unwrap_or(true);
+    let (has_existing_polymarket_source, has_existing_polymarket_source_overrides) =
+        existing_config
+            .and_then(|config| config.polymarket.as_ref())
+            .map(|polymarket| {
+                (
+                    polymarket.source.is_some(),
+                    polymarket.source_overrides.is_some(),
+                )
+            })
+            .unwrap_or((false, false));
 
     InitSummary {
         mode: if real_user_shadow_smoke {
@@ -109,6 +121,8 @@ fn build_summary_view<'a>(
             WizardMode::Live
         },
         config_path,
+        has_existing_polymarket_source,
+        has_existing_polymarket_source_overrides,
         configured_operator_target_revision,
         rollout_is_empty,
     }

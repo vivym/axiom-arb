@@ -357,7 +357,10 @@ fn operator_facing_smoke_fixture_without_source_uses_default_polymarket_source()
 fn source_overrides_win_over_source_when_both_are_present() {
     let config = PolymarketSourceConfig::try_from(&live_view_with_source_overrides()).unwrap();
 
-    assert_eq!(config.clob_host.as_str(), "https://override-clob.polymarket.com/");
+    assert_eq!(
+        config.clob_host.as_str(),
+        "https://override-clob.polymarket.com/"
+    );
     assert_eq!(
         config.data_api_host.as_str(),
         "https://override-data-api.polymarket.com/"
