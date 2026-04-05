@@ -194,6 +194,7 @@ fn adopted_summary(
                         config_path: &config_path_string,
                         config_fingerprint: &config_fingerprint,
                         configured_target: Some(configured_target.as_str()),
+                        configured_strategy: None,
                         startup_target_revision_at_start: &startup_target_revision,
                         rollout_state,
                         stale_after: RUN_SESSION_STALE_AFTER,

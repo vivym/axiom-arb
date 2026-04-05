@@ -216,6 +216,7 @@ where
     persist_operator_target_revision_anchor_with_run_session_id(
         &result.summary,
         operator_target_revision.as_deref(),
+        None,
         run_session_id,
     )?;
     Ok(result)

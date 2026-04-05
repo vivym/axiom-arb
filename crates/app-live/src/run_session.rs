@@ -142,16 +142,14 @@ fn startup_revision_snapshot(
     let active_operator_target_revision_at_start = active_progress
         .as_ref()
         .and_then(|row| row.operator_target_revision.clone());
-    let active_operator_strategy_revision_at_start = active_progress.as_ref().and_then(|row| {
-        row.operator_strategy_revision
-            .clone()
-            .or_else(|| row.operator_target_revision.clone())
-    });
+    let active_operator_strategy_revision_at_start = active_progress
+        .as_ref()
+        .and_then(|row| row.operator_strategy_revision.clone());
 
     Ok(StartupRevisionSnapshot {
         target_source_kind,
         startup_target_revision_at_start,
-        configured_operator_strategy_revision: configured_operator_target_revision.clone(),
+        configured_operator_strategy_revision: None,
         configured_operator_target_revision,
         active_operator_target_revision_at_start,
         active_operator_strategy_revision_at_start,
@@ -255,7 +253,7 @@ mod tests {
     use super::startup_revision_snapshot;
 
     #[test]
-    fn startup_revision_snapshot_populates_neutral_strategy_fields_for_adopted_source() {
+    fn startup_revision_snapshot_does_not_alias_strategy_revision_to_target_revision() {
         let config = live_view(
             r#"
 [negrisk.target_source]
@@ -282,10 +280,7 @@ operator_target_revision = "targets-rev-9"
             snapshot.configured_operator_target_revision.as_deref(),
             Some("targets-rev-9")
         );
-        assert_eq!(
-            snapshot.configured_operator_strategy_revision.as_deref(),
-            Some("targets-rev-9")
-        );
+        assert_eq!(snapshot.configured_operator_strategy_revision, None);
         assert_eq!(
             snapshot.active_operator_target_revision_at_start.as_deref(),
             Some("targets-rev-active")
@@ -296,6 +291,42 @@ operator_target_revision = "targets-rev-9"
                 .as_deref(),
             Some("strategy-rev-active")
         );
+    }
+
+    #[test]
+    fn startup_revision_snapshot_leaves_active_strategy_revision_empty_when_only_target_anchor_exists(
+    ) {
+        let config = live_view(
+            r#"
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-11"
+"#,
+        );
+
+        let snapshot = startup_revision_snapshot(
+            &config,
+            Some(RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-active".to_owned()),
+                operator_strategy_revision: None,
+                active_run_session_id: Some("run-session-1".to_owned()),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            snapshot.configured_operator_target_revision.as_deref(),
+            Some("targets-rev-11")
+        );
+        assert_eq!(snapshot.configured_operator_strategy_revision, None);
+        assert_eq!(
+            snapshot.active_operator_target_revision_at_start.as_deref(),
+            Some("targets-rev-active")
+        );
+        assert_eq!(snapshot.active_operator_strategy_revision_at_start, None);
     }
 
     fn live_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {

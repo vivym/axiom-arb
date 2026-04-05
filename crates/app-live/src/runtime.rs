@@ -699,18 +699,19 @@ pub(crate) fn persist_operator_target_revision_anchor(
         summary,
         operator_target_revision,
         None,
+        None,
     )
 }
 
 pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
     active_run_session_id: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(operator_target_revision) = operator_target_revision else {
         return Ok(());
     };
-    let operator_strategy_revision = operator_target_revision;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -729,7 +730,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
                 })?,
                 summary.published_snapshot_id.as_deref(),
                 Some(operator_target_revision),
-                Some(operator_strategy_revision),
+                operator_strategy_revision,
                 active_run_session_id,
             )
             .await

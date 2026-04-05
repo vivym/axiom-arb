@@ -126,10 +126,8 @@ fn sample_starting_session_for_target(
         configured_operator_target_revision: configured_operator_target_revision.map(str::to_owned),
         active_operator_target_revision_at_start: configured_operator_target_revision
             .map(str::to_owned),
-        configured_operator_strategy_revision: configured_operator_target_revision
-            .map(|value| value.replacen("targets-rev-", "strategy-rev-", 1)),
-        active_operator_strategy_revision_at_start: configured_operator_target_revision
-            .map(|value| value.replacen("targets-rev-", "strategy-rev-", 1)),
+        configured_operator_strategy_revision: None,
+        active_operator_strategy_revision_at_start: None,
         rollout_state_at_start: Some("ready".to_owned()),
         real_user_shadow_smoke: false,
     }
@@ -312,6 +310,53 @@ async fn runtime_progress_can_persist_distinct_operator_strategy_revision() {
 }
 
 #[tokio::test]
+async fn runtime_progress_record_progress_preserves_existing_distinct_strategy_revision() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RuntimeProgressRepo
+        .record_progress_with_strategy_revision(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-7"),
+            Some("strategy-rev-12"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            42,
+            8,
+            Some("snapshot-8"),
+            Some("targets-rev-8"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-8")
+    );
+    assert_eq!(
+        progress.operator_strategy_revision.as_deref(),
+        Some("strategy-rev-12")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn run_session_repo_round_trips_starting_running_and_terminal_states() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
@@ -461,6 +506,7 @@ async fn run_session_repo_selects_latest_relevant_and_conflicting_active_session
                 config_path: "config/axiom-arb.local.toml",
                 config_fingerprint: "fp-new",
                 configured_target: Some("targets-rev-2"),
+                configured_strategy: None,
                 startup_target_revision_at_start: "startup-target-2",
                 rollout_state: Some("ready"),
                 stale_after: Duration::minutes(5),
@@ -573,6 +619,7 @@ async fn run_session_repo_latest_relevant_treats_overdue_running_session_as_stal
                 config_path: "config/axiom-arb.local.toml",
                 config_fingerprint: "fp-shared",
                 configured_target: Some("targets-rev-shared"),
+                configured_strategy: None,
                 startup_target_revision_at_start: "startup-target-shared",
                 rollout_state: Some("ready"),
                 stale_after: Duration::minutes(5),
@@ -623,6 +670,7 @@ async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_with
                 config_path: "config/axiom-arb.local.toml",
                 config_fingerprint: "fp-explicit",
                 configured_target: None,
+                configured_strategy: None,
                 startup_target_revision_at_start: "startup-target-explicit",
                 rollout_state: Some("ready"),
                 stale_after: Duration::minutes(5),
@@ -633,6 +681,78 @@ async fn run_session_repo_latest_relevant_supports_explicit_target_sessions_with
         .unwrap();
 
     assert_eq!(relevant.run_session_id, "rs-explicit");
+    assert_eq!(relevant.configured_operator_target_revision, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn run_session_repo_latest_relevant_respects_configured_strategy_revision() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let older_started_at = Utc::now() - Duration::minutes(3);
+    let newer_started_at = Utc::now() - Duration::minutes(1);
+
+    let mut wanted = sample_starting_session_for_target(
+        "rs-strategy-only-wanted",
+        "config/axiom-arb.local.toml",
+        "fp-strategy-only",
+        "startup-target-strategy-only",
+        None,
+        older_started_at,
+    );
+    wanted.configured_operator_strategy_revision = Some("strategy-rev-wanted".to_owned());
+    wanted.active_operator_strategy_revision_at_start = Some("strategy-rev-wanted".to_owned());
+
+    let mut newer_wrong = wanted.clone();
+    newer_wrong.run_session_id = "rs-strategy-only-wrong".to_owned();
+    newer_wrong.started_at = newer_started_at;
+    newer_wrong.last_seen_at = newer_started_at;
+    newer_wrong.configured_operator_strategy_revision = Some("strategy-rev-wrong".to_owned());
+    newer_wrong.active_operator_strategy_revision_at_start = Some("strategy-rev-wrong".to_owned());
+
+    RunSessionRepo
+        .create_starting(&db.pool, &wanted)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-strategy-only-wanted", older_started_at)
+        .await
+        .unwrap();
+
+    RunSessionRepo
+        .create_starting(&db.pool, &newer_wrong)
+        .await
+        .unwrap();
+    RunSessionRepo
+        .mark_running(&db.pool, "rs-strategy-only-wrong", newer_started_at)
+        .await
+        .unwrap();
+
+    let relevant = RunSessionRepo
+        .latest_relevant(
+            &db.pool,
+            LatestRelevantRunSessionQuery {
+                mode: "live",
+                config_path: "config/axiom-arb.local.toml",
+                config_fingerprint: "fp-strategy-only",
+                configured_target: None,
+                configured_strategy: Some("strategy-rev-wanted"),
+                startup_target_revision_at_start: "startup-target-strategy-only",
+                rollout_state: Some("ready"),
+                stale_after: Duration::minutes(5),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(relevant.run_session_id, "rs-strategy-only-wanted");
+    assert_eq!(
+        relevant.configured_operator_strategy_revision.as_deref(),
+        Some("strategy-rev-wanted")
+    );
     assert_eq!(relevant.configured_operator_target_revision, None);
 
     db.cleanup().await;

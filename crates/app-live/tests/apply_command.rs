@@ -1420,10 +1420,8 @@ fn live_run_session(
         startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
         configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
         active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
-        configured_operator_strategy_revision: Some(startup_target_revision_at_start.to_owned()),
-        active_operator_strategy_revision_at_start: Some(
-            startup_target_revision_at_start.to_owned(),
-        ),
+        configured_operator_strategy_revision: None,
+        active_operator_strategy_revision_at_start: None,
         rollout_state_at_start: Some("ready".to_owned()),
         real_user_shadow_smoke: false,
     }

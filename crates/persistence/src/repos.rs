@@ -1569,6 +1569,7 @@ pub struct LatestRelevantRunSessionQuery<'a> {
     pub config_path: &'a str,
     pub config_fingerprint: &'a str,
     pub configured_target: Option<&'a str>,
+    pub configured_strategy: Option<&'a str>,
     pub startup_target_revision_at_start: &'a str,
     pub rollout_state: Option<&'a str>,
     pub stale_after: chrono::Duration,
@@ -1840,18 +1841,19 @@ impl RunSessionRepo {
               AND config_path = $2
               AND config_fingerprint = $3
               AND configured_operator_target_revision IS NOT DISTINCT FROM $4
-              AND startup_target_revision_at_start = $5
-              AND rollout_state_at_start IS NOT DISTINCT FROM $6
+              AND configured_operator_strategy_revision IS NOT DISTINCT FROM $5
+              AND startup_target_revision_at_start = $6
+              AND rollout_state_at_start IS NOT DISTINCT FROM $7
             ORDER BY
                 CASE state
                     WHEN 'running'
                         THEN CASE
-                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 0
+                            WHEN last_seen_at > NOW() - ($8 * INTERVAL '1 second') THEN 0
                             ELSE 3
                         END
                     WHEN 'starting'
                         THEN CASE
-                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 1
+                            WHEN last_seen_at > NOW() - ($8 * INTERVAL '1 second') THEN 1
                             ELSE 3
                         END
                     WHEN 'exited' THEN 2
@@ -1868,6 +1870,7 @@ impl RunSessionRepo {
         .bind(query.config_path)
         .bind(query.config_fingerprint)
         .bind(query.configured_target)
+        .bind(query.configured_strategy)
         .bind(query.startup_target_revision_at_start)
         .bind(query.rollout_state)
         .bind(query.stale_after.num_seconds())
@@ -2126,7 +2129,7 @@ impl RuntimeProgressRepo {
             last_state_version,
             last_snapshot_id,
             operator_target_revision,
-            operator_target_revision,
+            None,
             active_run_session_id,
         )
         .await
@@ -2672,7 +2675,7 @@ impl OperatorStrategyAdoptionHistoryRepo {
                     1 AS source_priority
                 FROM operator_target_adoption_history
             ) AS combined_history
-            ORDER BY adopted_at DESC, history_seq DESC, source_priority ASC
+            ORDER BY history_seq DESC, adopted_at DESC, source_priority ASC, adoption_id DESC
             LIMIT 1
             "#,
         )
@@ -2714,7 +2717,7 @@ impl OperatorStrategyAdoptionHistoryRepo {
                   AND previous_operator_target_revision IS NOT NULL
                   AND previous_operator_target_revision <> $1
             ) AS combined_history
-            ORDER BY adopted_at DESC, history_seq DESC, source_priority ASC
+            ORDER BY history_seq DESC, adopted_at DESC, source_priority ASC, adoption_id DESC
             LIMIT 1
             "#,
         )
