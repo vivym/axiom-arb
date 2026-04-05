@@ -42,9 +42,16 @@ At the same time, the operator surfaces remain `neg-risk`-shaped:
 
 - config schema is rooted in `[negrisk.*]`
 - startup resolves `NegRiskLiveTargetSet`
+- `discover` only materializes `neg-risk` candidate and adoptable artifacts
 - `targets` adoption revolves around `operator_target_revision`
 - `status` and `doctor` assume adopted targets are a `neg-risk` concern
 - `verify` still hardcodes `neg-risk` as the route of interest
+- a legacy explicit-target path still exists for `negrisk.targets`
+
+The live execution substrate is also less neutral than the control-plane shape suggests:
+
+- execution identity is already route-aware
+- but live signing and submission are still family-shaped and `neg-risk`-specific
 
 That means the repository already has a strategy-neutral execution identifier model, but not a strategy-neutral control plane.
 
@@ -55,6 +62,7 @@ This design should guarantee the following:
 - `app-live` can operate against a strategy-neutral adopted revision
 - the control plane manages a set of `StrategyKey { route, scope }`
 - `full-set`, `neg-risk`, and `both` become first-class runtime combinations
+- route-neutral candidate generation and discovery become possible
 - `targets`, `run`, `status`, `apply`, `doctor`, and `verify` become route-neutral entrypoints
 - route-specific rollout and readiness logic remains possible without leaking into the control-plane core
 - startup and restore remain fail-closed
@@ -153,6 +161,14 @@ V1 scope rules:
 - `full-set` only accepts `scope = "default"`
 - `neg-risk` accepts `scope = <family_id>`
 
+During migration, `default` remains a reserved kernel fallback scope for rollout resolution on any route.
+
+That means:
+
+- `full-set/default` is both the execution scope and the rollout scope
+- `neg-risk/<family_id>` remains the execution scope
+- `neg-risk/default` may continue to exist as a coarse route-level rollout fallback until per-family rollout is fully neutralized
+
 ### 6.2 Neutral Control-Plane Artifacts
 
 The control-plane kernel should reason about these neutral artifacts:
@@ -187,6 +203,21 @@ Examples:
 
 The adopted revision becomes a neutral envelope containing one or more route artifacts.
 
+### 6.4 Route-Local Candidate Production and Global Bundling
+
+Candidate generation should happen in two layers:
+
+1. route-local production
+- each route generates its own candidate artifacts and route payloads
+- unchanged route payloads should be stable and reusable across refreshes
+
+2. neutral bundling
+- the control-plane kernel assembles those route artifacts into one `StrategyCandidateSet`
+- adopted revisions remain globally authoritative
+- unchanged route artifacts may be carried forward verbatim into a new global revision
+
+This keeps a single global authority while avoiding unnecessary recomputation or rediscovery of unaffected routes.
+
 ## 7. Architecture
 
 ### 7.1 Strategy-Neutral Kernel
@@ -204,7 +235,7 @@ The kernel must not own strategy-specific decoding or rollout policy.
 
 ### 7.2 Route Adapters
 
-Each route implements four adapter surfaces.
+Each route implements five adapter surfaces.
 
 1. Control-plane adapter
 - produces candidates from route-specific discovery or static config
@@ -215,17 +246,59 @@ Each route implements four adapter surfaces.
 - decodes route artifacts from the adopted revision
 - registers runtime task groups, intents, planners, and sinks
 
-3. Readiness adapter
+3. Execution adapter
+- owns route-specific live signing, submission, and reconcile integration
+- hides strategy-shaped live submit APIs from the control-plane kernel
+
+4. Readiness adapter
 - evaluates route-specific rollout and readiness gates
 - reports route-level readiness into `status`, `doctor`, and `apply`
 
-4. Verify adapter
+5. Verify adapter
 - loads route-specific evidence
 - produces a route-level verification verdict
 
 This keeps `app-live` responsible for orchestration while route modules remain responsible for domain logic.
 
-### 7.3 Why This Boundary Matters
+### 7.3 Activation and Rollout Ownership
+
+Activation remains kernel-owned.
+
+The neutral kernel continues to own:
+
+- `ActivationPolicy`
+- exact `route + scope` mode resolution
+- the existing route-level `default` fallback rule semantics
+
+Route adapters own:
+
+- which scopes are meaningful for the route
+- which readiness facts gate execution
+- how route-specific config becomes rollout input
+
+This means the migration does not require removing the kernel's current fallback behavior on day one.
+
+For v1:
+
+- `full-set/default` remains the normal activation key
+- `neg-risk/default` may remain as a coarse route-level fallback rule
+- `neg-risk/<family_id>` remains the route's concrete execution scope
+
+### 7.4 Candidate Production, Discover, and Bundling
+
+`discover` should become a route-neutral orchestration command even if route implementations differ.
+
+Expected behavior:
+
+- `neg-risk` continues to have real discovery and candidate generation
+- `full-set` may initially contribute deterministic route-local artifacts from static config and readiness state rather than external discovery
+- the bundler assembles route-local outputs into one candidate set and one adoptable revision lineage
+
+The bundler should preserve route-local artifact identity.
+
+That means a `neg-risk` refresh may produce a new global candidate or adopted revision, but it should not force `full-set` to rediscover or rerender if its route artifact is unchanged.
+
+### 7.5 Why This Boundary Matters
 
 Without adapters, the neutral control plane would immediately re-absorb `neg-risk`-specific shapes such as:
 
@@ -233,12 +306,26 @@ Without adapters, the neutral control plane would immediately re-absorb `neg-ris
 - rendered family target sets
 - route-specific startup decoding
 - route-specific evidence windows
+- route-specific live submit APIs
 
 That would recreate the current problem under different names.
 
 ## 8. Command Semantics
 
-### 8.1 `app-live targets`
+### 8.1 `app-live discover`
+
+`discover` becomes the operator-facing candidate refresh command for the neutral control plane.
+
+It should:
+
+- run route-local candidate producers
+- collect route-local candidate artifacts
+- bundle them into a neutral candidate set and adoptable lineage
+- surface route-local diffs so the operator can see which route actually changed
+
+`discover` should not require every route to support the same discovery mechanism.
+
+### 8.2 `app-live targets`
 
 `targets` becomes a pure control-plane namespace.
 
@@ -257,7 +344,7 @@ Default operator output should explain:
 - which route artifacts were adopted
 - whether restart is required
 
-### 8.2 `app-live run`
+### 8.3 `app-live run`
 
 `run` should resolve a neutral startup plan from the configured revision, then dispatch route artifacts to route runtime adapters.
 
@@ -269,7 +356,19 @@ The runtime may start:
 - `neg-risk` only
 - both
 
-### 8.3 `app-live status`
+`real_user_shadow_smoke` becomes route-neutral.
+
+For v1, smoke mode must clamp all risk-expanding strategy routes to `Shadow`.
+
+That means:
+
+- no live `full-set` execution in smoke mode
+- no live `neg-risk` execution in smoke mode
+- `both` in smoke mode means shadow-only strategy execution across both routes
+
+Future exceptions for route-specific smoke-safe live behavior require a separate design and must not be assumed here.
+
+### 8.4 `app-live status`
 
 `status` should answer:
 
@@ -281,7 +380,11 @@ The runtime may start:
 
 It should report a revision-level summary plus route-level readiness details.
 
-### 8.4 `app-live apply`
+Legacy explicit-target startup should remain visible during migration.
+
+`status` should surface it as compatibility mode rather than as a first-class neutral control-plane mode, and should guide operators toward adopted revisions.
+
+### 8.5 `app-live apply`
 
 `apply` should become a route-neutral operator helper instead of a smoke-specific helper.
 
@@ -294,7 +397,7 @@ Its job becomes:
 
 It should operate on the configured revision and route readiness, not on hardcoded `paper/smoke/live` assumptions alone.
 
-### 8.5 `app-live doctor`
+### 8.6 `app-live doctor`
 
 `doctor` should report:
 
@@ -313,7 +416,9 @@ Route checks become adapter-owned:
 - `full-set` readiness
 - `neg-risk` rollout and artifact readiness
 
-### 8.6 `app-live verify`
+Legacy explicit-target configs should be reported as compatibility input, not silently treated as a permanent equal alternative to adopted revisions.
+
+### 8.7 `app-live verify`
 
 `verify` should become revision-aware and route-aware.
 
@@ -328,9 +433,9 @@ The flow becomes:
 
 ## 9. Persistence Design
 
-### 9.1 What Can Stay Neutral Already
+### 9.1 What Is Already Neutral Enough To Reuse
 
-The execution side is already close to neutral:
+The identity side of execution is already close enough to neutral:
 
 - execution attempts already store `route`
 - execution attempts already store `scope`
@@ -338,7 +443,25 @@ The execution side is already close to neutral:
 
 That should be preserved.
 
-### 9.2 New Neutral Lineage Tables
+### 9.2 What Is Not Neutral Yet
+
+The live execution submit path is still route-shaped around `neg-risk`.
+
+Today:
+
+- the live sink only performs real submit work for the family submit plan shape
+- signer and submit provider interfaces are explicitly family-oriented
+- `full-set` plans exist, but are not wired into a real route-neutral live submit path
+
+This must be treated as a first-class refactor workstream, not as incidental cleanup.
+
+The desired end state is:
+
+- route-neutral orchestration at the kernel
+- route-owned execution adapters below it
+- no family-shaped live submit API exposed as the only general live execution path
+
+### 9.3 New Neutral Lineage Tables
 
 The current control-plane lineage naming is target-specific and semantically biased toward `neg-risk`.
 
@@ -355,17 +478,22 @@ Promote runtime anchors accordingly:
 - `run_sessions.configured_operator_strategy_revision`
 - `run_sessions.active_operator_strategy_revision_at_start`
 
-### 9.3 Migration Strategy
+### 9.4 Migration Strategy
 
 Do not perform a big-bang rename.
 
-Migration should proceed in three stages:
+Migration should proceed in four stages:
 
 1. Add neutral tables and columns
 - backfill from existing `target`-named data
 - keep read compatibility with old data
 
-2. Move high-level commands to neutral repos
+2. Add route-neutral execution adapter seams
+- remove family-shaped assumptions from the only live submit path
+- preserve route-aware execution identity and attempt storage
+
+3. Move high-level commands to neutral repos
+- `discover`
 - `targets`
 - `status`
 - `run`
@@ -373,7 +501,7 @@ Migration should proceed in three stages:
 - `doctor`
 - `verify`
 
-3. Retire old `target`-specific control-plane APIs
+4. Retire old `target`-specific control-plane APIs
 - keep compatibility readers for a limited migration window
 - remove old names after the operator path is fully neutral
 
@@ -418,9 +546,29 @@ Exact naming may vary, but the split should be:
 - neutral control-plane anchor at the top
 - route-specific operational config under route-owned sections
 
-### 10.3 Compatibility
+### 10.3 Legacy Explicit Targets
+
+Legacy explicit target config is a compatibility path, not the long-term neutral control-plane model.
+
+During migration:
+
+- legacy explicit config may still be read
+- startup may still materialize a compatibility startup bundle from it
+- `status`, `doctor`, and `verify` should label that mode as compatibility or legacy-explicit
+
+The design does not promote explicit static targets into a new permanent, strategy-neutral operator mode.
+
+Instead, the operator-facing neutral model remains:
+
+- route-local candidate production
+- adopted neutral revisions
+- revision-anchored startup and verify
+
+### 10.4 Compatibility
 
 During migration, the loader may continue reading legacy `negrisk.target_source` and legacy `negrisk.rollout`.
+
+It may also continue reading legacy explicit `negrisk.targets` for compatibility startup.
 
 But write paths for new operator actions should switch to the neutral schema once available.
 
@@ -441,7 +589,17 @@ then the entire revision fails startup.
 
 The runtime must not partially activate a configured revision.
 
-### 11.2 Runtime Isolation
+### 11.2 Real-User Shadow Smoke
+
+`real_user_shadow_smoke` is revision-aware but route-neutral.
+
+For this design:
+
+- all risk-expanding strategy routes are clamped to `Shadow`
+- `verify` for smoke mode continues to expect no credible live strategy attempts
+- if a route cannot support shadow execution under smoke, startup should fail rather than silently run it live
+
+### 11.3 Runtime Isolation
 
 Once startup succeeds, route failures should be isolated where possible.
 
@@ -457,7 +615,7 @@ Shared infrastructure failures remain global runtime failures:
 - shared source failures
 - journal corruption or restore failure
 
-### 11.3 Verification Aggregation
+### 11.4 Verification Aggregation
 
 Each active route produces a route-level verdict.
 
@@ -485,6 +643,7 @@ Cover:
 
 - `full-set` adapter with `default` scope
 - `neg-risk` adapter with family scope
+- execution adapter behavior for both routes
 - artifact rendering and decoding
 - readiness logic
 - route-specific verify evidence loading
@@ -493,12 +652,15 @@ Cover:
 
 Every high-level command should cover:
 
+- `discover`
 - `full-set` only
 - `neg-risk` only
 - `both`
+- legacy explicit compatibility mode
 
 Priority commands:
 
+- `discover`
 - `targets`
 - `status`
 - `run`
@@ -520,16 +682,19 @@ The recommended implementation order is:
 
 1. Introduce neutral control-plane domain types and persistence lineage
 2. Add neutral config schema and compatibility reads
-3. Build route adapter interfaces
-4. Convert startup and `run` to neutral startup resolution
-5. Convert `targets` to neutral revision operations
-6. Convert `status`, `doctor`, and `apply` to route-neutral readiness reporting
-7. Convert `verify` to multi-route evidence aggregation
-8. Remove old target-specific operator paths after compatibility coverage is in place
+3. Build route adapter interfaces and define activation ownership boundaries
+4. Refactor the live execution submit path into route-neutral orchestration plus route-owned execution adapters
+5. Convert `discover` to route-local candidate production plus neutral bundling
+6. Convert startup and `run` to neutral startup resolution and route-neutral smoke semantics
+7. Convert `targets` to neutral revision operations
+8. Convert `status`, `doctor`, and `apply` to route-neutral readiness reporting with explicit compatibility handling
+9. Convert `verify` to multi-route evidence aggregation
+10. Remove old target-specific operator paths after compatibility coverage is in place
 
 This keeps the highest-risk refactor points early:
 
 - lineage
+- live execution substrate
 - startup
 - control-plane anchor
 
@@ -540,6 +705,10 @@ and pushes cleanup work after the new path is already operational.
 The repository should move to a strategy-neutral control plane built around `route + scope` and a neutral adopted revision anchor.
 
 `full-set` and `neg-risk` should remain distinct route implementations, but they should no longer force the control plane, config schema, or high-level `app-live` commands to be `neg-risk`-shaped.
+
+This still assumes one globally authoritative adopted revision.
+
+That global revision should be assembled from route-local candidate artifacts through a neutral bundling step, with unchanged route artifacts carried forward when possible.
 
 This is the smallest design that:
 
