@@ -284,15 +284,13 @@ fn discovery_supervisor_materializes_adoptable_output_without_prior_operator_rev
 #[test]
 fn discovery_supervisor_defers_non_authoritative_notice_when_backfill_is_missing() {
     let publication = discovery_only_candidate_publication();
-    assert!(
-        publication
-            .view
-            .as_ref()
-            .expect("candidate publication view")
-            .discovery_records[0]
-            .backfill_completed_at
-            .is_none()
-    );
+    assert!(publication
+        .view
+        .as_ref()
+        .expect("candidate publication view")
+        .discovery_records[0]
+        .backfill_completed_at
+        .is_none());
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
@@ -331,15 +329,13 @@ fn discovery_supervisor_defers_non_authoritative_notice_when_backfill_is_missing
 #[test]
 fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_backfill_facts() {
     let publication = discovery_only_candidate_publication();
-    assert!(
-        publication
-            .view
-            .as_ref()
-            .expect("candidate publication view")
-            .discovery_records[0]
-            .backfill_completed_at
-            .is_none()
-    );
+    assert!(publication
+        .view
+        .as_ref()
+        .expect("candidate publication view")
+        .discovery_records[0]
+        .backfill_completed_at
+        .is_none());
     let candidate_notice = CandidateNotice::authoritative_from_publication(
         &publication,
         [DirtyDomain::Candidates],

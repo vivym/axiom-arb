@@ -186,7 +186,9 @@ async fn ensure_canonical_provenance(
         .await?
         .is_none()
     {
-        CandidateAdoptionRepo.upsert_provenance(pool, &canonical).await?;
+        CandidateAdoptionRepo
+            .upsert_provenance(pool, &canonical)
+            .await?;
     }
 
     Ok(())

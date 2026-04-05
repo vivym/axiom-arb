@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, future::Future, pin::Pin};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
 use venue_polymarket::{
-    HeartbeatFetchResult, HeartbeatReconcileReason, NegRiskMarketMetadata,
-    OrderHeartbeatMonitor, OrderHeartbeatState,
+    HeartbeatFetchResult, HeartbeatReconcileReason, NegRiskMarketMetadata, OrderHeartbeatMonitor,
+    OrderHeartbeatState,
 };
 
 use crate::{
@@ -386,8 +386,14 @@ mod tests {
         );
 
         assert_eq!(batch.inputs.len(), 1);
-        assert_eq!(batch.inputs[0].event.payload.kind(), "family_discovery_observed");
-        assert_eq!(batch.inputs[0].event.source_session_id, "discover-session-1");
+        assert_eq!(
+            batch.inputs[0].event.payload.kind(),
+            "family_discovery_observed"
+        );
+        assert_eq!(
+            batch.inputs[0].event.source_session_id,
+            "discover-session-1"
+        );
         assert_eq!(
             batch.inputs[0].event.source_event_id,
             "metadata-snapshot-hash-1-family-a-discovery"

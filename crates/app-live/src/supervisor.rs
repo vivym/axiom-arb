@@ -1119,11 +1119,10 @@ impl AppSupervisor {
             return;
         };
 
-        let adoption_provenance_resolved = self
-            .candidate_restore_status
-            .adoption_provenance_resolved
-            && report.operator_target_revision.as_deref()
-                == self.neg_risk_live_target_revision.as_deref();
+        let adoption_provenance_resolved =
+            self.candidate_restore_status.adoption_provenance_resolved
+                && report.operator_target_revision.as_deref()
+                    == self.neg_risk_live_target_revision.as_deref();
 
         self.candidate_restore_status = CandidateRestoreStatus {
             latest_candidate_revision: report.candidate_revision,

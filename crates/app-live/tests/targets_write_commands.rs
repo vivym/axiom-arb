@@ -117,7 +117,8 @@ fn targets_adopt_from_fresh_adoptable_revision_writes_canonical_provenance_and_r
 }
 
 #[test]
-fn targets_adopt_same_operator_target_revision_preserves_canonical_provenance_and_appends_history() {
+fn targets_adopt_same_operator_target_revision_preserves_canonical_provenance_and_appends_history()
+{
     let database = TestDatabase::new();
     database.seed_adoptable_revision_with_active_runtime(
         "adoptable-7",
@@ -467,12 +468,10 @@ impl TestDatabase {
 
     fn history_count(&self) -> i64 {
         self.runtime.block_on(async {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM operator_target_adoption_history",
-            )
-            .fetch_one(&self.pool)
-            .await
-            .expect("history count should succeed")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM operator_target_adoption_history")
+                .fetch_one(&self.pool)
+                .await
+                .expect("history count should succeed")
         })
     }
 
