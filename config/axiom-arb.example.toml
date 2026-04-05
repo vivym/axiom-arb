@@ -2,15 +2,8 @@
 mode = "live"
 real_user_shadow_smoke = false
 
-[polymarket.source]
-clob_host = "https://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
-relayer_host = "https://relayer-v2.polymarket.com"
-market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
-heartbeat_interval_seconds = 15
-relayer_poll_interval_seconds = 5
-metadata_refresh_interval_seconds = 60
+# Operators normally omit source config; the built-in defaults apply.
+# Use [polymarket.source_overrides] only for non-default endpoints or cadence.
 
 [polymarket.account]
 address = "0xYOUR_ADDRESS"

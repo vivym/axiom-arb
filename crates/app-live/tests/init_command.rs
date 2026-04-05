@@ -121,6 +121,70 @@ ready_families = ["family-b"]
 }
 
 #[test]
+fn init_preserve_keeps_existing_source_block_when_present() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.source]
+clob_host = "https://custom-clob.example"
+data_api_host = "https://custom-data-api.example"
+relayer_host = "https://custom-relayer.example"
+market_ws_url = "wss://custom-market.example"
+user_ws_url = "wss://custom-user.example"
+heartbeat_interval_seconds = 42
+relayer_poll_interval_seconds = 7
+metadata_refresh_interval_seconds = 99
+
+[polymarket.account]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "existing-account-api-key"
+secret = "existing-account-secret"
+passphrase = "existing-account-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "existing-relay-key"
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+"#,
+    )
+    .expect("seed existing config");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    assert!(text.contains("[polymarket.source]"));
+    assert!(text.contains("clob_host = \"https://custom-clob.example\""));
+    assert!(text.contains("metadata_refresh_interval_seconds = 99"));
+}
+
+#[test]
 fn init_preserve_drops_stale_relayer_fields_when_auth_kind_changes() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(
@@ -565,11 +629,15 @@ fn init_interactive_live_writes_account_relayer_target_source_and_safe_empty_rol
     assert!(text.contains("[negrisk.rollout]"));
     assert!(text.contains("approved_families = []"));
     assert!(text.contains("ready_families = []"));
+    assert!(!text.contains("[polymarket.source]"));
     assert!(combined(&output).contains("app-live targets candidates --config"));
     assert!(combined(&output).contains("app-live targets adopt --config"));
     assert!(combined(&output).contains("--adoptable-revision ADOPTABLE_REVISION"));
     assert!(combined(&output).contains("app-live doctor --config"));
     assert!(combined(&output).contains("app-live run --config"));
+    assert!(!combined(&output).contains("[polymarket.source]"));
+    assert!(combined(&output).contains("built-in defaults"));
+    assert!(combined(&output).contains("source_overrides"));
     assert_generated_live_config_is_schema_valid(&text);
 }
 
@@ -608,11 +676,15 @@ fn init_interactive_smoke_sets_live_mode_plus_shadow_guard() {
     assert!(text.contains("source = \"adopted\""));
     assert!(text.contains("approved_families = []"));
     assert!(text.contains("ready_families = []"));
+    assert!(!text.contains("[polymarket.source]"));
     assert!(combined(&output).contains("app-live targets candidates --config"));
     assert!(combined(&output).contains("app-live targets adopt --config"));
     assert!(combined(&output).contains("--adoptable-revision ADOPTABLE_REVISION"));
     assert!(combined(&output).contains("app-live doctor --config"));
     assert!(combined(&output).contains("app-live run --config"));
+    assert!(!combined(&output).contains("[polymarket.source]"));
+    assert!(combined(&output).contains("built-in defaults"));
+    assert!(combined(&output).contains("source_overrides"));
     assert_generated_live_config_is_schema_valid(&text);
 }
 
@@ -649,6 +721,17 @@ fn init_interactive_live_supports_builder_relayer_auth_without_transient_fields(
     assert!(!text.contains("timestamp ="));
     assert!(!text.contains("signature ="));
     assert_generated_live_config_is_schema_valid(&text);
+}
+
+#[test]
+fn example_config_omits_default_source_block_and_points_to_source_overrides() {
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/axiom-arb.example.toml"),
+    )
+    .expect("example config should be readable");
+    assert!(!text.contains("[polymarket.source]"));
+    assert!(text.contains("built-in defaults"));
+    assert!(text.contains("source_overrides"));
 }
 
 fn app_live_binary() -> PathBuf {
