@@ -62,7 +62,6 @@ pub enum ApplyFailureKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyUnsupportedScenario {
     Paper,
-    Live,
 }
 
 impl ApplyFailureKind {
@@ -70,10 +69,6 @@ impl ApplyFailureKind {
         match self {
             Self::UnsupportedScenario(ApplyUnsupportedScenario::Paper) => {
                 "paper configs are not supported by apply yet; use bootstrap or run".to_owned()
-            }
-            Self::UnsupportedScenario(ApplyUnsupportedScenario::Live) => {
-                "live configs are not supported by apply yet; use status -> doctor -> run"
-                    .to_owned()
             }
             Self::ReadinessError(reason) => reason.clone(),
             Self::Transition(stage) => stage.label().to_owned(),

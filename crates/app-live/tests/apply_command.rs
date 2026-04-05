@@ -11,6 +11,8 @@ use std::{
     time::Duration,
 };
 
+use chrono::{Duration as ChronoDuration, Utc};
+use persistence::models::{RunSessionRow, RunSessionState};
 use support::cli;
 use support::{apply_db, status_db::TestDatabase};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
@@ -51,7 +53,158 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
         .expect("app-live apply should execute for live config");
     let live_text = cli::combined(&live_output);
     assert!(!live_output.status.success(), "{live_text}");
-    assert!(live_text.contains("status -> doctor -> run"), "{live_text}");
+    assert!(
+        live_text.contains("migrate to adopted target source or use lower-level commands"),
+        "{live_text}"
+    );
+}
+
+#[test]
+fn apply_live_config_no_longer_returns_generic_unsupported_error() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-ux-live.toml"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .expect("app-live apply should execute for adopted live config");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("DATABASE_URL"), "{text}");
+    assert!(!text.contains("status -> doctor -> run"), "{text}");
+}
+
+#[test]
+fn apply_live_target_adoption_required_stops_with_adopt_guidance() {
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .output()
+        .expect("app-live apply should execute for live target adoption required");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("target-adoption-required"), "{text}");
+    assert!(text.contains("app-live targets adopt --config"), "{text}");
+    assert!(!text.contains("status -> doctor -> run"), "{text}");
+
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_rollout_required_stops_before_doctor_or_run() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config = cli::config_fixture("app-live-ux-live.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live rollout required");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("live-rollout-required"), "{text}");
+    assert!(
+        text.contains(
+            "[negrisk.rollout].approved_families and ready_families for adopted families"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Running doctor preflight"), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+}
+
+#[test]
+fn apply_live_restart_required_with_rollout_missing_stops_before_doctor_or_run() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let config = cli::config_fixture("app-live-ux-live.toml");
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live restart required with rollout missing");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Rollout state: required"), "{text}");
+    assert!(
+        text.contains(
+            "[negrisk.rollout].approved_families and ready_families for adopted families"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Running doctor preflight"), "{text}");
+    assert!(!text.contains("Choose one:"), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+}
+
+#[test]
+fn apply_live_generic_blocked_stops_with_existing_blocking_guidance() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_without_provenance("targets-rev-9");
+    let config = cli::config_fixture("app-live-ux-live.toml");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live blocked readiness");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Readiness: blocked"), "{text}");
+    assert!(
+        text.contains("fix the blocking issue, then rerun app-live status --config"),
+        "{text}"
+    );
+    assert!(!text.contains("status -> doctor -> run"), "{text}");
+
+    database.cleanup();
+}
+
+#[test]
+fn apply_live_legacy_explicit_targets_keep_migration_specific_guidance() {
+    let output = Command::new(cli::app_live_binary())
+        .arg("apply")
+        .arg("--config")
+        .arg(cli::config_fixture("app-live-live.toml"))
+        .output()
+        .expect("app-live apply should execute for legacy explicit live config");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("legacy explicit targets are not supported in the high-level status flow"),
+        "{text}"
+    );
+    assert!(
+        text.contains("migrate to adopted target source or use lower-level commands"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("fix the blocking issue, then rerun app-live status --config"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -589,6 +742,120 @@ fn apply_restart_required_with_rollout_missing_enters_inline_smoke_rollout_enabl
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn apply_live_restart_required_with_start_fails_closed_when_not_interactive() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--start")
+        .env("DATABASE_URL", database.database_url())
+        .stdin(Stdio::null())
+        .output()
+        .expect("app-live apply should execute for live non-interactive restart boundary");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("confirm-manual-restart-boundary"), "{text}");
+    assert!(
+        text.contains("manual restart boundary requires interactive confirmation"),
+        "{text}"
+    );
+    assert!(!text.contains("Choose one:"), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_declining_restart_confirmation_stops_cleanly() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "decline\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("Runtime not started"), "{text}");
+    assert!(text.contains("restart confirmation declined"), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() {
+    let database = TestDatabase::new();
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+    database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
+    database.seed_run_session(live_run_session(
+        "rs-old",
+        &config_path,
+        "targets-rev-8",
+        RunSessionState::Running,
+        Utc::now() - ChronoDuration::minutes(2),
+    ));
+    database.seed_runtime_progress(Some("targets-rev-8"), Some("rs-old"));
+
+    let output = run_apply_with_options(
+        &config_path,
+        database.database_url(),
+        "confirm\n",
+        true,
+        true,
+    );
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(
+        text.contains("Conflicting active run session: rs-old"),
+        "{text}"
+    );
+    assert!(
+        text.contains("resolve the existing runtime outside apply"),
+        "{text}"
+    );
+    assert!(!text.contains("Choose one:"), "{text}");
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture(relative);
     let text = fs::read_to_string(&source).expect("fixture should be readable");
@@ -689,16 +956,19 @@ fn app_live_command() -> Command {
 fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
     let mut document = config
         .parse::<DocumentMut>()
-        .expect("smoke config fixture should parse as TOML");
+        .expect("config fixture should parse as TOML");
 
-    let polymarket = document
-        .get_mut("polymarket")
-        .and_then(|item| item.as_table_like_mut())
-        .expect("smoke config fixture should contain [polymarket]");
+    let polymarket = document["polymarket"]
+        .as_table_like_mut()
+        .expect("config fixture should contain [polymarket]");
+    if polymarket.get("source_overrides").is_none() {
+        polymarket.insert("source_overrides", toml_edit::table());
+    }
     let source = polymarket
         .get_mut("source_overrides")
-        .and_then(|item| item.as_table_like_mut())
-        .expect("smoke config fixture should contain [polymarket.source_overrides]");
+        .expect("config fixture should contain [polymarket.source_overrides]")
+        .as_table_like_mut()
+        .expect("config fixture should contain [polymarket.source_overrides]");
 
     for (key, rewritten) in [
         ("clob_host", venue.http_base_url()),
@@ -707,14 +977,53 @@ fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
         ("market_ws_url", venue.market_ws_url()),
         ("user_ws_url", venue.user_ws_url()),
     ] {
-        assert!(
-            source.get(key).is_some(),
-            "smoke config fixture should contain [polymarket.source_overrides].{key}"
-        );
         source.insert(key, value(rewritten));
+    }
+    for (key, rewritten) in [
+        ("heartbeat_interval_seconds", toml_edit::Value::from(15)),
+        ("relayer_poll_interval_seconds", toml_edit::Value::from(5)),
+        ("metadata_refresh_interval_seconds", toml_edit::Value::from(60)),
+    ] {
+        source.insert(key, toml_edit::Item::Value(rewritten));
     }
 
     document.to_string()
+}
+
+fn live_run_session(
+    run_session_id: &str,
+    config_path: &std::path::Path,
+    startup_target_revision_at_start: &str,
+    state: RunSessionState,
+    started_at: chrono::DateTime<Utc>,
+) -> RunSessionRow {
+    RunSessionRow {
+        run_session_id: run_session_id.to_owned(),
+        invoked_by: "run".to_owned(),
+        mode: "live".to_owned(),
+        state,
+        started_at,
+        last_seen_at: started_at,
+        ended_at: matches!(state, RunSessionState::Exited | RunSessionState::Failed)
+            .then(|| started_at + ChronoDuration::seconds(30)),
+        exit_status: (state == RunSessionState::Exited).then(|| "success".to_owned()),
+        exit_reason: (state == RunSessionState::Failed).then(|| "seeded failure".to_owned()),
+        config_path: config_path.display().to_string(),
+        config_fingerprint: config_fingerprint(config_path),
+        target_source_kind: "adopted".to_owned(),
+        startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
+        configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
+        active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
+        rollout_state_at_start: Some("ready".to_owned()),
+        real_user_shadow_smoke: false,
+    }
+}
+
+fn config_fingerprint(config_path: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+
+    let raw = std::fs::read(config_path).expect("config fixture should read");
+    format!("{:x}", Sha256::digest(raw))
 }
 
 struct MockDoctorVenue {
