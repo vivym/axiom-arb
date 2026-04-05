@@ -30,6 +30,8 @@ pub fn render_live_config(
             mode: RuntimeModeToml::Live,
             real_user_shadow_smoke,
         },
+        strategy_control: None,
+        strategies: None,
         polymarket: Some(PolymarketToml {
             account: Some(PolymarketAccountToml {
                 address: answers.account_address,

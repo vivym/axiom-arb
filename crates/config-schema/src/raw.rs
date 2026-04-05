@@ -4,6 +4,10 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 pub struct RawAxiomConfig {
     pub runtime: RuntimeToml,
     #[serde(default)]
+    pub strategy_control: Option<StrategyControlToml>,
+    #[serde(default)]
+    pub strategies: Option<StrategiesToml>,
+    #[serde(default)]
     pub polymarket: Option<PolymarketToml>,
     #[serde(default)]
     pub negrisk: Option<NegRiskToml>,
@@ -64,6 +68,43 @@ pub struct PolymarketToml {
     pub source: Option<PolymarketSourceToml>,
     #[serde(default)]
     pub signer: Option<PolymarketSignerToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyControlToml {
+    pub source: StrategyControlSourceToml,
+    #[serde(default)]
+    pub operator_strategy_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyControlSourceToml {
+    Adopted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategiesToml {
+    #[serde(default)]
+    pub full_set: Option<StrategyRouteToml>,
+    #[serde(default)]
+    pub neg_risk: Option<StrategyRouteToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyRouteToml {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rollout: Option<StrategyRouteRolloutToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyRouteRolloutToml {
+    #[serde(default)]
+    pub approved_scopes: Vec<String>,
+    #[serde(default)]
+    pub ready_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

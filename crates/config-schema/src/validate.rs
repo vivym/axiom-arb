@@ -222,6 +222,32 @@ impl<'a> AppLiveConfigView<'a> {
             .and_then(|negrisk| negrisk.rollout.as_ref())
             .map(|raw| AppLiveNegRiskRolloutView { raw })
     }
+
+    pub fn operator_strategy_revision(&self) -> Option<&'a str> {
+        if self.is_legacy_explicit_strategy_config() {
+            return None;
+        }
+
+        self.raw
+            .strategy_control
+            .as_ref()
+            .and_then(|strategy_control| strategy_control.operator_strategy_revision.as_deref())
+            .or_else(|| {
+                self.raw
+                    .negrisk
+                    .as_ref()
+                    .and_then(|negrisk| negrisk.target_source.as_ref())
+                    .and_then(|target_source| target_source.operator_target_revision.as_deref())
+            })
+    }
+
+    pub fn is_legacy_explicit_strategy_config(&self) -> bool {
+        self.raw
+            .negrisk
+            .as_ref()
+            .map(|negrisk| !negrisk.targets.is_empty())
+            .unwrap_or(false)
+    }
 }
 
 impl<'a> AppReplayConfigView<'a> {
@@ -466,6 +492,7 @@ pub(crate) fn validate_global_invariants(raw: &RawAxiomConfig) -> Result<(), Con
         ));
     }
 
+    validate_strategy_control(raw)?;
     validate_negrisk(raw)?;
 
     Ok(())
@@ -710,6 +737,22 @@ fn validate_target_source_view(
         require_non_empty_local_signer_field(
             operator_target_revision,
             "negrisk.target_source.operator_target_revision",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_strategy_control(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+    let Some(strategy_control) = raw.strategy_control.as_ref() else {
+        return Ok(());
+    };
+
+    if let Some(operator_strategy_revision) = strategy_control.operator_strategy_revision.as_deref()
+    {
+        require_non_empty_local_signer_field(
+            operator_strategy_revision,
+            "strategy_control.operator_strategy_revision",
         )?;
     }
 

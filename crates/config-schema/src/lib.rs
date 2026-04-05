@@ -7,7 +7,8 @@ pub use raw::{
     NegRiskRolloutToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml, NegRiskToml,
     PolymarketAccountToml, PolymarketHttpToml, PolymarketRelayerAuthToml, PolymarketSourceToml,
     PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, RuntimeToml,
-    SignatureTypeToml, WalletRouteToml,
+    SignatureTypeToml, StrategiesToml, StrategyControlSourceToml, StrategyControlToml,
+    StrategyRouteRolloutToml, StrategyRouteToml, WalletRouteToml,
 };
 pub use validate::{
     AppLiveConfigView, AppLiveNegRiskRolloutView, AppLiveNegRiskTargetMemberView,

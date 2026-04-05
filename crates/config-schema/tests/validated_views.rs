@@ -42,6 +42,115 @@ operator_target_revision = "targets-rev-9"
 }
 
 #[test]
+fn validated_config_accepts_strategy_control_and_route_sections() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(!live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
+fn validated_config_marks_legacy_explicit_targets_as_compatibility_mode() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert!(live.is_legacy_explicit_strategy_config());
+    assert_eq!(live.operator_strategy_revision(), None);
+}
+
+#[test]
 fn paper_view_does_not_require_live_sections() {
     let raw = load_raw_config_from_str("[runtime]\nmode = \"paper\"\n").unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
