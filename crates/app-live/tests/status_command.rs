@@ -287,6 +287,17 @@ fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
         combined.contains("Conflicting active state: running"),
         "{combined}"
     );
+    let relevant_idx = combined
+        .find("Relevant run session: rs-new")
+        .unwrap_or_else(|| panic!("{combined}"));
+    let conflicting_idx = combined
+        .find("Conflicting active run session: rs-old")
+        .unwrap_or_else(|| panic!("{combined}"));
+    let next_actions_idx = combined
+        .find("Next Actions")
+        .unwrap_or_else(|| panic!("{combined}"));
+    assert!(relevant_idx < next_actions_idx, "{combined}");
+    assert!(conflicting_idx < next_actions_idx, "{combined}");
 
     database.cleanup();
 }

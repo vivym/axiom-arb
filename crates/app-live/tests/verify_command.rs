@@ -179,6 +179,13 @@ fn verify_live_passes_when_local_results_match_current_config_and_control_plane(
         "{text}"
     );
     assert!(text.contains("Run Session: rs-live-2"), "{text}");
+    let run_session_idx = text
+        .find("Run Session: rs-live-2")
+        .unwrap_or_else(|| panic!("{text}"));
+    let next_actions_idx = text
+        .find("Next Actions")
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(run_session_idx < next_actions_idx, "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -478,6 +485,13 @@ fn verify_since_with_unique_session_mapping_keeps_strong_interpretation() {
         !text.contains("config/lifecycle consistency was not evaluated"),
         "{text}"
     );
+    let run_session_idx = text
+        .find("Run Session: rs-live-3")
+        .unwrap_or_else(|| panic!("{text}"));
+    let next_actions_idx = text
+        .find("Next Actions")
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(run_session_idx < next_actions_idx, "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
