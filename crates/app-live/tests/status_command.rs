@@ -155,6 +155,7 @@ fn status_smoke_target_adoption_required_points_to_apply() {
         combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
+    assert!(!combined.contains("Next: app-live doctor --config"), "{combined}");
     assert!(
         !combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
@@ -195,6 +196,7 @@ fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
         combined.contains("Next: perform controlled restart"),
         "{combined}"
     );
+    assert!(!combined.contains("Next: app-live apply --config"), "{combined}");
 
     database.cleanup();
 }
@@ -230,15 +232,10 @@ fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already
         "{combined}"
     );
     assert!(
-        !combined.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
-        ),
+        combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
-    assert!(
-        combined.contains("Next: perform controlled restart"),
-        "{combined}"
-    );
+    assert!(!combined.contains("Next: perform controlled restart"), "{combined}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -396,9 +393,10 @@ fn status_adopted_source_with_live_rollout_enabled_is_live_config_ready() {
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live doctor --config"),
+        combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
+    assert!(!combined.contains("Next: app-live doctor --config"), "{combined}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -615,7 +613,7 @@ fn status_output_uses_summary_key_details_next_actions_order() {
     );
     assert!(combined.contains("Rollout state: ready"), "{combined}");
     assert!(
-        combined.contains("Next: app-live doctor --config"),
+        combined.contains("Next: app-live apply --config"),
         "{combined}"
     );
 
@@ -711,6 +709,7 @@ fn status_actions_are_concrete_operator_actions() {
     let cases = [
         (StatusAction::RunTargetsAdopt, "run targets adopt"),
         (StatusAction::RunDoctor, "run doctor"),
+        (StatusAction::RunAppLiveApply, "run app-live apply"),
         (
             StatusAction::PerformControlledRestart,
             "perform controlled restart",

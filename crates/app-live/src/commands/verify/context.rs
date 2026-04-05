@@ -224,7 +224,7 @@ mod tests {
                 run_session_state: Some("running".to_owned()),
             },
             readiness: Some(crate::commands::status::model::StatusReadiness::LiveConfigReady),
-            actions: vec![crate::commands::status::model::StatusAction::RunDoctor],
+            actions: vec![crate::commands::status::model::StatusAction::RunAppLiveApply],
             reason: None,
         };
         let resolved_session = crate::commands::verify::session::ResolvedVerifySession {

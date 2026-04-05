@@ -256,14 +256,16 @@ fn adopted_summary(
 
     if restart_needed == Some(true) {
         let mut actions = Vec::new();
-        if !rollout_ready {
+        if rollout_ready {
+            actions.push(StatusAction::RunAppLiveApply);
+        } else {
             actions.push(if smoke_mode {
                 StatusAction::EnableSmokeRollout
             } else {
                 StatusAction::EnableLiveRollout
             });
+            actions.push(StatusAction::PerformControlledRestart);
         }
-        actions.push(StatusAction::PerformControlledRestart);
 
         let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
         details.configured_target = Some(configured_target.clone());
@@ -289,11 +291,12 @@ fn adopted_summary(
         } else {
             StatusReadiness::LiveConfigReady
         };
-        (
-            readiness,
-            vec![StatusAction::RunDoctor],
-            Some(rollout_reason),
-        )
+        let action = if smoke_mode {
+            StatusAction::RunDoctor
+        } else {
+            StatusAction::RunAppLiveApply
+        };
+        (readiness, vec![action], Some(rollout_reason))
     } else {
         let readiness = if smoke_mode {
             StatusReadiness::SmokeRolloutRequired

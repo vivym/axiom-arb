@@ -118,6 +118,7 @@ pub(crate) fn render_action_template_with_mode(
         {
             "app-live apply --config {config}".to_owned()
         }
+        model::StatusAction::RunAppLiveApply => "app-live apply --config {config}".to_owned(),
         model::StatusAction::EnableSmokeRollout => "app-live apply --config {config}".to_owned(),
         model::StatusAction::RunAppLiveRun => "app-live run --config {config}".to_owned(),
         model::StatusAction::RunDoctor => "app-live doctor --config {config}".to_owned(),
