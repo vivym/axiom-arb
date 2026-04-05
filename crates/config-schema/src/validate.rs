@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::sync::OnceLock;
 
 use crate::error::ConfigSchemaError;
 use crate::raw::{
@@ -173,6 +174,19 @@ impl<'a> AppLiveConfigView<'a> {
                     .or(polymarket.source.as_ref())
             })
             .map(|raw| AppLivePolymarketSourceView { raw })
+    }
+
+    pub fn effective_polymarket_source(&self) -> Option<AppLivePolymarketSourceView<'a>> {
+        let polymarket = self.raw.polymarket.as_ref()?;
+        let raw = match polymarket
+            .source_overrides
+            .as_ref()
+            .or(polymarket.source.as_ref())
+        {
+            Some(raw) => raw,
+            None => builtin_polymarket_source(),
+        };
+        Some(AppLivePolymarketSourceView { raw })
     }
 
     pub fn polymarket_signer(&self) -> Option<AppLivePolymarketSignerView<'a>> {
@@ -475,10 +489,6 @@ fn validate_app_live_requiredness(
 
                 let target_source = require_target_source(raw)?;
                 validate_target_source_view(target_source)?;
-
-                if raw.runtime.real_user_shadow_smoke {
-                    require_source_defaults_or_overrides(raw)?;
-                }
             } else {
                 require_source(raw)?;
                 require_signer(raw)?;
@@ -499,25 +509,6 @@ fn validate_app_replay_requiredness(
     raw: &RawAxiomConfig,
 ) -> Result<AppReplayConfigView<'_>, ConfigSchemaError> {
     Ok(AppReplayConfigView { raw })
-}
-
-fn require_source_defaults_or_overrides(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
-    if raw
-        .polymarket
-        .as_ref()
-        .and_then(|polymarket| {
-            polymarket
-                .source_overrides
-                .as_ref()
-                .or(polymarket.source.as_ref())
-        })
-        .is_none()
-    {
-        return Err(validation_error(
-            "missing required section: polymarket.source or polymarket.source_overrides",
-        ));
-    }
-    Ok(())
 }
 
 fn require_source(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
@@ -592,6 +583,20 @@ fn require_target_source(
         .and_then(|negrisk| negrisk.target_source.as_ref())
         .map(|raw| AppLiveNegRiskTargetSourceView { raw })
         .ok_or_else(|| validation_error("missing required section: negrisk.target_source"))
+}
+
+fn builtin_polymarket_source() -> &'static PolymarketSourceToml {
+    static BUILTIN: OnceLock<PolymarketSourceToml> = OnceLock::new();
+    BUILTIN.get_or_init(|| PolymarketSourceToml {
+        clob_host: "https://clob.polymarket.com".to_owned(),
+        data_api_host: "https://data-api.polymarket.com".to_owned(),
+        relayer_host: "https://relayer-v2.polymarket.com".to_owned(),
+        market_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market".to_owned(),
+        user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user".to_owned(),
+        heartbeat_interval_seconds: 15,
+        relayer_poll_interval_seconds: 5,
+        metadata_refresh_interval_seconds: 60,
+    })
 }
 
 fn require_relayer_auth_view(

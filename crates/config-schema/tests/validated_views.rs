@@ -191,42 +191,8 @@ fn smoke_view_requires_live_signer() {
 }
 
 #[test]
-fn smoke_view_requires_live_source() {
-    let err = validated_view_err(
-        r#"
-[runtime]
-mode = "live"
-real_user_shadow_smoke = true
-
-[polymarket.signer]
-address = "0x1111111111111111111111111111111111111111"
-funder_address = "0x2222222222222222222222222222222222222222"
-signature_type = "eoa"
-wallet_route = "eoa"
-api_key = "poly-api-key-1"
-passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
-
-[negrisk.rollout]
-approved_families = []
-ready_families = []
-"#,
-    );
-
-    assert!(err.contains("polymarket.source"));
-}
-
-#[test]
-fn operator_facing_smoke_view_requires_source_defaults_or_overrides() {
-    let err = validated_view_err(
+fn operator_facing_smoke_view_defaults_source_when_omitted() {
+    let raw = load_raw_config_from_str(
         r#"
 [runtime]
 mode = "live"
@@ -248,6 +214,116 @@ address = "0x1111111111111111111111111111111111111111"
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert!(!live.has_polymarket_source());
+
+    let source = live
+        .effective_polymarket_source()
+        .expect("operator smoke config should use built-in source defaults");
+    assert_eq!(source.clob_host(), "https://clob.polymarket.com");
+    assert_eq!(source.metadata_refresh_interval_seconds(), 60);
+}
+
+#[test]
+fn operator_facing_source_overrides_win_over_source() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[polymarket.source]
+clob_host = "https://clob.example.invalid"
+data_api_host = "https://data-api.example.invalid"
+relayer_host = "https://relayer.example.invalid"
+market_ws_url = "wss://market.example.invalid/ws"
+user_ws_url = "wss://user.example.invalid/ws"
+heartbeat_interval_seconds = 11
+relayer_poll_interval_seconds = 22
+metadata_refresh_interval_seconds = 33
+
+[polymarket.source_overrides]
+clob_host = "https://clob.override.invalid"
+data_api_host = "https://data-api.override.invalid"
+relayer_host = "https://relayer.override.invalid"
+market_ws_url = "wss://market.override.invalid/ws"
+user_ws_url = "wss://user.override.invalid/ws"
+heartbeat_interval_seconds = 44
+relayer_poll_interval_seconds = 55
+metadata_refresh_interval_seconds = 66
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert!(live.has_polymarket_source());
+    assert_eq!(
+        live.polymarket_source()
+            .expect("raw source should still resolve to explicit override")
+            .clob_host(),
+        "https://clob.override.invalid"
+    );
+    assert_eq!(
+        live.effective_polymarket_source()
+            .expect("effective source should resolve to explicit override")
+            .clob_host(),
+        "https://clob.override.invalid"
+    );
+}
+
+#[test]
+fn signer_based_legacy_live_view_still_requires_explicit_source() {
+    let err = validated_view_err(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
 "#,
     );
 
