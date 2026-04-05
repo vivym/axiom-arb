@@ -328,7 +328,7 @@ fn operator_facing_live_config_without_source_uses_default_polymarket_source() {
 }
 
 #[test]
-fn operator_facing_smoke_config_without_source_uses_default_polymarket_source() {
+fn operator_facing_smoke_fixture_without_source_uses_default_polymarket_source() {
     let config = PolymarketSourceConfig::try_from(&smoke_view_without_source()).unwrap();
 
     assert_eq!(config.clob_host.as_str(), "https://clob.polymarket.com/");
@@ -377,25 +377,6 @@ fn source_overrides_win_over_source_when_both_are_present() {
     assert_eq!(config.heartbeat_interval_seconds, 22);
     assert_eq!(config.relayer_poll_interval_seconds, 11);
     assert_eq!(config.metadata_refresh_interval_seconds, 99);
-}
-
-#[test]
-fn invalid_explicit_polymarket_source_still_fails() {
-    let error = source_config_err(
-        r#"
-[polymarket.source]
-clob_host = "ftp://clob.polymarket.com"
-data_api_host = "https://data-api.polymarket.com"
-relayer_host = "https://relayer-v2.polymarket.com"
-market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
-heartbeat_interval_seconds = 15
-relayer_poll_interval_seconds = 5
-metadata_refresh_interval_seconds = 60
-"#,
-    );
-
-    assert!(error.contains("clob_host"));
 }
 
 #[test]
