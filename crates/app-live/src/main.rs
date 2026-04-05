@@ -3,6 +3,7 @@ use std::process;
 use app_live::cli::{AppLiveCli, AppLiveCommand};
 use app_live::commands::apply::execute as apply_execute;
 use app_live::commands::bootstrap::execute as bootstrap_execute;
+use app_live::commands::discover::execute as discover_execute;
 use app_live::commands::doctor::execute as doctor_execute;
 use app_live::commands::init::execute as init_execute;
 use app_live::commands::run::execute as run_execute;
@@ -23,6 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         AppLiveCommand::Apply(args) => apply_execute(args),
         AppLiveCommand::Bootstrap(args) => bootstrap_execute(args),
+        AppLiveCommand::Discover(args) => discover_execute(args),
         AppLiveCommand::Doctor(args) => doctor_execute(args),
         AppLiveCommand::Init(args) => init_execute(args),
         AppLiveCommand::Status(args) => status_execute(args),

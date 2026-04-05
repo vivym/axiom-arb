@@ -1,5 +1,5 @@
 use state::RemoteSnapshot;
-use venue_polymarket::HeartbeatFetchResult;
+use venue_polymarket::{HeartbeatFetchResult, PolymarketRestClient};
 
 use crate::{
     config::PolymarketSourceConfig,
@@ -78,6 +78,15 @@ pub fn build_real_user_shadow_smoke_sources(
         metadata: MetadataTaskGroup,
         bootstrap_snapshot: RemoteSnapshot::empty(),
     })
+}
+
+pub fn build_polymarket_rest_client(source: &PolymarketSourceConfig) -> PolymarketRestClient {
+    PolymarketRestClient::new(
+        source.clob_host.clone(),
+        source.data_api_host.clone(),
+        source.relayer_host.clone(),
+        None,
+    )
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ use crate::{
         AppRuntimeMode,
     },
     snapshot_meta::{rollout_evidence_from_snapshot, snapshot_id_for},
+    task_groups::MetadataDiscoveryBatch,
 };
 use state::DirtyDomain;
 
@@ -324,6 +325,15 @@ impl AppSupervisor {
         }
     }
 
+    pub fn materialize_authoritative_discovery_batch(
+        batch: MetadataDiscoveryBatch,
+        run_session_id: &str,
+    ) -> Result<SupervisorSummary, SupervisorError> {
+        let mut supervisor = Self::new(AppRuntimeMode::Live, RemoteSnapshot::empty());
+        supervisor.set_run_session_id(run_session_id);
+        supervisor.run_authoritative_discovery_once(batch.rendered_live_targets, batch.inputs)
+    }
+
     pub fn push_dirty_snapshot(
         &mut self,
         state_version: u64,
@@ -389,6 +399,31 @@ impl AppSupervisor {
         self.neg_risk_live_target_revision =
             (!targets.is_empty()).then(|| neg_risk_live_target_revision_from_targets(&targets));
         self.neg_risk_live_targets = targets;
+    }
+
+    pub fn run_authoritative_discovery_once(
+        &mut self,
+        rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+        inputs: Vec<InputTaskEvent>,
+    ) -> Result<SupervisorSummary, SupervisorError> {
+        self.seed_neg_risk_live_targets(rendered_live_targets);
+        for input in inputs {
+            self.seed_unapplied_journal_entry(input.journal_seq, input);
+        }
+        self.last_emitted_rollout_evidence = None;
+        if self.runtime.bootstrap_status() != BootstrapStatus::Ready {
+            let source = StaticSnapshotSource::new(self.bootstrap_snapshot.clone());
+            self.runtime.bootstrap_once(&source);
+        }
+
+        let allow_operator_synthesis = self.allow_operator_rollout_evidence_synthesis();
+        self.publish_current_snapshot(allow_operator_synthesis);
+        self.refresh_neg_risk_live_execution_records(allow_operator_synthesis)?;
+        self.drain_input_tasks_authoritative_discovery()?;
+        self.validate_neg_risk_live_execution_anchor()?;
+        let _ = self.flush_dispatch_instrumented();
+
+        Ok(self.summary())
     }
 
     pub fn enable_real_user_shadow_smoke(&mut self) {
@@ -633,6 +668,45 @@ impl AppSupervisor {
                     self.record_recovery_backlog(self.input_tasks.len());
                 }
             }
+        }
+
+        Ok(processed_count)
+    }
+
+    fn drain_input_tasks_authoritative_discovery(&mut self) -> Result<usize, SupervisorError> {
+        let mut processed_count = 0usize;
+        let mut candidate_dirty_seen = false;
+        let durable_anchor = self.runtime.last_journal_seq();
+
+        while let Some(input) = self.input_tasks.next_after(durable_anchor) {
+            match self.runtime.apply_input(input.clone())? {
+                ApplyResult::Applied {
+                    state_version,
+                    dirty_set,
+                    ..
+                } => {
+                    let candidate_dirty = dirty_set.domains.contains(&DirtyDomain::Candidates);
+                    self.dispatcher.record_apply(state_version, dirty_set);
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    self.publish_current_snapshot(false);
+                    candidate_dirty_seen |= candidate_dirty;
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+                ApplyResult::Duplicate { .. }
+                | ApplyResult::Deferred { .. }
+                | ApplyResult::ReconcileRequired { .. } => {
+                    self.record_committed_input(input.clone());
+                    let _ = self.input_tasks.remove(&input);
+                    processed_count += 1;
+                    self.record_recovery_backlog(self.input_tasks.len());
+                }
+            }
+        }
+
+        if candidate_dirty_seen {
+            self.materialize_candidate_artifacts();
         }
 
         Ok(processed_count)

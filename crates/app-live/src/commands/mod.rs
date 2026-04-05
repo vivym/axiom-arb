@@ -1,5 +1,6 @@
 pub mod apply;
 pub mod bootstrap;
+pub mod discover;
 pub mod doctor;
 pub mod init;
 pub mod run;

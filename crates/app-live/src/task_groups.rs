@@ -1,11 +1,14 @@
-use std::{future::Future, pin::Pin};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use rust_decimal::Decimal;
 use venue_polymarket::{
-    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
+    HeartbeatFetchResult, HeartbeatReconcileReason, NegRiskMarketMetadata,
+    OrderHeartbeatMonitor, OrderHeartbeatState,
 };
 
 use crate::{
+    config::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget},
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
     queues::{FollowUpQueue, FollowUpWork, SnapshotNotice},
@@ -48,6 +51,12 @@ pub struct RelayerTaskGroup;
 
 #[derive(Debug, Default)]
 pub struct MetadataTaskGroup;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataDiscoveryBatch {
+    pub inputs: Vec<InputTaskEvent>,
+    pub rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
+}
 
 #[derive(Debug, Default)]
 pub struct DecisionTaskGroup {
@@ -188,6 +197,81 @@ impl DecisionTaskGroup {
 }
 
 impl MetadataTaskGroup {
+    pub fn authoritative_discovery_batch(
+        rows: &[NegRiskMarketMetadata],
+        source_session_id: &str,
+        observed_at: DateTime<Utc>,
+    ) -> MetadataDiscoveryBatch {
+        let mut grouped = BTreeMap::<String, Vec<&NegRiskMarketMetadata>>::new();
+        for row in rows {
+            grouped
+                .entry(row.event_family_id.clone())
+                .or_default()
+                .push(row);
+        }
+
+        let mut inputs = Vec::new();
+        let mut rendered_live_targets = BTreeMap::new();
+        let mut journal_seq = 1_i64;
+
+        for (family_id, mut family_rows) in grouped {
+            family_rows.sort_by(|left, right| {
+                left.condition_id
+                    .cmp(&right.condition_id)
+                    .then_with(|| left.token_id.cmp(&right.token_id))
+            });
+            let anchor = family_rows[0];
+            let discovery_event_id = format!(
+                "metadata-{}-{}-discovery",
+                anchor.metadata_snapshot_hash, family_id
+            );
+            let backfill_event_id = format!(
+                "metadata-{}-{}-backfill",
+                anchor.metadata_snapshot_hash, family_id
+            );
+            let backfill_cursor =
+                format!("metadata:{}:{}", anchor.discovery_revision, anchor.metadata_snapshot_hash);
+
+            inputs.push(Self::discovery_input(
+                journal_seq,
+                source_session_id,
+                &discovery_event_id,
+                &family_id,
+                observed_at,
+            ));
+            journal_seq += 1;
+            inputs.push(Self::backfill_input(
+                journal_seq,
+                source_session_id,
+                &backfill_event_id,
+                &family_id,
+                backfill_cursor,
+                true,
+                observed_at,
+            ));
+            journal_seq += 1;
+
+            let members = family_rows
+                .into_iter()
+                .map(|row| NegRiskMemberLiveTarget {
+                    condition_id: row.condition_id.clone(),
+                    token_id: row.token_id.clone(),
+                    price: Decimal::new(43, 2),
+                    quantity: Decimal::new(5, 0),
+                })
+                .collect();
+            rendered_live_targets.insert(
+                family_id.clone(),
+                NegRiskFamilyLiveTarget { family_id, members },
+            );
+        }
+
+        MetadataDiscoveryBatch {
+            inputs,
+            rendered_live_targets,
+        }
+    }
+
     pub fn discovery_input(
         journal_seq: i64,
         source_session_id: impl Into<String>,
