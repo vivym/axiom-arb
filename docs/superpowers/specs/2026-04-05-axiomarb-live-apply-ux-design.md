@@ -199,6 +199,12 @@ That means:
 - `live-config-ready` => continue to `doctor`
 - `restart-required` => continue only through the explicit manual-boundary flow
 
+Important combined-state rule:
+
+- `restart-required` does not override missing rollout posture
+- if `status` reports `restart-required` and `rollout_state = required`, live `apply` must stop before `doctor` and before `run`
+- in that case the next action remains “finish live rollout preparation outside `apply`”, then return to `apply`
+
 ## 7. Live Apply Flow
 
 ### 7.1 Default Flow
@@ -227,10 +233,23 @@ It only means `apply` can continue into the same foreground `run` path that an o
 If `status` says `restart-required`, live `apply` should still respect a manual boundary:
 
 - it may explain that the currently active runtime is not aligned with current config
-- with `--start`, it may continue into a new foreground `run`
+- with `--start`, it may continue into a new foreground `run` only after explicit manual-boundary confirmation
 - it must not claim to stop or replace an already-running daemon
 
 This is the same operational honesty that smoke `apply` already uses.
+
+The first live phase should distinguish two restart cases:
+
+1. `restart-required` with no conflicting active running session
+- interactive `--start` may ask for explicit confirmation and then continue into foreground `run`
+- non-interactive `--start` must fail closed because the manual boundary cannot be confirmed
+
+2. `restart-required` with a conflicting active running session
+- `apply --start` must stop at the manual boundary
+- it must not continue into foreground `run`
+- it must instruct the operator to resolve the existing active runtime outside `apply`
+
+This keeps `apply` out of process-management authority while still giving a high-level path for non-conflicting restart work.
 
 ## 8. State Machine
 
@@ -249,6 +268,7 @@ The live-specific internal stages should be:
 - `LoadReadiness`
 - `RejectIfAdoptionRequired`
 - `RejectIfRolloutRequired`
+- `RejectIfBlocked`
 - `ConfirmManualRestartBoundary`
 - `RunPreflight`
 - `Ready`
@@ -260,6 +280,36 @@ The live path must not include smoke-only stages:
 - no `EnsureSmokeRollout`
 
 Those stay smoke-only.
+
+### 8.3 Readiness-to-Stage Mapping
+
+The live path should map current `status` truth to stages as follows:
+
+- `target-adoption-required`
+  - stop in `RejectIfAdoptionRequired`
+  - next action: `targets candidates` / `targets adopt`
+
+- `live-rollout-required`
+  - stop in `RejectIfRolloutRequired`
+  - next action: finish live rollout preparation outside `apply`
+
+- `restart-required` with `rollout_state = required`
+  - stop in `RejectIfRolloutRequired`
+  - next action: finish live rollout preparation outside `apply`, then return to `apply`
+
+- `blocked` with legacy explicit-target details/action
+  - stop in `RejectIfBlocked`
+  - next action: migrate to adopted target source or fall back to lower-level commands
+
+- generic `blocked`
+  - stop in `RejectIfBlocked`
+  - next action: follow the existing blocking guidance from `status`
+
+- `restart-required` with rollout ready
+  - continue into `ConfirmManualRestartBoundary`
+
+- `live-config-ready`
+  - continue directly into `RunPreflight`
 
 ## 9. Output and Next Actions
 
@@ -286,9 +336,13 @@ For live, emphasize:
 
 ### 9.2 Planned Actions
 
-For live first phase, valid planned actions are only:
+For live first phase, valid planned actions are:
 
+- stop because target adoption is still required
+- stop because live rollout preparation is still required
+- stop because legacy explicit targets must be migrated
 - run doctor preflight
+- explicitly confirm the manual restart boundary when applicable
 - optionally start foreground runtime
 
 ### 9.3 Outcome
@@ -299,13 +353,23 @@ At minimum, live should produce:
 - `Ready to start`
 - `Started`
 
+Outcome semantics should be explicit:
+
+- adoption missing / rollout missing / legacy blocked / generic blocked => `Blocked`
+- manual restart boundary declined after successful preflight => clean stop with `Ready to start`, not failure
+- non-interactive `--start` when manual confirmation is required => fail-closed with `Blocked`
+- successful preflight without `--start` => `Ready to start`
+- successful foreground startup => `Started`
+
 ### 9.4 Next Actions
 
 Next actions should remain aligned with `status` vocabulary:
 
 - adoption required => use `targets candidates` / `targets adopt`
 - rollout required => finish live rollout preparation outside `apply`
+- legacy explicit targets => migrate to adopted target source or use lower-level commands
 - ready => rerun with `--start` if you want foreground run
+- conflicting active running session => resolve the existing runtime outside `apply`, then rerun `apply --start`
 - doctor failed => fix doctor-reported issue and rerun `apply`
 
 `apply` must not invent a second operator language.
@@ -329,10 +393,16 @@ Live `apply` should classify failures into the same broad families as current hi
 - unsupported scenario
 - readiness blocker
 - preflight failure
-- manual restart boundary refusal
+- manual restart boundary stop
 - runtime startup failure
 
 The output should always include a concrete next action.
+
+Manual restart-boundary semantics should be mode-aligned with current smoke behavior:
+
+- operator decline after an interactive confirmation prompt is a clean stop, not a runtime failure
+- non-interactive `--start` when confirmation is required is fail-closed
+- conflicting active running sessions are treated as boundary stops, not as situations `apply` can manage away
 
 ## 12. Testing Strategy
 
@@ -350,9 +420,14 @@ Tests should cover:
 
 - `target-adoption-required` => fail closed
 - `live-rollout-required` => fail closed
+- `restart-required` + `rollout_state = required` => stop before doctor/run
 - `blocked` => fail closed
+- `blocked` + legacy explicit targets => migration-specific next action
 - `live-config-ready` => reaches doctor
-- `restart-required` + `--start` => respects manual boundary
+- `restart-required` + interactive `--start` + no conflicting active running session => respects manual boundary and may continue
+- `restart-required` + interactive decline => clean stop
+- `restart-required` + non-interactive `--start` => fail closed
+- conflicting active running session + `--start` => stop at the boundary and do not enter run
 
 ### 12.3 Orchestration Boundaries
 
@@ -382,9 +457,11 @@ This design is complete when:
 - `app-live apply` supports smoke and conservative live under a single command surface
 - live `apply` no longer returns a generic unsupported-path error
 - live `apply` fails closed when target adoption or rollout posture is still missing
+- live `apply` fails closed when legacy explicit-target high-level flow is detected
 - live `apply` reuses `doctor` and optionally `run`
 - `--start` continues into foreground `run`
 - `restart-required` remains an explicit manual boundary
+- conflicting active running sessions are surfaced and not auto-overridden by `apply`
 - no live control-plane mutation authority is added
 - no process-management authority is added
 - smoke behavior remains intact
