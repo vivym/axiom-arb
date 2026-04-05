@@ -351,9 +351,8 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     assert!(text.contains("[polymarket.source_overrides]"));
     assert!(text.contains("clob_host = \"https://override-clob.example\""));
     assert!(
-        combined(&output).contains(
-            "preserved existing [polymarket.source] and [polymarket.source_overrides]."
-        ),
+        combined(&output)
+            .contains("preserved existing [polymarket.source] and [polymarket.source_overrides]."),
         "{}",
         combined(&output)
     );
