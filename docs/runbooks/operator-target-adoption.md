@@ -55,6 +55,8 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 - `doctor`
 - `run`
 
+Once adoption is complete and rollout posture exists, Day 1+ live progression returns to `apply`.
+
 Then drop into the lower-level control-plane views when you need exact provenance.
 
 ## 3. Check Current Configured Vs Active State
@@ -154,6 +156,8 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
+`apply` stays conservative here: it follows readiness, does not inline target adoption or rollout mutation, and keeps `verify` as a separate post-run check.
+
 `doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
 
 `verify` is the post-run local result check. It does not perform venue probes; instead it answers whether the latest local run evidence is consistent with the current mode and control-plane posture. Use it after `run` to confirm the daemon produced the kind of result you expected before moving on.
@@ -219,12 +223,12 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 Interpret `status` before `doctor` like this:
 
 - `target-adoption-required`
-  - for `real-user shadow smoke`, prefer `apply`; it can inline the adopt step
-  - otherwise run `targets candidates`, then `targets adopt`
+  - run `targets candidates`, then `targets adopt`
+  - once adoption and rollout posture exist, return to `apply`
 - `restart-required`
   - perform a controlled restart before expecting the running daemon to pick up the configured revision
 - `live-rollout-required` or `smoke-rollout-required`
-  - for smoke Day 1+ configs, prefer `apply`
+  - for smoke Day 1+ configs, return to `apply` after rollout readiness is in place
   - otherwise fix rollout readiness first
 - `live-config-ready` or `smoke-config-ready`
   - continue to `doctor`
@@ -262,8 +266,8 @@ If `status` shows:
 
 - `target-adoption-required`
   - no startup-scoped adopted target revision is currently configured
-  - for `real-user shadow smoke`, prefer `apply` to inline the adopt step
-  - otherwise inspect `targets candidates`, then adopt one
+  - inspect `targets candidates`, then adopt one
+  - after adoption and rollout posture exist, continue with `apply`
 
 - `restart-required`
   - the configured revision differs from the daemon's active revision
