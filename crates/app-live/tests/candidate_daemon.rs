@@ -213,10 +213,8 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
 
     let provenance = database
         .load_candidate_provenance(&operator_target_revision)
-        .expect("provenance lookup should succeed")
-        .expect("provenance row should persist");
-    assert_eq!(provenance.candidate_revision, "candidate-pub-2");
-    assert_eq!(provenance.adoptable_revision, "adoptable-candidate-pub-2");
+        .expect("provenance lookup should succeed");
+    assert!(provenance.is_none());
 
     database.cleanup();
 }

@@ -49,7 +49,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-7".to_owned()),
             adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
-            operator_target_revision: Some("targets-rev-operator".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 1,
             adoptable_target_count: 1,
             deferred_target_count: 0,
@@ -62,7 +62,7 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
 }
 
 #[test]
-fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
+fn candidate_bridge_derives_future_operator_target_revision_from_rendered_live_targets() {
     let bridge = CandidateBridge::for_tests();
     let candidate_set = CandidateTargetSet::new(
         "candidate-bridge-9",
@@ -83,11 +83,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
     ));
 
     let render = bridge
-        .render(
-            &candidate_set,
-            Some("targets-rev-9"),
-            &sample_rendered_live_targets(),
-        )
+        .render(&candidate_set, None, &sample_rendered_live_targets())
         .expect("candidate render");
 
     assert_eq!(
@@ -125,11 +121,12 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
             adoptable: persistence::models::AdoptableTargetRevisionRow {
                 adoptable_revision: "adoptable-candidate-bridge-9".to_owned(),
                 candidate_revision: "candidate-bridge-9".to_owned(),
-                rendered_operator_target_revision: "targets-rev-9".to_owned(),
+                rendered_operator_target_revision: sample_rendered_live_target_revision()
+                    .to_owned(),
                 payload: json!({
                     "adoptable_revision": "adoptable-candidate-bridge-9",
                     "candidate_revision": "candidate-bridge-9",
-                    "rendered_operator_target_revision": "targets-rev-9",
+                    "rendered_operator_target_revision": sample_rendered_live_target_revision(),
                     "snapshot_id": "snapshot-9",
                     "source_anchor": {
                         "source_kind": "metadata_refresh",
@@ -140,7 +137,7 @@ fn candidate_bridge_renders_adoptable_revision_with_operator_target_revision() {
                     "bridge_policy_version": "bridge-policy-v1",
                     "candidate_policy_version": "policy-v1",
                     "compatibility": {
-                        "operator_target_revision_supplied": true,
+                        "operator_target_revision_supplied": false,
                         "advisory_only": true,
                     },
                     "rendered_live_targets": sample_rendered_live_targets(),
@@ -247,14 +244,13 @@ fn candidate_bridge_rejects_non_adoptable_candidate_set_even_with_operator_targe
 }
 
 #[test]
-fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_operator_revision_missing(
-) {
+fn discovery_supervisor_materializes_adoptable_output_without_prior_operator_revision() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
         [DirtyDomain::Candidates],
         None,
-        BTreeMap::new(),
+        sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
     );
 
@@ -273,8 +269,8 @@ fn discovery_supervisor_reports_adoptable_candidate_without_bridge_output_when_o
         report,
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-7".to_owned()),
-            adoptable_revision: None,
-            operator_target_revision: None,
+            adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 1,
             adoptable_target_count: 1,
             deferred_target_count: 0,
@@ -404,7 +400,7 @@ fn discovery_supervisor_keeps_all_discovery_records_in_candidate_targets() {
         DiscoveryReport {
             candidate_revision: Some("candidate-pub-multi".to_owned()),
             adoptable_revision: Some("adoptable-candidate-pub-multi".to_owned()),
-            operator_target_revision: Some("targets-rev-multi".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
             target_count: 2,
             adoptable_target_count: 2,
             deferred_target_count: 0,
@@ -596,4 +592,8 @@ fn sample_rendered_live_targets() -> BTreeMap<String, NegRiskFamilyLiveTarget> {
             }],
         },
     )])
+}
+
+fn sample_rendered_live_target_revision() -> &'static str {
+    "sha256:50ec69009b6695d74391623b20a7fc8e9902fcb99bcd9be15a3defbda864110c"
 }
