@@ -1,8 +1,8 @@
 use config_schema::{
     render_raw_config_to_string, NegRiskRolloutToml, NegRiskTargetSourceKindToml,
     NegRiskTargetSourceToml, NegRiskToml, PolymarketAccountToml, PolymarketRelayerAuthToml,
-    PolymarketSourceToml, PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml,
-    RuntimeToml, SignatureTypeToml, WalletRouteToml,
+    PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, RuntimeToml,
+    SignatureTypeToml, WalletRouteToml,
 };
 
 use super::InitError;
@@ -50,7 +50,7 @@ pub fn render_live_config(
                 address: answers.relayer_address,
             }),
             source_overrides: None,
-            source: Some(default_source()),
+            source: None,
             signer: None,
         }),
         negrisk: Some(NegRiskToml {
@@ -100,6 +100,10 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
         return;
     };
 
+    if let Some(existing_source) = &existing_polymarket.source {
+        polymarket.source = Some(existing_source.clone());
+    }
+
     if let Some(existing_account) = &existing_polymarket.account {
         if let Some(account) = polymarket.account.as_mut() {
             if account.funder_address.is_none() {
@@ -136,18 +140,5 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
     }
     if relayer_auth.address.is_none() {
         relayer_auth.address = existing_relayer_auth.address.clone();
-    }
-}
-
-fn default_source() -> PolymarketSourceToml {
-    PolymarketSourceToml {
-        clob_host: "https://clob.polymarket.com".into(),
-        data_api_host: "https://data-api.polymarket.com".into(),
-        relayer_host: "https://relayer-v2.polymarket.com".into(),
-        market_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market".into(),
-        user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user".into(),
-        heartbeat_interval_seconds: 15,
-        relayer_poll_interval_seconds: 5,
-        metadata_refresh_interval_seconds: 60,
     }
 }

@@ -59,9 +59,9 @@ fn render_live_summary(summary: InitSummary<'_>) -> WizardSummary {
         lines.push("real_user_shadow_smoke = true".to_string());
     }
     lines.extend([
-        "[polymarket.source]".to_string(),
         "[polymarket.account]".to_string(),
         "[polymarket.relayer_auth]".to_string(),
+        "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence.".to_string(),
         "[negrisk.target_source]".to_string(),
     ]);
     if let Some(revision) = summary.configured_operator_target_revision {
