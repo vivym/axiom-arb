@@ -526,6 +526,38 @@ fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
 }
 
 #[test]
+fn apply_live_config_ready_without_start_stops_at_ready_to_start_outcome() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
+            with_mock_doctor_venue(config, &venue)
+        )
+    });
+
+    let output = app_live_command()
+        .arg("apply")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live apply should execute for live config ready without start");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Outcome"), "{text}");
+    assert!(text.contains("Ready to start"), "{text}");
+    assert!(!text.contains("apply reached ready state"), "{text}");
+    assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(text.contains("app-live apply --config"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
@@ -802,8 +834,9 @@ fn apply_live_declining_restart_confirmation_stops_cleanly() {
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
-    assert!(text.contains("Runtime not started"), "{text}");
+    assert!(text.contains("Ready to start"), "{text}");
     assert!(text.contains("restart confirmation declined"), "{text}");
+    assert!(!text.contains("apply reached ready state"), "{text}");
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();

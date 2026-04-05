@@ -179,7 +179,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
     }
 
     if !start_requested {
-        output::render_outcome(&ready_outcome(&summary));
+        output::render_outcome(&live_ready_outcome(summary.readiness, false));
         output::render_next_actions(&ready_next_actions(config_path, &summary, false));
         return Ok(());
     }
@@ -231,9 +231,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
                 );
             }
             RestartBoundarySelection::Decline => {
-                output::render_outcome(
-                    "Runtime not started; restart confirmation declined at the manual restart boundary.",
-                );
+                output::render_outcome(&live_ready_outcome(summary.readiness, true));
                 output::render_next_actions(&ready_next_actions(config_path, &summary, true));
                 return Ok(());
             }
@@ -595,6 +593,19 @@ fn ready_outcome(summary: &status::model::StatusSummary) -> String {
         "Runtime not started; apply reached ready state at the manual restart boundary.".to_owned()
     } else {
         "Runtime not started; apply reached ready state.".to_owned()
+    }
+}
+
+fn live_ready_outcome(readiness: StatusReadiness, boundary_declined: bool) -> String {
+    match (readiness, boundary_declined) {
+        (StatusReadiness::RestartRequired, true) => {
+            "Ready to start; restart confirmation declined at the manual restart boundary."
+                .to_owned()
+        }
+        (StatusReadiness::RestartRequired, false) => {
+            "Ready to start; apply is waiting at the manual restart boundary.".to_owned()
+        }
+        _ => "Ready to start".to_owned(),
     }
 }
 
