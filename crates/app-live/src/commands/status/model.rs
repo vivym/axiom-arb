@@ -18,7 +18,9 @@ impl StatusMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusReadiness {
     PaperReady,
-    TargetAdoptionRequired,
+    DiscoveryRequired,
+    DiscoveryReadyNotAdoptable,
+    AdoptableReady,
     RestartRequired,
     SmokeRolloutRequired,
     SmokeConfigReady,
@@ -31,7 +33,9 @@ impl StatusReadiness {
     pub fn label(self) -> &'static str {
         match self {
             Self::PaperReady => "paper-ready",
-            Self::TargetAdoptionRequired => "target-adoption-required",
+            Self::DiscoveryRequired => "discovery-required",
+            Self::DiscoveryReadyNotAdoptable => "discovery-ready-not-adoptable",
+            Self::AdoptableReady => "adoptable-ready",
             Self::RestartRequired => "restart-required",
             Self::SmokeRolloutRequired => "smoke-rollout-required",
             Self::SmokeConfigReady => "smoke-config-ready",
@@ -59,7 +63,9 @@ impl StatusRolloutState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusAction {
-    RunTargetsAdopt,
+    RunDiscover,
+    InspectDiscoveryReasons,
+    ChooseAndAdoptRevision,
     RunDoctor,
     PerformControlledRestart,
     RunAppLiveRun,
@@ -72,7 +78,9 @@ pub enum StatusAction {
 impl StatusAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::RunTargetsAdopt => "run targets adopt",
+            Self::RunDiscover => "run discover",
+            Self::InspectDiscoveryReasons => "inspect discovery reasons",
+            Self::ChooseAndAdoptRevision => "choose and adopt an adoptable revision",
             Self::RunDoctor => "run doctor",
             Self::PerformControlledRestart => "perform controlled restart",
             Self::RunAppLiveRun => "run app-live run",

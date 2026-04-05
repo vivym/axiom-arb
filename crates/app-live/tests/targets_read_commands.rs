@@ -168,6 +168,44 @@ fn targets_candidates_labels_advisory_adoptable_and_adopted_rows() {
 }
 
 #[test]
+fn targets_candidates_prints_recommended_adoptable_and_non_adoptable_summary() {
+    let database = TestDatabase::new();
+    database.seed_targets_catalog();
+    let config = temp_config(MINIMAL_LIVE_CONFIG);
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("candidates")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets candidates should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains(
+            "summary advisory_candidate_count = 1 adoptable_revision_count = 1 deferred_target_count = 1 excluded_target_count = 0"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("recommended_adoptable_revision = adoptable-9"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "non_adoptable_reason = candidate generation deferred until discovery backfill completes"
+        ),
+        "{text}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn targets_status_fails_when_configured_revision_has_no_durable_provenance() {
     let database = TestDatabase::new();
     let config = temp_config(MINIMAL_LIVE_CONFIG);
@@ -376,6 +414,16 @@ impl TestDatabase {
                             source_revision: "discovery-8".to_owned(),
                             payload: json!({
                                 "candidate_revision": "candidate-8",
+                                "targets": [
+                                    {
+                                        "target_id": "candidate-target-8",
+                                        "family_id": "family-a",
+                                        "validation": {
+                                            "status": "deferred",
+                                            "reason": "candidate generation deferred until discovery backfill completes"
+                                        }
+                                    }
+                                ]
                             }),
                         },
                     )

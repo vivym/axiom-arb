@@ -96,7 +96,7 @@ fn status_paper_mode_without_database_url_is_blocked() {
 }
 
 #[test]
-fn status_adopted_source_without_operator_target_revision_is_target_adoption_required() {
+fn status_adopted_source_without_operator_target_revision_is_discovery_required() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
         config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
@@ -114,11 +114,11 @@ fn status_adopted_source_without_operator_target_revision_is_target_adoption_req
     assert!(output.status.success(), "{combined}");
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(
-        combined.contains("Readiness: target-adoption-required"),
+        combined.contains("Readiness: discovery-required"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live targets adopt --config"),
+        combined.contains("Next: app-live discover --config"),
         "{combined}"
     );
 
@@ -127,7 +127,7 @@ fn status_adopted_source_without_operator_target_revision_is_target_adoption_req
 }
 
 #[test]
-fn status_smoke_target_adoption_required_points_to_apply() {
+fn status_smoke_without_discovery_artifacts_is_discovery_required() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
@@ -148,15 +148,88 @@ fn status_smoke_target_adoption_required_points_to_apply() {
         "{combined}"
     );
     assert!(
-        combined.contains("Readiness: target-adoption-required"),
+        combined.contains("Readiness: discovery-required"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: app-live discover --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn status_smoke_with_advisory_only_candidate_is_discovery_ready_not_adoptable() {
+    let database = TestDatabase::new();
+    database.seed_advisory_candidate(
+        "candidate-8",
+        "candidate generation deferred until discovery backfill completes",
+    );
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Readiness: discovery-ready-not-adoptable"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("candidate generation deferred until discovery backfill completes"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Next: app-live targets candidates --config"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Next: app-live apply --config"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn status_smoke_with_adoptable_artifacts_and_no_anchor_is_adoptable_ready() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_without_provenance("targets-rev-9");
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Readiness: adoptable-ready"),
         "{combined}"
     );
     assert!(
         combined.contains("Next: app-live apply --config"),
-        "{combined}"
-    );
-    assert!(
-        !combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
 
@@ -681,10 +754,12 @@ fn status_readiness_labels_use_operator_vocabulary() {
 
     let cases = [
         (StatusReadiness::PaperReady, "paper-ready"),
+        (StatusReadiness::DiscoveryRequired, "discovery-required"),
         (
-            StatusReadiness::TargetAdoptionRequired,
-            "target-adoption-required",
+            StatusReadiness::DiscoveryReadyNotAdoptable,
+            "discovery-ready-not-adoptable",
         ),
+        (StatusReadiness::AdoptableReady, "adoptable-ready"),
         (StatusReadiness::RestartRequired, "restart-required"),
         (
             StatusReadiness::SmokeRolloutRequired,
@@ -709,7 +784,15 @@ fn status_actions_are_concrete_operator_actions() {
     use app_live::commands::status::model::StatusAction;
 
     let cases = [
-        (StatusAction::RunTargetsAdopt, "run targets adopt"),
+        (StatusAction::RunDiscover, "run discover"),
+        (
+            StatusAction::InspectDiscoveryReasons,
+            "inspect discovery reasons",
+        ),
+        (
+            StatusAction::ChooseAndAdoptRevision,
+            "choose and adopt an adoptable revision",
+        ),
         (StatusAction::RunDoctor, "run doctor"),
         (
             StatusAction::PerformControlledRestart,

@@ -171,6 +171,36 @@ impl TestDatabase {
         });
     }
 
+    pub fn seed_advisory_candidate(&self, candidate_revision: &str, reason: &str) {
+        self.runtime.block_on(async {
+            CandidateArtifactRepo
+                .upsert_candidate_target_set(
+                    &self.pool,
+                    &CandidateTargetSetRow {
+                        candidate_revision: candidate_revision.to_owned(),
+                        snapshot_id: format!("snapshot-{candidate_revision}"),
+                        source_revision: format!("discovery-{candidate_revision}"),
+                        payload: json!({
+                            "candidate_revision": candidate_revision,
+                            "snapshot_id": format!("snapshot-{candidate_revision}"),
+                            "targets": [
+                                {
+                                    "target_id": format!("target-{candidate_revision}"),
+                                    "family_id": "family-a",
+                                    "validation": {
+                                        "status": "deferred",
+                                        "reason": reason,
+                                    }
+                                }
+                            ]
+                        }),
+                    },
+                )
+                .await
+                .expect("advisory candidate row should persist");
+        });
+    }
+
     pub fn latest_history(&self) -> Option<OperatorTargetAdoptionHistoryRow> {
         self.runtime.block_on(async {
             OperatorTargetAdoptionHistoryRepo

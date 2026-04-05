@@ -91,7 +91,7 @@ fn apply_maps_smoke_blocked_readiness_to_concrete_reason() {
 }
 
 #[test]
-fn apply_maps_target_adoption_required_to_ensure_target_anchor() {
+fn apply_maps_discovery_required_to_truthful_next_action() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
@@ -107,7 +107,9 @@ fn apply_maps_target_adoption_required_to_ensure_target_anchor() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("ensure-target-anchor"), "{text}");
+    assert!(text.contains("app-live bootstrap --config"), "{text}");
+    assert!(text.contains("app-live discover --config"), "{text}");
+    assert!(!text.contains("ensure-target-anchor"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -223,7 +225,7 @@ fn apply_non_interactive_target_adoption_required_stays_fail_closed_at_stage() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("ensure-target-anchor"), "{text}");
+    assert!(text.contains("choose-adoptable-revision"), "{text}");
     assert!(!text.contains("Choose an adoptable revision"), "{text}");
 
     let rewritten = fs::read_to_string(&config_path).expect("config should still load");
@@ -232,6 +234,35 @@ fn apply_non_interactive_target_adoption_required_stays_fail_closed_at_stage() {
         "{rewritten}"
     );
     assert_eq!(database.history_count(), 0);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn apply_does_not_inline_discovery_when_only_advisory_candidates_exist() {
+    let database = apply_db::TestDatabase::new();
+    database.seed_advisory_candidate(
+        "candidate-8",
+        "candidate generation deferred until discovery backfill completes",
+    );
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("candidate generation deferred until discovery backfill completes"),
+        "{text}"
+    );
+    assert!(
+        text.contains("app-live targets candidates --config"),
+        "{text}"
+    );
+    assert!(!text.contains("Choose an adoptable revision"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
