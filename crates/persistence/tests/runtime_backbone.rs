@@ -110,6 +110,7 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode) -> ExecutionAttemptRow 
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 
@@ -148,13 +149,62 @@ fn sample_live_submission_record(
     }
 }
 
+async fn seed_run_session(pool: &PgPool, run_session_id: &str) {
+    sqlx::query(
+        r#"
+        INSERT INTO run_sessions (
+            run_session_id,
+            invoked_by,
+            mode,
+            state,
+            started_at,
+            last_seen_at,
+            ended_at,
+            exit_status,
+            exit_reason,
+            config_path,
+            config_fingerprint,
+            target_source_kind,
+            startup_target_revision_at_start,
+            configured_operator_target_revision,
+            active_operator_target_revision_at_start,
+            rollout_state_at_start,
+            real_user_shadow_smoke
+        )
+        VALUES (
+            $1,
+            'tester',
+            'daemon',
+            'running',
+            NOW(),
+            NOW(),
+            NULL,
+            NULL,
+            NULL,
+            '/tmp/run-session-config.toml',
+            'fingerprint-1',
+            'source',
+            'rev-start',
+            NULL,
+            NULL,
+            NULL,
+            false
+        )
+        "#,
+    )
+    .bind(run_session_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None)
+        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), None, None)
         .await
         .unwrap();
 
@@ -167,17 +217,26 @@ async fn runtime_progress_persists_journal_state_snapshot_triplet() {
     assert_eq!(progress.last_state_version, 7);
     assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
     assert_eq!(progress.operator_target_revision, None);
+    assert_eq!(progress.active_run_session_id, None);
 
     db.cleanup().await;
 }
 
 #[tokio::test]
-async fn runtime_progress_round_trips_operator_target_revision() {
+async fn runtime_progress_round_trips_active_run_session_id() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            Some("run-session-1"),
+        )
         .await
         .unwrap();
 
@@ -193,6 +252,158 @@ async fn runtime_progress_round_trips_operator_target_revision() {
         progress.operator_target_revision.as_deref(),
         Some("targets-rev-3")
     );
+    assert_eq!(
+        progress.active_run_session_id.as_deref(),
+        Some("run-session-1")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_set_active_run_session_id_requires_existing_row() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let err = RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, PersistenceError::MissingRuntimeProgressRow));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_clear_active_run_session_id_requires_existing_row() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let err = RuntimeProgressRepo
+        .clear_active_run_session_id(&db.pool)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, PersistenceError::MissingRuntimeProgressRow));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_row_exposes_active_run_session_id_through_repo() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        progress.active_run_session_id.as_deref(),
+        Some("run-session-1")
+    );
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_round_trips_operator_target_revision() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.last_journal_seq, 41);
+    assert_eq!(progress.last_state_version, 7);
+    assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-7"));
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
+    assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempts_round_trip_run_session_id() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    let mut row = sample_attempt("attempt-live-run-session-1", ExecutionMode::Live);
+    row.run_session_id = Some("run-session-1".to_owned());
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let attempt = ExecutionAttemptRepo
+        .get_by_attempt_id(&db.pool, "attempt-live-run-session-1")
+        .await
+        .unwrap()
+        .unwrap()
+        .attempt;
+    assert_eq!(attempt.run_session_id.as_deref(), Some("run-session-1"));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_list_recent_by_mode_and_route_round_trips_run_session_id() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    let mut row = sample_attempt("attempt-live-route-session-1", ExecutionMode::Live);
+    row.run_session_id = Some("run-session-1".to_owned());
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let rows = ExecutionAttemptRepo
+        .list_recent_by_mode_and_route(&db.pool, ExecutionMode::Live, "neg-risk", 10)
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].attempt.run_session_id.as_deref(),
+        Some("run-session-1")
+    );
 
     db.cleanup().await;
 }
@@ -203,11 +414,18 @@ async fn runtime_progress_preserves_operator_target_revision_when_update_omits_i
     run_migrations(&db.pool).await.unwrap();
 
     RuntimeProgressRepo
-        .record_progress(&db.pool, 41, 7, Some("snapshot-7"), Some("targets-rev-3"))
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
         .await
         .unwrap();
     RuntimeProgressRepo
-        .record_progress(&db.pool, 42, 8, Some("snapshot-8"), None)
+        .record_progress(&db.pool, 42, 8, Some("snapshot-8"), None, None)
         .await
         .unwrap();
 
@@ -219,6 +437,47 @@ async fn runtime_progress_preserves_operator_target_revision_when_update_omits_i
     assert_eq!(progress.last_journal_seq, 42);
     assert_eq!(progress.last_state_version, 8);
     assert_eq!(progress.last_snapshot_id.as_deref(), Some("snapshot-8"));
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-3")
+    );
+    assert_eq!(progress.active_run_session_id, None);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn runtime_progress_can_clear_active_run_session_id_explicitly() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+    seed_run_session(&db.pool, "run-session-1").await;
+
+    RuntimeProgressRepo
+        .record_progress(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-3"),
+            None,
+        )
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .set_active_run_session_id(&db.pool, "run-session-1")
+        .await
+        .unwrap();
+    RuntimeProgressRepo
+        .clear_active_run_session_id(&db.pool)
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.active_run_session_id, None);
     assert_eq!(
         progress.operator_target_revision.as_deref(),
         Some("targets-rev-3")
@@ -664,6 +923,30 @@ async fn execution_attempt_round_trips_durable_audit_anchor_fields() {
         .await
         .unwrap();
     assert_eq!(rows, vec![row]);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn execution_attempt_rows_allow_optional_run_session_links() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let row = sample_attempt("attempt-live-run-session-link-1", ExecutionMode::Live);
+    ExecutionAttemptRepo.append(&db.pool, &row).await.unwrap();
+
+    let run_session_id: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT run_session_id
+        FROM execution_attempts
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind("attempt-live-run-session-link-1")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(run_session_id, None);
 
     db.cleanup().await;
 }

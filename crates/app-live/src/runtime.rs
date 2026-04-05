@@ -695,6 +695,18 @@ pub(crate) fn persist_operator_target_revision_anchor(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    persist_operator_target_revision_anchor_with_run_session_id(
+        summary,
+        operator_target_revision,
+        None,
+    )
+}
+
+pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
+    summary: &SupervisorSummary,
+    operator_target_revision: Option<&str>,
+    active_run_session_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(operator_target_revision) = operator_target_revision else {
         return Ok(());
     };
@@ -716,6 +728,7 @@ pub(crate) fn persist_operator_target_revision_anchor(
                 })?,
                 summary.published_snapshot_id.as_deref(),
                 Some(operator_target_revision),
+                active_run_session_id,
             )
             .await
             .map_err(Into::into)
@@ -837,22 +850,43 @@ fn durable_shadow_execution_state(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_shadow_execution_records(
     attempts: &[ExecutionAttemptRow],
     artifacts: &[ShadowExecutionArtifactRow],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    persist_shadow_execution_records_with_run_session_id(attempts, artifacts, None)
+}
+
+pub(crate) fn persist_shadow_execution_records_with_run_session_id(
+    attempts: &[ExecutionAttemptRow],
+    artifacts: &[ShadowExecutionArtifactRow],
+    run_session_id: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let attempts = attempts
+        .iter()
+        .map(|attempt| attempt_row_with_run_session_id(attempt, run_session_id))
+        .collect::<Vec<_>>();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        append_shadow_execution_batch(&pool, attempts, artifacts).await?;
+        append_shadow_execution_batch(&pool, &attempts, artifacts).await?;
         Ok(())
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn persist_live_execution_records(
     records: &[NegRiskLiveExecutionRecord],
+) -> Result<(), Box<dyn std::error::Error>> {
+    persist_live_execution_records_with_run_session_id(records, None)
+}
+
+pub(crate) fn persist_live_execution_records_with_run_session_id(
+    records: &[NegRiskLiveExecutionRecord],
+    run_session_id: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -870,22 +904,7 @@ pub(crate) fn persist_live_execution_records(
                         record.attempt_id
                     ))
                 })?;
-            let attempt = ExecutionAttemptRow {
-                attempt_id: record.attempt_id.clone(),
-                plan_id: record.plan_id.clone(),
-                snapshot_id: record.snapshot_id.clone(),
-                route: record.route.clone(),
-                scope: record.scope.clone(),
-                matched_rule_id: record.matched_rule_id.clone(),
-                execution_mode: record.execution_mode,
-                attempt_no: i32::try_from(record.attempt_no).map_err(|_| {
-                    boxed_error(format!(
-                        "live attempt {} attempt_no {} does not fit in i32",
-                        record.attempt_id, record.attempt_no
-                    ))
-                })?,
-                idempotency_key: record.idempotency_key.clone(),
-            };
+            let attempt = execution_attempt_row_for_live_record(record, run_session_id)?;
             ExecutionAttemptRepo.append(&pool, &attempt).await?;
             LiveSubmissionRepo
                 .append(
@@ -914,6 +933,40 @@ pub(crate) fn persist_live_execution_records(
         }
         Ok(())
     })
+}
+
+fn execution_attempt_row_for_live_record(
+    record: &NegRiskLiveExecutionRecord,
+    run_session_id: Option<&str>,
+) -> Result<ExecutionAttemptRow, Box<dyn std::error::Error>> {
+    Ok(ExecutionAttemptRow {
+        attempt_id: record.attempt_id.clone(),
+        plan_id: record.plan_id.clone(),
+        snapshot_id: record.snapshot_id.clone(),
+        route: record.route.clone(),
+        scope: record.scope.clone(),
+        matched_rule_id: record.matched_rule_id.clone(),
+        execution_mode: record.execution_mode,
+        attempt_no: i32::try_from(record.attempt_no).map_err(|_| {
+            boxed_error(format!(
+                "live attempt {} attempt_no {} does not fit in i32",
+                record.attempt_id, record.attempt_no
+            ))
+        })?,
+        idempotency_key: record.idempotency_key.clone(),
+        run_session_id: run_session_id.map(str::to_owned),
+    })
+}
+
+fn attempt_row_with_run_session_id(
+    attempt: &ExecutionAttemptRow,
+    run_session_id: Option<&str>,
+) -> ExecutionAttemptRow {
+    let mut attempt = attempt.clone();
+    if let Some(run_session_id) = run_session_id {
+        attempt.run_session_id = Some(run_session_id.to_owned());
+    }
+    attempt
 }
 
 fn pending_reconcile_anchor_from_row(
@@ -950,11 +1003,14 @@ mod tests {
     use persistence::models::{
         ExecutionAttemptRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
     };
+    use serde_json::json;
 
     use super::{
-        durable_live_execution_records, durable_progress_anchor, durable_shadow_execution_state,
+        attempt_row_with_run_session_id, durable_live_execution_records, durable_progress_anchor,
+        durable_shadow_execution_state, execution_attempt_row_for_live_record,
         validate_operator_target_revision,
     };
+    use crate::negrisk_live::NegRiskLiveExecutionRecord;
 
     #[test]
     fn durable_live_attempt_requires_submission_record() {
@@ -969,6 +1025,7 @@ mod tests {
                 execution_mode: ExecutionMode::Live,
                 attempt_no: 1,
                 idempotency_key: "idem-attempt-live-1".to_owned(),
+                run_session_id: None,
             }],
             BTreeMap::new(),
             &[],
@@ -980,6 +1037,31 @@ mod tests {
                 .contains("missing durable live submission record"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn live_attempt_row_uses_run_session_id_when_provided() {
+        let attempt = execution_attempt_row_for_live_record(
+            &NegRiskLiveExecutionRecord {
+                attempt_id: "attempt-live-1".to_owned(),
+                plan_id: "negrisk-submit-family:family-a".to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                execution_mode: ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: "idem-attempt-live-1".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family-a".to_owned(),
+                matched_rule_id: Some("family-a-live".to_owned()),
+                submission_ref: Some("submission-1".to_owned()),
+                pending_ref: None,
+                artifacts: Vec::new(),
+                order_requests: vec![json!({"submission_ref": "submission-1"})],
+            },
+            Some("run-session-1"),
+        )
+        .unwrap();
+
+        assert_eq!(attempt.run_session_id.as_deref(), Some("run-session-1"));
     }
 
     #[test]
@@ -1011,6 +1093,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: None,
+                active_run_session_id: None,
             }),
             true,
         )
@@ -1029,6 +1112,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: Some("targets-rev-stale".to_owned()),
+                active_run_session_id: None,
             }),
             Some("targets-rev-current"),
             true,
@@ -1058,6 +1142,7 @@ mod tests {
             execution_mode: ExecutionMode::Shadow,
             attempt_no: 1,
             idempotency_key: "idem-attempt-shadow-1".to_owned(),
+            run_session_id: None,
         }];
         let artifacts = vec![ShadowExecutionArtifactRow {
             attempt_id: "attempt-shadow-1".to_owned(),
@@ -1075,6 +1160,27 @@ mod tests {
     }
 
     #[test]
+    fn shadow_attempt_row_uses_run_session_id_when_provided() {
+        let attempt = attempt_row_with_run_session_id(
+            &ExecutionAttemptRow {
+                attempt_id: "attempt-shadow-1".to_owned(),
+                plan_id: "negrisk-submit-family:family-a".to_owned(),
+                snapshot_id: "snapshot-7".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "family-a".to_owned(),
+                matched_rule_id: Some("family-a-live".to_owned()),
+                execution_mode: ExecutionMode::Shadow,
+                attempt_no: 1,
+                idempotency_key: "idem-attempt-shadow-1".to_owned(),
+                run_session_id: None,
+            },
+            Some("run-session-1"),
+        );
+
+        assert_eq!(attempt.run_session_id.as_deref(), Some("run-session-1"));
+    }
+
+    #[test]
     fn durable_shadow_state_requires_artifact_for_every_attempt() {
         let err = durable_shadow_execution_state(
             vec![ExecutionAttemptRow {
@@ -1087,6 +1193,7 @@ mod tests {
                 execution_mode: ExecutionMode::Shadow,
                 attempt_no: 1,
                 idempotency_key: "idem-attempt-shadow-1".to_owned(),
+                run_session_id: None,
             }],
             Vec::new(),
         )

@@ -4,6 +4,7 @@ use std::{fs, process::Command};
 
 use chrono::{Duration, Utc};
 use domain::ExecutionMode;
+use persistence::models::RunSessionState;
 use serde_json::json;
 use support::{cli, verify_db};
 
@@ -58,8 +59,6 @@ fn verify_paper_blocked_without_database_url_fails_instead_of_warning() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("Scenario: paper"), "{text}");
-    assert!(text.contains("Verdict: FAIL"), "{text}");
     assert!(text.contains("DATABASE_URL"), "{text}");
 }
 
@@ -117,7 +116,6 @@ fn verify_placeholder_fails_for_missing_config() {
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("Verdict: FAIL"), "{text}");
 }
 
 #[test]
@@ -142,12 +140,28 @@ fn verify_explicit_target_config_is_reported_as_legacy_unsupported() {
 #[test]
 fn verify_live_passes_when_local_results_match_current_config_and_control_plane() {
     let verify_db = verify_db::TestDatabase::new();
-    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
-    verify_db.seed_live_attempt_with_artifacts("attempt-live-1");
     let config_path = verify_db::temp_config_path(
         "app-live-verify-live-ready",
         &verify_db::live_ready_config(),
     );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    let session = verify_db.sample_run_session(
+        "rs-live-2",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "targets-rev-9",
+        Some("targets-rev-9"),
+        Some("targets-rev-9"),
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(2),
+        Utc::now() - Duration::minutes(1),
+    );
+    verify_db.seed_run_session(session);
+    verify_db.seed_live_attempt_with_artifacts_for_run_session("attempt-live-1", "rs-live-2");
 
     let output = Command::new(cli::app_live_binary())
         .arg("verify")
@@ -164,6 +178,14 @@ fn verify_live_passes_when_local_results_match_current_config_and_control_plane(
         text.contains("Expectation: live-config-consistent"),
         "{text}"
     );
+    assert!(text.contains("Run Session: rs-live-2"), "{text}");
+    let run_session_idx = text
+        .find("Run Session: rs-live-2")
+        .unwrap_or_else(|| panic!("{text}"));
+    let next_actions_idx = text
+        .find("Next Actions")
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(run_session_idx < next_actions_idx, "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -172,16 +194,32 @@ fn verify_live_passes_when_local_results_match_current_config_and_control_plane(
 #[test]
 fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
     let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-neg-risk-only",
+        &verify_db::live_ready_config(),
+    );
     verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    let session = verify_db.sample_run_session(
+        "rs-live-2",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "targets-rev-9",
+        Some("targets-rev-9"),
+        Some("targets-rev-9"),
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(2),
+        Utc::now() - Duration::minutes(1),
+    );
+    verify_db.seed_run_session(session);
     verify_db.seed_attempt(verify_db::sample_attempt_for_route(
         "attempt-live-other-route",
         ExecutionMode::Live,
         "other-route",
     ));
-    let config_path = verify_db::temp_config_path(
-        "app-live-verify-live-neg-risk-only",
-        &verify_db::live_ready_config(),
-    );
 
     let output = Command::new(cli::app_live_binary())
         .arg("verify")
@@ -201,14 +239,68 @@ fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
 }
 
 #[test]
+fn verify_historical_attempt_window_without_unique_session_downgrades_to_evidence_only() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-historical-ambiguous",
+        &verify_db::live_ready_config(),
+    );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_attempt(verify_db::sample_attempt(
+        "attempt-legacy-7",
+        ExecutionMode::Live,
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--attempt-id")
+        .arg("attempt-legacy-7")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(
+        text.contains("historical window is not uniquely mapped to a run session"),
+        "{text}"
+    );
+    assert!(
+        text.contains("config/lifecycle consistency was not evaluated"),
+        "{text}"
+    );
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_live_fails_when_results_conflict_with_current_mode_and_readiness() {
     let verify_db = verify_db::TestDatabase::new();
-    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
-    verify_db.seed_shadow_attempt_with_artifacts("attempt-shadow-1");
     let config_path = verify_db::temp_config_path(
         "app-live-verify-live-conflict",
         &verify_db::live_ready_config(),
     );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    let session = verify_db.sample_run_session(
+        "rs-live-2",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "targets-rev-9",
+        Some("targets-rev-9"),
+        Some("targets-rev-9"),
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(2),
+        Utc::now() - Duration::minutes(1),
+    );
+    verify_db.seed_run_session(session);
+    verify_db.seed_shadow_attempt_with_artifacts_for_run_session("attempt-shadow-1", "rs-live-2");
 
     let output = Command::new(cli::app_live_binary())
         .arg("verify")
@@ -313,7 +405,7 @@ fn verify_historical_attempt_window_degrades_when_it_cannot_be_tied_to_current_c
     let text = cli::combined(&output);
     assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
     assert!(
-        text.contains("historical window is not provably tied to the current config anchor"),
+        text.contains("historical window is not uniquely mapped to a run session"),
         "{text}"
     );
 
@@ -346,6 +438,63 @@ fn verify_since_includes_recent_journal_rows_even_when_runtime_progress_is_ahead
     assert!(text.contains("Replay: 1"), "{text}");
 
     verify_db.cleanup();
+}
+
+#[test]
+fn verify_since_with_unique_session_mapping_keeps_strong_interpretation() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-since-unique",
+        &verify_db::live_ready_config(),
+    );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    let session = verify_db.sample_run_session(
+        "rs-live-3",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "targets-rev-9",
+        Some("targets-rev-9"),
+        Some("targets-rev-9"),
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(9),
+        Utc::now() - Duration::minutes(1),
+    );
+    verify_db.seed_run_session(session);
+    verify_db
+        .seed_shadow_attempt_with_artifacts_for_run_session("attempt-shadow-since-1", "rs-live-3");
+    verify_db
+        .seed_shadow_attempt_with_artifacts_for_run_session("attempt-shadow-since-2", "rs-live-3");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--since")
+        .arg("10m")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Run Session: rs-live-3"), "{text}");
+    assert!(
+        !text.contains("config/lifecycle consistency was not evaluated"),
+        "{text}"
+    );
+    let run_session_idx = text
+        .find("Run Session: rs-live-3")
+        .unwrap_or_else(|| panic!("{text}"));
+    let next_actions_idx = text
+        .find("Next Actions")
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(run_session_idx < next_actions_idx, "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]

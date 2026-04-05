@@ -456,6 +456,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(rendered_operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should persist");
@@ -607,6 +608,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should persist");
@@ -621,6 +623,7 @@ impl TestDatabase {
                     execution_mode: domain::ExecutionMode::Live,
                     attempt_no: 1,
                     idempotency_key: "idem-attempt-live-1".to_owned(),
+                    run_session_id: None,
                 };
                 ExecutionAttemptRepo
                     .append(&self.pool, &attempt)
@@ -663,6 +666,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should persist");
@@ -677,6 +681,7 @@ impl TestDatabase {
                     execution_mode: domain::ExecutionMode::Shadow,
                     attempt_no: 1,
                     idempotency_key: "idem-attempt-shadow-broken-1".to_owned(),
+                    run_session_id: None,
                 };
                 ExecutionAttemptRepo
                     .append(&self.pool, &attempt)

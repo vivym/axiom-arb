@@ -10,14 +10,16 @@ pub mod repos;
 pub use instrumentation::NegRiskPersistenceInstrumentation;
 pub use models::{
     AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-    OperatorTargetAdoptionHistoryRow, RuntimeProgressRow, StoredOrder,
+    OperatorTargetAdoptionHistoryRow, RunSessionRow, RunSessionState, RuntimeProgressRow,
+    StoredOrder,
 };
 pub use repos::{
     append_shadow_execution_batch, persist_discovery_snapshot, reconcile_current_family_view,
     ApprovalRepo, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
-    IdentifierRepo, InventoryRepo, JournalRepo, LiveArtifactRepo, LiveSubmissionRepo,
-    NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo, PendingReconcileRepo,
-    ResolutionRepo, RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
+    IdentifierRepo, InventoryRepo, JournalRepo, LatestRelevantRunSessionQuery, LiveArtifactRepo,
+    LiveSubmissionRepo, NegRiskFamilyRepo, OperatorTargetAdoptionHistoryRepo, OrderRepo,
+    PendingReconcileRepo, ResolutionRepo, RunSessionProjectedRow, RunSessionRepo,
+    RuntimeProgressRepo, ShadowArtifactRepo, SnapshotPublicationRepo,
 };
 
 pub type Result<T> = std::result::Result<T, PersistenceError>;
@@ -50,6 +52,15 @@ pub enum PersistenceError {
     },
     MissingDiscoverySnapshot {
         discovery_revision: i64,
+    },
+    MissingRuntimeProgressRow,
+    MissingRunSessionRow {
+        run_session_id: String,
+    },
+    InvalidRunSessionTransition {
+        run_session_id: String,
+        from_state: String,
+        to_state: String,
     },
     DuplicateExecutionAttempt {
         attempt_id: String,
@@ -135,6 +146,20 @@ impl fmt::Display for PersistenceError {
             Self::MissingDiscoverySnapshot { discovery_revision } => write!(
                 f,
                 "missing neg-risk discovery snapshot for revision {discovery_revision}"
+            ),
+            Self::MissingRuntimeProgressRow => {
+                write!(f, "runtime progress row does not exist")
+            }
+            Self::MissingRunSessionRow { run_session_id } => {
+                write!(f, "run session {run_session_id} does not exist")
+            }
+            Self::InvalidRunSessionTransition {
+                run_session_id,
+                from_state,
+                to_state,
+            } => write!(
+                f,
+                "run session {run_session_id} cannot transition from {from_state} to {to_state}"
             ),
             Self::DuplicateExecutionAttempt { attempt_id } => {
                 write!(f, "execution attempt {attempt_id} already exists")

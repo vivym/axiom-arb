@@ -7,8 +7,12 @@ use std::{
 };
 
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+    models::{
+        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
+        RunSessionRow, RunSessionState,
+    },
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RunSessionRepo,
+    RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -148,6 +152,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(active_operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed");
@@ -202,6 +207,92 @@ impl TestDatabase {
                 )
                 .await
                 .expect("adoptable row should persist");
+        });
+    }
+
+    pub fn seed_runtime_progress(
+        &self,
+        operator_target_revision: Option<&str>,
+        active_run_session_id: Option<&str>,
+    ) {
+        self.runtime.block_on(async {
+            RuntimeProgressRepo
+                .record_progress(
+                    &self.pool,
+                    41,
+                    7,
+                    Some("snapshot-7"),
+                    operator_target_revision,
+                    None,
+                )
+                .await
+                .expect("runtime progress should seed");
+
+            if let Some(active_run_session_id) = active_run_session_id {
+                RuntimeProgressRepo
+                    .set_active_run_session_id(&self.pool, active_run_session_id)
+                    .await
+                    .expect("active run session should seed");
+            }
+        });
+    }
+
+    pub fn seed_run_session(&self, row: RunSessionRow) {
+        self.runtime.block_on(async {
+            RunSessionRepo
+                .create_starting(
+                    &self.pool,
+                    &RunSessionRow {
+                        state: RunSessionState::Starting,
+                        ended_at: None,
+                        exit_status: None,
+                        exit_reason: None,
+                        ..row.clone()
+                    },
+                )
+                .await
+                .expect("run session should seed");
+
+            match row.state {
+                RunSessionState::Starting => {}
+                RunSessionState::Running => {
+                    RunSessionRepo
+                        .mark_running(&self.pool, &row.run_session_id, row.started_at)
+                        .await
+                        .expect("running session should seed");
+                }
+                RunSessionState::Exited => {
+                    RunSessionRepo
+                        .mark_running(&self.pool, &row.run_session_id, row.started_at)
+                        .await
+                        .expect("running session should seed");
+                    RunSessionRepo
+                        .mark_exited(
+                            &self.pool,
+                            &row.run_session_id,
+                            row.ended_at.unwrap_or(row.last_seen_at),
+                            row.exit_status.as_deref().unwrap_or("success"),
+                            row.exit_reason.as_deref(),
+                        )
+                        .await
+                        .expect("exited session should seed");
+                }
+                RunSessionState::Failed => {
+                    RunSessionRepo
+                        .mark_running(&self.pool, &row.run_session_id, row.started_at)
+                        .await
+                        .expect("running session should seed");
+                    RunSessionRepo
+                        .mark_failed(
+                            &self.pool,
+                            &row.run_session_id,
+                            row.ended_at.unwrap_or(row.last_seen_at),
+                            row.exit_reason.as_deref().unwrap_or("seeded failure"),
+                        )
+                        .await
+                        .expect("failed session should seed");
+                }
+            }
         });
     }
 

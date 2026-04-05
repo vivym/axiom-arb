@@ -1,7 +1,11 @@
 use std::{collections::BTreeSet, path::Path};
 
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
-use persistence::connect_pool_from_env;
+use persistence::{
+    connect_pool_from_env, LatestRelevantRunSessionQuery, RunSessionProjectedRow, RunSessionRepo,
+    RuntimeProgressRepo,
+};
+use sha2::{Digest, Sha256};
 use tokio::runtime::Builder;
 
 use super::model::{
@@ -11,9 +15,12 @@ use super::model::{
 use crate::commands::targets::state::load_target_control_plane_state;
 use crate::startup::resolve_startup_targets;
 
+const RUN_SESSION_STALE_AFTER: chrono::Duration = chrono::Duration::minutes(5);
+
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum StatusOutcome {
-    Summary(StatusSummary),
+    Summary(Box<StatusSummary>),
     Deferred(StatusDeferred),
 }
 
@@ -27,42 +34,47 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
     match load_raw_config_from_path(config_path) {
         Ok(raw) => {
             if let Some(legacy_summary) = legacy_explicit_targets_summary_from_raw(&raw) {
-                return StatusOutcome::Summary(legacy_summary);
+                return StatusOutcome::Summary(Box::new(legacy_summary));
+            }
+            if let Some(adopted_summary) = adopted_target_adoption_required_summary_from_raw(&raw) {
+                return StatusOutcome::Summary(Box::new(adopted_summary));
             }
 
             match ValidatedConfig::new(raw) {
                 Ok(validated) => match validated.for_app_live() {
                     Ok(config) => match config.mode() {
-                        RuntimeModeToml::Paper => StatusOutcome::Summary(paper_summary()),
+                        RuntimeModeToml::Paper => StatusOutcome::Summary(Box::new(paper_summary())),
                         RuntimeModeToml::Live => {
                             let smoke_mode = config.real_user_shadow_smoke();
                             match config.target_source().map(|source| source.is_adopted()) {
                                 Some(true) => {
                                     match adopted_summary(config_path, &config, smoke_mode) {
                                         Ok(outcome) => outcome,
-                                        Err(reason) => {
-                                            StatusOutcome::Summary(blocked_summary(reason))
-                                        }
+                                        Err(reason) => StatusOutcome::Summary(Box::new(
+                                            blocked_summary(reason),
+                                        )),
                                     }
                                 }
                                 _ if config.negrisk_targets().iter().next().is_some() => {
-                                    StatusOutcome::Summary(legacy_explicit_targets_summary(
-                                        smoke_mode,
+                                    StatusOutcome::Summary(Box::new(
+                                        legacy_explicit_targets_summary(smoke_mode),
                                     ))
                                 }
-                                _ => StatusOutcome::Summary(blocked_summary(
+                                _ => StatusOutcome::Summary(Box::new(blocked_summary(
                                     "high-level status requires an adopted target source"
                                         .to_owned(),
-                                )),
+                                ))),
                             }
                         }
                     },
-                    Err(error) => StatusOutcome::Summary(blocked_summary(error.to_string())),
+                    Err(error) => {
+                        StatusOutcome::Summary(Box::new(blocked_summary(error.to_string())))
+                    }
                 },
-                Err(error) => StatusOutcome::Summary(blocked_summary(error.to_string())),
+                Err(error) => StatusOutcome::Summary(Box::new(blocked_summary(error.to_string()))),
             }
         }
-        Err(error) => StatusOutcome::Summary(blocked_summary(error.to_string())),
+        Err(error) => StatusOutcome::Summary(Box::new(blocked_summary(error.to_string()))),
     }
 }
 
@@ -77,6 +89,14 @@ fn paper_summary() -> StatusSummary {
                 target_source: None,
                 rollout_state: None,
                 restart_needed: None,
+                relevant_run_session_id: None,
+                relevant_run_state: None,
+                relevant_run_started_at: None,
+                relevant_startup_target_revision: None,
+                conflicting_active_run_session_id: None,
+                conflicting_active_run_state: None,
+                conflicting_active_started_at: None,
+                conflicting_active_startup_target_revision: None,
                 reason: Some("DATABASE_URL is required before paper run can start".to_owned()),
             },
             actions: vec![StatusAction::FixBlockingIssueAndRerunStatus],
@@ -92,6 +112,14 @@ fn paper_summary() -> StatusSummary {
             target_source: None,
             rollout_state: None,
             restart_needed: None,
+            relevant_run_session_id: None,
+            relevant_run_state: None,
+            relevant_run_started_at: None,
+            relevant_startup_target_revision: None,
+            conflicting_active_run_session_id: None,
+            conflicting_active_run_state: None,
+            conflicting_active_started_at: None,
+            conflicting_active_startup_target_revision: None,
             reason: None,
         },
         actions: vec![StatusAction::RunAppLiveRun],
@@ -103,18 +131,75 @@ fn adopted_summary(
     config: &config_schema::AppLiveConfigView<'_>,
     smoke_mode: bool,
 ) -> Result<StatusOutcome, String> {
+    let config_path_string = config_path.display().to_string();
+    let config_fingerprint = config_fingerprint(config_path).map_err(|error| error.to_string())?;
     let runtime = Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    let state = runtime.block_on(async {
-        let pool = connect_pool_from_env()
-            .await
-            .map_err(|error| error.to_string())?;
-        load_target_control_plane_state(&pool, config_path)
-            .await
-            .map_err(|error| error.to_string())
-    })?;
+    let (state, resolved_targets, relevant_run_session, conflicting_active_run_session) =
+        runtime.block_on(async {
+            let pool = connect_pool_from_env()
+                .await
+                .map_err(|error| error.to_string())?;
+            let state = load_target_control_plane_state(&pool, config_path)
+                .await
+                .map_err(|error| error.to_string())?;
+            let resolved_targets = resolve_startup_targets(&pool, config)
+                .await
+                .map_err(|error| error.to_string())?;
+            let family_ids = resolved_targets
+                .targets
+                .targets()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let rollout_state = if rollout_covers_families(config, &family_ids) {
+                Some("ready")
+            } else {
+                Some("required")
+            };
+            let startup_target_revision = resolved_targets
+                .operator_target_revision
+                .clone()
+                .unwrap_or_else(|| resolved_targets.targets.revision().to_owned());
+            let relevant = RunSessionRepo
+                .latest_relevant(
+                    &pool,
+                    LatestRelevantRunSessionQuery {
+                        mode: "live",
+                        config_path: &config_path_string,
+                        config_fingerprint: &config_fingerprint,
+                        configured_target: state.configured_operator_target_revision.as_deref(),
+                        startup_target_revision_at_start: &startup_target_revision,
+                        rollout_state,
+                        stale_after: RUN_SESSION_STALE_AFTER,
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let relevant = match relevant {
+                Some(row) => RunSessionRepo
+                    .load_with_projected_state(&pool, &row.run_session_id, RUN_SESSION_STALE_AFTER)
+                    .await
+                    .map_err(|error| error.to_string())?,
+                None => None,
+            };
+            let conflicting = match RuntimeProgressRepo
+                .current(&pool)
+                .await
+                .map_err(|error| error.to_string())?
+                .and_then(|progress| progress.active_run_session_id)
+            {
+                Some(run_session_id) => RunSessionRepo
+                    .load_with_projected_state(&pool, &run_session_id, RUN_SESSION_STALE_AFTER)
+                    .await
+                    .map_err(|error| error.to_string())?,
+                None => None,
+            };
+
+            Ok::<_, String>((state, resolved_targets, relevant, conflicting))
+        })?;
 
     let mode = if smoke_mode {
         StatusMode::RealUserShadowSmoke
@@ -124,33 +209,21 @@ fn adopted_summary(
     let configured_target = match state.configured_operator_target_revision {
         Some(revision) => revision,
         None => {
-            return Ok(StatusOutcome::Summary(StatusSummary {
+            let mut details =
+                session_details(&relevant_run_session, &conflicting_active_run_session);
+            details.active_target = state.active_operator_target_revision;
+            details.target_source = Some(StatusTargetSource::AdoptedTargets);
+            details.reason =
+                Some("operator_target_revision is required for adopted target source".to_owned());
+
+            return Ok(StatusOutcome::Summary(Box::new(StatusSummary {
                 mode: Some(mode),
                 readiness: StatusReadiness::TargetAdoptionRequired,
-                details: StatusDetails {
-                    configured_target: None,
-                    active_target: state.active_operator_target_revision,
-                    target_source: Some(StatusTargetSource::AdoptedTargets),
-                    rollout_state: None,
-                    restart_needed: None,
-                    reason: Some(
-                        "operator_target_revision is required for adopted target source".to_owned(),
-                    ),
-                },
+                details,
                 actions: vec![StatusAction::RunTargetsAdopt],
-            }));
+            })));
         }
     };
-
-    let resolved_targets = runtime.block_on(async {
-        let pool = connect_pool_from_env()
-            .await
-            .map_err(|error| error.to_string())?;
-        resolve_startup_targets(&pool, config)
-            .await
-            .map_err(|error| error.to_string())
-    })?;
-
     let family_ids = resolved_targets
         .targets
         .targets()
@@ -159,9 +232,9 @@ fn adopted_summary(
         .collect::<BTreeSet<_>>();
 
     if family_ids.is_empty() {
-        return Ok(StatusOutcome::Summary(blocked_summary(
+        return Ok(StatusOutcome::Summary(Box::new(blocked_summary(
             "resolved adopted target set did not contain any families".to_owned(),
-        )));
+        ))));
     }
 
     let rollout_ready = rollout_covers_families(config, &family_ids);
@@ -192,21 +265,22 @@ fn adopted_summary(
         }
         actions.push(StatusAction::PerformControlledRestart);
 
-        return Ok(StatusOutcome::Summary(StatusSummary {
+        let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
+        details.configured_target = Some(configured_target.clone());
+        details.active_target = active_target;
+        details.target_source = Some(StatusTargetSource::AdoptedTargets);
+        details.rollout_state = Some(rollout_state);
+        details.restart_needed = Some(true);
+        details.reason = Some(format!(
+            "configured and active operator_target_revision differ; {rollout_reason}"
+        ));
+
+        return Ok(StatusOutcome::Summary(Box::new(StatusSummary {
             mode: Some(mode),
             readiness: StatusReadiness::RestartRequired,
-            details: StatusDetails {
-                configured_target: Some(configured_target.clone()),
-                active_target,
-                target_source: Some(StatusTargetSource::AdoptedTargets),
-                rollout_state: Some(rollout_state),
-                restart_needed: Some(true),
-                reason: Some(format!(
-                    "configured and active operator_target_revision differ; {rollout_reason}"
-                )),
-            },
+            details,
             actions,
-        }));
+        })));
     }
 
     let (readiness, actions, reason) = if rollout_ready {
@@ -234,19 +308,20 @@ fn adopted_summary(
         (readiness, vec![action], Some(rollout_reason))
     };
 
-    Ok(StatusOutcome::Summary(StatusSummary {
+    let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
+    details.configured_target = Some(configured_target);
+    details.active_target = active_target;
+    details.target_source = Some(StatusTargetSource::AdoptedTargets);
+    details.rollout_state = Some(rollout_state);
+    details.restart_needed = restart_needed;
+    details.reason = reason;
+
+    Ok(StatusOutcome::Summary(Box::new(StatusSummary {
         mode: Some(mode),
         readiness,
-        details: StatusDetails {
-            configured_target: Some(configured_target),
-            active_target,
-            target_source: Some(StatusTargetSource::AdoptedTargets),
-            rollout_state: Some(rollout_state),
-            restart_needed,
-            reason,
-        },
+        details,
         actions,
-    }))
+    })))
 }
 
 fn blocked_summary(reason: String) -> StatusSummary {
@@ -259,6 +334,14 @@ fn blocked_summary(reason: String) -> StatusSummary {
             target_source: None,
             rollout_state: None,
             restart_needed: None,
+            relevant_run_session_id: None,
+            relevant_run_state: None,
+            relevant_run_started_at: None,
+            relevant_startup_target_revision: None,
+            conflicting_active_run_session_id: None,
+            conflicting_active_run_state: None,
+            conflicting_active_started_at: None,
+            conflicting_active_startup_target_revision: None,
             reason: Some(reason),
         },
         actions: vec![StatusAction::FixBlockingIssueAndRerunStatus],
@@ -279,6 +362,14 @@ fn legacy_explicit_targets_summary(smoke_mode: bool) -> StatusSummary {
             target_source: Some(StatusTargetSource::LegacyExplicitTargets),
             rollout_state: None,
             restart_needed: None,
+            relevant_run_session_id: None,
+            relevant_run_state: None,
+            relevant_run_started_at: None,
+            relevant_startup_target_revision: None,
+            conflicting_active_run_session_id: None,
+            conflicting_active_run_state: None,
+            conflicting_active_started_at: None,
+            conflicting_active_startup_target_revision: None,
             reason: Some(
                 "legacy explicit targets are not supported in the high-level status flow"
                     .to_owned(),
@@ -306,6 +397,50 @@ fn legacy_explicit_targets_summary_from_raw(
     ))
 }
 
+fn adopted_target_adoption_required_summary_from_raw(
+    raw: &config_schema::RawAxiomConfig,
+) -> Option<StatusSummary> {
+    if raw.runtime.mode != RuntimeModeToml::Live {
+        return None;
+    }
+
+    let target_source = raw.negrisk.as_ref()?.target_source.as_ref()?;
+    if target_source.source != config_schema::NegRiskTargetSourceKindToml::Adopted {
+        return None;
+    }
+    if target_source.operator_target_revision.is_some() {
+        return None;
+    }
+
+    Some(StatusSummary {
+        mode: Some(if raw.runtime.real_user_shadow_smoke {
+            StatusMode::RealUserShadowSmoke
+        } else {
+            StatusMode::Live
+        }),
+        readiness: StatusReadiness::TargetAdoptionRequired,
+        details: StatusDetails {
+            configured_target: None,
+            active_target: None,
+            target_source: Some(StatusTargetSource::AdoptedTargets),
+            rollout_state: None,
+            restart_needed: None,
+            relevant_run_session_id: None,
+            relevant_run_state: None,
+            relevant_run_started_at: None,
+            relevant_startup_target_revision: None,
+            conflicting_active_run_session_id: None,
+            conflicting_active_run_state: None,
+            conflicting_active_started_at: None,
+            conflicting_active_startup_target_revision: None,
+            reason: Some(
+                "operator_target_revision is required for adopted target source".to_owned(),
+            ),
+        },
+        actions: vec![StatusAction::RunTargetsAdopt],
+    })
+}
+
 fn rollout_covers_families(
     config: &config_schema::AppLiveConfigView<'_>,
     family_ids: &BTreeSet<String>,
@@ -328,6 +463,49 @@ fn rollout_covers_families(
     family_ids
         .iter()
         .all(|family_id| approved.contains(family_id) && ready.contains(family_id))
+}
+
+fn session_details(
+    relevant_run_session: &Option<RunSessionProjectedRow>,
+    conflicting_active_run_session: &Option<RunSessionProjectedRow>,
+) -> StatusDetails {
+    StatusDetails {
+        configured_target: None,
+        active_target: None,
+        target_source: None,
+        rollout_state: None,
+        restart_needed: None,
+        relevant_run_session_id: relevant_run_session
+            .as_ref()
+            .map(|session| session.row.run_session_id.clone()),
+        relevant_run_state: relevant_run_session
+            .as_ref()
+            .map(|session| session.state_label.clone()),
+        relevant_run_started_at: relevant_run_session
+            .as_ref()
+            .map(|session| session.row.started_at),
+        relevant_startup_target_revision: relevant_run_session
+            .as_ref()
+            .map(|session| session.row.startup_target_revision_at_start.clone()),
+        conflicting_active_run_session_id: conflicting_active_run_session
+            .as_ref()
+            .map(|session| session.row.run_session_id.clone()),
+        conflicting_active_run_state: conflicting_active_run_session
+            .as_ref()
+            .map(|session| session.state_label.clone()),
+        conflicting_active_started_at: conflicting_active_run_session
+            .as_ref()
+            .map(|session| session.row.started_at),
+        conflicting_active_startup_target_revision: conflicting_active_run_session
+            .as_ref()
+            .map(|session| session.row.startup_target_revision_at_start.clone()),
+        reason: None,
+    }
+}
+
+fn config_fingerprint(config_path: &Path) -> Result<String, std::io::Error> {
+    let raw = std::fs::read(config_path)?;
+    Ok(format!("{:x}", Sha256::digest(raw)))
 }
 
 #[cfg(test)]

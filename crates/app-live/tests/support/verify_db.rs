@@ -12,12 +12,14 @@ use persistence::{
     models::{
         AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
         ExecutionAttemptRow, JournalEntryInput, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
-        ShadowExecutionArtifactRow,
+        RunSessionRow, RunSessionState, ShadowExecutionArtifactRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
-    JournalRepo, LiveArtifactRepo, LiveSubmissionRepo, RuntimeProgressRepo, ShadowArtifactRepo,
+    JournalRepo, LiveArtifactRepo, LiveSubmissionRepo, RunSessionRepo, RuntimeProgressRepo,
+    ShadowArtifactRepo,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 use super::cli::default_test_database_url;
@@ -156,6 +158,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-verify-7"),
                         Some(active_operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed");
@@ -178,6 +181,7 @@ impl TestDatabase {
                     last_state_version,
                     last_snapshot_id,
                     operator_target_revision,
+                    None,
                 )
                 .await
                 .expect("runtime progress should seed");
@@ -191,6 +195,98 @@ impl TestDatabase {
                 .await
                 .expect("execution attempt should seed");
         });
+    }
+
+    pub fn seed_run_session(&self, row: RunSessionRow) {
+        self.runtime.block_on(async {
+            RunSessionRepo
+                .create_starting(
+                    &self.pool,
+                    &RunSessionRow {
+                        state: RunSessionState::Starting,
+                        ended_at: None,
+                        exit_status: None,
+                        exit_reason: None,
+                        last_seen_at: row.started_at,
+                        ..row.clone()
+                    },
+                )
+                .await
+                .expect("run session should seed as starting");
+
+            match row.state {
+                RunSessionState::Starting => {}
+                RunSessionState::Running => {
+                    RunSessionRepo
+                        .mark_running(&self.pool, &row.run_session_id, row.last_seen_at)
+                        .await
+                        .expect("run session should transition to running");
+                }
+                RunSessionState::Exited => {
+                    RunSessionRepo
+                        .mark_exited(
+                            &self.pool,
+                            &row.run_session_id,
+                            row.ended_at.unwrap_or(row.last_seen_at),
+                            row.exit_status.as_deref().unwrap_or("success"),
+                            row.exit_reason.as_deref(),
+                        )
+                        .await
+                        .expect("run session should transition to exited");
+                }
+                RunSessionState::Failed => {
+                    RunSessionRepo
+                        .mark_failed(
+                            &self.pool,
+                            &row.run_session_id,
+                            row.ended_at.unwrap_or(row.last_seen_at),
+                            row.exit_reason.as_deref().unwrap_or("failed"),
+                        )
+                        .await
+                        .expect("run session should transition to failed");
+                }
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sample_run_session(
+        &self,
+        run_session_id: &str,
+        invoked_by: &str,
+        mode: &str,
+        config_path: &std::path::Path,
+        target_source_kind: &str,
+        startup_target_revision_at_start: &str,
+        configured_operator_target_revision: Option<&str>,
+        active_operator_target_revision_at_start: Option<&str>,
+        rollout_state_at_start: Option<&str>,
+        real_user_shadow_smoke: bool,
+        state: RunSessionState,
+        started_at: DateTime<Utc>,
+        last_seen_at: DateTime<Utc>,
+    ) -> RunSessionRow {
+        RunSessionRow {
+            run_session_id: run_session_id.to_owned(),
+            invoked_by: invoked_by.to_owned(),
+            mode: mode.to_owned(),
+            state,
+            started_at,
+            last_seen_at,
+            ended_at: None,
+            exit_status: None,
+            exit_reason: None,
+            config_path: config_path.display().to_string(),
+            config_fingerprint: config_fingerprint(config_path),
+            target_source_kind: target_source_kind.to_owned(),
+            startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
+            configured_operator_target_revision: configured_operator_target_revision
+                .map(ToOwned::to_owned),
+            active_operator_target_revision_at_start: active_operator_target_revision_at_start
+                .map(ToOwned::to_owned),
+            rollout_state_at_start: rollout_state_at_start.map(ToOwned::to_owned),
+            real_user_shadow_smoke,
+        }
     }
 
     pub fn seed_live_attempt(&self, attempt_id: &str) {
@@ -226,6 +322,21 @@ impl TestDatabase {
 
     pub fn seed_live_attempt_with_artifacts(&self, attempt_id: &str) {
         self.seed_live_attempt(attempt_id);
+        self.seed_live_artifact(sample_live_artifact(attempt_id));
+        self.seed_live_submission(sample_live_submission(
+            attempt_id,
+            &format!("{attempt_id}-submission"),
+        ));
+    }
+
+    pub fn seed_live_attempt_with_artifacts_for_run_session(
+        &self,
+        attempt_id: &str,
+        run_session_id: &str,
+    ) {
+        let mut attempt = sample_attempt(attempt_id, ExecutionMode::Live);
+        attempt.run_session_id = Some(run_session_id.to_owned());
+        self.seed_attempt(attempt);
         self.seed_live_artifact(sample_live_artifact(attempt_id));
         self.seed_live_submission(sample_live_submission(
             attempt_id,
@@ -453,6 +564,7 @@ pub fn sample_attempt_for_route(
         execution_mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 
@@ -498,6 +610,17 @@ impl TestDatabase {
 
     pub fn seed_shadow_attempt_with_artifacts(&self, attempt_id: &str) {
         self.seed_attempt(sample_attempt(attempt_id, ExecutionMode::Shadow));
+        self.seed_shadow_artifact(sample_shadow_artifact(attempt_id));
+    }
+
+    pub fn seed_shadow_attempt_with_artifacts_for_run_session(
+        &self,
+        attempt_id: &str,
+        run_session_id: &str,
+    ) {
+        let mut attempt = sample_attempt(attempt_id, ExecutionMode::Shadow);
+        attempt.run_session_id = Some(run_session_id.to_owned());
+        self.seed_attempt(attempt);
         self.seed_shadow_artifact(sample_shadow_artifact(attempt_id));
     }
 
@@ -597,4 +720,9 @@ fn schema_scoped_database_url(database_url: &str, schema: &str) -> String {
     } else {
         format!("{database_url}?options=-csearch_path%3D{schema}")
     }
+}
+
+fn config_fingerprint(config_path: &std::path::Path) -> String {
+    let raw = fs::read(config_path).expect("config should be readable");
+    format!("{:x}", Sha256::digest(raw))
 }

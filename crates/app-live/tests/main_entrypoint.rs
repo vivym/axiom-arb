@@ -282,6 +282,7 @@ impl TestDatabase {
                         7,
                         Some("snapshot-7"),
                         Some(operator_target_revision),
+                        None,
                     )
                     .await
                     .expect("runtime progress should seed");
@@ -296,6 +297,7 @@ impl TestDatabase {
                     execution_mode: domain::ExecutionMode::Live,
                     attempt_no: 1,
                     idempotency_key: "idem-attempt-live-entrypoint-1".to_owned(),
+                    run_session_id: None,
                 };
                 ExecutionAttemptRepo
                     .append(&self.pool, &attempt)

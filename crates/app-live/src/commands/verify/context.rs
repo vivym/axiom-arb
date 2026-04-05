@@ -5,6 +5,7 @@ use super::{
         VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneRolloutState,
         VerifyControlPlaneTargetSource, VerifyExpectation, VerifyScenario,
     },
+    session::ResolvedVerifySession,
     window::VerifyWindowSelection,
 };
 use crate::commands::status::{
@@ -19,6 +20,7 @@ use crate::commands::status::{
 pub struct VerifyContext {
     pub scenario: VerifyScenario,
     pub expectation: VerifyExpectation,
+    pub config_path: String,
     pub control_plane: VerifyControlPlaneContext,
     pub readiness: Option<StatusReadiness>,
     pub actions: Vec<StatusAction>,
@@ -33,8 +35,8 @@ pub struct ConfigAnchorComparison {
 
 pub fn load(config_path: &Path) -> VerifyContext {
     match evaluate::evaluate(config_path) {
-        StatusOutcome::Summary(summary) => from_summary(summary),
-        StatusOutcome::Deferred(deferred) => from_deferred(deferred),
+        StatusOutcome::Summary(summary) => from_summary(config_path, *summary),
+        StatusOutcome::Deferred(deferred) => from_deferred(config_path, deferred),
     }
 }
 
@@ -53,8 +55,18 @@ pub fn parse_expectation_override(value: &str) -> Result<Option<VerifyExpectatio
 pub fn compare_window_to_current_config_anchor(
     _context: &VerifyContext,
     window: &VerifyWindowSelection,
+    resolved_session: &ResolvedVerifySession,
 ) -> ConfigAnchorComparison {
     if !window.is_historical_explicit() {
+        return ConfigAnchorComparison {
+            comparable: true,
+            reason: None,
+        };
+    }
+
+    if resolved_session.historical_window_unique
+        && resolved_session.historical_window_session.is_some()
+    {
         return ConfigAnchorComparison {
             comparable: true,
             reason: None,
@@ -64,12 +76,13 @@ pub fn compare_window_to_current_config_anchor(
     ConfigAnchorComparison {
         comparable: false,
         reason: Some(
-            "historical window is not provably tied to the current config anchor".to_owned(),
+            "historical window is not uniquely mapped to a run session; config/lifecycle consistency was not evaluated"
+                .to_owned(),
         ),
     }
 }
 
-fn from_summary(summary: StatusSummary) -> VerifyContext {
+fn from_summary(config_path: &Path, summary: StatusSummary) -> VerifyContext {
     let scenario = map_scenario(summary.mode);
     let expectation = derive_auto_expectation(summary.mode, summary.readiness);
     let readiness = summary.readiness;
@@ -81,11 +94,13 @@ fn from_summary(summary: StatusSummary) -> VerifyContext {
         rollout_state,
         restart_needed,
         reason,
+        ..
     } = summary.details;
 
     VerifyContext {
         scenario,
         expectation,
+        config_path: config_path.display().to_string(),
         control_plane: VerifyControlPlaneContext {
             mode: summary.mode.map(map_mode),
             target_source: target_source.map(map_target_source),
@@ -93,6 +108,8 @@ fn from_summary(summary: StatusSummary) -> VerifyContext {
             active_target,
             restart_needed,
             rollout_state: rollout_state.map(map_rollout_state),
+            run_session_id: summary.details.relevant_run_session_id,
+            run_session_state: summary.details.relevant_run_state,
         },
         readiness: Some(readiness),
         actions,
@@ -100,12 +117,15 @@ fn from_summary(summary: StatusSummary) -> VerifyContext {
     }
 }
 
-fn from_deferred(deferred: StatusDeferred) -> VerifyContext {
+fn from_deferred(config_path: &Path, deferred: StatusDeferred) -> VerifyContext {
     VerifyContext {
         scenario: map_scenario(Some(deferred.mode)),
         expectation: derive_auto_expectation(Some(deferred.mode), StatusReadiness::Blocked),
+        config_path: config_path.display().to_string(),
         control_plane: VerifyControlPlaneContext {
             mode: Some(map_mode(deferred.mode)),
+            run_session_id: None,
+            run_session_state: None,
             ..VerifyControlPlaneContext::default()
         },
         readiness: Some(StatusReadiness::Blocked),
@@ -192,6 +212,7 @@ mod tests {
         let context = VerifyContext {
             scenario: crate::commands::verify::model::VerifyScenario::Live,
             expectation: VerifyExpectation::LiveConfigConsistent,
+            config_path: "config/live.toml".to_owned(),
             control_plane: VerifyControlPlaneContext {
                 mode: Some(VerifyControlPlaneMode::Live),
                 target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),
@@ -199,18 +220,28 @@ mod tests {
                 active_target: Some("targets-rev-9".to_owned()),
                 restart_needed: Some(false),
                 rollout_state: Some(VerifyControlPlaneRolloutState::Ready),
+                run_session_id: Some("rs-live-1".to_owned()),
+                run_session_state: Some("running".to_owned()),
             },
             readiness: Some(crate::commands::status::model::StatusReadiness::LiveConfigReady),
             actions: vec![crate::commands::status::model::StatusAction::RunDoctor],
             reason: None,
         };
+        let resolved_session = crate::commands::verify::session::ResolvedVerifySession {
+            relevant_session: None,
+            historical_window_session: None,
+            historical_window_unique: false,
+        };
         let window = VerifyWindowSelection::ExplicitAttemptId("attempt-old".to_owned());
 
-        let comparison = compare_window_to_current_config_anchor(&context, &window);
+        let comparison =
+            compare_window_to_current_config_anchor(&context, &window, &resolved_session);
         assert!(!comparison.comparable);
         assert_eq!(
             comparison.reason.as_deref(),
-            Some("historical window is not provably tied to the current config anchor")
+            Some(
+                "historical window is not uniquely mapped to a run session; config/lifecycle consistency was not evaluated"
+            )
         );
     }
 }

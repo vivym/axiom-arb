@@ -28,6 +28,13 @@ Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.
 
 If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
 
+The runtime now records a durable `run_session`, so the operator-facing lifecycle summary is session-aware instead of purely heuristic:
+
+- `status` shows the latest relevant run session for this smoke config.
+- `status` also shows a conflicting active run session when the active daemon is stale or points at a different startup anchor.
+- `stale` is projected from freshness; it is not stored as a separate durable truth value.
+- `verify` defaults to the latest relevant run session and only falls back to evidence-only when a historical window cannot be tied to a single session.
+
 Before running the smoke with the lower-level path, inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
 
 ```bash
@@ -107,7 +114,7 @@ Interpret the verifier like this:
   - no credible run evidence exists
   - or forbidden live side effects were observed
 
-`verify` is intentionally local-only. It does not do venue probes and it does not replace `doctor`; it validates what the latest local smoke run actually produced.
+`verify` is intentionally local-only. It does not do venue probes and it does not replace `doctor`; it validates what the latest local smoke run actually produced. Its `Run Session` line is the concrete lifecycle anchor for the verdict and should appear before `Next Actions`.
 
 Interpret the ending of the `doctor` report like this:
 
@@ -188,6 +195,7 @@ Treat `app-live verify --config config/axiom-arb.local.toml` as the primary verd
 
 - `PASS`
   - smoke-only behavior is evidenced locally
+  - the report names the latest relevant `Run session`
 - `PASS WITH WARNINGS`
   - smoke executed, but rollout/readiness or replay strength remains incomplete
 - `FAIL`

@@ -273,6 +273,47 @@ pub struct RuntimeProgressRow {
     pub last_state_version: i64,
     pub last_snapshot_id: Option<String>,
     pub operator_target_revision: Option<String>,
+    pub active_run_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunSessionState {
+    Starting,
+    Running,
+    Exited,
+    Failed,
+}
+
+impl RunSessionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Exited => "exited",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSessionRow {
+    pub run_session_id: String,
+    pub invoked_by: String,
+    pub mode: String,
+    pub state: RunSessionState,
+    pub started_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub exit_status: Option<String>,
+    pub exit_reason: Option<String>,
+    pub config_path: String,
+    pub config_fingerprint: String,
+    pub target_source_kind: String,
+    pub startup_target_revision_at_start: String,
+    pub configured_operator_target_revision: Option<String>,
+    pub active_operator_target_revision_at_start: Option<String>,
+    pub rollout_state_at_start: Option<String>,
+    pub real_user_shadow_smoke: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,6 +372,7 @@ pub struct ExecutionAttemptRow {
     pub execution_mode: ExecutionMode,
     pub attempt_no: i32,
     pub idempotency_key: String,
+    pub run_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

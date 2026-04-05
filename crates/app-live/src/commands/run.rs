@@ -5,12 +5,12 @@ use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
 use crate::cli::RunArgs;
+use crate::daemon::run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented;
 use crate::{
     build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
-    load_real_user_shadow_smoke_config,
-    run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,
-    run_paper_instrumented, startup::resolve_startup_targets, AppInstrumentation, ConfigError,
-    LocalSignerConfig, NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
+    load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
+    startup::resolve_startup_targets, AppInstrumentation, ConfigError, LocalSignerConfig,
+    NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
 };
 
 pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
@@ -18,6 +18,20 @@ pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
 }
 
 pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Error>> {
+    run_from_config_path_for_source(config_path, RunInvocationSource::Run)
+}
+
+pub(crate) fn run_from_config_path_with_invoked_by(
+    config_path: &Path,
+    invoked_by: &'static str,
+) -> Result<(), Box<dyn Error>> {
+    run_from_config_path_for_source(config_path, RunInvocationSource::from_label(invoked_by)?)
+}
+
+fn run_from_config_path_for_source(
+    config_path: &Path,
+    invoked_by: RunInvocationSource,
+) -> Result<(), Box<dyn Error>> {
     let observability = bootstrap_observability("app-live");
     let bootstrap_span = tracing::info_span!(span_names::APP_BOOTSTRAP);
     let _bootstrap_guard = bootstrap_span.enter();
@@ -26,66 +40,112 @@ pub(crate) fn run_from_config_path(config_path: &Path) -> Result<(), Box<dyn Err
     let config = validated.for_app_live()?;
     let real_user_shadow_smoke = load_real_user_shadow_smoke_config(&config)?;
     require_database_url_env()?;
+    let run_session = RunSessionHandle::create_starting(config_path, &config, invoked_by.as_str())?;
     let instrumentation = AppInstrumentation::enabled(observability.recorder());
-    let result = match config.mode() {
-        RuntimeModeToml::Paper => {
-            let source = StaticSnapshotSource::empty();
-            run_paper_instrumented(&source, instrumentation.clone())
-        }
-        RuntimeModeToml::Live => {
-            let resolved_targets = load_resolved_targets_from_config(&config)?;
-            let neg_risk_live_targets = resolved_targets.targets;
-            let neg_risk_live_approved_families = rollout_approved_families(&config);
-            let neg_risk_live_ready_families = rollout_ready_families(&config);
-            let signer_config = if real_user_shadow_smoke.is_some()
-                || live_neg_risk_work_requested(
+    let result = (|| -> Result<crate::runtime::AppRunResult, Box<dyn Error>> {
+        match config.mode() {
+            RuntimeModeToml::Paper => {
+                let source = StaticSnapshotSource::empty();
+                Ok(run_paper_instrumented(&source, instrumentation.clone()))
+            }
+            RuntimeModeToml::Live => {
+                let resolved_targets = load_resolved_targets_from_config(&config)?;
+                let neg_risk_live_targets = resolved_targets.targets;
+                let neg_risk_live_approved_families = rollout_approved_families(&config);
+                let neg_risk_live_ready_families = rollout_ready_families(&config);
+                let signer_config = if real_user_shadow_smoke.is_some()
+                    || live_neg_risk_work_requested(
+                        &neg_risk_live_targets,
+                        &neg_risk_live_approved_families,
+                        &neg_risk_live_ready_families,
+                    ) {
+                    Some(LocalSignerConfig::try_from(&config)?)
+                } else {
+                    None
+                };
+                let source = match real_user_shadow_smoke.as_ref() {
+                    Some(smoke) => SmokeSafeStartupSource::RealUserShadowSmoke(Box::new(
+                        build_real_user_shadow_smoke_sources(
+                            smoke.source_config.clone(),
+                            signer_config
+                                .clone()
+                                .expect("smoke startup should require signer config"),
+                            run_session.run_session_id(),
+                        )
+                        .map_err(|error| {
+                            ConfigError::InvalidPolymarketSourceConfig {
+                                value: config_path.display().to_string(),
+                                message: error,
+                            }
+                        })?,
+                    )),
+                    None => SmokeSafeStartupSource::Static(StaticSnapshotSource::empty()),
+                };
+
+                if live_neg_risk_work_requested(
                     &neg_risk_live_targets,
                     &neg_risk_live_approved_families,
                     &neg_risk_live_ready_families,
                 ) {
-                Some(LocalSignerConfig::try_from(&config)?)
-            } else {
-                None
-            };
-            let source = match real_user_shadow_smoke.as_ref() {
-                Some(smoke) => SmokeSafeStartupSource::RealUserShadowSmoke(Box::new(
-                    build_real_user_shadow_smoke_sources(
-                        smoke.source_config.clone(),
-                        signer_config
-                            .clone()
-                            .expect("smoke startup should require signer config"),
-                    )
-                    .map_err(|error| {
-                        ConfigError::InvalidPolymarketSourceConfig {
-                            value: config_path.display().to_string(),
-                            message: error,
-                        }
-                    })?,
-                )),
-                None => SmokeSafeStartupSource::Static(StaticSnapshotSource::empty()),
-            };
+                    let _ = signer_config;
+                }
 
-            if live_neg_risk_work_requested(
-                &neg_risk_live_targets,
-                &neg_risk_live_approved_families,
-                &neg_risk_live_ready_families,
-            ) {
-                let _ = signer_config;
+                run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented(
+                    &source,
+                    instrumentation,
+                    neg_risk_live_targets,
+                    neg_risk_live_approved_families,
+                    neg_risk_live_ready_families,
+                    real_user_shadow_smoke,
+                    Some(run_session.run_session_id()),
+                )
             }
-
-            run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented(
-                &source,
-                instrumentation,
-                neg_risk_live_targets,
-                neg_risk_live_approved_families,
-                neg_risk_live_ready_families,
-                real_user_shadow_smoke,
-            )?
         }
-    };
-    emit_bootstrap_completion_observability(&observability.recorder(), &result);
+    })();
 
-    Ok(())
+    match result {
+        Ok(result) => {
+            run_session.mark_running()?;
+            run_session.refresh_last_seen()?;
+            run_session.mark_exited()?;
+            emit_bootstrap_completion_observability(&observability.recorder(), &result);
+            Ok(())
+        }
+        Err(error) => {
+            run_session.mark_failed(&error.to_string())?;
+            Err(error)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunInvocationSource {
+    Run,
+    Bootstrap,
+    Apply,
+}
+
+impl RunInvocationSource {
+    fn from_label(label: &'static str) -> Result<Self, Box<dyn Error>> {
+        match label {
+            "run" => Ok(Self::Run),
+            "bootstrap" => Ok(Self::Bootstrap),
+            "apply" => Ok(Self::Apply),
+            other => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported run invocation source: {other}"),
+            )
+            .into()),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Bootstrap => "bootstrap",
+            Self::Apply => "apply",
+        }
+    }
 }
 
 fn require_database_url_env() -> Result<(), Box<dyn Error>> {

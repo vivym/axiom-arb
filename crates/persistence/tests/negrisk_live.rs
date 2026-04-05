@@ -91,6 +91,7 @@ fn sample_attempt(attempt_id: &str, mode: ExecutionMode, plan_id: &str) -> Execu
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 
@@ -269,6 +270,7 @@ async fn legacy_negrisk_live_attempts_are_backfilled_from_plan_id() {
             execution_mode: ExecutionMode::Live,
             attempt_no: 1,
             idempotency_key: "idem-legacy-live-1".to_owned(),
+            run_session_id: None,
         }]
     );
 

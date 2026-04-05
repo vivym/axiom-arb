@@ -124,8 +124,12 @@ fn real_user_shadow_smoke_source_bundle_carries_source_and_signer_configs() {
         .expect("smoke should be enabled");
     let signer = LocalSignerConfig::try_from(&config).expect("signer config should parse");
 
-    let sources = build_real_user_shadow_smoke_sources(smoke.source_config.clone(), signer.clone())
-        .expect("source bundle should build");
+    let sources = build_real_user_shadow_smoke_sources(
+        smoke.source_config.clone(),
+        signer.clone(),
+        "run-session-77",
+    )
+    .expect("source bundle should build");
 
     assert_eq!(sources.source_config, smoke.source_config);
     assert_eq!(sources.signer_config, signer);

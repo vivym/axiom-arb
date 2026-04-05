@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use domain::{
@@ -16,8 +16,8 @@ use crate::{
         InventoryBucketRow, JournalEntryInput, JournalEntryRow, LiveExecutionArtifactRow,
         LiveSubmissionRecordRow, NegRiskDiscoverySnapshotInput, NegRiskFamilyMemberRow,
         NegRiskFamilyValidationRow, NewOrderRow, OperatorTargetAdoptionHistoryRow, OrderRow,
-        PendingReconcileRow, ResolutionStateRow, RuntimeProgressRow, ShadowExecutionArtifactRow,
-        SnapshotPublicationRow, StoredOrder,
+        PendingReconcileRow, ResolutionStateRow, RunSessionRow, RunSessionState,
+        RuntimeProgressRow, ShadowExecutionArtifactRow, SnapshotPublicationRow, StoredOrder,
     },
     PersistenceError, Result,
 };
@@ -1554,6 +1554,545 @@ const RUNTIME_PROGRESS_KEY: &str = "default";
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RuntimeProgressRepo;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSessionProjectedRow {
+    pub row: RunSessionRow,
+    pub state_label: String,
+    pub is_stale: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LatestRelevantRunSessionQuery<'a> {
+    pub mode: &'a str,
+    pub config_path: &'a str,
+    pub config_fingerprint: &'a str,
+    pub configured_target: Option<&'a str>,
+    pub startup_target_revision_at_start: &'a str,
+    pub rollout_state: Option<&'a str>,
+    pub stale_after: chrono::Duration,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RunSessionRepo;
+
+#[derive(Debug, Clone)]
+struct RunSessionTransition<'a> {
+    run_session_id: &'a str,
+    allowed_from: &'a [RunSessionState],
+    to_state: RunSessionState,
+    changed_at: DateTime<Utc>,
+    exit_status: Option<&'a str>,
+    exit_reason: Option<&'a str>,
+}
+
+impl RunSessionRepo {
+    pub async fn create_starting(&self, pool: &PgPool, row: &RunSessionRow) -> Result<()> {
+        if row.state != RunSessionState::Starting {
+            return Err(PersistenceError::invalid_value(
+                "run_session.state",
+                row.state.as_str(),
+            ));
+        }
+        if row.ended_at.is_some() || row.exit_status.is_some() || row.exit_reason.is_some() {
+            return Err(PersistenceError::invalid_value(
+                "run_session.starting_payload",
+                "terminal fields must be empty for starting sessions",
+            ));
+        }
+        match row.target_source_kind.as_str() {
+            "adopted" if row.configured_operator_target_revision.is_none() => {
+                return Err(PersistenceError::invalid_value(
+                    "run_session.configured_operator_target_revision",
+                    "adopted sessions require configured operator target revision",
+                ));
+            }
+            "explicit" | "adopted" => {}
+            other => {
+                return Err(PersistenceError::invalid_value(
+                    "run_session.target_source_kind",
+                    other,
+                ));
+            }
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO run_sessions (
+                run_session_id,
+                invoked_by,
+                mode,
+                state,
+                started_at,
+                last_seen_at,
+                ended_at,
+                exit_status,
+                exit_reason,
+                config_path,
+                config_fingerprint,
+                target_source_kind,
+                startup_target_revision_at_start,
+                configured_operator_target_revision,
+                active_operator_target_revision_at_start,
+                rollout_state_at_start,
+                real_user_shadow_smoke
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9, $10, $11, $12, $13, $14
+            )
+            "#,
+        )
+        .bind(&row.run_session_id)
+        .bind(&row.invoked_by)
+        .bind(&row.mode)
+        .bind(row.state.as_str())
+        .bind(row.started_at)
+        .bind(row.last_seen_at)
+        .bind(&row.config_path)
+        .bind(&row.config_fingerprint)
+        .bind(&row.target_source_kind)
+        .bind(&row.startup_target_revision_at_start)
+        .bind(&row.configured_operator_target_revision)
+        .bind(&row.active_operator_target_revision_at_start)
+        .bind(&row.rollout_state_at_start)
+        .bind(row.real_user_shadow_smoke)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn mark_running(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        seen_at: DateTime<Utc>,
+    ) -> Result<()> {
+        self.transition_active_state(
+            pool,
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting],
+                to_state: RunSessionState::Running,
+                changed_at: seen_at,
+                exit_status: None,
+                exit_reason: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn mark_exited(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        ended_at: DateTime<Utc>,
+        exit_status: &str,
+        exit_reason: Option<&str>,
+    ) -> Result<()> {
+        self.transition_active_state(
+            pool,
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting, RunSessionState::Running],
+                to_state: RunSessionState::Exited,
+                changed_at: ended_at,
+                exit_status: Some(exit_status),
+                exit_reason,
+            },
+        )
+        .await
+    }
+
+    pub async fn mark_failed(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        ended_at: DateTime<Utc>,
+        exit_reason: &str,
+    ) -> Result<()> {
+        self.transition_active_state(
+            pool,
+            RunSessionTransition {
+                run_session_id,
+                allowed_from: &[RunSessionState::Starting, RunSessionState::Running],
+                to_state: RunSessionState::Failed,
+                changed_at: ended_at,
+                exit_status: Some("failed"),
+                exit_reason: Some(exit_reason),
+            },
+        )
+        .await
+    }
+
+    pub async fn refresh_last_seen(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        seen_at: DateTime<Utc>,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE run_sessions
+            SET last_seen_at = GREATEST(last_seen_at, $2)
+            WHERE run_session_id = $1
+              AND state IN ('starting', 'running')
+            "#,
+        )
+        .bind(run_session_id)
+        .bind(seen_at)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return self
+                .classify_run_session_update_failure(pool, run_session_id, "refresh_last_seen")
+                .await;
+        }
+
+        Ok(())
+    }
+
+    pub async fn get(&self, pool: &PgPool, run_session_id: &str) -> Result<Option<RunSessionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                run_session_id,
+                invoked_by,
+                mode,
+                state,
+                started_at,
+                last_seen_at,
+                ended_at,
+                exit_status,
+                exit_reason,
+                config_path,
+                config_fingerprint,
+                target_source_kind,
+                startup_target_revision_at_start,
+                configured_operator_target_revision,
+                active_operator_target_revision_at_start,
+                rollout_state_at_start,
+                real_user_shadow_smoke
+            FROM run_sessions
+            WHERE run_session_id = $1
+            "#,
+        )
+        .bind(run_session_id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_run_session_row).transpose()
+    }
+
+    pub async fn load_with_projected_state(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        stale_after: chrono::Duration,
+    ) -> Result<Option<RunSessionProjectedRow>> {
+        let Some(row) = self.get(pool, run_session_id).await? else {
+            return Ok(None);
+        };
+
+        Ok(Some(project_run_session_state(row, stale_after)))
+    }
+
+    pub async fn latest_relevant(
+        &self,
+        pool: &PgPool,
+        query: LatestRelevantRunSessionQuery<'_>,
+    ) -> Result<Option<RunSessionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                run_session_id,
+                invoked_by,
+                mode,
+                state,
+                started_at,
+                last_seen_at,
+                ended_at,
+                exit_status,
+                exit_reason,
+                config_path,
+                config_fingerprint,
+                target_source_kind,
+                startup_target_revision_at_start,
+                configured_operator_target_revision,
+                active_operator_target_revision_at_start,
+                rollout_state_at_start,
+                real_user_shadow_smoke
+            FROM run_sessions
+            WHERE mode = $1
+              AND config_path = $2
+              AND config_fingerprint = $3
+              AND configured_operator_target_revision IS NOT DISTINCT FROM $4
+              AND startup_target_revision_at_start = $5
+              AND rollout_state_at_start IS NOT DISTINCT FROM $6
+            ORDER BY
+                CASE state
+                    WHEN 'running'
+                        THEN CASE
+                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 0
+                            ELSE 3
+                        END
+                    WHEN 'starting'
+                        THEN CASE
+                            WHEN last_seen_at > NOW() - ($7 * INTERVAL '1 second') THEN 1
+                            ELSE 3
+                        END
+                    WHEN 'exited' THEN 2
+                    WHEN 'failed' THEN 2
+                    ELSE 4
+                END,
+                COALESCE(ended_at, started_at) DESC,
+                started_at DESC,
+                run_session_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(query.mode)
+        .bind(query.config_path)
+        .bind(query.config_fingerprint)
+        .bind(query.configured_target)
+        .bind(query.startup_target_revision_at_start)
+        .bind(query.rollout_state)
+        .bind(query.stale_after.num_seconds())
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_run_session_row).transpose()
+    }
+
+    pub async fn conflicting_active_for_run_session(
+        &self,
+        pool: &PgPool,
+        active_run_session_id: &str,
+    ) -> Result<Option<RunSessionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                run_session_id,
+                invoked_by,
+                mode,
+                state,
+                started_at,
+                last_seen_at,
+                ended_at,
+                exit_status,
+                exit_reason,
+                config_path,
+                config_fingerprint,
+                target_source_kind,
+                startup_target_revision_at_start,
+                configured_operator_target_revision,
+                active_operator_target_revision_at_start,
+                rollout_state_at_start,
+                real_user_shadow_smoke
+            FROM run_sessions
+            WHERE run_session_id = $1
+              AND state IN ('starting', 'running')
+            "#,
+        )
+        .bind(active_run_session_id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_run_session_row).transpose()
+    }
+
+    pub async fn resolve_unique_for_attempt_id(
+        &self,
+        pool: &PgPool,
+        attempt_id: &str,
+    ) -> Result<Option<RunSessionRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                rs.run_session_id,
+                rs.invoked_by,
+                rs.mode,
+                rs.state,
+                rs.started_at,
+                rs.last_seen_at,
+                rs.ended_at,
+                rs.exit_status,
+                rs.exit_reason,
+                rs.config_path,
+                rs.config_fingerprint,
+                rs.target_source_kind,
+                rs.startup_target_revision_at_start,
+                rs.configured_operator_target_revision,
+                rs.active_operator_target_revision_at_start,
+                rs.rollout_state_at_start,
+                rs.real_user_shadow_smoke
+            FROM execution_attempts ea
+            JOIN run_sessions rs
+              ON rs.run_session_id = ea.run_session_id
+            WHERE ea.attempt_id = $1
+            "#,
+        )
+        .bind(attempt_id)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_run_session_row).transpose()
+    }
+
+    pub async fn resolve_unique_for_since(
+        &self,
+        pool: &PgPool,
+        since: DateTime<Utc>,
+    ) -> Result<Option<RunSessionRow>> {
+        let attempts = ExecutionAttemptRepo.list_created_since(pool, since).await?;
+        let run_session_ids = attempts
+            .iter()
+            .filter_map(|row| row.attempt.run_session_id.as_deref())
+            .collect::<BTreeSet<_>>();
+
+        if run_session_ids.len() == 1 {
+            return self.get(pool, run_session_ids.iter().next().unwrap()).await;
+        }
+
+        if !run_session_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let journal_session_ids = JournalRepo
+            .list_since(pool, since)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                if row.source_session_id.is_empty() {
+                    None
+                } else {
+                    Some(row.source_session_id)
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        if journal_session_ids.len() == 1 {
+            return self
+                .get(pool, journal_session_ids.iter().next().unwrap())
+                .await;
+        }
+
+        Ok(None)
+    }
+
+    pub async fn resolve_unique_for_seq_range(
+        &self,
+        pool: &PgPool,
+        from_seq: i64,
+        to_seq: Option<i64>,
+    ) -> Result<Option<RunSessionRow>> {
+        let journal_session_ids = JournalRepo
+            .list_range(pool, from_seq, to_seq)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                if row.source_session_id.is_empty() {
+                    None
+                } else {
+                    Some(row.source_session_id)
+                }
+            })
+            .collect::<BTreeSet<_>>();
+
+        if journal_session_ids.len() == 1 {
+            return self
+                .get(pool, journal_session_ids.iter().next().unwrap())
+                .await;
+        }
+
+        Ok(None)
+    }
+
+    async fn transition_active_state(
+        &self,
+        pool: &PgPool,
+        transition: RunSessionTransition<'_>,
+    ) -> Result<()> {
+        let is_terminal = matches!(
+            transition.to_state,
+            RunSessionState::Exited | RunSessionState::Failed
+        );
+        let allowed_from_labels: Vec<&str> = transition
+            .allowed_from
+            .iter()
+            .map(RunSessionState::as_str)
+            .collect();
+        let result = sqlx::query(
+            r#"
+            UPDATE run_sessions
+            SET state = $2,
+                last_seen_at = GREATEST(last_seen_at, $3),
+                ended_at = CASE WHEN $4 THEN $3 ELSE NULL END,
+                exit_status = $5,
+                exit_reason = $6
+            WHERE run_session_id = $1
+              AND state = ANY($7)
+            "#,
+        )
+        .bind(transition.run_session_id)
+        .bind(transition.to_state.as_str())
+        .bind(transition.changed_at)
+        .bind(is_terminal)
+        .bind(transition.exit_status)
+        .bind(transition.exit_reason)
+        .bind(&allowed_from_labels)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return self
+                .classify_run_session_update_failure(
+                    pool,
+                    transition.run_session_id,
+                    transition.to_state.as_str(),
+                )
+                .await;
+        }
+
+        Ok(())
+    }
+
+    async fn current_state(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+    ) -> Result<Option<RunSessionState>> {
+        let state = sqlx::query_scalar::<_, String>(
+            "SELECT state FROM run_sessions WHERE run_session_id = $1",
+        )
+        .bind(run_session_id)
+        .fetch_optional(pool)
+        .await?;
+
+        state
+            .map(|value| run_session_state_from_str(&value))
+            .transpose()
+    }
+
+    async fn classify_run_session_update_failure(
+        &self,
+        pool: &PgPool,
+        run_session_id: &str,
+        to_state: &str,
+    ) -> Result<()> {
+        match self.current_state(pool, run_session_id).await? {
+            Some(current_state) => Err(PersistenceError::InvalidRunSessionTransition {
+                run_session_id: run_session_id.to_owned(),
+                from_state: current_state.as_str().to_owned(),
+                to_state: to_state.to_owned(),
+            }),
+            None => Err(PersistenceError::MissingRunSessionRow {
+                run_session_id: run_session_id.to_owned(),
+            }),
+        }
+    }
+}
+
 impl RuntimeProgressRepo {
     pub async fn record_progress(
         &self,
@@ -1562,6 +2101,7 @@ impl RuntimeProgressRepo {
         last_state_version: i64,
         last_snapshot_id: Option<&str>,
         operator_target_revision: Option<&str>,
+        active_run_session_id: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
             r#"
@@ -1570,13 +2110,18 @@ impl RuntimeProgressRepo {
                 last_journal_seq,
                 last_state_version,
                 last_snapshot_id,
+                active_run_session_id,
                 operator_target_revision
             )
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (progress_key) DO UPDATE
             SET last_journal_seq = EXCLUDED.last_journal_seq,
                 last_state_version = EXCLUDED.last_state_version,
                 last_snapshot_id = EXCLUDED.last_snapshot_id,
+                active_run_session_id = COALESCE(
+                    EXCLUDED.active_run_session_id,
+                    runtime_apply_progress.active_run_session_id
+                ),
                 operator_target_revision = COALESCE(
                     EXCLUDED.operator_target_revision,
                     runtime_apply_progress.operator_target_revision
@@ -1588,9 +2133,55 @@ impl RuntimeProgressRepo {
         .bind(last_journal_seq)
         .bind(last_state_version)
         .bind(last_snapshot_id)
+        .bind(active_run_session_id)
         .bind(operator_target_revision)
         .execute(pool)
         .await?;
+
+        Ok(())
+    }
+
+    pub async fn set_active_run_session_id(
+        &self,
+        pool: &PgPool,
+        active_run_session_id: &str,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE runtime_apply_progress
+            SET active_run_session_id = $2,
+                updated_at = NOW()
+            WHERE progress_key = $1
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .bind(active_run_session_id)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(PersistenceError::MissingRuntimeProgressRow);
+        }
+
+        Ok(())
+    }
+
+    pub async fn clear_active_run_session_id(&self, pool: &PgPool) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+            UPDATE runtime_apply_progress
+            SET active_run_session_id = NULL,
+                updated_at = NOW()
+            WHERE progress_key = $1
+            "#,
+        )
+        .bind(RUNTIME_PROGRESS_KEY)
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(PersistenceError::MissingRuntimeProgressRow);
+        }
 
         Ok(())
     }
@@ -1602,7 +2193,8 @@ impl RuntimeProgressRepo {
                 last_journal_seq,
                 last_state_version,
                 last_snapshot_id,
-                operator_target_revision
+                operator_target_revision,
+                active_run_session_id
             FROM runtime_apply_progress
             WHERE progress_key = $1
             "#,
@@ -2041,6 +2633,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE attempt_id = $1
@@ -2071,6 +2664,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE created_at >= $1
@@ -2111,6 +2705,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1
@@ -2144,6 +2739,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1
@@ -2178,6 +2774,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE snapshot_id = $1
@@ -2211,6 +2808,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE snapshot_id = $1
@@ -2247,6 +2845,7 @@ impl ExecutionAttemptRepo {
                     execution_mode,
                     attempt_no,
                     idempotency_key,
+                    run_session_id,
                     created_at
                 FROM execution_attempts
                 WHERE execution_mode = $1
@@ -2271,6 +2870,7 @@ impl ExecutionAttemptRepo {
                     execution_mode,
                     attempt_no,
                     idempotency_key,
+                    run_session_id,
                     created_at
                 FROM execution_attempts
                 ORDER BY created_at DESC, attempt_id DESC
@@ -2306,6 +2906,7 @@ impl ExecutionAttemptRepo {
                 execution_mode,
                 attempt_no,
                 idempotency_key,
+                run_session_id,
                 created_at
             FROM execution_attempts
             WHERE execution_mode = $1
@@ -2325,11 +2926,11 @@ impl ExecutionAttemptRepo {
             .collect()
     }
 
-    async fn list_attempts_by_mode(
+    pub async fn list_by_run_session_id(
         &self,
         pool: &PgPool,
-        mode: domain::ExecutionMode,
-    ) -> Result<Vec<ExecutionAttemptRow>> {
+        run_session_id: &str,
+    ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -2341,17 +2942,81 @@ impl ExecutionAttemptRepo {
                 matched_rule_id,
                 execution_mode,
                 attempt_no,
-                idempotency_key
+                idempotency_key,
+                run_session_id,
+                created_at
             FROM execution_attempts
-            WHERE execution_mode = $1
-            ORDER BY created_at, attempt_id
+            WHERE run_session_id = $1
+            ORDER BY created_at DESC, attempt_id DESC
             "#,
         )
-        .bind(execution_mode_to_str(mode))
+        .bind(run_session_id)
         .fetch_all(pool)
         .await?;
 
-        rows.into_iter().map(map_execution_attempt_row).collect()
+        rows.into_iter()
+            .map(map_execution_attempt_with_created_at_row)
+            .collect()
+    }
+
+    async fn list_attempts_by_mode(
+        &self,
+        pool: &PgPool,
+        mode: domain::ExecutionMode,
+    ) -> Result<Vec<ExecutionAttemptRow>> {
+        let has_run_session_id = execution_attempts_has_run_session_id(pool).await?;
+        let rows = if has_run_session_id {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key,
+                    run_session_id
+                FROM execution_attempts
+                WHERE execution_mode = $1
+                ORDER BY created_at, attempt_id
+                "#,
+            )
+            .bind(execution_mode_to_str(mode))
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT
+                    attempt_id,
+                    plan_id,
+                    snapshot_id,
+                    route,
+                    scope,
+                    matched_rule_id,
+                    execution_mode,
+                    attempt_no,
+                    idempotency_key
+                FROM execution_attempts
+                WHERE execution_mode = $1
+                ORDER BY created_at, attempt_id
+                "#,
+            )
+            .bind(execution_mode_to_str(mode))
+            .fetch_all(pool)
+            .await?
+        };
+
+        if has_run_session_id {
+            rows.into_iter().map(map_execution_attempt_row).collect()
+        } else {
+            rows.into_iter()
+                .map(map_legacy_execution_attempt_row)
+                .collect()
+        }
     }
 }
 
@@ -3056,9 +3721,10 @@ where
             matched_rule_id,
             execution_mode,
             attempt_no,
-            idempotency_key
+            idempotency_key,
+            run_session_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(&row.attempt_id)
@@ -3070,6 +3736,7 @@ where
     .bind(execution_mode_to_str(row.execution_mode))
     .bind(row.attempt_no)
     .bind(&row.idempotency_key)
+    .bind(&row.run_session_id)
     .execute(executor)
     .await;
 
@@ -3235,6 +3902,30 @@ fn map_runtime_progress_row(row: PgRow) -> Result<RuntimeProgressRow> {
         last_state_version: row.try_get("last_state_version")?,
         last_snapshot_id: row.try_get("last_snapshot_id")?,
         operator_target_revision: row.try_get("operator_target_revision")?,
+        active_run_session_id: row.try_get("active_run_session_id")?,
+    })
+}
+
+fn map_run_session_row(row: PgRow) -> Result<RunSessionRow> {
+    Ok(RunSessionRow {
+        run_session_id: row.try_get("run_session_id")?,
+        invoked_by: row.try_get("invoked_by")?,
+        mode: row.try_get("mode")?,
+        state: run_session_state_from_str(&row.try_get::<String, _>("state")?)?,
+        started_at: row.try_get("started_at")?,
+        last_seen_at: row.try_get("last_seen_at")?,
+        ended_at: row.try_get("ended_at")?,
+        exit_status: row.try_get("exit_status")?,
+        exit_reason: row.try_get("exit_reason")?,
+        config_path: row.try_get("config_path")?,
+        config_fingerprint: row.try_get("config_fingerprint")?,
+        target_source_kind: row.try_get("target_source_kind")?,
+        startup_target_revision_at_start: row.try_get("startup_target_revision_at_start")?,
+        configured_operator_target_revision: row.try_get("configured_operator_target_revision")?,
+        active_operator_target_revision_at_start: row
+            .try_get("active_operator_target_revision_at_start")?,
+        rollout_state_at_start: row.try_get("rollout_state_at_start")?,
+        real_user_shadow_smoke: row.try_get("real_user_shadow_smoke")?,
     })
 }
 
@@ -3261,7 +3952,72 @@ fn map_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
         execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
         attempt_no: row.try_get("attempt_no")?,
         idempotency_key: row.try_get("idempotency_key")?,
+        run_session_id: row.try_get("run_session_id")?,
     })
+}
+
+fn map_legacy_execution_attempt_row(row: PgRow) -> Result<ExecutionAttemptRow> {
+    Ok(ExecutionAttemptRow {
+        attempt_id: row.try_get("attempt_id")?,
+        plan_id: row.try_get("plan_id")?,
+        snapshot_id: row.try_get("snapshot_id")?,
+        route: row.try_get("route")?,
+        scope: row.try_get("scope")?,
+        matched_rule_id: row.try_get("matched_rule_id")?,
+        execution_mode: execution_mode_from_str(&row.try_get::<String, _>("execution_mode")?)?,
+        attempt_no: row.try_get("attempt_no")?,
+        idempotency_key: row.try_get("idempotency_key")?,
+        run_session_id: None,
+    })
+}
+
+async fn execution_attempts_has_run_session_id(pool: &PgPool) -> Result<bool> {
+    let has_column = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'execution_attempts'
+              AND column_name = 'run_session_id'
+        )
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(has_column)
+}
+
+fn run_session_state_from_str(value: &str) -> Result<RunSessionState> {
+    match value {
+        "starting" => Ok(RunSessionState::Starting),
+        "running" => Ok(RunSessionState::Running),
+        "exited" => Ok(RunSessionState::Exited),
+        "failed" => Ok(RunSessionState::Failed),
+        other => Err(PersistenceError::invalid_value("run_session.state", other)),
+    }
+}
+
+fn project_run_session_state(
+    row: RunSessionRow,
+    stale_after: chrono::Duration,
+) -> RunSessionProjectedRow {
+    let is_stale = matches!(
+        row.state,
+        RunSessionState::Starting | RunSessionState::Running
+    ) && row.last_seen_at <= Utc::now() - stale_after;
+    let state_label = if is_stale {
+        "stale".to_owned()
+    } else {
+        row.state.as_str().to_owned()
+    };
+
+    RunSessionProjectedRow {
+        row,
+        state_label,
+        is_stale,
+    }
 }
 
 fn map_execution_attempt_with_created_at_row(

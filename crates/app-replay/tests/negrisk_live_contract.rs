@@ -112,6 +112,7 @@ fn sample_attempt(
         execution_mode: mode,
         attempt_no: 1,
         idempotency_key: format!("idem-{attempt_id}"),
+        run_session_id: None,
     }
 }
 
@@ -474,6 +475,7 @@ async fn negrisk_live_contract_keeps_legacy_negrisk_attempts_replay_visible_afte
                 execution_mode: ExecutionMode::Live,
                 attempt_no: 1,
                 idempotency_key: "idem-legacy-live-contract-1".to_owned(),
+                run_session_id: None,
             },
             artifacts: vec![artifact(attempt_id, "negrisk.live", "planned_order")],
         }]
