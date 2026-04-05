@@ -23,6 +23,7 @@ The recommended fix is:
 - keep `operator_target_revision` as the only startup authority
 - make pre-adoption discovery/materialization a first-class phase
 - allow `AdoptableTargetRevision` to be generated before adoption
+- require discovery/materialization to reuse the existing authoritative `journal -> apply -> published snapshot -> candidate publication` path rather than introducing a second discovery truth path
 - keep `targets adopt` as the only command that writes `operator_target_revision` into config
 - make `bootstrap` the public Day 0 happy path by orchestrating:
   - config
@@ -73,6 +74,7 @@ This design should guarantee the following:
 - `bootstrap` remains an orchestration layer, not a second authority
 - `operator_target_revision` remains the only startup and restore authority
 - pre-adoption discovery/materialization becomes a first-class lifecycle phase
+- the new discovery/materialization phase reuses the existing authoritative state publication chain rather than bypassing it
 - `AdoptableTargetRevision` can be generated before adoption
 - multiple adoptable revisions may be shown with a recommendation, but operator confirmation remains mandatory
 - if discovery yields no adoptable revisions, the flow stops at a truthful non-error readiness boundary with reasons and next actions
@@ -114,6 +116,8 @@ Hard rules:
 - `bootstrap` must not invent a second startup authority
 - discovery must not write `operator_target_revision`
 - discovery must not write config
+- discovery must not bypass the repo-owned `journal -> apply -> published snapshot` path by materializing candidate/adoptable artifacts directly from raw venue responses
+- discovery must run through an extracted pre-authority publication path that does not require startup target resolution or an already adopted `operator_target_revision`
 - adoption must remain explicit
 - runtime startup must still require an adopted target revision
 
@@ -184,6 +188,17 @@ Discovery/materialization must not pre-write provenance rows because that would 
 
 Those are distinct lifecycle facts.
 
+`CandidateAdoptionProvenance` remains the canonical startup-resolution linkage keyed by `operator_target_revision`.
+
+`operator_target_adoption_history` remains the per-adoption event ledger.
+
+This distinction matters for repeated adoption of identical rendered targets:
+
+- startup/restore needs one canonical linkage for a given `operator_target_revision`
+- operator auditability may still need to remember multiple adoption events that referenced the same startup authority value
+- if a later adoption renders the same `operator_target_revision`, adoption should preserve the existing canonical linkage and append a new history event rather than mutating startup identity semantics
+- differing `adoptable_revision` or `candidate_revision` alone is not a conflict when the rendered startup authority is the same
+
 ## 7. Rendering The Future operator_target_revision
 
 The current implementation incorrectly requires an already existing `operator_target_revision` before it can render an adoptable artifact.
@@ -201,16 +216,25 @@ The bridge should deterministically derive `rendered_operator_target_revision` f
 The recommended canonical input is:
 
 - canonical `rendered_live_targets`
-- `candidate_revision`
-- `adoptable_revision`
-- `bridge_policy_version`
 
 This preserves two important properties:
 
 1. identical bridge artifacts render the same future revision
-2. distinct adoptable artifacts do not accidentally collapse onto one provenance key simply because their final targets happen to match
+2. `operator_target_revision` remains a target-content identity rather than turning into an adoptable-artifact identity
 
-That second property matters because the durable provenance chain is keyed by `operator_target_revision`.
+This intentionally means that distinct adoptable revisions may collapse onto the same `operator_target_revision` when they render the same live targets.
+
+That is desirable for startup semantics:
+
+- re-adopting identical live targets should not create a fake new startup authority
+- identical target content should not force a meaningless restart boundary
+- authority identity remains stable even if discovery or bridge metadata changes upstream
+
+Per-adoptable identity and explainability remain available through:
+
+- `adoptable_revision`
+- `candidate_revision`
+- `operator_target_adoption_history`
 
 ### 7.2 Recommended Implementation Shape
 
@@ -219,7 +243,9 @@ Add a small helper that canonicalizes the bridge render input and returns:
 - `rendered_operator_target_revision`
 - optionally a separate `rendered_live_targets_hash` for observability/debuggability
 
-`neg_risk_live_target_revision_from_targets(...)` should remain available as the canonical target-content hash, but it should not be reused as the sole identity of the adoptable bridge artifact unless the provenance model is also redesigned.
+The recommended direction is to keep `rendered_operator_target_revision` byte-compatible with the existing target-content identity semantics of `neg_risk_live_target_revision_from_targets(...)`.
+
+If the bridge also needs a distinct artifact identity, add a separate field rather than overloading `operator_target_revision`.
 
 ## 8. Cold-Start State Machine
 
@@ -298,6 +324,15 @@ First-version behavior:
 - no config writes
 - no adoption
 - no runtime start
+- must reuse the existing authoritative lifecycle:
+  - source tasks and discovery refresh
+  - repo-owned events or equivalent authoritative inputs
+  - state apply
+  - published snapshot / candidate publication
+  - candidate/adoptable artifact materialization
+- must be implemented by extracting a reusable pre-adoption publication session from the existing runtime/discovery pipeline rather than inventing a bootstrap-only codepath
+- must not depend on startup resolution helpers that require an already adopted `operator_target_revision`
+- must not write `candidate_target_sets` or `adoptable_target_revisions` directly from raw venue responses without going through the authoritative publication path
 - operator-facing summary of:
   - candidate count
   - adoptable count
@@ -313,6 +348,16 @@ First-version behavior:
 
 `targets adopt`
 - remains the only authority write path
+- when adopting by `--adoptable-revision`, it must resolve directly from `adoptable_target_revisions`
+- it must no longer require pre-existing `CandidateAdoptionProvenance` for that revision
+- in the successful adopt transaction, it should:
+  - validate the adoptable payload
+  - write the canonical startup-resolution linkage if absent
+  - preserve the existing canonical linkage if the rendered `operator_target_revision` already exists
+  - fail only if the adoptable payload is invalid or does not actually render the requested `operator_target_revision`
+  - not treat differing prior `adoptable_revision` or `candidate_revision` lineage alone as an incompatibility when the startup authority matches
+  - append adoption history
+  - rewrite `[negrisk.target_source].operator_target_revision`
 
 `doctor`
 - remains preflight-only
@@ -320,6 +365,8 @@ First-version behavior:
 `apply`
 - remains the preferred Day 1+ smoke orchestration surface
 - but it must understand the new discovery-related readiness states
+- it should not become a second Day 0 discovery/orchestration entrypoint
+- it must never trigger or refresh discovery on its own
 
 ## 10. Operator UX
 
@@ -338,6 +385,14 @@ When discovery yields multiple adoptable revisions:
 - require the operator to manually choose/confirm
 
 The system must not auto-adopt.
+
+The recommendation must come from one shared deterministic selector over persisted discovery artifacts so that:
+
+- `discover`
+- `bootstrap`
+- `targets candidates`
+
+all present the same recommendation for the same persisted state.
 
 ### 10.3 No Adoptable Revisions
 
@@ -402,9 +457,15 @@ Or:
 
 Instead:
 
-- `discovery-required` should trigger or request discovery
-- `discovery-ready-not-adoptable` should stop with reasons
+- `discovery-required` should stop with a truthful next action pointing to `bootstrap` or `discover`
+- `discovery-ready-not-adoptable` should stop with reasons and should not attempt to inline discovery again
 - `adoptable-ready` should permit inline adoptable selection
+
+This preserves the intended command split:
+
+- `bootstrap` is the Day 0 orchestrator
+- `discover` is the low-level materialization command
+- `apply` remains the Day 1+ smoke progression command
 
 ### 11.4 targets candidates
 
@@ -449,21 +510,31 @@ The first two should often be expressed as readiness/result states.
 
 - decouple adoptable rendering from existing adopted state
 - make the bridge deterministically render future `operator_target_revision`
+- keep `operator_target_revision` as content-derived startup identity
 - prevent discovery from writing adoption provenance
 
 ### 13.2 Phase 2: Add `discover`
 
 - add CLI shape
 - add one-shot runtime path for candidate/adoptable materialization
+- require it to drive the existing authoritative publication chain rather than bypass it
+- extract that path from the existing runtime/discovery flow so it can run without startup target resolution
 - add operator summary output
+- add a shared deterministic recommendation selector reused by `discover`, `bootstrap`, and `targets candidates`
 
 ### 13.3 Phase 3: Update State Evaluation
 
 - extend `status` readiness states
-- extend `apply` transition handling
+- extend `apply` transition handling without turning `apply` into a second Day 0 discovery path
 - update next-action wording
 
-### 13.4 Phase 4: Rework `bootstrap`
+### 13.4 Phase 4: Fix Adopt-By-Adoptable Semantics
+
+- make `targets adopt --adoptable-revision` resolve directly from adoptable artifacts
+- write canonical startup-resolution linkage during adopt rather than requiring it beforehand
+- preserve per-event lineage in adoption history even when identical rendered targets collapse onto the same `operator_target_revision`
+
+### 13.5 Phase 5: Rework `bootstrap`
 
 - empty-database smoke path should inline discover
 - stop at adoptable confirmation boundary by default
@@ -490,8 +561,10 @@ The implementation must add coverage for:
 Additional invariants:
 
 - identical bridge input renders identical future `operator_target_revision`
+- identical rendered live targets intentionally render the same `operator_target_revision` even when candidate/adoptable metadata differs
 - discovery never writes config
 - discovery never writes adoption provenance
+- `discover` reaches candidate/adoptable materialization only by reusing the authoritative publication path
 - adoption remains the only path that mutates `operator_target_revision`
 
 ## 15. Final Recommendation
