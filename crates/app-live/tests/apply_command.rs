@@ -514,6 +514,7 @@ fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Current State"), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
     assert!(text.contains("Execution"), "{text}");
     assert!(text.contains("Outcome"), "{text}");
     assert!(text.contains("Next Actions"), "{text}");
@@ -521,6 +522,16 @@ fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
     assert!(text.contains("Overall: PASS"), "{text}");
     assert!(text.contains("Runtime not started"), "{text}");
     assert!(text.contains("app-live apply --config"), "{text}");
+    let planned = section_text(&text, "Planned Actions");
+    assert!(planned.contains("Run doctor preflight checks."), "{text}");
+    assert!(
+        planned.contains("Stop at ready without starting the runtime."),
+        "{text}"
+    );
+    assert!(
+        !planned.contains("to continue in the foreground"),
+        "{text}"
+    );
     assert!(!text.contains("run-preflight"), "{text}");
 
     database.cleanup();
@@ -550,8 +561,14 @@ fn apply_live_config_ready_without_start_stops_at_ready_to_start_outcome() {
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Planned Actions"), "{text}");
+    let planned = section_text(&text, "Planned Actions");
+    assert!(planned.contains("Run doctor preflight checks."), "{text}");
     assert!(
-        text.contains("Stop at Ready to start without starting the runtime."),
+        planned.contains("Stop at Ready to start without starting the runtime."),
+        "{text}"
+    );
+    assert!(
+        !planned.contains("Start the runtime in the foreground."),
         "{text}"
     );
     assert!(text.contains("Outcome"), "{text}");
@@ -591,6 +608,13 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    let planned = section_text(&text, "Planned Actions");
+    assert!(planned.contains("Run doctor preflight checks."), "{text}");
+    assert!(
+        planned.contains("Start the runtime in the foreground."),
+        "{text}"
+    );
     assert!(text.contains("Execution"), "{text}");
     assert!(section_text(&text, "Outcome").contains("Outcome\nStarted"), "{text}");
     assert!(
@@ -627,6 +651,16 @@ fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() 
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Current State"), "{text}");
     assert!(text.contains("Planned Actions"), "{text}");
+    let planned = section_text(&text, "Planned Actions");
+    assert!(planned.contains("Run doctor preflight checks."), "{text}");
+    assert!(
+        planned.contains("Stop at the manual restart boundary without starting the runtime."),
+        "{text}"
+    );
+    assert!(
+        !planned.contains("Start the runtime in the foreground only if confirmed."),
+        "{text}"
+    );
     assert!(text.contains("Outcome"), "{text}");
     assert!(text.contains("Next Actions"), "{text}");
     assert!(text.contains("Readiness: restart-required"), "{text}");
@@ -696,6 +730,17 @@ fn apply_restart_required_with_start_requires_explicit_confirmation() {
 
     let text = cli::combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(text.contains("Planned Actions"), "{text}");
+    let planned = section_text(&text, "Planned Actions");
+    assert!(planned.contains("Run doctor preflight checks."), "{text}");
+    assert!(
+        planned.contains("Require explicit confirmation at the manual restart boundary."),
+        "{text}"
+    );
+    assert!(
+        planned.contains("Start the runtime in the foreground only if confirmed."),
+        "{text}"
+    );
     assert!(text.contains("Choose one:"), "{text}");
     assert!(text.contains("confirm"), "{text}");
     assert!(text.contains("decline"), "{text}");
@@ -1114,7 +1159,20 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
 
 fn section_text<'a>(text: &'a str, title: &str) -> &'a str {
     let start = text.find(title).unwrap_or_else(|| panic!("{text}"));
-    &text[start..]
+    let section_titles = [
+        "Current State",
+        "Planned Actions",
+        "Execution",
+        "Outcome",
+        "Next Actions",
+    ];
+    let next_start = section_titles
+        .iter()
+        .filter(|candidate| **candidate != title)
+        .filter_map(|candidate| text[start + title.len()..].find(candidate).map(|idx| start + title.len() + idx))
+        .min()
+        .unwrap_or(text.len());
+    &text[start..next_start]
 }
 
 fn temp_invalid_config_path() -> PathBuf {
