@@ -76,7 +76,7 @@ async fn run_discover_from_config(config_path: &Path) -> Result<DiscoverSummary,
                         ),
                     )
                 })?;
-            candidate_target_count(&candidate.payload)
+            candidate_target_count(&candidate.payload)?
         }
         None => 0,
     };
@@ -93,7 +93,7 @@ async fn run_discover_from_config(config_path: &Path) -> Result<DiscoverSummary,
                         ),
                     )
                 })?;
-            rendered_live_target_count(&adoptable.payload)
+            rendered_live_target_count(&adoptable.payload)?
         }
         None => 0,
     };
@@ -117,16 +117,51 @@ fn render_discover_summary(summary: &DiscoverSummary) {
     );
 }
 
-fn candidate_target_count(payload: &serde_json::Value) -> usize {
+fn candidate_target_count(payload: &serde_json::Value) -> Result<usize, io::Error> {
     payload
         .get("targets")
         .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len)
+        .map(Vec::len)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "candidate payload is missing targets array",
+            )
+        })
 }
 
-fn rendered_live_target_count(payload: &serde_json::Value) -> usize {
+fn rendered_live_target_count(payload: &serde_json::Value) -> Result<usize, io::Error> {
     payload
         .get("rendered_live_targets")
         .and_then(serde_json::Value::as_object)
-        .map_or(0, |targets| targets.len())
+        .map(|targets| targets.len())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "adoptable payload is missing rendered_live_targets object",
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{candidate_target_count, rendered_live_target_count};
+
+    #[test]
+    fn candidate_target_count_rejects_missing_targets_array() {
+        let err = candidate_target_count(&json!({})).expect_err("missing targets should fail");
+        assert!(err.to_string().contains("targets array"), "{err}");
+    }
+
+    #[test]
+    fn rendered_live_target_count_rejects_missing_rendered_live_targets_object() {
+        let err = rendered_live_target_count(&json!({}))
+            .expect_err("missing rendered_live_targets should fail");
+        assert!(
+            err.to_string().contains("rendered_live_targets object"),
+            "{err}"
+        );
+    }
 }

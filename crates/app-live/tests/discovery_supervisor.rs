@@ -575,6 +575,30 @@ fn candidate_notice_queue_coalesced_keeps_distinct_operator_or_restriction_varia
 }
 
 #[test]
+fn candidate_notice_queue_coalesced_keeps_authoritative_notices_distinct() {
+    let publication = ready_candidate_publication();
+    let mut queue = CandidateNoticeQueue::default();
+    queue.push(CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-a"),
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    ));
+    queue.push(CandidateNotice::authoritative_from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        Some("targets-rev-a"),
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    ));
+
+    let coalesced = queue.coalesced();
+
+    assert_eq!(coalesced.len(), 2);
+}
+
+#[test]
 fn discovery_and_backfill_input_helpers_emit_through_ingress_path() {
     let discovered_at = Utc.with_ymd_and_hms(2026, 3, 28, 12, 0, 0).unwrap();
 

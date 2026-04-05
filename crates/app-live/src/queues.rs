@@ -148,6 +148,7 @@ pub struct CandidateNotice {
     pub operator_target_revision: Option<String>,
     pub rendered_live_targets: BTreeMap<String, NegRiskFamilyLiveTarget>,
     pub restriction: CandidateRestrictionTruth,
+    // Authoritative discovery may render adoptable output without observed backfill completion.
     pub authoritative: bool,
 }
 
