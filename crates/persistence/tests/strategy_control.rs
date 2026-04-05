@@ -4,7 +4,13 @@ use chrono::Utc;
 use domain::{
     canonical_strategy_artifact_semantic_digest, StrategyArtifactSemanticDigestInput, StrategyKey,
 };
-use persistence::run_migrations;
+use persistence::{
+    models::{
+        OperatorStrategyAdoptionHistoryRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
+    run_migrations, OperatorStrategyAdoptionHistoryRepo, StrategyAdoptionRepo,
+    StrategyControlArtifactRepo,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
@@ -171,4 +177,164 @@ fn semantic_digest_ignores_provenance_only_metadata() {
     let changed_digest = canonical_strategy_artifact_semantic_digest(&provenance_only_change);
 
     assert_eq!(baseline_digest, changed_digest);
+}
+
+#[tokio::test]
+async fn strategy_control_repos_read_legacy_lineage_when_neutral_tables_are_empty() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO candidate_target_sets (candidate_revision, snapshot_id, source_revision, payload)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind("candidate-legacy")
+    .bind("snapshot-legacy")
+    .bind("discovery-legacy")
+    .bind(serde_json::json!({
+        "candidate_revision": "candidate-legacy",
+        "snapshot_id": "snapshot-legacy",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO adoptable_target_revisions (
+            adoptable_revision,
+            candidate_revision,
+            rendered_operator_target_revision,
+            payload
+        )
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind("adoptable-legacy")
+    .bind("candidate-legacy")
+    .bind("targets-rev-legacy")
+    .bind(serde_json::json!({
+        "adoptable_revision": "adoptable-legacy",
+        "candidate_revision": "candidate-legacy",
+    }))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO candidate_adoption_provenance (
+            operator_target_revision,
+            adoptable_revision,
+            candidate_revision
+        )
+        VALUES ($1, $2, $3)
+        "#,
+    )
+    .bind("targets-rev-legacy")
+    .bind("adoptable-legacy")
+    .bind("candidate-legacy")
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let candidate = StrategyControlArtifactRepo
+        .get_strategy_candidate_set(&db.pool, "candidate-legacy")
+        .await
+        .unwrap()
+        .expect("neutral repo should read legacy candidate row");
+    assert_eq!(
+        candidate,
+        StrategyCandidateSetRow {
+            strategy_candidate_revision: "candidate-legacy".to_owned(),
+            snapshot_id: "snapshot-legacy".to_owned(),
+            source_revision: "discovery-legacy".to_owned(),
+            payload: serde_json::json!({
+                "candidate_revision": "candidate-legacy",
+                "snapshot_id": "snapshot-legacy",
+            }),
+        }
+    );
+
+    let provenance = StrategyAdoptionRepo
+        .get_by_operator_strategy_revision(&db.pool, "targets-rev-legacy")
+        .await
+        .unwrap()
+        .expect("neutral repo should read legacy provenance row");
+    assert_eq!(
+        provenance,
+        StrategyAdoptionProvenanceRow {
+            operator_strategy_revision: "targets-rev-legacy".to_owned(),
+            adoptable_strategy_revision: "adoptable-legacy".to_owned(),
+            strategy_candidate_revision: "candidate-legacy".to_owned(),
+        }
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn operator_strategy_adoption_history_repo_reads_legacy_history_when_neutral_table_is_empty()
+{
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO operator_target_adoption_history (
+            adoption_id,
+            action_kind,
+            operator_target_revision,
+            previous_operator_target_revision,
+            adoptable_revision,
+            candidate_revision,
+            adopted_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+    )
+    .bind("legacy-adoption-1")
+    .bind("adopt")
+    .bind("targets-rev-11")
+    .bind("targets-rev-10")
+    .bind("adoptable-11")
+    .bind("candidate-11")
+    .bind(
+        chrono::DateTime::parse_from_rfc3339("2026-04-06T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc),
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let latest = OperatorStrategyAdoptionHistoryRepo
+        .latest(&db.pool)
+        .await
+        .unwrap()
+        .expect("neutral history repo should read legacy history row");
+    assert_eq!(
+        latest,
+        OperatorStrategyAdoptionHistoryRow {
+            adoption_id: "legacy-adoption-1".to_owned(),
+            action_kind: "adopt".to_owned(),
+            operator_strategy_revision: "targets-rev-11".to_owned(),
+            previous_operator_strategy_revision: Some("targets-rev-10".to_owned()),
+            adoptable_strategy_revision: Some("adoptable-11".to_owned()),
+            strategy_candidate_revision: Some("candidate-11".to_owned()),
+            adopted_at: chrono::DateTime::parse_from_rfc3339("2026-04-06T01:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        }
+    );
+
+    let previous = OperatorStrategyAdoptionHistoryRepo
+        .previous_distinct_revision(&db.pool, "targets-rev-11")
+        .await
+        .unwrap();
+    assert_eq!(previous.as_deref(), Some("targets-rev-10"));
+
+    db.cleanup().await;
 }

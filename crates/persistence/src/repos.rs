@@ -2120,6 +2120,28 @@ impl RuntimeProgressRepo {
         operator_target_revision: Option<&str>,
         active_run_session_id: Option<&str>,
     ) -> Result<()> {
+        self.record_progress_with_strategy_revision(
+            pool,
+            last_journal_seq,
+            last_state_version,
+            last_snapshot_id,
+            operator_target_revision,
+            operator_target_revision,
+            active_run_session_id,
+        )
+        .await
+    }
+
+    pub async fn record_progress_with_strategy_revision(
+        &self,
+        pool: &PgPool,
+        last_journal_seq: i64,
+        last_state_version: i64,
+        last_snapshot_id: Option<&str>,
+        operator_target_revision: Option<&str>,
+        operator_strategy_revision: Option<&str>,
+        active_run_session_id: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO runtime_apply_progress (
@@ -2157,7 +2179,7 @@ impl RuntimeProgressRepo {
         .bind(last_snapshot_id)
         .bind(active_run_session_id)
         .bind(operator_target_revision)
-        .bind(operator_target_revision)
+        .bind(operator_strategy_revision)
         .execute(pool)
         .await?;
 
@@ -2309,7 +2331,26 @@ impl StrategyControlArtifactRepo {
         .fetch_optional(pool)
         .await?;
 
-        row.map(map_strategy_candidate_set_row).transpose()
+        if let Some(row) = row {
+            return Ok(Some(map_strategy_candidate_set_row(row)?));
+        }
+
+        let legacy_row = sqlx::query(
+            r#"
+            SELECT
+                candidate_revision AS strategy_candidate_revision,
+                snapshot_id,
+                source_revision,
+                payload
+            FROM candidate_target_sets
+            WHERE candidate_revision = $1
+            "#,
+        )
+        .bind(strategy_candidate_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        legacy_row.map(map_strategy_candidate_set_row).transpose()
     }
 
     pub async fn upsert_adoptable_strategy_revision(
@@ -2390,7 +2431,28 @@ impl StrategyControlArtifactRepo {
         .fetch_optional(pool)
         .await?;
 
-        row.map(map_adoptable_strategy_revision_row).transpose()
+        if let Some(row) = row {
+            return Ok(Some(map_adoptable_strategy_revision_row(row)?));
+        }
+
+        let legacy_row = sqlx::query(
+            r#"
+            SELECT
+                adoptable_revision AS adoptable_strategy_revision,
+                candidate_revision AS strategy_candidate_revision,
+                rendered_operator_target_revision AS rendered_operator_strategy_revision,
+                payload
+            FROM adoptable_target_revisions
+            WHERE adoptable_revision = $1
+            "#,
+        )
+        .bind(adoptable_strategy_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        legacy_row
+            .map(map_adoptable_strategy_revision_row)
+            .transpose()
     }
 }
 
@@ -2495,6 +2557,42 @@ impl StrategyAdoptionRepo {
             });
         }
 
+        let legacy_row = sqlx::query(
+            r#"
+            SELECT
+                provenance.operator_target_revision AS operator_strategy_revision,
+                provenance.adoptable_revision AS adoptable_strategy_revision,
+                provenance.candidate_revision AS strategy_candidate_revision
+            FROM candidate_adoption_provenance AS provenance
+            JOIN adoptable_target_revisions AS adoptable
+              ON adoptable.adoptable_revision = provenance.adoptable_revision
+             AND adoptable.candidate_revision = provenance.candidate_revision
+             AND adoptable.rendered_operator_target_revision = provenance.operator_target_revision
+            JOIN candidate_target_sets AS candidate
+              ON candidate.candidate_revision = provenance.candidate_revision
+            WHERE provenance.operator_target_revision = $1
+            "#,
+        )
+        .bind(operator_strategy_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(row) = legacy_row {
+            return Ok(Some(map_strategy_adoption_provenance_row(row)?));
+        }
+
+        if sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM candidate_adoption_provenance WHERE operator_target_revision = $1)",
+        )
+        .bind(operator_strategy_revision)
+        .fetch_one(pool)
+        .await?
+        {
+            return Err(PersistenceError::MissingStrategyAdoptionLink {
+                operator_strategy_revision: operator_strategy_revision.to_owned(),
+            });
+        }
+
         Ok(None)
     }
 }
@@ -2557,7 +2655,30 @@ impl OperatorStrategyAdoptionHistoryRepo {
         .fetch_optional(pool)
         .await?;
 
-        row.map(map_operator_strategy_adoption_history_row)
+        if let Some(row) = row {
+            return Ok(Some(map_operator_strategy_adoption_history_row(row)?));
+        }
+
+        let legacy_row = sqlx::query(
+            r#"
+            SELECT
+                adoption_id,
+                action_kind,
+                operator_target_revision AS operator_strategy_revision,
+                previous_operator_target_revision AS previous_operator_strategy_revision,
+                adoptable_revision AS adoptable_strategy_revision,
+                candidate_revision AS strategy_candidate_revision,
+                adopted_at
+            FROM operator_target_adoption_history
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        legacy_row
+            .map(map_operator_strategy_adoption_history_row)
             .transpose()
     }
 
@@ -2581,7 +2702,30 @@ impl OperatorStrategyAdoptionHistoryRepo {
         .fetch_optional(pool)
         .await?;
 
-        row.map(|row| row.try_get("previous_operator_strategy_revision"))
+        if let Some(row) = row {
+            return row
+                .try_get("previous_operator_strategy_revision")
+                .map(Some)
+                .map_err(Into::into);
+        }
+
+        let legacy_row = sqlx::query(
+            r#"
+            SELECT previous_operator_target_revision AS previous_operator_strategy_revision
+            FROM operator_target_adoption_history
+            WHERE operator_target_revision = $1
+              AND previous_operator_target_revision IS NOT NULL
+              AND previous_operator_target_revision <> $1
+            ORDER BY history_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(current_revision)
+        .fetch_optional(pool)
+        .await?;
+
+        legacy_row
+            .map(|row| row.try_get("previous_operator_strategy_revision"))
             .transpose()
             .map_err(Into::into)
     }

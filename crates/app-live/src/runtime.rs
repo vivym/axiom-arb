@@ -710,6 +710,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     let Some(operator_target_revision) = operator_target_revision else {
         return Ok(());
     };
+    let operator_strategy_revision = operator_target_revision;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -717,7 +718,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         RuntimeProgressRepo
-            .record_progress(
+            .record_progress_with_strategy_revision(
                 &pool,
                 summary.last_journal_seq,
                 i64::try_from(summary.last_state_version).map_err(|_| {
@@ -728,6 +729,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
                 })?,
                 summary.published_snapshot_id.as_deref(),
                 Some(operator_target_revision),
+                Some(operator_strategy_revision),
                 active_run_session_id,
             )
             .await
@@ -1093,6 +1095,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: None,
+                operator_strategy_revision: None,
                 active_run_session_id: None,
             }),
             true,
@@ -1112,6 +1115,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: Some("targets-rev-stale".to_owned()),
+                operator_strategy_revision: Some("targets-rev-stale".to_owned()),
                 active_run_session_id: None,
             }),
             Some("targets-rev-current"),

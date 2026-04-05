@@ -4,7 +4,7 @@ use chrono::Utc;
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use persistence::{
     connect_pool_from_env, models::RunSessionState, RunSessionRepo, RunSessionRow,
-    RuntimeProgressRepo,
+    RuntimeProgressRepo, RuntimeProgressRow,
 };
 use sha2::{Digest, Sha256};
 
@@ -90,9 +90,8 @@ fn build_starting_row(
 ) -> Result<RunSessionRow, Box<dyn Error>> {
     let config_path_string = config_path.display().to_string();
     let config_fingerprint = config_fingerprint(config_path)?;
-    let current_active_revision = load_active_operator_target_revision_at_start()?;
-    let (target_source_kind, startup_target_revision_at_start, configured_operator_target_revision) =
-        startup_snapshot_target_source(config)?;
+    let revision_snapshot =
+        startup_revision_snapshot(config, load_active_runtime_progress_at_start()?)?;
     let rollout_state_at_start = rollout_state_at_start(config);
 
     Ok(RunSessionRow {
@@ -110,12 +109,52 @@ fn build_starting_row(
         exit_reason: None,
         config_path: config_path_string,
         config_fingerprint,
-        target_source_kind,
-        startup_target_revision_at_start,
-        configured_operator_target_revision,
-        active_operator_target_revision_at_start: current_active_revision,
+        target_source_kind: revision_snapshot.target_source_kind,
+        startup_target_revision_at_start: revision_snapshot.startup_target_revision_at_start,
+        configured_operator_target_revision: revision_snapshot.configured_operator_target_revision,
+        active_operator_target_revision_at_start: revision_snapshot
+            .active_operator_target_revision_at_start,
+        configured_operator_strategy_revision: revision_snapshot
+            .configured_operator_strategy_revision,
+        active_operator_strategy_revision_at_start: revision_snapshot
+            .active_operator_strategy_revision_at_start,
         rollout_state_at_start,
         real_user_shadow_smoke: config.real_user_shadow_smoke(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartupRevisionSnapshot {
+    target_source_kind: String,
+    startup_target_revision_at_start: String,
+    configured_operator_target_revision: Option<String>,
+    active_operator_target_revision_at_start: Option<String>,
+    configured_operator_strategy_revision: Option<String>,
+    active_operator_strategy_revision_at_start: Option<String>,
+}
+
+fn startup_revision_snapshot(
+    config: &AppLiveConfigView<'_>,
+    active_progress: Option<RuntimeProgressRow>,
+) -> Result<StartupRevisionSnapshot, Box<dyn Error>> {
+    let (target_source_kind, startup_target_revision_at_start, configured_operator_target_revision) =
+        startup_snapshot_target_source(config)?;
+    let active_operator_target_revision_at_start = active_progress
+        .as_ref()
+        .and_then(|row| row.operator_target_revision.clone());
+    let active_operator_strategy_revision_at_start = active_progress.as_ref().and_then(|row| {
+        row.operator_strategy_revision
+            .clone()
+            .or_else(|| row.operator_target_revision.clone())
+    });
+
+    Ok(StartupRevisionSnapshot {
+        target_source_kind,
+        startup_target_revision_at_start,
+        configured_operator_strategy_revision: configured_operator_target_revision.clone(),
+        configured_operator_target_revision,
+        active_operator_target_revision_at_start,
+        active_operator_strategy_revision_at_start,
     })
 }
 
@@ -164,15 +203,10 @@ fn rollout_state_at_start(config: &AppLiveConfigView<'_>) -> Option<String> {
     Some(if ready { "ready" } else { "required" }.to_owned())
 }
 
-fn load_active_operator_target_revision_at_start() -> Result<Option<String>, Box<dyn Error>> {
-    with_pool(|pool| async move {
-        Ok::<_, Box<dyn Error>>(
-            RuntimeProgressRepo
-                .current(&pool)
-                .await?
-                .and_then(|row| row.operator_target_revision),
-        )
-    })
+fn load_active_runtime_progress_at_start() -> Result<Option<RuntimeProgressRow>, Box<dyn Error>> {
+    with_pool(
+        |pool| async move { Ok::<_, Box<dyn Error>>(RuntimeProgressRepo.current(&pool).await?) },
+    )
 }
 
 fn config_fingerprint(config_path: &Path) -> Result<String, Box<dyn Error>> {
@@ -211,4 +245,94 @@ where
         let pool = connect_pool_from_env().await?;
         f(pool).await
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use config_schema::{load_raw_config_from_str, ValidatedConfig};
+    use persistence::models::RuntimeProgressRow;
+
+    use super::startup_revision_snapshot;
+
+    #[test]
+    fn startup_revision_snapshot_populates_neutral_strategy_fields_for_adopted_source() {
+        let config = live_view(
+            r#"
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+        );
+
+        let snapshot = startup_revision_snapshot(
+            &config,
+            Some(RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-active".to_owned()),
+                operator_strategy_revision: Some("strategy-rev-active".to_owned()),
+                active_run_session_id: Some("run-session-1".to_owned()),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.target_source_kind, "adopted");
+        assert_eq!(
+            snapshot.configured_operator_target_revision.as_deref(),
+            Some("targets-rev-9")
+        );
+        assert_eq!(
+            snapshot.configured_operator_strategy_revision.as_deref(),
+            Some("targets-rev-9")
+        );
+        assert_eq!(
+            snapshot.active_operator_target_revision_at_start.as_deref(),
+            Some("targets-rev-active")
+        );
+        assert_eq!(
+            snapshot
+                .active_operator_strategy_revision_at_start
+                .as_deref(),
+            Some("strategy-rev-active")
+        );
+    }
+
+    fn live_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {
+        let raw = Box::leak(Box::new(
+            load_raw_config_from_str(&format!(
+                r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+
+{extra}
+"#
+            ))
+            .expect("config should parse"),
+        ));
+        let validated = Box::leak(Box::new(
+            ValidatedConfig::new(raw.clone()).expect("config should validate"),
+        ));
+
+        validated.for_app_live().expect("view should validate")
+    }
 }

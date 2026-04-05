@@ -277,6 +277,41 @@ async fn run_sessions_reject_invalid_state_labels() {
 }
 
 #[tokio::test]
+async fn runtime_progress_can_persist_distinct_operator_strategy_revision() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    RuntimeProgressRepo
+        .record_progress_with_strategy_revision(
+            &db.pool,
+            41,
+            7,
+            Some("snapshot-7"),
+            Some("targets-rev-7"),
+            Some("strategy-rev-12"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let progress = RuntimeProgressRepo
+        .current(&db.pool)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        progress.operator_target_revision.as_deref(),
+        Some("targets-rev-7")
+    );
+    assert_eq!(
+        progress.operator_strategy_revision.as_deref(),
+        Some("strategy-rev-12")
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn run_session_repo_round_trips_starting_running_and_terminal_states() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
