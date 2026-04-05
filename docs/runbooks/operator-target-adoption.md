@@ -50,7 +50,7 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 `status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
 
 - `targets adopt`
-- `apply` for smoke Day 1+ rollout progression
+- `apply` for conservative Day 1+ progression
 - controlled restart
 - `doctor`
 - `run`
@@ -133,9 +133,9 @@ After a successful adopt:
 
 1. re-run `status`
 2. re-run `targets status` if you need the lower-level control-plane details
-3. if this is a `real-user shadow smoke` config, prefer `apply` for the Day 1+ smoke flow
-4. otherwise run `doctor`
-5. if `restart_needed = true`, perform a controlled restart
+3. once adoption and rollout posture exist, return to `apply` for the conservative Day 1+ flow
+4. let `apply` run `doctor` after readiness is in place
+5. if `restart_needed = true`, perform a controlled restart before `run`
 6. start `run`
 7. verify the local result
 
@@ -224,14 +224,14 @@ Interpret `status` before `doctor` like this:
 
 - `target-adoption-required`
   - run `targets candidates`, then `targets adopt`
-  - once adoption and rollout posture exist, return to `apply`
+  - once adoption and rollout posture exist, return to `apply` for Day 1+ progression
 - `restart-required`
   - perform a controlled restart before expecting the running daemon to pick up the configured revision
 - `live-rollout-required` or `smoke-rollout-required`
-  - for smoke Day 1+ configs, return to `apply` after rollout readiness is in place
+  - once rollout readiness is in place, return to `apply`
   - otherwise fix rollout readiness first
 - `live-config-ready` or `smoke-config-ready`
-  - continue to `doctor`
+  - continue to `apply`, which will run `doctor` after readiness is in place
 - `blocked`
   - follow the printed next action and rerun `status`
 
