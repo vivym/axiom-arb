@@ -52,7 +52,7 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 - `smoke-config-ready`
 - `blocked`
 
-Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary. For the preferred high-level path, hand the smoke back to `apply`; it can inline the same adopt and rollout work without changing startup authority.
+Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary. For the preferred high-level path, hand the smoke back to `apply`; once the target and rollout posture are already in place, it rechecks readiness without changing startup authority.
 
 ## Run
 
@@ -65,7 +65,7 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml
 cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 ```
 
-`apply` is smoke-only. It reuses `status`, can inline an explicit adopt when the target anchor is missing, can explicitly enable smoke-only rollout for the adopted families, runs `doctor`, and stops at ready unless you also pass `--start`. It does not chain `verify`; run that explicitly after the runtime work you want to inspect.
+`apply` is the conservative Day 1+ path. It reuses `status`, runs `doctor`, and stops at ready unless you also pass `--start`. It does not inline adoption or rollout mutation, and it does not chain `verify`; run that explicitly after the runtime work you want to inspect.
 
 If you are using the lower-level path, preflight the smoke config, then start `app-live` with the smoke config:
 
@@ -78,11 +78,10 @@ cargo run -p app-live -- run --config config/axiom-arb.local.toml
 Interpret `status` before `apply` like this:
 
 - `target-adoption-required`
-  - `apply` can inline the adoptable revision selection for smoke
-  - or drop to `targets candidates` / `targets adopt` if you want lower-level control
+  - use `targets candidates` / `targets adopt` first
 - `smoke-rollout-required`
   - config and adopted target are present, but rollout is still intentionally empty
-  - `apply` can explicitly enable the smoke-only rollout posture for the adopted family set
+  - finish the rollout posture before returning to `apply`
 - `smoke-config-ready`
   - config, adopted target, and smoke rollout are aligned
   - `apply` will run `doctor` and stop at ready, or continue into `run` if you pass `--start`
