@@ -2,11 +2,10 @@ use std::{error::Error, io, path::Path};
 
 use chrono::Utc;
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
-use persistence::connect_pool_from_env;
+use persistence::{connect_pool_from_env, CandidateArtifactRepo};
 
 use crate::{
     cli::DiscoverArgs,
-    commands::targets::state::load_target_candidates_catalog,
     load_real_user_shadow_smoke_config, source_tasks::build_polymarket_rest_client,
     task_groups::MetadataTaskGroup, AppSupervisor, LocalSignerConfig,
 };
@@ -59,27 +58,50 @@ async fn run_discover_from_config(config_path: &Path) -> Result<DiscoverSummary,
         &source_session_id,
         Utc::now(),
     );
-    AppSupervisor::materialize_authoritative_discovery_batch(batch, &source_session_id)?;
+    let discovery_summary =
+        AppSupervisor::materialize_authoritative_discovery_batch(batch, &source_session_id)?;
 
     let pool = connect_pool_from_env().await?;
-    let catalog = load_target_candidates_catalog(&pool).await?;
-    let recommended_adoptable_revision = catalog
-        .adoptable_revisions
-        .first()
-        .map(|row| row.adoptable_revision.clone());
-    let candidate_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM candidate_target_sets")
-            .fetch_one(&pool)
-            .await? as usize;
-    let adoptable_count =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM adoptable_target_revisions")
-            .fetch_one(&pool)
-            .await? as usize;
+    let artifacts = CandidateArtifactRepo;
+    let candidate_count = match discovery_summary.latest_candidate_revision.as_deref() {
+        Some(candidate_revision) => {
+            let candidate = artifacts
+                .get_candidate_target_set(&pool, candidate_revision)
+                .await?
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "candidate_revision {candidate_revision} disappeared after discover materialization"
+                        ),
+                    )
+                })?;
+            candidate_target_count(&candidate.payload)
+        }
+        None => 0,
+    };
+    let adoptable_count = match discovery_summary.latest_adoptable_revision.as_deref() {
+        Some(adoptable_revision) => {
+            let adoptable = artifacts
+                .get_adoptable_target_revision(&pool, adoptable_revision)
+                .await?
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "adoptable_revision {adoptable_revision} disappeared after discover materialization"
+                        ),
+                    )
+                })?;
+            rendered_live_target_count(&adoptable.payload)
+        }
+        None => 0,
+    };
 
     Ok(DiscoverSummary {
         candidate_count,
         adoptable_count,
-        recommended_adoptable_revision,
+        recommended_adoptable_revision: discovery_summary.latest_adoptable_revision,
     })
 }
 
@@ -93,4 +115,18 @@ fn render_discover_summary(summary: &DiscoverSummary) {
             .as_deref()
             .unwrap_or("none")
     );
+}
+
+fn candidate_target_count(payload: &serde_json::Value) -> usize {
+    payload
+        .get("targets")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn rendered_live_target_count(payload: &serde_json::Value) -> usize {
+    payload
+        .get("rendered_live_targets")
+        .and_then(serde_json::Value::as_object)
+        .map_or(0, |targets| targets.len())
 }

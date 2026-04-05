@@ -706,7 +706,7 @@ impl AppSupervisor {
         }
 
         if candidate_dirty_seen {
-            self.materialize_candidate_artifacts();
+            self.materialize_candidate_artifacts_authoritative();
         }
 
         Ok(processed_count)
@@ -1080,6 +1080,14 @@ impl AppSupervisor {
     }
 
     fn materialize_candidate_artifacts(&mut self) {
+        self.materialize_candidate_artifacts_with_authority(false);
+    }
+
+    fn materialize_candidate_artifacts_authoritative(&mut self) {
+        self.materialize_candidate_artifacts_with_authority(true);
+    }
+
+    fn materialize_candidate_artifacts_with_authority(&mut self, authoritative: bool) {
         let Some(publication) = self.runtime.candidate_publication() else {
             return;
         };
@@ -1090,13 +1098,23 @@ impl AppSupervisor {
             return;
         }
 
-        let notice = CandidateNotice::from_publication(
-            &publication,
-            [DirtyDomain::Candidates],
-            self.neg_risk_live_target_revision.as_deref(),
-            self.neg_risk_live_targets.clone(),
-            CandidateRestrictionTruth::eligible(),
-        );
+        let notice = if authoritative {
+            CandidateNotice::authoritative_from_publication(
+                &publication,
+                [DirtyDomain::Candidates],
+                self.neg_risk_live_target_revision.as_deref(),
+                self.neg_risk_live_targets.clone(),
+                CandidateRestrictionTruth::eligible(),
+            )
+        } else {
+            CandidateNotice::from_publication(
+                &publication,
+                [DirtyDomain::Candidates],
+                self.neg_risk_live_target_revision.as_deref(),
+                self.neg_risk_live_targets.clone(),
+                CandidateRestrictionTruth::eligible(),
+            )
+        };
         let Ok(report) = DiscoverySupervisor::persist_notice_blocking(notice) else {
             return;
         };

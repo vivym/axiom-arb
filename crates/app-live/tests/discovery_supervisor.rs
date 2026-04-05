@@ -282,6 +282,100 @@ fn discovery_supervisor_materializes_adoptable_output_without_prior_operator_rev
 }
 
 #[test]
+fn discovery_supervisor_defers_non_authoritative_notice_when_backfill_is_missing() {
+    let publication = discovery_only_candidate_publication();
+    assert!(
+        publication
+            .view
+            .as_ref()
+            .expect("candidate publication view")
+            .discovery_records[0]
+            .backfill_completed_at
+            .is_none()
+    );
+    let candidate_notice = CandidateNotice::from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
+            adoptable_revision: None,
+            operator_target_revision: None,
+            target_count: 1,
+            adoptable_target_count: 0,
+            deferred_target_count: 1,
+            excluded_target_count: 0,
+            live_dispatch_woken: false,
+            disposition: "deferred".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_backfill_facts() {
+    let publication = discovery_only_candidate_publication();
+    assert!(
+        publication
+            .view
+            .as_ref()
+            .expect("candidate publication view")
+            .discovery_records[0]
+            .backfill_completed_at
+            .is_none()
+    );
+    let candidate_notice = CandidateNotice::authoritative_from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    );
+
+    let mut candidate_queue = CandidateNoticeQueue::default();
+    candidate_queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(candidate_queue);
+    let report = run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    });
+
+    assert_eq!(
+        report,
+        DiscoveryReport {
+            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
+            adoptable_revision: Some("adoptable-candidate-pub-discovery-only".to_owned()),
+            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
+            target_count: 1,
+            adoptable_target_count: 1,
+            deferred_target_count: 0,
+            excluded_target_count: 0,
+            live_dispatch_woken: false,
+            disposition: "adoptable".to_owned(),
+        }
+    );
+}
+
+#[test]
 fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_outputs() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
@@ -518,6 +612,25 @@ fn discovery_and_backfill_input_helpers_emit_through_ingress_path() {
 
 fn ready_candidate_publication() -> CandidatePublication {
     ready_candidate_publication_with_family_id("family-7")
+}
+
+fn discovery_only_candidate_publication() -> CandidatePublication {
+    let discovered_at = Utc.with_ymd_and_hms(2026, 3, 28, 10, 0, 0).unwrap();
+    let mut store = StateStore::default();
+    let discovery = domain::ExternalFactEvent::family_discovery_observed(
+        "metadata-refresh-1",
+        "evt-discovery-only-0",
+        "family-a",
+        discovered_at,
+    );
+    StateApplier::new(&mut store)
+        .apply(7, discovery)
+        .expect("discovery fact applies");
+
+    CandidatePublication::from_store(
+        &store,
+        CandidateProjectionReadiness::ready("candidate-pub-discovery-only"),
+    )
 }
 
 fn ready_candidate_publication_with_family_id(family_id: &str) -> CandidatePublication {

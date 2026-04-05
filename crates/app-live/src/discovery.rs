@@ -179,6 +179,7 @@ impl CandidateValidationEngine {
         publication: &CandidatePublication,
         restriction: &CandidateRestrictionTruth,
         _operator_target_revision: Option<&str>,
+        authoritative: bool,
     ) -> Result<(CandidateTargetSet, String, ValidationSummary), String> {
         let Some(view) = publication.view.as_ref() else {
             return Err("candidate publication is not ready".to_owned());
@@ -195,7 +196,7 @@ impl CandidateValidationEngine {
                 CandidateTarget::new(
                     format!("candidate-target-{}", record.family_id.as_str()),
                     EventFamilyId::from(record.family_id.as_str()),
-                    validation_for_record(record, restriction),
+                    validation_for_record(record, restriction, authoritative),
                 )
             })
             .collect();
@@ -306,6 +307,7 @@ impl DiscoverySupervisor {
             operator_target_revision,
             rendered_live_targets,
             restriction,
+            authoritative,
         } = notice;
 
         if !dirty_domains.contains(&DirtyDomain::Candidates) {
@@ -333,6 +335,7 @@ impl DiscoverySupervisor {
                 &publication,
                 &restriction,
                 operator_target_revision.as_deref(),
+                authoritative,
             )?;
         let candidate = self.bridge.render_candidate(&candidate_set);
 
@@ -422,9 +425,10 @@ impl ValidationSummary {
 fn validation_for_record(
     discovery_record: &FamilyDiscoveryRecord,
     restriction: &CandidateRestrictionTruth,
+    authoritative: bool,
 ) -> CandidateValidationResult {
     if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
-        || discovery_record.backfill_completed_at.is_none()
+        || (!authoritative && discovery_record.backfill_completed_at.is_none())
     {
         CandidateValidationResult::Deferred {
             reason: deferred_reason(discovery_record, restriction),

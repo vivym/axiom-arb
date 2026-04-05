@@ -225,28 +225,12 @@ impl MetadataTaskGroup {
                 "metadata-{}-{}-discovery",
                 anchor.metadata_snapshot_hash, family_id
             );
-            let backfill_event_id = format!(
-                "metadata-{}-{}-backfill",
-                anchor.metadata_snapshot_hash, family_id
-            );
-            let backfill_cursor =
-                format!("metadata:{}:{}", anchor.discovery_revision, anchor.metadata_snapshot_hash);
 
             inputs.push(Self::discovery_input(
                 journal_seq,
                 source_session_id,
                 &discovery_event_id,
                 &family_id,
-                observed_at,
-            ));
-            journal_seq += 1;
-            inputs.push(Self::backfill_input(
-                journal_seq,
-                source_session_id,
-                &backfill_event_id,
-                &family_id,
-                backfill_cursor,
-                true,
                 observed_at,
             ));
             journal_seq += 1;
@@ -325,10 +309,11 @@ fn heartbeat_attention_reason(reason: HeartbeatReconcileReason) -> &'static str 
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
-    use venue_polymarket::HeartbeatFetchResult;
+    use chrono::{Duration, TimeZone, Utc};
+    use domain::{MarketRoute, NegRiskVariant};
+    use venue_polymarket::{HeartbeatFetchResult, NegRiskMarketMetadata};
 
-    use super::{HeartbeatSource, HeartbeatTaskGroup};
+    use super::{HeartbeatSource, HeartbeatTaskGroup, MetadataTaskGroup};
 
     #[test]
     fn runtime_originated_heartbeat_fact_uses_run_session_id_as_source_session_id() {
@@ -359,6 +344,55 @@ mod tests {
         assert!(group.now <= after);
         assert!(group.state.last_success_at >= before - Duration::seconds(1));
         assert!(group.state.last_success_at <= after + Duration::seconds(1));
+    }
+
+    #[test]
+    fn authoritative_discovery_batch_emits_only_discovery_inputs() {
+        let batch = MetadataTaskGroup::authoritative_discovery_batch(
+            &[
+                NegRiskMarketMetadata {
+                    event_family_id: "family-a".to_owned(),
+                    event_id: "event-1".to_owned(),
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    outcome_label: "Alpha".to_owned(),
+                    route: MarketRoute::NegRisk,
+                    enable_neg_risk: Some(true),
+                    neg_risk_augmented: Some(false),
+                    neg_risk_variant: NegRiskVariant::Standard,
+                    is_placeholder: false,
+                    is_other: false,
+                    discovery_revision: 1,
+                    metadata_snapshot_hash: "snapshot-hash-1".to_owned(),
+                },
+                NegRiskMarketMetadata {
+                    event_family_id: "family-a".to_owned(),
+                    event_id: "event-2".to_owned(),
+                    condition_id: "condition-2".to_owned(),
+                    token_id: "token-2".to_owned(),
+                    outcome_label: "Beta".to_owned(),
+                    route: MarketRoute::NegRisk,
+                    enable_neg_risk: Some(true),
+                    neg_risk_augmented: Some(false),
+                    neg_risk_variant: NegRiskVariant::Standard,
+                    is_placeholder: false,
+                    is_other: false,
+                    discovery_revision: 1,
+                    metadata_snapshot_hash: "snapshot-hash-1".to_owned(),
+                },
+            ],
+            "discover-session-1",
+            Utc.with_ymd_and_hms(2026, 4, 5, 10, 0, 0).unwrap(),
+        );
+
+        assert_eq!(batch.inputs.len(), 1);
+        assert_eq!(batch.inputs[0].event.payload.kind(), "family_discovery_observed");
+        assert_eq!(batch.inputs[0].event.source_session_id, "discover-session-1");
+        assert_eq!(
+            batch.inputs[0].event.source_event_id,
+            "metadata-snapshot-hash-1-family-a-discovery"
+        );
+        assert_eq!(batch.rendered_live_targets.len(), 1);
     }
 
     #[derive(Debug)]
