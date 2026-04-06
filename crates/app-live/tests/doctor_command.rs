@@ -272,7 +272,11 @@ quantity = "5"
         "{combined}"
     );
     assert!(
-        combined.contains("[SKIP] control-plane checks not required for explicit targets"),
+        combined.contains("[SKIP] compatibility mode"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("--adopt-compatibility"),
         "{combined}"
     );
 }
@@ -347,6 +351,14 @@ quantity = "5"
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
     assert!(
         combined.contains("Next: app-live run --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("[SKIP] compatibility mode"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("--adopt-compatibility"),
         "{combined}"
     );
 }

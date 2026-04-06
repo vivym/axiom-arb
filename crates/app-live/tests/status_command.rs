@@ -702,7 +702,7 @@ fn status_adopted_source_with_unavailable_active_revision_is_live_rollout_requir
     assert!(combined.contains("Next: edit "), "{combined}");
     assert!(
         combined.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
+            "[strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes"
         ),
         "{combined}"
     );
@@ -893,7 +893,7 @@ fn status_adopted_source_with_broken_durable_provenance_is_blocked() {
 }
 
 #[test]
-fn status_explicit_target_flow_is_reported_as_legacy_high_level_unsupported() {
+fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
     let config = cli::config_fixture("app-live-live.toml");
 
     let output = Command::new(cli::app_live_binary())
@@ -907,14 +907,17 @@ fn status_explicit_target_flow_is_reported_as_legacy_high_level_unsupported() {
     assert!(output.status.success(), "{combined}");
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(combined.contains("Target source: compatibility"), "{combined}");
     assert!(
-        combined.contains(
-            "Reason: legacy explicit targets are not supported in the high-level status flow"
-        ),
+        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: migrate to adopted target source or use lower-level commands"),
+        combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("--adopt-compatibility"),
         "{combined}"
     );
 }
@@ -972,7 +975,7 @@ fn status_output_uses_summary_key_details_next_actions_order() {
 }
 
 #[test]
-fn status_operator_shaped_explicit_targets_still_get_legacy_guidance() {
+fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
     let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
         let without_target_source = config.replace(
             "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
@@ -994,14 +997,17 @@ fn status_operator_shaped_explicit_targets_still_get_legacy_guidance() {
     assert!(output.status.success(), "{combined}");
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(combined.contains("Target source: compatibility"), "{combined}");
     assert!(
-        combined.contains(
-            "Reason: legacy explicit targets are not supported in the high-level status flow"
-        ),
+        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: migrate to adopted target source or use lower-level commands"),
+        combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("--adopt-compatibility"),
         "{combined}"
     );
 
@@ -1083,7 +1089,7 @@ fn status_actions_are_concrete_operator_actions() {
         (StatusAction::EnableLiveRollout, "enable live rollout"),
         (
             StatusAction::MigrateLegacyExplicitTargets,
-            "migrate legacy explicit targets",
+            "migrate compatibility targets",
         ),
     ];
 
@@ -1124,7 +1130,7 @@ fn status_details_use_structured_key_fields() {
     );
     assert_eq!(
         details.target_source.unwrap().label(),
-        "legacy explicit targets"
+        "compatibility"
     );
     assert_eq!(details.rollout_state, Some(StatusRolloutState::Ready));
     assert_eq!(details.rollout_state.unwrap().label(), "ready");
@@ -1176,7 +1182,7 @@ fn status_target_source_labels_are_structured() {
     let cases = [
         (
             StatusTargetSource::LegacyExplicitTargets,
-            "legacy explicit targets",
+            "compatibility",
         ),
         (StatusTargetSource::AdoptedTargets, "adopted targets"),
     ];

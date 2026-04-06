@@ -54,7 +54,15 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
     let live_text = cli::combined(&live_output);
     assert!(!live_output.status.success(), "{live_text}");
     assert!(
-        live_text.contains("migrate to adopted target source or use lower-level commands"),
+        live_text.contains("compatibility mode"),
+        "{live_text}"
+    );
+    assert!(
+        live_text.contains("app-live targets adopt --config"),
+        "{live_text}"
+    );
+    assert!(
+        live_text.contains("--adopt-compatibility"),
         "{live_text}"
     );
 }
@@ -121,7 +129,7 @@ fn apply_live_rollout_required_stops_before_doctor_or_run() {
     assert!(text.contains("live-rollout-required"), "{text}");
     assert!(
         text.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
+            "[strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes"
         ),
         "{text}"
     );
@@ -150,7 +158,7 @@ fn apply_live_restart_required_with_rollout_missing_stops_before_doctor_or_run()
     assert!(text.contains("Rollout state: required"), "{text}");
     assert!(
         text.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
+            "[strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes"
         ),
         "{text}"
     );
@@ -188,7 +196,7 @@ fn apply_live_generic_blocked_stops_with_existing_blocking_guidance() {
 }
 
 #[test]
-fn apply_live_legacy_explicit_targets_keep_migration_specific_guidance() {
+fn apply_live_legacy_explicit_targets_require_explicit_compatibility_migration() {
     let output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
@@ -199,11 +207,15 @@ fn apply_live_legacy_explicit_targets_keep_migration_specific_guidance() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(
-        text.contains("legacy explicit targets are not supported in the high-level status flow"),
+        text.contains("compatibility mode"),
         "{text}"
     );
     assert!(
-        text.contains("migrate to adopted target source or use lower-level commands"),
+        text.contains("app-live targets adopt --config"),
+        "{text}"
+    );
+    assert!(
+        text.contains("--adopt-compatibility"),
         "{text}"
     );
     assert!(

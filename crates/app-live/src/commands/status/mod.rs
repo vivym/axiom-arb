@@ -134,9 +134,9 @@ pub(crate) fn render_action_template_with_mode(
             "fix the blocking issue, then rerun app-live status --config {config}".to_owned()
         }
         model::StatusAction::EnableLiveRollout =>
-            "edit {config} and set [negrisk.rollout].approved_families and ready_families for adopted families".to_owned(),
+            "edit {config} and set [strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes".to_owned(),
         model::StatusAction::MigrateLegacyExplicitTargets => {
-            "migrate to adopted target source or use lower-level commands".to_owned()
+            "app-live targets adopt --config {config} --adopt-compatibility".to_owned()
         }
     }
 }

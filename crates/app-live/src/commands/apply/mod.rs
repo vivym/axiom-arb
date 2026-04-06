@@ -140,7 +140,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             let planned_action = if summary.details.target_source
                 == Some(StatusTargetSource::LegacyExplicitTargets)
             {
-                "Stop because legacy explicit targets must be migrated before live apply can continue."
+                "Stop because compatibility mode cannot be auto-migrated during live apply."
                     .to_owned()
             } else {
                 "Stop because status reported a blocking issue.".to_owned()
@@ -162,7 +162,7 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
                 "Blocked".to_owned(),
                 vec![
                     format!(
-                        "Edit {} and set [negrisk.rollout].approved_families and ready_families for adopted families.",
+                        "Edit {} and set [strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes.",
                         output::quoted_config_path(config_path)
                     ),
                     format!(

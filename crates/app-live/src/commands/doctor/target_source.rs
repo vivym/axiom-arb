@@ -58,7 +58,7 @@ fn evaluate_live(
         report.push_check(
             "Target Source",
             DoctorCheckStatus::Skip,
-            "control-plane checks not required for explicit targets",
+            "compatibility mode: control-plane checks stay read-only until app-live targets adopt --config <config> --adopt-compatibility",
             "",
         );
         return Ok(Some(ResolvedTargets {
@@ -69,7 +69,7 @@ fn evaluate_live(
 
     if !config.has_adopted_strategy_source() {
         let message =
-            "live target source must be adopted strategy source or legacy explicit targets";
+            "live target source must be adopted strategy source or compatibility-mode explicit targets";
         report.push_check(
             "Target Source",
             DoctorCheckStatus::Fail,
