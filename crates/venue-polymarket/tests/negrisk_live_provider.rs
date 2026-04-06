@@ -1,3 +1,5 @@
+mod support;
+
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -11,10 +13,14 @@ use execution::{
     LiveSubmitOutcome, PendingReconcileWork, ReconcileOutcome, SignedFamilySubmission,
 };
 use rust_decimal::Decimal;
+use support::{
+    scripted_gateway_with_open_orders, scripted_gateway_with_relayer, scripted_open_order,
+};
 use url::Url;
 use venue_polymarket::{
-    L2AuthHeaders, OrderType, PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider,
-    PolymarketRestClient, PostOrderTransport, RelayerAuth, SignerContext,
+    L2AuthHeaders, OrderType, PolymarketGateway, PolymarketNegRiskReconcileProvider,
+    PolymarketNegRiskSubmitProvider, PolymarketRestClient, PostOrderTransport, RelayerAuth,
+    RelayerTransaction, RelayerTransactionType, SignerContext,
 };
 
 #[tokio::test]
@@ -132,6 +138,29 @@ async fn polymarket_submit_provider_rejects_multi_member_submission_before_side_
 }
 
 #[tokio::test]
+async fn polymarket_submit_provider_can_use_gateway_without_http_side_effects() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let provider = sample_submit_provider_with_gateway(
+        server.base_url(),
+        scripted_gateway_with_open_orders(Vec::new()),
+    );
+
+    let outcome = provider
+        .submit_family(&sample_signed_submission(), &sample_attempt())
+        .expect("gateway-backed submit should succeed");
+
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record } => {
+            assert_eq!(submission_record.provider, "polymarket");
+            assert_eq!(submission_record.submission_ref, "order-default");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    server.finish_without_request();
+}
+
+#[tokio::test]
 async fn polymarket_reconcile_provider_maps_pending_relayer_status_into_still_pending() {
     let server = MockServer::spawn(
         "200 OK",
@@ -230,6 +259,74 @@ async fn polymarket_reconcile_provider_confirms_matching_open_order_for_order_pe
 }
 
 #[tokio::test]
+async fn polymarket_reconcile_provider_confirms_gateway_open_order_without_http_side_effects() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let provider = sample_reconcile_provider_with_gateway(
+        server.base_url(),
+        scripted_gateway_with_open_orders(vec![scripted_open_order("order-gateway-open")]),
+    );
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("order:order-gateway-open"))
+        .expect("gateway-backed open orders should confirm");
+
+    match outcome {
+        ReconcileOutcome::ConfirmedAuthoritative { submission_ref } => {
+            assert_eq!(submission_ref, "order-gateway-open");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    server.finish_without_request();
+}
+
+#[tokio::test]
+async fn polymarket_reconcile_provider_confirms_gateway_tx_without_http_side_effects() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let provider = sample_reconcile_provider_with_gateway(
+        server.base_url(),
+        scripted_gateway_with_relayer(
+            Ok(vec![confirmed_transaction("0xtx-gateway")]),
+            Ok("60".to_owned()),
+        ),
+    );
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("tx:0xtx-gateway"))
+        .expect("gateway-backed tx should confirm");
+
+    match outcome {
+        ReconcileOutcome::ConfirmedAuthoritative { submission_ref } => {
+            assert_eq!(submission_ref, "0xtx-gateway");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    server.finish_without_request();
+}
+
+#[tokio::test]
+async fn polymarket_reconcile_provider_maps_gateway_relayer_errors_to_provider_errors() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let provider = sample_reconcile_provider_with_gateway(
+        server.base_url(),
+        scripted_gateway_with_relayer(
+            Err(venue_polymarket::PolymarketGatewayError::relayer(
+                "gateway relayer down",
+            )),
+            Ok("60".to_owned()),
+        ),
+    );
+
+    let err = provider
+        .reconcile_live(&sample_pending_work("tx:0xtx-gateway"))
+        .expect_err("gateway relayer error should surface");
+
+    assert!(err.reason.contains("gateway relayer down"));
+    server.finish_without_request();
+}
+
+#[tokio::test]
 async fn polymarket_reconcile_provider_surfaces_transport_failures_as_provider_errors() {
     let server = MockServer::spawn("500 Internal Server Error", r#"{"error":"boom"}"#);
     let provider = sample_reconcile_provider(server.base_url());
@@ -250,11 +347,35 @@ fn sample_submit_provider(base_url: Url) -> PolymarketNegRiskSubmitProvider<'sta
     )
 }
 
+fn sample_submit_provider_with_gateway(
+    base_url: Url,
+    gateway: PolymarketGateway,
+) -> PolymarketNegRiskSubmitProvider<'static> {
+    PolymarketNegRiskSubmitProvider::with_gateway(
+        sample_rest_client(base_url),
+        sample_l2_auth(),
+        sample_post_order_transport(),
+        gateway,
+    )
+}
+
 fn sample_reconcile_provider(base_url: Url) -> PolymarketNegRiskReconcileProvider<'static> {
     PolymarketNegRiskReconcileProvider::new(
         sample_rest_client(base_url),
         sample_l2_auth(),
         sample_relayer_auth(),
+    )
+}
+
+fn sample_reconcile_provider_with_gateway(
+    base_url: Url,
+    gateway: PolymarketGateway,
+) -> PolymarketNegRiskReconcileProvider<'static> {
+    PolymarketNegRiskReconcileProvider::with_gateway(
+        sample_rest_client(base_url),
+        sample_l2_auth(),
+        sample_relayer_auth(),
+        gateway,
     )
 }
 
@@ -367,6 +488,26 @@ fn sample_multi_member_submission() -> SignedFamilySubmission {
         },
     });
     signed
+}
+
+fn confirmed_transaction(tx_ref: &str) -> RelayerTransaction {
+    RelayerTransaction {
+        transaction_id: tx_ref.to_owned(),
+        transaction_hash: Some(tx_ref.to_owned()),
+        from_address: None,
+        to_address: None,
+        proxy_address: None,
+        nonce: Some("60".to_owned()),
+        state: Some("STATE_CONFIRMED".to_owned()),
+        wallet_type: Some(RelayerTransactionType::Safe),
+        owner: Some("0x4444444444444444444444444444444444444444".to_owned()),
+        created_at: None,
+        updated_at: None,
+        data: None,
+        value: None,
+        signature: None,
+        metadata: None,
+    }
 }
 
 fn sample_post_order_transport() -> PostOrderTransport {

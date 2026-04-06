@@ -11,13 +11,17 @@ use execution::{
 };
 
 use crate::orders::{build_post_order_request_from_signed_member, PostOrderTransport};
-use crate::{L2AuthHeaders, PolymarketRestClient, RelayerAuth, RestError};
+use crate::{
+    L2AuthHeaders, PolymarketGateway, PolymarketOrderQuery, PolymarketRestClient,
+    PolymarketSignedOrder, PolymarketSubmitResponse, RelayerAuth, RestError,
+};
 
 const PROVIDER_NAME: &str = "polymarket";
 
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskSubmitProvider<'a> {
     rest: PolymarketRestClient,
+    gateway: Option<PolymarketGateway>,
     auth: L2AuthHeaders<'a>,
     transport: PostOrderTransport,
 }
@@ -25,6 +29,7 @@ pub struct PolymarketNegRiskSubmitProvider<'a> {
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskReconcileProvider<'a> {
     rest: PolymarketRestClient,
+    gateway: Option<PolymarketGateway>,
     l2_auth: L2AuthHeaders<'a>,
     relayer_auth: RelayerAuth<'a>,
 }
@@ -54,6 +59,21 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     ) -> Self {
         Self {
             rest,
+            gateway: None,
+            auth,
+            transport,
+        }
+    }
+
+    pub fn with_gateway(
+        rest: PolymarketRestClient,
+        auth: L2AuthHeaders<'a>,
+        transport: PostOrderTransport,
+        gateway: PolymarketGateway,
+    ) -> Self {
+        Self {
+            rest,
+            gateway: Some(gateway),
             auth,
             transport,
         }
@@ -76,15 +96,24 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
             .expect("validated single-member family submission");
         let submission = build_post_order_request_from_signed_member(member, &self.transport)
             .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
-        let request = self
-            .rest
-            .build_submit_order_request(&self.auth, &submission)
-            .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
-        let response = self
-            .rest
-            .execute_json::<SubmitOrderResponse>(request)
-            .await
-            .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?;
+        let response = if let Some(gateway) = &self.gateway {
+            let gateway_order = polymarket_signed_order_from_submission(&submission)
+                .map_err(SubmitProviderError::new)?;
+            let response = gateway
+                .submit_order(gateway_order)
+                .await
+                .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
+            submit_order_response_from_gateway(response)
+        } else {
+            let request = self
+                .rest
+                .build_submit_order_request(&self.auth, &submission)
+                .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
+            self.rest
+                .execute_json::<SubmitOrderResponse>(request)
+                .await
+                .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?
+        };
 
         if !response.success {
             return Ok(LiveSubmitOutcome::RejectedDefinitive {
@@ -142,6 +171,21 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
     ) -> Self {
         Self {
             rest,
+            gateway: None,
+            l2_auth,
+            relayer_auth,
+        }
+    }
+
+    pub fn with_gateway(
+        rest: PolymarketRestClient,
+        l2_auth: L2AuthHeaders<'a>,
+        relayer_auth: RelayerAuth<'a>,
+        gateway: PolymarketGateway,
+    ) -> Self {
+        Self {
+            rest,
+            gateway: Some(gateway),
             l2_auth,
             relayer_auth,
         }
@@ -163,8 +207,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         tx_ref: &str,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
         let transactions = self
-            .rest
-            .fetch_recent_transactions(&self.relayer_auth)
+            .fetch_recent_transactions()
             .await
             .map_err(map_relayer_error)?;
         let matching_transactions: Vec<_> = transactions
@@ -207,8 +250,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         order_id: &str,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
         let open_orders = self
-            .rest
-            .fetch_open_orders(&self.l2_auth)
+            .fetch_open_orders()
             .await
             .map_err(map_open_orders_error)?;
 
@@ -219,6 +261,42 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         }
 
         Ok(ReconcileOutcome::StillPending)
+    }
+}
+
+impl PolymarketNegRiskReconcileProvider<'_> {
+    async fn fetch_recent_transactions(&self) -> Result<Vec<crate::RelayerTransaction>, RestError> {
+        if let Some(gateway) = &self.gateway {
+            return gateway
+                .recent_transactions(&self.relayer_auth)
+                .await
+                .map_err(RestError::from);
+        }
+
+        self.rest
+            .fetch_recent_transactions(&self.relayer_auth)
+            .await
+    }
+
+    async fn fetch_open_orders(&self) -> Result<Vec<crate::OpenOrderSummary>, RestError> {
+        if let Some(gateway) = &self.gateway {
+            return gateway
+                .open_orders(PolymarketOrderQuery::open_orders())
+                .await
+                .map(|orders| {
+                    orders
+                        .into_iter()
+                        .map(|order| crate::OpenOrderSummary {
+                            order_id: order.order_id,
+                            status: None,
+                            market: None,
+                        })
+                        .collect()
+                })
+                .map_err(RestError::from);
+        }
+
+        self.rest.fetch_open_orders(&self.l2_auth).await
     }
 }
 
@@ -313,4 +391,30 @@ fn map_relayer_error(error: RestError) -> ReconcileProviderError {
 
 fn map_open_orders_error(error: RestError) -> ReconcileProviderError {
     ReconcileProviderError::new(format!("open orders status error: {error}"))
+}
+
+fn polymarket_signed_order_from_submission(
+    submission: &crate::orders::PostOrderRequest,
+) -> Result<PolymarketSignedOrder, String> {
+    let order = serde_json::to_value(&submission.order)
+        .map_err(|err| format!("submit order serialization error: {err}"))?;
+
+    Ok(PolymarketSignedOrder {
+        order,
+        owner: submission.owner.clone(),
+        order_type: match submission.order_type {
+            crate::OrderType::Gtc => "GTC".to_owned(),
+        },
+        defer_exec: submission.defer_exec,
+    })
+}
+
+fn submit_order_response_from_gateway(response: PolymarketSubmitResponse) -> SubmitOrderResponse {
+    SubmitOrderResponse {
+        success: response.success,
+        order_id: response.order_id,
+        status: response.status,
+        transaction_hashes: response.transaction_hashes,
+        error_msg: response.error_message.unwrap_or_default(),
+    }
 }
