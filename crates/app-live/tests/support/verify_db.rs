@@ -10,13 +10,14 @@ use chrono::{DateTime, Utc};
 use domain::ExecutionMode;
 use persistence::{
     models::{
-        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        ExecutionAttemptRow, JournalEntryInput, LiveExecutionArtifactRow, LiveSubmissionRecordRow,
-        RunSessionRow, RunSessionState, ShadowExecutionArtifactRow,
+        AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow,
+        CandidateTargetSetRow, ExecutionAttemptRow, JournalEntryInput, LiveExecutionArtifactRow,
+        LiveSubmissionRecordRow, RunSessionRow, RunSessionState, ShadowExecutionArtifactRow,
+        StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
     JournalRepo, LiveArtifactRepo, LiveSubmissionRepo, RunSessionRepo, RuntimeProgressRepo,
-    ShadowArtifactRepo,
+    ShadowArtifactRepo, StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -185,6 +186,135 @@ impl TestDatabase {
                 )
                 .await
                 .expect("runtime progress should seed");
+        });
+    }
+
+    pub fn seed_strategy_runtime_progress(&self, operator_strategy_revision: &str) {
+        self.runtime.block_on(async {
+            RuntimeProgressRepo
+                .record_progress_with_strategy_revision(
+                    &self.pool,
+                    41,
+                    7,
+                    Some("snapshot-verify-7"),
+                    None,
+                    Some(operator_strategy_revision),
+                    None,
+                )
+                .await
+                .expect("strategy runtime progress should seed");
+        });
+    }
+
+    pub fn seed_adopted_strategy_revision_with_routes(
+        &self,
+        operator_strategy_revision: &str,
+        include_full_set: bool,
+    ) {
+        self.runtime.block_on(async {
+            let strategy_candidate_revision =
+                format!("strategy-candidate-{operator_strategy_revision}");
+            let adoptable_strategy_revision = format!("adoptable-{operator_strategy_revision}");
+            let mut route_artifacts = Vec::new();
+            if include_full_set {
+                route_artifacts.push(json!({
+                    "key": {
+                        "route": "full-set",
+                        "scope": "default",
+                    },
+                    "route_policy_version": "full-set-route-policy-v1",
+                    "semantic_digest": "full-set-basis-default",
+                    "content": {
+                        "config_basis_digest": "full-set-basis-default",
+                        "mode": "static-default",
+                    },
+                }));
+            }
+            route_artifacts.push(json!({
+                "key": {
+                    "route": "neg-risk",
+                    "scope": "family-a",
+                },
+                "route_policy_version": "neg-risk-route-policy-v1",
+                "semantic_digest": "family-a",
+                "content": {
+                    "family_id": "family-a",
+                    "rendered_live_target": {
+                        "family_id": "family-a",
+                        "members": [
+                            {
+                                "condition_id": "condition-1",
+                                "token_id": "token-1",
+                                "price": "0.43",
+                                "quantity": "5",
+                            }
+                        ]
+                    },
+                    "target_id": "candidate-target-family-a",
+                    "validation": {
+                        "status": "adoptable",
+                    },
+                },
+            }));
+
+            StrategyControlArtifactRepo
+                .upsert_strategy_candidate_set(
+                    &self.pool,
+                    &StrategyCandidateSetRow {
+                        strategy_candidate_revision: strategy_candidate_revision.clone(),
+                        snapshot_id: format!("snapshot-{operator_strategy_revision}"),
+                        source_revision: format!("discovery-{operator_strategy_revision}"),
+                        payload: json!({
+                            "strategy_candidate_revision": strategy_candidate_revision,
+                            "snapshot_id": format!("snapshot-{operator_strategy_revision}"),
+                        }),
+                    },
+                )
+                .await
+                .expect("strategy candidate should seed");
+
+            StrategyControlArtifactRepo
+                .upsert_adoptable_strategy_revision(
+                    &self.pool,
+                    &AdoptableStrategyRevisionRow {
+                        adoptable_strategy_revision: adoptable_strategy_revision.clone(),
+                        strategy_candidate_revision: strategy_candidate_revision.clone(),
+                        rendered_operator_strategy_revision: operator_strategy_revision.to_owned(),
+                        payload: json!({
+                            "adoptable_strategy_revision": adoptable_strategy_revision,
+                            "strategy_candidate_revision": strategy_candidate_revision,
+                            "rendered_operator_strategy_revision": operator_strategy_revision,
+                            "route_artifacts": route_artifacts,
+                            "rendered_live_targets": {
+                                "family-a": {
+                                    "family_id": "family-a",
+                                    "members": [
+                                        {
+                                            "condition_id": "condition-1",
+                                            "token_id": "token-1",
+                                            "price": "0.43",
+                                            "quantity": "5",
+                                        }
+                                    ]
+                                }
+                            }
+                        }),
+                    },
+                )
+                .await
+                .expect("adoptable strategy should seed");
+
+            StrategyAdoptionRepo
+                .upsert_provenance(
+                    &self.pool,
+                    &StrategyAdoptionProvenanceRow {
+                        operator_strategy_revision: operator_strategy_revision.to_owned(),
+                        adoptable_strategy_revision,
+                        strategy_candidate_revision,
+                    },
+                )
+                .await
+                .expect("strategy provenance should seed");
         });
     }
 
@@ -372,6 +502,47 @@ pub fn live_ready_config() -> String {
     live_ready_config_for("targets-rev-9")
 }
 
+pub fn live_ready_strategy_config() -> String {
+    live_ready_strategy_config_for("strategy-rev-12")
+}
+
+pub fn live_ready_strategy_config_for(operator_strategy_revision: &str) -> String {
+    format!(
+        r#"[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "{operator_strategy_revision}"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+"#
+    )
+}
+
 pub fn live_ready_config_for(operator_target_revision: &str) -> String {
     format!(
         r#"[runtime]
@@ -517,6 +688,14 @@ ready_families = ["family-a"]
 pub mod config_shapes {
     pub fn live_ready_config() -> String {
         super::live_ready_config()
+    }
+
+    pub fn live_ready_strategy_config() -> String {
+        super::live_ready_strategy_config()
+    }
+
+    pub fn live_ready_strategy_config_for(operator_strategy_revision: &str) -> String {
+        super::live_ready_strategy_config_for(operator_strategy_revision)
     }
 
     pub fn live_ready_config_for(operator_target_revision: &str) -> String {

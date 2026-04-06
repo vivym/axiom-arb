@@ -42,11 +42,12 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     let runtime = Builder::new_current_thread().enable_all().build()?;
     let (resolved_session, evidence_result, active_routes) = match runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        let active_routes = context::load_active_routes(&pool, &args.config)
-            .await
-            .map_err(io::Error::other)?;
         let resolved_session =
             session::resolve_session_window(&pool, &verify_context, &selection).await?;
+        let active_routes =
+            context::load_active_routes(&pool, &args.config, &selection, &resolved_session)
+                .await
+                .map_err(io::Error::other)?;
         let evidence = evidence::load(&pool, &selection, &resolved_session, &active_routes).await;
         Ok::<_, Box<dyn Error>>((resolved_session, evidence, active_routes))
     }) {
@@ -222,49 +223,28 @@ fn evaluate_outcome_with_route_reports(
     Vec<String>,
     Vec<RouteVerdictReport>,
 ) {
+    let (foundation_verdict, foundation_reason, foundation_next_actions) =
+        evaluate_foundation_outcome(verify_context, anchor_comparison, evidence);
     let route_reports = route_verdict_reports(verify_context, anchor_comparison, evidence);
     if route_reports.is_empty() {
-        let (verdict, reason, next_actions) =
-            evaluate_foundation_outcome(verify_context, anchor_comparison, evidence);
-        return (verdict, reason, next_actions, Vec::new());
+        return (
+            foundation_verdict,
+            foundation_reason,
+            foundation_next_actions,
+            Vec::new(),
+        );
     }
 
-    let verdict = aggregate_route_verdict(&route_reports);
-    let primary_reason = route_reports
-        .iter()
-        .find(|report| matches!(report.verdict, model::VerifyVerdict::Fail))
-        .or_else(|| {
-            route_reports
-                .iter()
-                .find(|report| matches!(report.verdict, model::VerifyVerdict::PassWithWarnings))
-        })
-        .and_then(|report| report.reason.clone());
-    let reason = Some(format!(
-        "route verdicts: {}{}",
-        route_reports
-            .iter()
-            .map(|report| format!("{}={}", report.route, report.verdict.label()))
-            .collect::<Vec<_>>()
-            .join(", "),
-        primary_reason
-            .map(|reason| format!("; {reason}"))
-            .unwrap_or_default()
-    ));
-    let next_actions = if matches!(verdict, model::VerifyVerdict::Fail) {
-        route_reports
-            .iter()
-            .filter(|report| matches!(report.verdict, model::VerifyVerdict::Fail))
-            .flat_map(|_| {
-                next_actions_from_context(
-                    verify_context,
-                    &["run app-live status --config {config}"],
-                )
-            })
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
+    let route_verdict = aggregate_route_verdict(&route_reports);
+    let route_reason = route_summary_reason(&route_reports);
+    let verdict = aggregate_verdicts(&[foundation_verdict, route_verdict]);
+    let route_next_actions =
+        next_actions_from_context(verify_context, &["run app-live status --config {config}"]);
+
+    let (reason, next_actions) = if verdict_rank(route_verdict) > verdict_rank(foundation_verdict) {
+        (route_reason.or(foundation_reason), route_next_actions)
     } else {
-        next_actions_from_context(verify_context, &["run app-live status --config {config}"])
+        (foundation_reason.or(route_reason), foundation_next_actions)
     };
 
     (verdict, reason, next_actions, route_reports)
@@ -297,21 +277,35 @@ fn route_verdict_reports(
         return Vec::new();
     }
 
-    evidence::routes_with_evidence(evidence, &verify_context.active_routes)
+    evidence::routes_to_evaluate(evidence, &verify_context.active_routes)
         .into_iter()
         .map(|route| {
             let route_evidence = evidence::window_for_route(evidence, &route);
-            let (verdict, reason, _next_actions) = match mode {
-                model::VerifyControlPlaneMode::Live => {
-                    evaluate_live_outcome(verify_context, &route_evidence)
-                }
-                model::VerifyControlPlaneMode::RealUserShadowSmoke => {
-                    evaluate_smoke_outcome(verify_context, &route_evidence)
-                }
-                model::VerifyControlPlaneMode::Paper => {
-                    evaluate_paper_outcome(verify_context, &route_evidence)
-                }
-            };
+            let (verdict, reason, _next_actions) =
+                if evidence::route_has_local_evidence(&route_evidence) {
+                    match mode {
+                        model::VerifyControlPlaneMode::Live => {
+                            evaluate_live_outcome(verify_context, &route_evidence)
+                        }
+                        model::VerifyControlPlaneMode::RealUserShadowSmoke => {
+                            evaluate_smoke_outcome(verify_context, &route_evidence)
+                        }
+                        model::VerifyControlPlaneMode::Paper => {
+                            evaluate_paper_outcome(verify_context, &route_evidence)
+                        }
+                    }
+                } else {
+                    (
+                        model::VerifyVerdict::PassWithWarnings,
+                        Some(format!(
+                            "no local evidence observed for active route {route}"
+                        )),
+                        next_actions_from_context(
+                            verify_context,
+                            &["run app-live status --config {config}"],
+                        ),
+                    )
+                };
 
             RouteVerdictReport {
                 route,
@@ -335,6 +329,54 @@ fn aggregate_route_verdict(route_reports: &[RouteVerdictReport]) -> model::Verif
         model::VerifyVerdict::PassWithWarnings
     } else {
         model::VerifyVerdict::Pass
+    }
+}
+
+fn aggregate_verdicts(verdicts: &[model::VerifyVerdict]) -> model::VerifyVerdict {
+    if verdicts
+        .iter()
+        .any(|verdict| matches!(verdict, model::VerifyVerdict::Fail))
+    {
+        model::VerifyVerdict::Fail
+    } else if verdicts
+        .iter()
+        .any(|verdict| matches!(verdict, model::VerifyVerdict::PassWithWarnings))
+    {
+        model::VerifyVerdict::PassWithWarnings
+    } else {
+        model::VerifyVerdict::Pass
+    }
+}
+
+fn route_summary_reason(route_reports: &[RouteVerdictReport]) -> Option<String> {
+    let primary_reason = route_reports
+        .iter()
+        .find(|report| matches!(report.verdict, model::VerifyVerdict::Fail))
+        .or_else(|| {
+            route_reports
+                .iter()
+                .find(|report| matches!(report.verdict, model::VerifyVerdict::PassWithWarnings))
+        })
+        .and_then(|report| report.reason.clone());
+
+    Some(format!(
+        "route verdicts: {}{}",
+        route_reports
+            .iter()
+            .map(|report| format!("{}={}", report.route, report.verdict.label()))
+            .collect::<Vec<_>>()
+            .join(", "),
+        primary_reason
+            .map(|reason| format!("; {reason}"))
+            .unwrap_or_default()
+    ))
+}
+
+fn verdict_rank(verdict: model::VerifyVerdict) -> u8 {
+    match verdict {
+        model::VerifyVerdict::Pass => 0,
+        model::VerifyVerdict::PassWithWarnings => 1,
+        model::VerifyVerdict::Fail => 2,
     }
 }
 
@@ -1115,12 +1157,10 @@ mod tests {
             evaluate_foundation_outcome(&context, &noncomparable_anchor(), &evidence);
 
         assert_eq!(verdict, VerifyVerdict::Fail);
-        assert!(
-            reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("forbidden live side effects")
-        );
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("forbidden live side effects"));
     }
 
     #[test]
@@ -1142,12 +1182,10 @@ mod tests {
             evaluate_foundation_outcome(&context, &comparable_anchor(), &evidence);
 
         assert_eq!(verdict, VerifyVerdict::Fail);
-        assert!(
-            reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("contradictory local outcomes")
-        );
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("contradictory local outcomes"));
     }
 
     #[test]
@@ -1168,12 +1206,10 @@ mod tests {
             evaluate_foundation_outcome(&context, &noncomparable_anchor(), &evidence);
 
         assert_eq!(verdict, VerifyVerdict::Fail);
-        assert!(
-            reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("contradictory local outcomes")
-        );
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("contradictory local outcomes"));
     }
 
     #[test]
@@ -1205,19 +1241,15 @@ mod tests {
         );
 
         assert_eq!(paper_verdict, VerifyVerdict::Fail);
-        assert!(
-            paper_reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("not compatible")
-        );
+        assert!(paper_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not compatible"));
         assert_eq!(smoke_verdict, VerifyVerdict::Fail);
-        assert!(
-            smoke_reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains("not compatible")
-        );
+        assert!(smoke_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("not compatible"));
     }
 
     #[test]
@@ -1239,11 +1271,9 @@ mod tests {
             evaluate_foundation_outcome(&context, &comparable_anchor(), &evidence);
 
         assert_eq!(verdict, VerifyVerdict::PassWithWarnings);
-        assert!(
-            next_actions
-                .iter()
-                .any(|action| action.contains("app-live apply --config"))
-        );
+        assert!(next_actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
     }
 
     #[test]
@@ -1259,11 +1289,9 @@ mod tests {
         let actions =
             next_actions_from_context(&context, &["run app-live status --config {config}"]);
 
-        assert!(
-            actions
-                .iter()
-                .any(|action| action.contains("app-live apply --config"))
-        );
+        assert!(actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
     }
 
     #[test]
@@ -1288,11 +1316,9 @@ mod tests {
         let live_actions =
             next_actions_from_context(&live_context, &["run app-live status --config {config}"]);
 
-        assert!(
-            smoke_actions
-                .iter()
-                .any(|action| action.contains("app-live apply --config"))
-        );
+        assert!(smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
         assert!(live_actions.iter().any(|action| {
             action.contains("approved_scopes") && action.contains("ready_scopes")
         }));
@@ -1311,16 +1337,12 @@ mod tests {
         let smoke_actions =
             next_actions_from_context(&smoke_context, &["run app-live status --config {config}"]);
 
-        assert!(
-            smoke_actions
-                .iter()
-                .any(|action| action.contains("app-live apply --config"))
-        );
-        assert!(
-            !smoke_actions
-                .iter()
-                .any(|action| action.contains("app-live targets adopt --config"))
-        );
+        assert!(smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live apply --config")));
+        assert!(!smoke_actions
+            .iter()
+            .any(|action| action.contains("app-live targets adopt --config")));
     }
 
     fn populated_report_fixture() -> VerifyReport {

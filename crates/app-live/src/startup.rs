@@ -171,12 +171,10 @@ pub async fn resolve_startup_strategy_revision(
             .operator_target_revision()
             .ok_or(StartupError::MissingOperatorTargetRevision)?
             .to_owned();
-        let targets = resolve_adopted_targets_from_operator_target_revision(
-            pool,
-            &operator_target_revision,
-        )
-        .await?
-        .targets;
+        let targets =
+            resolve_adopted_targets_from_operator_target_revision(pool, &operator_target_revision)
+                .await?
+                .targets;
         return Ok(ResolvedStrategyRevision {
             operator_strategy_revision: Some(operator_target_revision.clone()),
             route_artifacts: compatibility_route_artifacts_from_targets(&targets),
@@ -196,6 +194,26 @@ pub async fn resolve_startup_strategy_revision(
         route_artifacts: compatibility_route_artifacts_from_targets(&targets),
         compatibility_mode: config.is_legacy_explicit_strategy_config(),
     })
+}
+
+pub async fn resolve_route_artifacts_for_operator_target_revision(
+    pool: &PgPool,
+    operator_target_revision: &str,
+) -> Result<BTreeMap<String, Vec<RouteRuntimeArtifact>>, StartupError> {
+    let targets =
+        resolve_adopted_targets_from_operator_target_revision(pool, operator_target_revision)
+            .await?
+            .targets;
+    Ok(compatibility_route_artifacts_from_targets(&targets))
+}
+
+pub async fn resolve_route_artifacts_for_operator_strategy_revision(
+    pool: &PgPool,
+    operator_strategy_revision: &str,
+) -> Result<BTreeMap<String, Vec<RouteRuntimeArtifact>>, StartupError> {
+    resolve_adopted_strategy_revision(pool, operator_strategy_revision)
+        .await
+        .map(|resolved| resolved.route_artifacts)
 }
 
 async fn resolve_adopted_targets_from_operator_target_revision(
@@ -241,20 +259,19 @@ async fn resolve_adopted_strategy_revision(
         .ok_or_else(|| StartupError::MissingStrategyAdoptionProvenance {
             operator_strategy_revision: operator_strategy_revision.to_owned(),
         })?;
-    let route_artifacts =
-        parse_route_artifacts(&adoptable.payload, operator_strategy_revision).or_else(|error| {
-            match error {
-                StartupError::MissingRouteArtifacts { .. } => {
-                    let targets = parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
-                    Ok(compatibility_route_artifacts_from_targets(
-                        &NegRiskLiveTargetSet::from_targets_with_revision(
-                            operator_strategy_revision.to_owned(),
-                            targets,
-                        ),
-                    ))
-                }
-                other => Err(other),
+    let route_artifacts = parse_route_artifacts(&adoptable.payload, operator_strategy_revision)
+        .or_else(|error| match error {
+            StartupError::MissingRouteArtifacts { .. } => {
+                let targets =
+                    parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
+                Ok(compatibility_route_artifacts_from_targets(
+                    &NegRiskLiveTargetSet::from_targets_with_revision(
+                        operator_strategy_revision.to_owned(),
+                        targets,
+                    ),
+                ))
             }
+            other => Err(other),
         })?;
 
     Ok(ResolvedStrategyRevision {
@@ -288,12 +305,13 @@ fn parse_route_artifacts(
             operator_strategy_revision: operator_strategy_revision.to_owned(),
         })?
         .clone();
-    let artifacts = serde_json::from_value::<Vec<SerializedRouteArtifact>>(artifacts).map_err(
-        |error| StartupError::InvalidRouteArtifacts {
-            operator_strategy_revision: operator_strategy_revision.to_owned(),
-            message: error.to_string(),
-        },
-    )?;
+    let artifacts =
+        serde_json::from_value::<Vec<SerializedRouteArtifact>>(artifacts).map_err(|error| {
+            StartupError::InvalidRouteArtifacts {
+                operator_strategy_revision: operator_strategy_revision.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
 
     if artifacts.is_empty() {
         return Err(StartupError::EmptyRouteArtifacts {

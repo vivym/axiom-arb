@@ -27,8 +27,8 @@ fn verify_subcommand_is_exposed() {
 }
 
 #[test]
-fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_no_live_attempts_exist()
- {
+fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_no_live_attempts_exist(
+) {
     let verify_db = verify_db::TestDatabase::new();
 
     let output = Command::new(cli::app_live_binary())
@@ -219,6 +219,79 @@ fn verify_fails_if_any_active_route_fails() {
     assert!(text.contains("Verdict: FAIL"), "{text}");
     assert!(text.contains("Route neg-risk: PASS"), "{text}");
     assert!(text.contains("Route full-set: FAIL"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_live_warns_when_an_active_route_has_no_evidence() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-missing-route-evidence",
+        &verify_db::live_ready_config(),
+    );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-neg-risk-only");
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(text.contains("Route neg-risk: PASS"), "{text}");
+    assert!(
+        text.contains("Route full-set: PASS WITH WARNINGS"),
+        "{text}"
+    );
+    assert!(
+        text.contains("no local evidence observed for active route full-set"),
+        "{text}"
+    );
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_live_latest_window_ignores_newer_inactive_route_attempts() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-live-route-window",
+        &verify_db::live_ready_config(),
+    );
+    verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-neg-risk-window");
+    verify_db.seed_attempt(verify_db::sample_attempt_for_route(
+        "attempt-live-full-set-window",
+        ExecutionMode::Live,
+        "full-set",
+    ));
+    for i in 0..25 {
+        verify_db.seed_attempt(verify_db::sample_attempt_for_route(
+            &format!("attempt-live-other-route-{i}"),
+            ExecutionMode::Live,
+            "other-route",
+        ));
+    }
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("Route neg-risk: PASS"), "{text}");
+    assert!(text.contains("Route full-set: PASS"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -530,6 +603,58 @@ fn verify_since_with_unique_session_mapping_keeps_strong_interpretation() {
         .find("Next Actions")
         .unwrap_or_else(|| panic!("{text}"));
     assert!(run_session_idx < next_actions_idx, "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_historical_unique_window_uses_routes_from_the_historical_revision() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-historical-routes",
+        &verify_db::config_shapes::live_ready_strategy_config(),
+    );
+    verify_db.seed_adopted_strategy_revision_with_routes("strategy-rev-12", true);
+    verify_db.seed_adopted_strategy_revision_with_routes("strategy-rev-neg-only", false);
+    verify_db.seed_strategy_runtime_progress("strategy-rev-12");
+    let mut session = verify_db.sample_run_session(
+        "rs-live-historical-routes",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "strategy-rev-neg-only",
+        None,
+        None,
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(3),
+        Utc::now() - Duration::minutes(2),
+    );
+    session.configured_operator_strategy_revision = Some("strategy-rev-neg-only".to_owned());
+    session.active_operator_strategy_revision_at_start = Some("strategy-rev-neg-only".to_owned());
+    verify_db.seed_run_session(session);
+    verify_db.seed_live_attempt_with_artifacts_for_run_session(
+        "attempt-live-historical-neg-risk-1",
+        "rs-live-historical-routes",
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--since")
+        .arg("4m")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("Route neg-risk: PASS"), "{text}");
+    assert!(!text.contains("Route full-set"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);

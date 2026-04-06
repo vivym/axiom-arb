@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use config_schema::{ValidatedConfig, load_raw_config_from_path};
+use config_schema::{load_raw_config_from_path, ValidatedConfig};
 use sqlx::PgPool;
 
 use super::{
@@ -45,7 +45,42 @@ pub fn load(config_path: &Path) -> VerifyContext {
     }
 }
 
-pub async fn load_active_routes(pool: &PgPool, config_path: &Path) -> Result<Vec<String>, String> {
+pub async fn load_active_routes(
+    pool: &PgPool,
+    config_path: &Path,
+    selection: &VerifyWindowSelection,
+    resolved_session: &ResolvedVerifySession,
+) -> Result<Vec<String>, String> {
+    if selection.is_historical_explicit() && resolved_session.historical_window_unique {
+        if let Some(session) = resolved_session.historical_window_session.as_ref() {
+            if let Some(operator_strategy_revision) =
+                session.configured_operator_strategy_revision.as_deref()
+            {
+                let route_artifacts =
+                    startup::resolve_route_artifacts_for_operator_strategy_revision(
+                        pool,
+                        operator_strategy_revision,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                return Ok(route_artifacts.into_keys().collect());
+            }
+
+            if let Some(operator_target_revision) =
+                session.configured_operator_target_revision.as_deref()
+            {
+                let route_artifacts =
+                    startup::resolve_route_artifacts_for_operator_target_revision(
+                        pool,
+                        operator_target_revision,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                return Ok(route_artifacts.into_keys().collect());
+            }
+        }
+    }
+
     let raw = load_raw_config_from_path(config_path).map_err(|error| error.to_string())?;
     let validated = ValidatedConfig::new(raw).map_err(|error| error.to_string())?;
     let config = validated
@@ -200,7 +235,7 @@ fn map_rollout_state(state: StatusRolloutState) -> VerifyControlPlaneRolloutStat
 #[cfg(test)]
 mod tests {
     use super::{
-        VerifyContext, compare_window_to_current_config_anchor, parse_expectation_override,
+        compare_window_to_current_config_anchor, parse_expectation_override, VerifyContext,
     };
     use crate::commands::verify::{
         model::{
