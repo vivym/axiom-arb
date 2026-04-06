@@ -223,13 +223,7 @@ fn rewrite_smoke_rollout_families_supports_route_owned_rollout_after_strategy_mi
     let raw = load_raw_config_from_path(&path).unwrap();
     let validated = ValidatedConfig::new(raw.clone()).unwrap();
     let _ = validated;
-    let rollout = raw
-        .strategies
-        .unwrap()
-        .neg_risk
-        .unwrap()
-        .rollout
-        .unwrap();
+    let rollout = raw.strategies.unwrap().neg_risk.unwrap().rollout.unwrap();
     assert_eq!(
         rollout.approved_scopes,
         vec!["family-a".to_owned(), "family-b".to_owned()]

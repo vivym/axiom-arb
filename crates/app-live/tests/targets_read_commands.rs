@@ -159,8 +159,14 @@ fn targets_status_reports_compatibility_mode_for_legacy_explicit_config() {
 
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
-    assert!(text.contains("compatibility_mode = legacy-explicit"), "{text}");
-    assert!(text.contains("configured_operator_strategy_revision = unavailable"), "{text}");
+    assert!(
+        text.contains("compatibility_mode = legacy-explicit"),
+        "{text}"
+    );
+    assert!(
+        text.contains("configured_operator_strategy_revision = unavailable"),
+        "{text}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -284,7 +290,10 @@ fn targets_status_fails_when_configured_revision_has_no_durable_provenance() {
 
     let text = combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(!text.contains("adopted operator_strategy_revision"), "{text}");
+    assert!(
+        !text.contains("adopted operator_strategy_revision"),
+        "{text}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -368,7 +377,9 @@ fn targets_status_treats_matching_legacy_digest_anchor_as_no_restart_after_strat
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(
-        text.contains(format!("configured_operator_strategy_revision = {strategy_revision}").as_str()),
+        text.contains(
+            format!("configured_operator_strategy_revision = {strategy_revision}").as_str()
+        ),
         "{text}"
     );
     assert!(
@@ -774,7 +785,7 @@ impl TestDatabase {
                     )
                     .await
                     .expect("runtime progress should seed with unprovenanced active revision");
-        });
+            });
     }
 
     fn seed_strategy_control_revision_with_legacy_digest_active_runtime(
@@ -786,66 +797,66 @@ impl TestDatabase {
             .build()
             .expect("test runtime should build")
             .block_on(async {
-            let strategy_candidate_revision = format!(
-                "strategy-candidate-{}",
-                strategy_revision.trim_start_matches("strategy-rev-")
-            );
-            let adoptable_strategy_revision = format!(
-                "adoptable-strategy-{}",
-                strategy_revision.trim_start_matches("strategy-rev-")
-            );
-            let artifacts = StrategyControlArtifactRepo;
-            artifacts
-                .upsert_strategy_candidate_set(
-                    &self.pool,
-                    &StrategyCandidateSetRow {
-                        strategy_candidate_revision: strategy_candidate_revision.clone(),
-                        snapshot_id: "snapshot-strategy-compat".to_owned(),
-                        source_revision: "discovery-strategy-compat".to_owned(),
-                        payload: json!({
-                            "strategy_candidate_revision": strategy_candidate_revision,
-                        }),
-                    },
-                )
-                .await
-                .expect("strategy candidate should seed");
-            artifacts
-                .upsert_adoptable_strategy_revision(
-                    &self.pool,
-                    &AdoptableStrategyRevisionRow {
-                        adoptable_strategy_revision: adoptable_strategy_revision.clone(),
-                        strategy_candidate_revision: strategy_candidate_revision.clone(),
-                        rendered_operator_strategy_revision: strategy_revision.to_owned(),
-                        payload: json!({
-                            "rendered_live_targets": sample_rendered_live_targets_json(),
-                        }),
-                    },
-                )
-                .await
-                .expect("strategy adoptable should seed");
-            StrategyAdoptionRepo
-                .upsert_provenance(
-                    &self.pool,
-                    &StrategyAdoptionProvenanceRow {
-                        operator_strategy_revision: strategy_revision.to_owned(),
-                        adoptable_strategy_revision,
-                        strategy_candidate_revision,
-                    },
-                )
-                .await
-                .expect("strategy provenance should seed");
-            RuntimeProgressRepo
-                .record_progress(
-                    &self.pool,
-                    77,
-                    12,
-                    Some("snapshot-strategy-compat"),
-                    Some(&legacy_explicit_operator_target_revision()),
-                    None,
-                )
-                .await
-                .expect("runtime progress should seed");
-        });
+                let strategy_candidate_revision = format!(
+                    "strategy-candidate-{}",
+                    strategy_revision.trim_start_matches("strategy-rev-")
+                );
+                let adoptable_strategy_revision = format!(
+                    "adoptable-strategy-{}",
+                    strategy_revision.trim_start_matches("strategy-rev-")
+                );
+                let artifacts = StrategyControlArtifactRepo;
+                artifacts
+                    .upsert_strategy_candidate_set(
+                        &self.pool,
+                        &StrategyCandidateSetRow {
+                            strategy_candidate_revision: strategy_candidate_revision.clone(),
+                            snapshot_id: "snapshot-strategy-compat".to_owned(),
+                            source_revision: "discovery-strategy-compat".to_owned(),
+                            payload: json!({
+                                "strategy_candidate_revision": strategy_candidate_revision,
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("strategy candidate should seed");
+                artifacts
+                    .upsert_adoptable_strategy_revision(
+                        &self.pool,
+                        &AdoptableStrategyRevisionRow {
+                            adoptable_strategy_revision: adoptable_strategy_revision.clone(),
+                            strategy_candidate_revision: strategy_candidate_revision.clone(),
+                            rendered_operator_strategy_revision: strategy_revision.to_owned(),
+                            payload: json!({
+                                "rendered_live_targets": sample_rendered_live_targets_json(),
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("strategy adoptable should seed");
+                StrategyAdoptionRepo
+                    .upsert_provenance(
+                        &self.pool,
+                        &StrategyAdoptionProvenanceRow {
+                            operator_strategy_revision: strategy_revision.to_owned(),
+                            adoptable_strategy_revision,
+                            strategy_candidate_revision,
+                        },
+                    )
+                    .await
+                    .expect("strategy provenance should seed");
+                RuntimeProgressRepo
+                    .record_progress(
+                        &self.pool,
+                        77,
+                        12,
+                        Some("snapshot-strategy-compat"),
+                        Some(&legacy_explicit_operator_target_revision()),
+                        None,
+                    )
+                    .await
+                    .expect("runtime progress should seed");
+            });
     }
 
     fn cleanup(self) {
@@ -935,8 +946,7 @@ fn legacy_explicit_operator_target_revision() -> String {
 fn legacy_explicit_strategy_revision() -> String {
     format!(
         "strategy-rev-{}",
-        legacy_explicit_operator_target_revision()
-            .trim_start_matches("sha256:")
+        legacy_explicit_operator_target_revision().trim_start_matches("sha256:")
     )
 }
 

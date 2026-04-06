@@ -200,7 +200,9 @@ fn evaluate_live(
             DoctorCheckStatus::Pass,
             format!(
                 "active operator strategy revision: {}",
-                active_operator_strategy_revision.as_deref().unwrap_or("unavailable")
+                active_operator_strategy_revision
+                    .as_deref()
+                    .unwrap_or("unavailable")
             ),
             "",
         );

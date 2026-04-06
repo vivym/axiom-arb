@@ -111,8 +111,14 @@ fn real_user_shadow_smoke_forces_shadow_across_risk_expanding_routes() {
 fn smoke_mode_clamps_all_risk_expanding_routes_to_shadow() {
     let policy = ActivationPolicy::phase_one_defaults().with_real_user_shadow_smoke();
 
-    assert_eq!(policy.mode_for_route("full-set", "default"), ExecutionMode::Shadow);
-    assert_eq!(policy.mode_for_route("neg-risk", "family-a"), ExecutionMode::Shadow);
+    assert_eq!(
+        policy.mode_for_route("full-set", "default"),
+        ExecutionMode::Shadow
+    );
+    assert_eq!(
+        policy.mode_for_route("neg-risk", "family-a"),
+        ExecutionMode::Shadow
+    );
 }
 
 #[test]

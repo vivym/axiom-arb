@@ -53,18 +53,12 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
         .expect("app-live apply should execute for live config");
     let live_text = cli::combined(&live_output);
     assert!(!live_output.status.success(), "{live_text}");
-    assert!(
-        live_text.contains("compatibility mode"),
-        "{live_text}"
-    );
+    assert!(live_text.contains("compatibility mode"), "{live_text}");
     assert!(
         live_text.contains("app-live targets adopt --config"),
         "{live_text}"
     );
-    assert!(
-        live_text.contains("--adopt-compatibility"),
-        "{live_text}"
-    );
+    assert!(live_text.contains("--adopt-compatibility"), "{live_text}");
 }
 
 #[test]
@@ -206,18 +200,9 @@ fn apply_live_legacy_explicit_targets_require_explicit_compatibility_migration()
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(
-        text.contains("compatibility mode"),
-        "{text}"
-    );
-    assert!(
-        text.contains("app-live targets adopt --config"),
-        "{text}"
-    );
-    assert!(
-        text.contains("--adopt-compatibility"),
-        "{text}"
-    );
+    assert!(text.contains("compatibility mode"), "{text}");
+    assert!(text.contains("app-live targets adopt --config"), "{text}");
+    assert!(text.contains("--adopt-compatibility"), "{text}");
     assert!(
         !text.contains("fix the blocking issue, then rerun app-live status --config"),
         "{text}"
@@ -361,10 +346,7 @@ fn apply_can_inline_smoke_target_adoption() {
     );
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
-    assert!(
-        rewritten.contains("[strategy_control]"),
-        "{rewritten}"
-    );
+    assert!(rewritten.contains("[strategy_control]"), "{rewritten}");
     assert!(
         rewritten.contains("operator_strategy_revision = \"targets-rev-9\""),
         "{rewritten}"

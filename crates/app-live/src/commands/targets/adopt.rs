@@ -174,7 +174,8 @@ pub(crate) async fn adopt_selected_revision(
         .map(|active| active != selection.operator_strategy_revision);
 
     ensure_canonical_provenance(pool, &selection).await?;
-    let strategy_candidate_revision = strategy_candidate_revision_for_selection(pool, &selection).await?;
+    let strategy_candidate_revision =
+        strategy_candidate_revision_for_selection(pool, &selection).await?;
 
     let history_row = OperatorStrategyAdoptionHistoryRow {
         adoption_id: format!(
@@ -235,7 +236,9 @@ async fn ensure_canonical_provenance(
         .await?
         .is_none()
     {
-        StrategyAdoptionRepo.upsert_provenance(pool, &canonical).await?;
+        StrategyAdoptionRepo
+            .upsert_provenance(pool, &canonical)
+            .await?;
     }
 
     Ok(())
@@ -427,7 +430,8 @@ async fn ensure_compatibility_migration_artifacts(
     adoptable_strategy_revision: &str,
 ) -> Result<(), Box<dyn Error>> {
     let targets = legacy_explicit_targets(config_path)?;
-    let strategy_candidate_revision = synthetic_strategy_candidate_revision(operator_strategy_revision);
+    let strategy_candidate_revision =
+        synthetic_strategy_candidate_revision(operator_strategy_revision);
 
     StrategyControlArtifactRepo
         .upsert_strategy_candidate_set(

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use domain::{ActivationDecision, ExecutionMode};
 
-use crate::rollout::{index_rules, is_risk_expanding_route, resolve_rule, RolloutRule, RolloutRuleMap};
+use crate::rollout::{
+    index_rules, is_risk_expanding_route, resolve_rule, RolloutRule, RolloutRuleMap,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationPolicy {

@@ -11,8 +11,7 @@ use persistence::{
         AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
         OperatorStrategyAdoptionHistoryRow, RuntimeProgressRow,
     },
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
-    RuntimeProgressRepo,
+    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};

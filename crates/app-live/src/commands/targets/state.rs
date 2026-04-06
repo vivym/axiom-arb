@@ -550,9 +550,7 @@ fn parse_legacy_explicit_targets(
                     .get("token_id")
                     .and_then(|item| item.as_str())
                     .ok_or_else(|| {
-                        TargetStateError::new(
-                            "negrisk.targets.members.token_id must be present",
-                        )
+                        TargetStateError::new("negrisk.targets.members.token_id must be present")
                     })?;
                 let price = member
                     .get("price")
@@ -814,7 +812,9 @@ struct ValidatedRouteArtifact {
     content: serde_json::Value,
 }
 
-fn map_strategy_candidate_row(row: sqlx::postgres::PgRow) -> Result<StrategyCandidateSetRow, sqlx::Error> {
+fn map_strategy_candidate_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<StrategyCandidateSetRow, sqlx::Error> {
     Ok(StrategyCandidateSetRow {
         strategy_candidate_revision: row.try_get("strategy_candidate_revision")?,
         snapshot_id: row.try_get("snapshot_id")?,

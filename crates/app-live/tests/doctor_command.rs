@@ -271,14 +271,8 @@ quantity = "5"
         combined.contains("[OK] startup target resolution succeeded"),
         "{combined}"
     );
-    assert!(
-        combined.contains("[SKIP] compatibility mode"),
-        "{combined}"
-    );
-    assert!(
-        combined.contains("--adopt-compatibility"),
-        "{combined}"
-    );
+    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]
@@ -353,14 +347,8 @@ quantity = "5"
         combined.contains("Next: app-live run --config"),
         "{combined}"
     );
-    assert!(
-        combined.contains("[SKIP] compatibility mode"),
-        "{combined}"
-    );
-    assert!(
-        combined.contains("--adopt-compatibility"),
-        "{combined}"
-    );
+    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]

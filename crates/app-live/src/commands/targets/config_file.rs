@@ -230,7 +230,9 @@ pub fn rewrite_smoke_rollout_families(
             rollout.ready_families.as_slice(),
         )
     };
-    if persisted.0 != normalized_family_ids.as_slice() || persisted.1 != normalized_family_ids.as_slice() {
+    if persisted.0 != normalized_family_ids.as_slice()
+        || persisted.1 != normalized_family_ids.as_slice()
+    {
         return Err(IoError::new(
             ErrorKind::InvalidData,
             "config validation error: rewritten smoke rollout families did not persist",

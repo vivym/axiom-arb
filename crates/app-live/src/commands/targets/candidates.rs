@@ -63,7 +63,8 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
         }
     }
 
-    if let Some(operator_strategy_revision) = state.configured_operator_strategy_revision.as_deref() {
+    if let Some(operator_strategy_revision) = state.configured_operator_strategy_revision.as_deref()
+    {
         let adoptable_revision = state
             .provenance
             .as_ref()

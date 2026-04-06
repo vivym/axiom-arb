@@ -282,11 +282,12 @@ pub fn neg_risk_live_targets_from_route_artifacts(
         if rendered_live_target.is_null() {
             continue;
         }
-        let target = serde_json::from_value::<NegRiskFamilyLiveTarget>(rendered_live_target.clone())
-            .map_err(|error| ConfigError::InvalidJson {
-                value: artifact.scope.clone(),
-                message: error.to_string(),
-            })?;
+        let target =
+            serde_json::from_value::<NegRiskFamilyLiveTarget>(rendered_live_target.clone())
+                .map_err(|error| ConfigError::InvalidJson {
+                    value: artifact.scope.clone(),
+                    message: error.to_string(),
+                })?;
         let family_id = target.family_id.clone();
         if targets.insert(family_id.clone(), target).is_some() {
             return Err(ConfigError::DuplicateFamilyId { family_id });

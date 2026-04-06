@@ -427,8 +427,14 @@ fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
 
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
-    assert!(text.contains("operator_strategy_revision = strategy-rev-"), "{text}");
-    assert!(text.contains("migration_source = legacy-explicit"), "{text}");
+    assert!(
+        text.contains("operator_strategy_revision = strategy-rev-"),
+        "{text}"
+    );
+    assert!(
+        text.contains("migration_source = legacy-explicit"),
+        "{text}"
+    );
 
     let operator_strategy_revision = text
         .lines()
@@ -446,7 +452,10 @@ fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
         operator_strategy_revision.trim_start_matches("strategy-rev-")
     );
     assert_eq!(latest.action_kind, "adopt");
-    assert_eq!(latest.operator_strategy_revision, operator_strategy_revision);
+    assert_eq!(
+        latest.operator_strategy_revision,
+        operator_strategy_revision
+    );
     assert_eq!(
         latest.adoptable_strategy_revision.as_deref(),
         Some(expected_adoptable_revision.as_str())
@@ -456,7 +465,10 @@ fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
         .provenance_for(&operator_strategy_revision)
         .expect("provenance lookup should succeed")
         .expect("canonical provenance should be written");
-    assert_eq!(provenance.operator_strategy_revision, operator_strategy_revision);
+    assert_eq!(
+        provenance.operator_strategy_revision,
+        operator_strategy_revision
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -553,7 +565,10 @@ fn targets_rollback_allows_compatibility_mode_after_neutral_history_exists() {
         text.contains("operator_strategy_revision = targets-rev-8"),
         "{text}"
     );
-    assert!(text.contains("previous_operator_strategy_revision = strategy-rev-"), "{text}");
+    assert!(
+        text.contains("previous_operator_strategy_revision = strategy-rev-"),
+        "{text}"
+    );
     assert!(text.contains("restart_required = false"), "{text}");
 
     let rewritten = fs::read_to_string(&config).expect("rewritten config should load");
@@ -761,9 +776,9 @@ impl TestDatabase {
                 ) AS combined_history
                 "#,
             )
-                .fetch_one(&self.pool)
-                .await
-                .expect("history count should succeed")
+            .fetch_one(&self.pool)
+            .await
+            .expect("history count should succeed")
         })
     }
 
@@ -1228,8 +1243,7 @@ fn legacy_explicit_operator_target_revision() -> String {
 fn legacy_explicit_strategy_revision() -> String {
     format!(
         "strategy-rev-{}",
-        legacy_explicit_operator_target_revision()
-            .trim_start_matches("sha256:")
+        legacy_explicit_operator_target_revision().trim_start_matches("sha256:")
     )
 }
 

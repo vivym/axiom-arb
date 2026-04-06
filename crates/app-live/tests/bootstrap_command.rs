@@ -178,10 +178,7 @@ fn bootstrap_can_adopt_selected_revision_then_reach_smoke_rollout_boundary() {
     );
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
-    assert!(
-        rewritten.contains("[strategy_control]"),
-        "{rewritten}"
-    );
+    assert!(rewritten.contains("[strategy_control]"), "{rewritten}");
     assert!(
         rewritten.contains("operator_strategy_revision = \"targets-rev-9\""),
         "{rewritten}"

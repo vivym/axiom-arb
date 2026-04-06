@@ -36,8 +36,8 @@ fn execute_inner(args: TargetRollbackArgs) -> Result<(), Box<dyn Error>> {
     let summary = runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         let compatibility_mode = compatibility_mode(&args.config)?;
-        let previous_operator_strategy_revision = configured_operator_strategy_revision(&args.config)?
-            .or_else(|| {
+        let previous_operator_strategy_revision =
+            configured_operator_strategy_revision(&args.config)?.or_else(|| {
                 compatibility_mode
                     .as_deref()
                     .map(|_| synthetic_strategy_revision_for_legacy_explicit_config(&args.config))
@@ -69,7 +69,10 @@ fn execute_inner(args: TargetRollbackArgs) -> Result<(), Box<dyn Error>> {
             OperatorStrategyAdoptionHistoryRepo
                 .append(&pool, &history_row)
                 .await?;
-            rewrite_operator_strategy_revision(&args.config, &selection.operator_strategy_revision)?;
+            rewrite_operator_strategy_revision(
+                &args.config,
+                &selection.operator_strategy_revision,
+            )?;
         }
 
         Ok::<_, Box<dyn Error>>(RollbackSummary {

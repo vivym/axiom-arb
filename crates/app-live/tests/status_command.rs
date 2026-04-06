@@ -907,7 +907,10 @@ fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
     assert!(output.status.success(), "{combined}");
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
-    assert!(combined.contains("Target source: compatibility"), "{combined}");
+    assert!(
+        combined.contains("Target source: compatibility"),
+        "{combined}"
+    );
     assert!(
         combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
@@ -916,10 +919,7 @@ fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
         combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
-    assert!(
-        combined.contains("--adopt-compatibility"),
-        "{combined}"
-    );
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[test]
@@ -997,7 +997,10 @@ fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
     assert!(output.status.success(), "{combined}");
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
-    assert!(combined.contains("Target source: compatibility"), "{combined}");
+    assert!(
+        combined.contains("Target source: compatibility"),
+        "{combined}"
+    );
     assert!(
         combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
@@ -1006,10 +1009,7 @@ fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
         combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
-    assert!(
-        combined.contains("--adopt-compatibility"),
-        "{combined}"
-    );
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 
     let _ = fs::remove_file(config);
 }
@@ -1128,10 +1128,7 @@ fn status_details_use_structured_key_fields() {
         details.target_source,
         Some(StatusTargetSource::LegacyExplicitTargets)
     );
-    assert_eq!(
-        details.target_source.unwrap().label(),
-        "compatibility"
-    );
+    assert_eq!(details.target_source.unwrap().label(), "compatibility");
     assert_eq!(details.rollout_state, Some(StatusRolloutState::Ready));
     assert_eq!(details.rollout_state.unwrap().label(), "ready");
     assert_eq!(details.restart_needed, Some(true));
@@ -1180,10 +1177,7 @@ fn status_target_source_labels_are_structured() {
     use app_live::commands::status::model::StatusTargetSource;
 
     let cases = [
-        (
-            StatusTargetSource::LegacyExplicitTargets,
-            "compatibility",
-        ),
+        (StatusTargetSource::LegacyExplicitTargets, "compatibility"),
         (StatusTargetSource::AdoptedTargets, "adopted targets"),
     ];
 

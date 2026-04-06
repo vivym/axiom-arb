@@ -98,7 +98,10 @@ pub struct TargetAdoptArgs {
     #[arg(long)]
     pub config: PathBuf,
 
-    #[arg(long = "operator-strategy-revision", alias = "operator-target-revision")]
+    #[arg(
+        long = "operator-strategy-revision",
+        alias = "operator-target-revision"
+    )]
     pub operator_strategy_revision: Option<String>,
 
     #[arg(long)]
@@ -113,7 +116,10 @@ pub struct TargetRollbackArgs {
     #[arg(long)]
     pub config: PathBuf,
 
-    #[arg(long = "to-operator-strategy-revision", alias = "to-operator-target-revision")]
+    #[arg(
+        long = "to-operator-strategy-revision",
+        alias = "to-operator-target-revision"
+    )]
     pub to_operator_strategy_revision: Option<String>,
 }
 
