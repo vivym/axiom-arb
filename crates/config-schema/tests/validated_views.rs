@@ -104,6 +104,176 @@ ready_families = []
 }
 
 #[test]
+fn validated_config_accepts_pure_neutral_strategy_control_without_legacy_target_source() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(!live.has_target_source());
+    assert!(!live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
+fn validated_config_accepts_pure_neutral_neg_risk_rollout_without_legacy_rollout() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(live.negrisk_rollout().is_none());
+}
+
+#[test]
+fn legacy_explicit_strategy_config_detection_distinguishes_missing_targets_from_explicit_targets() {
+    let missing_targets = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+    let explicit_targets = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk]
+targets = []
+"#,
+    )
+    .unwrap();
+
+    let missing_targets_validated = ValidatedConfig::new(missing_targets).unwrap();
+    let missing_targets_live = missing_targets_validated.for_app_live().unwrap();
+    let explicit_targets_validated = ValidatedConfig::new(explicit_targets).unwrap();
+    let explicit_targets_live = explicit_targets_validated.for_app_live().unwrap();
+
+    assert!(!missing_targets_live.is_legacy_explicit_strategy_config());
+    assert!(explicit_targets_live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
 fn validated_config_marks_legacy_explicit_targets_as_compatibility_mode() {
     let raw = load_raw_config_from_str(
         r#"
@@ -494,12 +664,8 @@ fn smoke_view_accepts_operator_facing_live_fixture() {
     assert!(live.real_user_shadow_smoke());
     assert!(live.has_polymarket_account());
     assert!(live.has_polymarket_source());
-    assert_eq!(
-        live.target_source()
-            .expect("operator smoke fixture should include target source")
-            .operator_target_revision(),
-        Some("targets-rev-9")
-    );
+    assert!(!live.has_target_source());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
     assert_eq!(
         live.polymarket_source()
             .expect("operator smoke fixture should include source settings")

@@ -30,10 +30,6 @@ kind = "relayer_api_key"
 api_key = "relay-key"
 address = "0x1111111111111111111111111111111111111111"
 
-[negrisk.target_source]
-source = "adopted"
-operator_target_revision = "targets-rev-9"
-
 [polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"

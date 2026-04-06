@@ -138,7 +138,7 @@ quantity = "5"
 }
 
 #[test]
-fn neutral_adopted_strategy_control_shape_loads_in_app_live_view() {
+fn pure_neutral_adopted_strategy_control_shape_loads_in_app_live_view() {
     let raw = load_raw_config_from_str(
         r#"
 [runtime]
@@ -185,10 +185,6 @@ api_key = "builder-api-key-1"
 timestamp = "1700000001"
 passphrase = "builder-passphrase-1"
 signature = "builder-signature-1"
-
-[negrisk.rollout]
-approved_families = []
-ready_families = []
 "#,
     )
     .unwrap();

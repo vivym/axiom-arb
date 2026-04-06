@@ -245,7 +245,7 @@ impl<'a> AppLiveConfigView<'a> {
         self.raw
             .negrisk
             .as_ref()
-            .map(|negrisk| !negrisk.targets.is_empty())
+            .map(|negrisk| negrisk.targets.is_present())
             .unwrap_or(false)
     }
 }
@@ -511,8 +511,7 @@ fn validate_app_live_requiredness(
                 let relayer_auth = require_relayer_auth_view(raw)?;
                 validate_relayer_auth_view(relayer_auth)?;
 
-                let target_source = require_target_source(raw)?;
-                validate_target_source_view(target_source)?;
+                require_strategy_control_or_legacy_target_source(raw)?;
             } else {
                 require_source(raw)?;
                 require_signer(raw)?;
@@ -520,7 +519,7 @@ fn validate_app_live_requiredness(
                 let relayer_auth = require_relayer_auth_view(raw)?;
                 validate_relayer_auth_view(relayer_auth)?;
 
-                require_rollout(raw)?;
+                require_rollout_or_route_owned_rollout(raw)?;
                 validate_negrisk_rollout_referential_integrity(raw)?;
             }
 
@@ -563,15 +562,21 @@ fn require_signer(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     Ok(())
 }
 
-fn require_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+fn require_rollout_or_route_owned_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     if raw
         .negrisk
         .as_ref()
         .and_then(|negrisk| negrisk.rollout.as_ref())
         .is_none()
+        && raw
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .and_then(|neg_risk| neg_risk.rollout.as_ref())
+            .is_none()
     {
         return Err(validation_error(
-            "missing required section: negrisk.rollout",
+            "missing required section: negrisk.rollout or strategies.neg_risk.rollout",
         ));
     }
     Ok(())
@@ -607,6 +612,28 @@ fn require_target_source(
         .and_then(|negrisk| negrisk.target_source.as_ref())
         .map(|raw| AppLiveNegRiskTargetSourceView { raw })
         .ok_or_else(|| validation_error("missing required section: negrisk.target_source"))
+}
+
+fn require_strategy_control_or_legacy_target_source(
+    raw: &RawAxiomConfig,
+) -> Result<(), ConfigSchemaError> {
+    if let Some(target_source) = raw
+        .negrisk
+        .as_ref()
+        .and_then(|negrisk| negrisk.target_source.as_ref())
+        .map(|raw| AppLiveNegRiskTargetSourceView { raw })
+    {
+        validate_target_source_view(target_source)?;
+        return Ok(());
+    }
+
+    if raw.strategy_control.is_some() {
+        return Ok(());
+    }
+
+    Err(validation_error(
+        "missing required section: strategy_control or negrisk.target_source",
+    ))
 }
 
 fn explicit_polymarket_source(raw: &RawAxiomConfig) -> Option<&PolymarketSourceToml> {
@@ -648,7 +675,7 @@ fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     };
 
     let mut family_ids = BTreeSet::new();
-    for target in &negrisk.targets {
+    for target in negrisk.targets.iter() {
         require_non_empty("negrisk.targets.family_id", &target.family_id)?;
         if !family_ids.insert(target.family_id.as_str()) {
             return Err(validation_error(format!(

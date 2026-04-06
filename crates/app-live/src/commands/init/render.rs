@@ -65,7 +65,7 @@ pub fn render_live_config(
                 approved_families: vec![],
                 ready_families: vec![],
             }),
-            targets: vec![],
+            targets: Default::default(),
         }),
     };
 

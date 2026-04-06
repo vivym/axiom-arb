@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -194,8 +196,8 @@ pub struct NegRiskToml {
     pub target_source: Option<NegRiskTargetSourceToml>,
     #[serde(default)]
     pub rollout: Option<NegRiskRolloutToml>,
-    #[serde(default)]
-    pub targets: Vec<NegRiskTargetToml>,
+    #[serde(default, skip_serializing_if = "NegRiskTargetsToml::is_implicit_empty")]
+    pub targets: NegRiskTargetsToml,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -232,4 +234,63 @@ pub struct NegRiskTargetMemberToml {
     pub token_id: String,
     pub price: String,
     pub quantity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NegRiskTargetsToml {
+    present: bool,
+    items: Vec<NegRiskTargetToml>,
+}
+
+impl NegRiskTargetsToml {
+    pub fn is_present(&self) -> bool {
+        self.present
+    }
+
+    pub fn as_slice(&self) -> &[NegRiskTargetToml] {
+        self.items.as_slice()
+    }
+
+    fn is_implicit_empty(&self) -> bool {
+        !self.present && self.items.is_empty()
+    }
+}
+
+impl Default for NegRiskTargetsToml {
+    fn default() -> Self {
+        Self {
+            present: false,
+            items: Vec::new(),
+        }
+    }
+}
+
+impl Deref for NegRiskTargetsToml {
+    type Target = [NegRiskTargetToml];
+
+    fn deref(&self) -> &Self::Target {
+        self.items.as_slice()
+    }
+}
+
+impl Serialize for NegRiskTargetsToml {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.items.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NegRiskTargetsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let items = Vec::<NegRiskTargetToml>::deserialize(deserializer)?;
+        Ok(Self {
+            present: true,
+            items,
+        })
+    }
 }
