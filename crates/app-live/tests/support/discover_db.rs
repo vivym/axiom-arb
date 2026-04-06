@@ -6,11 +6,14 @@ use std::{
 };
 
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateTargetSetRow},
+    models::{
+        AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateTargetSetRow,
+        StrategyCandidateSetRow,
+    },
     run_migrations, CandidateArtifactRepo,
 };
 use serde_json::json;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 use super::cli::default_test_database_url;
 
@@ -79,12 +82,90 @@ impl TestDatabase {
         self.count_rows("candidate_target_sets") > 0
     }
 
+    pub fn has_strategy_candidate_rows(&self) -> bool {
+        self.count_rows("strategy_candidate_sets") > 0
+    }
+
     pub fn has_adoptable_rows(&self) -> bool {
         self.count_rows("adoptable_target_revisions") > 0
     }
 
+    pub fn has_strategy_adoptable_rows(&self) -> bool {
+        self.count_rows("adoptable_strategy_revisions") > 0
+    }
+
     pub fn has_candidate_provenance_rows(&self) -> bool {
         self.count_rows("candidate_adoption_provenance") > 0
+    }
+
+    pub fn has_strategy_provenance_rows(&self) -> bool {
+        self.count_rows("strategy_adoption_provenance") > 0
+    }
+
+    pub fn strategy_candidate_row_count(&self) -> i64 {
+        self.count_rows("strategy_candidate_sets")
+    }
+
+    pub fn strategy_adoptable_row_count(&self) -> i64 {
+        self.count_rows("adoptable_strategy_revisions")
+    }
+
+    pub fn strategy_candidate_rows(&self) -> Vec<StrategyCandidateSetRow> {
+        self.runtime.block_on(async {
+            sqlx::query(
+                r#"
+                SELECT strategy_candidate_revision, snapshot_id, source_revision, payload
+                FROM strategy_candidate_sets
+                ORDER BY strategy_candidate_revision
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .expect("strategy candidate rows should load")
+            .into_iter()
+            .map(|row| StrategyCandidateSetRow {
+                strategy_candidate_revision: row
+                    .try_get("strategy_candidate_revision")
+                    .expect("strategy candidate revision"),
+                snapshot_id: row.try_get("snapshot_id").expect("snapshot id"),
+                source_revision: row.try_get("source_revision").expect("source revision"),
+                payload: row.try_get("payload").expect("payload"),
+            })
+            .collect()
+        })
+    }
+
+    pub fn strategy_adoptable_rows(&self) -> Vec<AdoptableStrategyRevisionRow> {
+        self.runtime.block_on(async {
+            sqlx::query(
+                r#"
+                SELECT
+                    adoptable_strategy_revision,
+                    strategy_candidate_revision,
+                    rendered_operator_strategy_revision,
+                    payload
+                FROM adoptable_strategy_revisions
+                ORDER BY adoptable_strategy_revision
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .expect("strategy adoptable rows should load")
+            .into_iter()
+            .map(|row| AdoptableStrategyRevisionRow {
+                adoptable_strategy_revision: row
+                    .try_get("adoptable_strategy_revision")
+                    .expect("adoptable strategy revision"),
+                strategy_candidate_revision: row
+                    .try_get("strategy_candidate_revision")
+                    .expect("strategy candidate revision"),
+                rendered_operator_strategy_revision: row
+                    .try_get("rendered_operator_strategy_revision")
+                    .expect("rendered operator strategy revision"),
+                payload: row.try_get("payload").expect("payload"),
+            })
+            .collect()
+        })
     }
 
     pub fn seed_advisory_candidate(&self, candidate_revision: &str, reason: &str) {

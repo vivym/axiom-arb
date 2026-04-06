@@ -5,6 +5,12 @@ use state::{CandidatePublication, DirtyDomain};
 use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 
+const DEFAULT_FULL_SET_BASIS_DIGEST: &str = "full-set-basis-default";
+
+pub fn default_full_set_basis_digest() -> String {
+    DEFAULT_FULL_SET_BASIS_DIGEST.to_owned()
+}
+
 #[derive(Debug, Default)]
 pub struct IngressQueue {
     backlog: VecDeque<InputTaskEvent>,
@@ -150,6 +156,7 @@ pub struct CandidateNotice {
     pub restriction: CandidateRestrictionTruth,
     // Authoritative discovery may render adoptable output without observed backfill completion.
     pub authoritative: bool,
+    pub full_set_basis_digest: String,
 }
 
 impl CandidateNotice {
@@ -195,14 +202,22 @@ impl CandidateNotice {
         restriction: CandidateRestrictionTruth,
         authoritative: bool,
     ) -> Self {
-        Self {
+        let notice = Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
             rendered_live_targets,
             restriction,
             authoritative,
-        }
+            full_set_basis_digest: default_full_set_basis_digest(),
+        };
+
+        notice
+    }
+
+    pub fn with_full_set_basis_digest(mut self, full_set_basis_digest: impl Into<String>) -> Self {
+        self.full_set_basis_digest = full_set_basis_digest.into();
+        self
     }
 }
 
@@ -234,6 +249,7 @@ impl CandidateNoticeQueue {
                     notice.operator_target_revision.clone(),
                     notice.restriction.clone(),
                     notice.authoritative,
+                    notice.full_set_basis_digest.clone(),
                 ),
                 notice.clone(),
             );

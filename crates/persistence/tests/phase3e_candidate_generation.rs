@@ -1,8 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
-    run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
+    models::{
+        AdoptableStrategyRevisionRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
+    run_migrations, StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -17,8 +19,8 @@ struct TestDatabase {
 
 impl TestDatabase {
     async fn new() -> Self {
-        let database_url =
-            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for persistence tests");
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://axiom:axiom@localhost:5432/axiom_arb".to_owned());
 
         let admin_pool = PgPoolOptions::new()
             .max_connections(2)
@@ -77,21 +79,21 @@ impl TestDatabase {
 
 async fn seed_candidate_artifact(
     pool: &PgPool,
-    artifacts: &CandidateArtifactRepo,
-    candidate_revision: &str,
+    artifacts: &StrategyControlArtifactRepo,
+    strategy_candidate_revision: &str,
     snapshot_id: &str,
     source_revision: &str,
-    rendered_operator_target_revision: &str,
+    rendered_operator_strategy_revision: &str,
 ) {
     artifacts
-        .upsert_candidate_target_set(
+        .upsert_strategy_candidate_set(
             pool,
-            &CandidateTargetSetRow {
-                candidate_revision: candidate_revision.to_owned(),
+            &StrategyCandidateSetRow {
+                strategy_candidate_revision: strategy_candidate_revision.to_owned(),
                 snapshot_id: snapshot_id.to_owned(),
                 source_revision: source_revision.to_owned(),
                 payload: json!({
-                    "candidate_revision": candidate_revision,
+                    "strategy_candidate_revision": strategy_candidate_revision,
                     "snapshot_id": snapshot_id,
                     "source_revision": source_revision,
                 }),
@@ -101,16 +103,16 @@ async fn seed_candidate_artifact(
         .unwrap();
 
     artifacts
-        .upsert_adoptable_target_revision(
+        .upsert_adoptable_strategy_revision(
             pool,
-            &AdoptableTargetRevisionRow {
-                adoptable_revision: format!("adoptable-{candidate_revision}"),
-                candidate_revision: candidate_revision.to_owned(),
-                rendered_operator_target_revision: rendered_operator_target_revision.to_owned(),
+            &AdoptableStrategyRevisionRow {
+                adoptable_strategy_revision: format!("adoptable-{strategy_candidate_revision}"),
+                strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                rendered_operator_strategy_revision: rendered_operator_strategy_revision.to_owned(),
                 payload: json!({
-                    "adoptable_revision": format!("adoptable-{candidate_revision}"),
-                    "candidate_revision": candidate_revision,
-                    "rendered_operator_target_revision": rendered_operator_target_revision,
+                    "adoptable_strategy_revision": format!("adoptable-{strategy_candidate_revision}"),
+                    "strategy_candidate_revision": strategy_candidate_revision,
+                    "rendered_operator_strategy_revision": rendered_operator_strategy_revision,
                 }),
             },
         )
@@ -119,45 +121,45 @@ async fn seed_candidate_artifact(
 }
 
 #[tokio::test]
-async fn adoption_provenance_round_trips_operator_target_revision() {
+async fn adoption_provenance_round_trips_operator_strategy_revision() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
-    let artifacts = CandidateArtifactRepo;
-    let adoption = CandidateAdoptionRepo;
+    let artifacts = StrategyControlArtifactRepo;
+    let adoption = StrategyAdoptionRepo;
 
-    let candidate_row = CandidateTargetSetRow {
-        candidate_revision: "candidate-9".to_owned(),
+    let candidate_row = StrategyCandidateSetRow {
+        strategy_candidate_revision: "candidate-9".to_owned(),
         snapshot_id: "snapshot-9".to_owned(),
         source_revision: "discovery-9".to_owned(),
         payload: json!({
-            "candidate_revision": "candidate-9",
+            "strategy_candidate_revision": "candidate-9",
             "snapshot_id": "snapshot-9",
         }),
     };
     artifacts
-        .upsert_candidate_target_set(&db.pool, &candidate_row)
+        .upsert_strategy_candidate_set(&db.pool, &candidate_row)
         .await
         .unwrap();
 
-    let adoptable_row = AdoptableTargetRevisionRow {
-        adoptable_revision: "adoptable-9".to_owned(),
-        candidate_revision: "candidate-9".to_owned(),
-        rendered_operator_target_revision: "targets-rev-9".to_owned(),
+    let adoptable_row = AdoptableStrategyRevisionRow {
+        adoptable_strategy_revision: "adoptable-9".to_owned(),
+        strategy_candidate_revision: "candidate-9".to_owned(),
+        rendered_operator_strategy_revision: "targets-rev-9".to_owned(),
         payload: json!({
-            "adoptable_revision": "adoptable-9",
-            "candidate_revision": "candidate-9",
+            "adoptable_strategy_revision": "adoptable-9",
+            "strategy_candidate_revision": "candidate-9",
         }),
     };
     artifacts
-        .upsert_adoptable_target_revision(&db.pool, &adoptable_row)
+        .upsert_adoptable_strategy_revision(&db.pool, &adoptable_row)
         .await
         .unwrap();
 
-    let provenance_row = CandidateAdoptionProvenanceRow {
-        operator_target_revision: "targets-rev-9".to_owned(),
-        adoptable_revision: "adoptable-9".to_owned(),
-        candidate_revision: "candidate-9".to_owned(),
+    let provenance_row = StrategyAdoptionProvenanceRow {
+        operator_strategy_revision: "targets-rev-9".to_owned(),
+        adoptable_strategy_revision: "adoptable-9".to_owned(),
+        strategy_candidate_revision: "candidate-9".to_owned(),
     };
     adoption
         .upsert_provenance(&db.pool, &provenance_row)
@@ -165,7 +167,7 @@ async fn adoption_provenance_round_trips_operator_target_revision() {
         .unwrap();
 
     let loaded = adoption
-        .get_by_operator_target_revision(&db.pool, "targets-rev-9")
+        .get_by_operator_strategy_revision(&db.pool, "targets-rev-9")
         .await
         .unwrap()
         .unwrap();
@@ -175,65 +177,65 @@ async fn adoption_provenance_round_trips_operator_target_revision() {
 }
 
 #[tokio::test]
-async fn candidate_artifact_rewrites_are_rejected() {
+async fn strategy_artifact_rewrites_are_rejected() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
-    let artifacts = CandidateArtifactRepo;
-    let candidate_row = CandidateTargetSetRow {
-        candidate_revision: "candidate-1".to_owned(),
+    let artifacts = StrategyControlArtifactRepo;
+    let candidate_row = StrategyCandidateSetRow {
+        strategy_candidate_revision: "candidate-1".to_owned(),
         snapshot_id: "snapshot-1".to_owned(),
         source_revision: "discovery-1".to_owned(),
         payload: json!({
-            "candidate_revision": "candidate-1",
+            "strategy_candidate_revision": "candidate-1",
             "snapshot_id": "snapshot-1",
             "source_revision": "discovery-1",
         }),
     };
 
     artifacts
-        .upsert_candidate_target_set(&db.pool, &candidate_row)
+        .upsert_strategy_candidate_set(&db.pool, &candidate_row)
         .await
         .unwrap();
     artifacts
-        .upsert_candidate_target_set(&db.pool, &candidate_row)
+        .upsert_strategy_candidate_set(&db.pool, &candidate_row)
         .await
         .unwrap();
 
-    let conflicting_candidate_row = CandidateTargetSetRow {
+    let conflicting_candidate_row = StrategyCandidateSetRow {
         snapshot_id: "snapshot-2".to_owned(),
         ..candidate_row.clone()
     };
     assert!(artifacts
-        .upsert_candidate_target_set(&db.pool, &conflicting_candidate_row)
+        .upsert_strategy_candidate_set(&db.pool, &conflicting_candidate_row)
         .await
         .is_err());
 
-    let adoptable_row = AdoptableTargetRevisionRow {
-        adoptable_revision: "adoptable-1".to_owned(),
-        candidate_revision: "candidate-1".to_owned(),
-        rendered_operator_target_revision: "targets-rev-1".to_owned(),
+    let adoptable_row = AdoptableStrategyRevisionRow {
+        adoptable_strategy_revision: "adoptable-1".to_owned(),
+        strategy_candidate_revision: "candidate-1".to_owned(),
+        rendered_operator_strategy_revision: "targets-rev-1".to_owned(),
         payload: json!({
-            "adoptable_revision": "adoptable-1",
-            "candidate_revision": "candidate-1",
-            "rendered_operator_target_revision": "targets-rev-1",
+            "adoptable_strategy_revision": "adoptable-1",
+            "strategy_candidate_revision": "candidate-1",
+            "rendered_operator_strategy_revision": "targets-rev-1",
         }),
     };
     artifacts
-        .upsert_adoptable_target_revision(&db.pool, &adoptable_row)
+        .upsert_adoptable_strategy_revision(&db.pool, &adoptable_row)
         .await
         .unwrap();
     artifacts
-        .upsert_adoptable_target_revision(&db.pool, &adoptable_row)
+        .upsert_adoptable_strategy_revision(&db.pool, &adoptable_row)
         .await
         .unwrap();
 
-    let conflicting_adoptable_row = AdoptableTargetRevisionRow {
-        rendered_operator_target_revision: "targets-rev-2".to_owned(),
+    let conflicting_adoptable_row = AdoptableStrategyRevisionRow {
+        rendered_operator_strategy_revision: "targets-rev-2".to_owned(),
         ..adoptable_row.clone()
     };
     assert!(artifacts
-        .upsert_adoptable_target_revision(&db.pool, &conflicting_adoptable_row)
+        .upsert_adoptable_strategy_revision(&db.pool, &conflicting_adoptable_row)
         .await
         .is_err());
 
@@ -245,8 +247,8 @@ async fn provenance_pairing_must_match_the_adoptable_revision_candidate() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
-    let artifacts = CandidateArtifactRepo;
-    let adoption = CandidateAdoptionRepo;
+    let artifacts = StrategyControlArtifactRepo;
+    let adoption = StrategyAdoptionRepo;
 
     seed_candidate_artifact(
         &db.pool,
@@ -267,10 +269,10 @@ async fn provenance_pairing_must_match_the_adoptable_revision_candidate() {
     )
     .await;
 
-    let mismatched_provenance = CandidateAdoptionProvenanceRow {
-        operator_target_revision: "targets-rev-1".to_owned(),
-        adoptable_revision: "adoptable-candidate-1".to_owned(),
-        candidate_revision: "candidate-2".to_owned(),
+    let mismatched_provenance = StrategyAdoptionProvenanceRow {
+        operator_strategy_revision: "targets-rev-1".to_owned(),
+        adoptable_strategy_revision: "adoptable-candidate-1".to_owned(),
+        strategy_candidate_revision: "candidate-2".to_owned(),
     };
     assert!(adoption
         .upsert_provenance(&db.pool, &mismatched_provenance)
@@ -281,12 +283,12 @@ async fn provenance_pairing_must_match_the_adoptable_revision_candidate() {
 }
 
 #[tokio::test]
-async fn lookup_rejects_mismatched_rendered_operator_target_revision() {
+async fn lookup_rejects_mismatched_rendered_operator_strategy_revision() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();
 
-    let artifacts = CandidateArtifactRepo;
-    let adoption = CandidateAdoptionRepo;
+    let artifacts = StrategyControlArtifactRepo;
+    let adoption = StrategyAdoptionRepo;
 
     seed_candidate_artifact(
         &db.pool,
@@ -298,10 +300,10 @@ async fn lookup_rejects_mismatched_rendered_operator_target_revision() {
     )
     .await;
 
-    let provenance_row = CandidateAdoptionProvenanceRow {
-        operator_target_revision: "targets-rev-3".to_owned(),
-        adoptable_revision: "adoptable-candidate-3".to_owned(),
-        candidate_revision: "candidate-3".to_owned(),
+    let provenance_row = StrategyAdoptionProvenanceRow {
+        operator_strategy_revision: "targets-rev-3".to_owned(),
+        adoptable_strategy_revision: "adoptable-candidate-3".to_owned(),
+        strategy_candidate_revision: "candidate-3".to_owned(),
     };
     adoption
         .upsert_provenance(&db.pool, &provenance_row)
@@ -309,7 +311,7 @@ async fn lookup_rejects_mismatched_rendered_operator_target_revision() {
         .unwrap();
 
     assert!(adoption
-        .get_by_operator_target_revision(&db.pool, "targets-rev-3")
+        .get_by_operator_strategy_revision(&db.pool, "targets-rev-3")
         .await
         .is_err());
 

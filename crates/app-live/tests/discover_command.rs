@@ -53,14 +53,14 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_smoke_config() {
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Starting discovery"), "{text}");
     assert!(text.contains("Fetching Polymarket metadata"), "{text}");
-    assert!(text.contains("Materializing discovery artifacts"), "{text}");
-    assert!(text.contains("candidate_count = 1"), "{text}");
-    assert!(text.contains("adoptable_count = 1"), "{text}");
+    assert!(text.contains("Materializing strategy artifacts"), "{text}");
+    assert!(text.contains("candidate_count = 2"), "{text}");
+    assert!(text.contains("adoptable_count = 2"), "{text}");
     assert!(text.contains("recommended_adoptable_revision = "), "{text}");
 
-    assert!(database.has_candidate_rows());
-    assert!(database.has_adoptable_rows());
-    assert!(!database.has_candidate_provenance_rows());
+    assert!(database.has_strategy_candidate_rows());
+    assert!(database.has_strategy_adoptable_rows());
+    assert!(!database.has_strategy_provenance_rows());
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -90,14 +90,122 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_live_adopted_con
     assert!(output.status.success(), "{text}");
     assert!(text.contains("Starting discovery"), "{text}");
     assert!(text.contains("Fetching Polymarket metadata"), "{text}");
-    assert!(text.contains("Materializing discovery artifacts"), "{text}");
-    assert!(text.contains("candidate_count = 1"), "{text}");
-    assert!(text.contains("adoptable_count = 1"), "{text}");
+    assert!(text.contains("Materializing strategy artifacts"), "{text}");
+    assert!(text.contains("candidate_count = 2"), "{text}");
+    assert!(text.contains("adoptable_count = 2"), "{text}");
     assert!(text.contains("recommended_adoptable_revision = "), "{text}");
 
-    assert!(database.has_candidate_rows());
-    assert!(database.has_adoptable_rows());
-    assert!(!database.has_candidate_provenance_rows());
+    assert!(database.has_strategy_candidate_rows());
+    assert!(database.has_strategy_adoptable_rows());
+    assert!(!database.has_strategy_provenance_rows());
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn discover_noop_rediscovery_reuses_strategy_bundle_identity() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::with_responses(vec![
+        page_one_ok(),
+        page_two_empty(),
+        page_one_ok(),
+        page_two_empty(),
+    ]);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let first_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("first discover should execute");
+    let first_text = cli::combined(&first_output);
+    assert!(first_output.status.success(), "{first_text}");
+    let first_revision = recommended_adoptable_revision(&first_text);
+
+    let second_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("second discover should execute");
+    let second_text = cli::combined(&second_output);
+    assert!(second_output.status.success(), "{second_text}");
+    let second_revision = recommended_adoptable_revision(&second_text);
+
+    assert_eq!(first_revision, second_revision);
+    assert_eq!(database.strategy_candidate_row_count(), 1);
+    assert_eq!(database.strategy_adoptable_row_count(), 1);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn discover_keeps_full_set_route_digest_stable_when_neg_risk_metadata_changes() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::with_responses(vec![
+        page_one_ok(),
+        page_two_empty(),
+        page_one_changed(),
+        page_two_empty(),
+    ]);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let first_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("first discover should execute");
+    let first_text = cli::combined(&first_output);
+    assert!(first_output.status.success(), "{first_text}");
+
+    let first_candidate = database
+        .strategy_candidate_rows()
+        .into_iter()
+        .next()
+        .expect("first strategy candidate row");
+    let first_full_set_digest =
+        route_digest(&first_candidate.payload, "full-set", "default").to_owned();
+    let first_revision = first_candidate.strategy_candidate_revision.clone();
+
+    let second_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("second discover should execute");
+    let second_text = cli::combined(&second_output);
+    assert!(second_output.status.success(), "{second_text}");
+
+    let second_candidate = database
+        .strategy_candidate_rows()
+        .into_iter()
+        .find(|row| row.strategy_candidate_revision != first_revision)
+        .expect("second strategy candidate row");
+
+    assert_eq!(database.strategy_candidate_row_count(), 2);
+    assert_ne!(
+        second_candidate.strategy_candidate_revision, first_revision,
+        "neg-risk route change should change bundle identity"
+    );
+    assert_eq!(
+        route_digest(&second_candidate.payload, "full-set", "default"),
+        first_full_set_digest,
+        "full-set route digest should be reused across rediscovery"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -126,12 +234,32 @@ fn discover_emits_debug_logs_when_rust_log_requests_them() {
     assert!(text.contains("discover loaded live config"), "{text}");
     assert!(text.contains("discover fetched metadata rows"), "{text}");
     assert!(
-        text.contains("discover materialized authoritative discovery batch"),
+        text.contains("discover materialized strategy bundle"),
         "{text}"
     );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
+}
+
+fn recommended_adoptable_revision(output: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("recommended_adoptable_revision = ")
+                .map(str::to_owned)
+        })
+        .expect("discover output should include recommended adoptable revision")
+}
+
+fn route_digest<'a>(payload: &'a serde_json::Value, route: &str, scope: &str) -> &'a str {
+    payload["route_artifacts"]
+        .as_array()
+        .expect("route_artifacts should be present")
+        .iter()
+        .find(|artifact| artifact["key"]["route"] == route && artifact["key"]["scope"] == scope)
+        .and_then(|artifact| artifact["semantic_digest"].as_str())
+        .expect("route artifact digest should be present")
 }
 
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
@@ -197,8 +325,12 @@ struct MockDiscoverVenue {
 
 impl MockDiscoverVenue {
     fn spawn() -> Self {
+        Self::with_responses(vec![page_one_ok(), page_two_empty()])
+    }
+
+    fn with_responses(scripted_responses: Vec<ScriptedResponse>) -> Self {
         Self {
-            http: spawn_local_listener(vec![page_one_ok(), page_two_empty()]),
+            http: spawn_local_listener(scripted_responses),
         }
     }
 
@@ -327,5 +459,12 @@ fn page_two_empty() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=2"],
         body: r#"[]"#,
+    }
+}
+
+fn page_one_changed() -> ScriptedResponse {
+    ScriptedResponse {
+        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-3","parentEvent":"family-b","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }

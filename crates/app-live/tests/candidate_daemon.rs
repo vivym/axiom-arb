@@ -14,11 +14,12 @@ use chrono::{TimeZone, Utc};
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use persistence::{
     models::{
-        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        ExecutionAttemptRow, LiveSubmissionRecordRow,
+        AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow,
+        CandidateTargetSetRow, ExecutionAttemptRow, LiveSubmissionRecordRow,
+        StrategyCandidateSetRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, ExecutionAttemptRepo,
-    LiveSubmissionRepo, RuntimeProgressRepo,
+    LiveSubmissionRepo, RuntimeProgressRepo, StrategyControlArtifactRepo,
 };
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -177,34 +178,41 @@ fn daemon_run_persists_candidate_artifacts_from_candidate_dirty_inputs() {
         .expect("daemon run should process candidate dirty inputs");
     let summary = report.summary;
 
-    assert_eq!(
-        summary.latest_candidate_revision.as_deref(),
-        Some("candidate-pub-2")
-    );
-    assert_eq!(
-        summary.latest_adoptable_revision.as_deref(),
-        Some("adoptable-candidate-pub-2")
-    );
-    assert_eq!(
-        summary.latest_candidate_operator_target_revision.as_deref(),
-        Some(operator_target_revision.as_str())
-    );
+    let strategy_candidate_revision = summary
+        .latest_candidate_revision
+        .clone()
+        .expect("strategy candidate revision should be reported");
+    let adoptable_strategy_revision = summary
+        .latest_adoptable_revision
+        .clone()
+        .expect("adoptable strategy revision should be reported");
+    let operator_strategy_revision = summary
+        .latest_candidate_operator_target_revision
+        .clone()
+        .expect("operator strategy revision should be reported");
+
+    assert!(strategy_candidate_revision.starts_with("strategy-candidate-"));
+    assert!(adoptable_strategy_revision.starts_with("adoptable-strategy-"));
+    assert!(operator_strategy_revision.starts_with("operator-strategy-"));
     assert!(!summary.adoption_provenance_resolved);
 
     let candidate = database
-        .load_candidate_target_set("candidate-pub-2")
-        .expect("candidate row lookup should succeed")
-        .expect("candidate row should persist");
-    assert_eq!(candidate.snapshot_id, "candidate-pub-2");
+        .load_strategy_candidate_set(&strategy_candidate_revision)
+        .expect("strategy candidate row lookup should succeed")
+        .expect("strategy candidate row should persist");
+    assert_eq!(candidate.snapshot_id, strategy_candidate_revision);
 
     let adoptable = database
-        .load_adoptable_target_revision("adoptable-candidate-pub-2")
-        .expect("adoptable row lookup should succeed")
-        .expect("adoptable row should persist");
-    assert_eq!(adoptable.candidate_revision, "candidate-pub-2");
+        .load_adoptable_strategy_revision(&adoptable_strategy_revision)
+        .expect("strategy adoptable row lookup should succeed")
+        .expect("strategy adoptable row should persist");
     assert_eq!(
-        adoptable.rendered_operator_target_revision,
-        operator_target_revision
+        adoptable.strategy_candidate_revision,
+        strategy_candidate_revision
+    );
+    assert_eq!(
+        adoptable.rendered_operator_strategy_revision,
+        operator_strategy_revision
     );
     assert_eq!(
         adoptable.payload["rendered_live_targets"]["family-a"]["family_id"],
@@ -544,32 +552,32 @@ impl TestDatabase {
             });
     }
 
-    fn load_candidate_target_set(
+    fn load_strategy_candidate_set(
         &self,
-        candidate_revision: &str,
-    ) -> persistence::Result<Option<CandidateTargetSetRow>> {
+        strategy_candidate_revision: &str,
+    ) -> persistence::Result<Option<StrategyCandidateSetRow>> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                CandidateArtifactRepo
-                    .get_candidate_target_set(&self.pool, candidate_revision)
+                StrategyControlArtifactRepo
+                    .get_strategy_candidate_set(&self.pool, strategy_candidate_revision)
                     .await
             })
     }
 
-    fn load_adoptable_target_revision(
+    fn load_adoptable_strategy_revision(
         &self,
-        adoptable_revision: &str,
-    ) -> persistence::Result<Option<AdoptableTargetRevisionRow>> {
+        adoptable_strategy_revision: &str,
+    ) -> persistence::Result<Option<AdoptableStrategyRevisionRow>> {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                CandidateArtifactRepo
-                    .get_adoptable_target_revision(&self.pool, adoptable_revision)
+                StrategyControlArtifactRepo
+                    .get_adoptable_strategy_revision(&self.pool, adoptable_strategy_revision)
                     .await
             })
     }
