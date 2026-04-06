@@ -114,7 +114,14 @@ pub struct PolymarketWsClient<T = RealWsMessageSource> {
     pub user_ws_url: Url,
     market_transport: T,
     user_transport: T,
+    gateway: Option<crate::PolymarketGateway>,
+    gateway_user_address: Option<String>,
+    market_asset_ids: Vec<String>,
+    market_custom_feature_enabled: bool,
+    user_markets: Vec<String>,
+    user_auth: Option<crate::PolymarketUserStreamAuth>,
     pending_market_events: VecDeque<MarketWsEvent>,
+    pending_user_events: VecDeque<UserWsEvent>,
 }
 
 impl RealWsMessageSource {
@@ -187,7 +194,14 @@ impl PolymarketWsClient<RealWsMessageSource> {
             user_ws_url,
             market_transport,
             user_transport,
+            gateway: None,
+            gateway_user_address: None,
+            market_asset_ids: Vec::new(),
+            market_custom_feature_enabled: false,
+            user_markets: Vec::new(),
+            user_auth: None,
             pending_market_events: VecDeque::new(),
+            pending_user_events: VecDeque::new(),
         })
     }
 }
@@ -207,13 +221,63 @@ where
             user_ws_url,
             market_transport,
             user_transport,
+            gateway: None,
+            gateway_user_address: None,
+            market_asset_ids: Vec::new(),
+            market_custom_feature_enabled: false,
+            user_markets: Vec::new(),
+            user_auth: None,
             pending_market_events: VecDeque::new(),
+            pending_user_events: VecDeque::new(),
+        }
+    }
+
+    pub fn with_gateway(
+        market_ws_url: Url,
+        user_ws_url: Url,
+        market_transport: T,
+        user_transport: T,
+        gateway: crate::PolymarketGateway,
+        gateway_user_address: Option<String>,
+    ) -> Self {
+        Self {
+            market_ws_url,
+            user_ws_url,
+            market_transport,
+            user_transport,
+            gateway: Some(gateway),
+            gateway_user_address,
+            market_asset_ids: Vec::new(),
+            market_custom_feature_enabled: false,
+            user_markets: Vec::new(),
+            user_auth: None,
+            pending_market_events: VecDeque::new(),
+            pending_user_events: VecDeque::new(),
         }
     }
 
     pub async fn next_market_event(&mut self) -> Result<MarketWsEvent, WsClientError> {
         if let Some(event) = self.pending_market_events.pop_front() {
             return Ok(event);
+        }
+
+        if let Some(gateway) = &self.gateway {
+            if self.market_asset_ids.is_empty() {
+                return Err(WsClientError::Transport(
+                    "no market assets subscribed for gateway-backed websocket client".to_owned(),
+                ));
+            }
+
+            let events = gateway
+                .collect_market_events(self.market_asset_ids.clone())
+                .await
+                .map_err(ws_gateway_error)?;
+            self.pending_market_events = VecDeque::from(events);
+            return self.pending_market_events.pop_front().ok_or_else(|| {
+                WsClientError::Transport(
+                    "gateway-backed market websocket yielded no events".to_owned(),
+                )
+            });
         }
 
         loop {
@@ -228,6 +292,28 @@ where
     }
 
     pub async fn next_user_event(&mut self) -> Result<UserWsEvent, WsClientError> {
+        if let Some(event) = self.pending_user_events.pop_front() {
+            return Ok(event);
+        }
+
+        if let Some(gateway) = &self.gateway {
+            let auth = self.user_auth.clone().ok_or_else(|| {
+                WsClientError::Transport(
+                    "no user markets subscribed for gateway-backed websocket client".to_owned(),
+                )
+            })?;
+            let events = gateway
+                .collect_user_events(auth, self.user_markets.clone())
+                .await
+                .map_err(ws_gateway_error)?;
+            self.pending_user_events = VecDeque::from(events);
+            return self.pending_user_events.pop_front().ok_or_else(|| {
+                WsClientError::Transport(
+                    "gateway-backed user websocket yielded no events".to_owned(),
+                )
+            });
+        }
+
         let message = self.user_transport.next_message().await?;
         let message = transport_message_to_payload(message)?;
         parse_user_message(&message).map_err(WsClientError::from)
@@ -238,6 +324,12 @@ where
         asset_ids: &[String],
         custom_feature_enabled: bool,
     ) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            self.market_asset_ids = asset_ids.to_vec();
+            self.market_custom_feature_enabled = custom_feature_enabled;
+            return Ok(());
+        }
+
         self.market_transport
             .send_message(WsTransportMessage::Text(
                 serde_json::json!({
@@ -256,6 +348,12 @@ where
         asset_ids: &[String],
         custom_feature_enabled: bool,
     ) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            apply_subscription_update(&mut self.market_asset_ids, operation, asset_ids);
+            self.market_custom_feature_enabled = custom_feature_enabled;
+            return Ok(());
+        }
+
         self.market_transport
             .send_message(WsTransportMessage::Text(
                 serde_json::json!({
@@ -273,6 +371,23 @@ where
         auth: &WsUserChannelAuth<'_>,
         markets: &[String],
     ) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            let address = self.gateway_user_address.clone().ok_or_else(|| {
+                WsClientError::Transport(
+                    "gateway-backed user websocket client requires a configured user address"
+                        .to_owned(),
+                )
+            })?;
+            self.user_auth = Some(crate::PolymarketUserStreamAuth {
+                address,
+                api_key: auth.api_key.to_owned(),
+                secret: auth.secret.to_owned(),
+                passphrase: auth.passphrase.to_owned(),
+            });
+            self.user_markets = markets.to_vec();
+            return Ok(());
+        }
+
         self.user_transport
             .send_message(WsTransportMessage::Text(
                 serde_json::json!({
@@ -294,6 +409,11 @@ where
         operation: WsSubscriptionOp,
         markets: &[String],
     ) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            apply_subscription_update(&mut self.user_markets, operation, markets);
+            return Ok(());
+        }
+
         self.user_transport
             .send_message(WsTransportMessage::Text(
                 serde_json::json!({
@@ -306,16 +426,47 @@ where
     }
 
     pub async fn send_market_ping(&mut self) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            return Ok(());
+        }
+
         self.market_transport
             .send_message(WsTransportMessage::Ping)
             .await
     }
 
     pub async fn send_user_ping(&mut self) -> Result<(), WsClientError> {
+        if self.gateway.is_some() {
+            return Ok(());
+        }
+
         self.user_transport
             .send_message(WsTransportMessage::Ping)
             .await
     }
+}
+
+fn apply_subscription_update(
+    current: &mut Vec<String>,
+    operation: WsSubscriptionOp,
+    values: &[String],
+) {
+    match operation {
+        WsSubscriptionOp::Subscribe => {
+            for value in values {
+                if !current.iter().any(|existing| existing == value) {
+                    current.push(value.clone());
+                }
+            }
+        }
+        WsSubscriptionOp::Unsubscribe => {
+            current.retain(|existing| !values.iter().any(|value| value == existing));
+        }
+    }
+}
+
+fn ws_gateway_error(error: crate::PolymarketGatewayError) -> WsClientError {
+    WsClientError::Transport(format!("gateway websocket error: {error}"))
 }
 
 fn map_tungstenite_message(message: Message) -> Result<Option<WsTransportMessage>, WsClientError> {
