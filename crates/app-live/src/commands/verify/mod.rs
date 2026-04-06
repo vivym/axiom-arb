@@ -40,16 +40,22 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     )?;
 
     let runtime = Builder::new_current_thread().enable_all().build()?;
-    let (resolved_session, evidence_result, active_routes) = match runtime.block_on(async {
+    let (resolved_session, evidence_result, route_resolution) = match runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         let resolved_session =
             session::resolve_session_window(&pool, &verify_context, &selection).await?;
-        let active_routes =
+        let route_resolution =
             context::load_active_routes(&pool, &args.config, &selection, &resolved_session)
                 .await
                 .map_err(io::Error::other)?;
-        let evidence = evidence::load(&pool, &selection, &resolved_session, &active_routes).await;
-        Ok::<_, Box<dyn Error>>((resolved_session, evidence, active_routes))
+        let evidence = evidence::load(
+            &pool,
+            &selection,
+            &resolved_session,
+            &route_resolution.active_routes,
+        )
+        .await;
+        Ok::<_, Box<dyn Error>>((resolved_session, evidence, route_resolution))
     }) {
         Ok(value) => value,
         Err(error) => {
@@ -71,13 +77,14 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    verify_context.active_routes = active_routes;
+    verify_context.active_routes = route_resolution.active_routes.clone();
 
     apply_session_resolution(&mut verify_context, &selection, &resolved_session);
     let anchor_comparison = context::compare_window_to_current_config_anchor(
         &verify_context,
         &selection,
         &resolved_session,
+        &route_resolution,
     );
 
     let evidence = match evidence_result {

@@ -121,11 +121,23 @@ fn verify_placeholder_fails_for_missing_config() {
 #[test]
 fn verify_explicit_target_config_is_reported_as_legacy_unsupported() {
     let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-legacy-explicit",
+        &format!(
+            "{}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n",
+            fs::read_to_string(cli::config_fixture("app-live-ux-live.toml"))
+                .unwrap()
+                .replace(
+                    "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
+                    "",
+                )
+        ),
+    );
 
     let output = Command::new(cli::app_live_binary())
         .arg("verify")
         .arg("--config")
-        .arg(cli::config_fixture("app-live-live.toml"))
+        .arg(&config_path)
         .env("DATABASE_URL", verify_db.database_url())
         .output()
         .unwrap();
@@ -135,6 +147,7 @@ fn verify_explicit_target_config_is_reported_as_legacy_unsupported() {
     assert!(text.contains("legacy explicit targets"), "{text}");
 
     verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
@@ -655,6 +668,64 @@ fn verify_historical_unique_window_uses_routes_from_the_historical_revision() {
     assert!(text.contains("Verdict: PASS"), "{text}");
     assert!(text.contains("Route neg-risk: PASS"), "{text}");
     assert!(!text.contains("Route full-set"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn verify_historical_unique_window_degrades_when_historical_revision_cannot_be_rehydrated() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-historical-missing-lineage",
+        &verify_db::config_shapes::live_ready_strategy_config(),
+    );
+    verify_db.seed_adopted_strategy_revision_with_routes("strategy-rev-12", true);
+    verify_db.seed_strategy_runtime_progress("strategy-rev-12");
+    let mut session = verify_db.sample_run_session(
+        "rs-live-historical-missing-lineage",
+        "run",
+        "live",
+        &config_path,
+        "adopted",
+        "strategy-rev-missing",
+        None,
+        None,
+        Some("ready"),
+        false,
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(3),
+        Utc::now() - Duration::minutes(2),
+    );
+    session.configured_operator_strategy_revision = Some("strategy-rev-missing".to_owned());
+    session.active_operator_strategy_revision_at_start = Some("strategy-rev-missing".to_owned());
+    verify_db.seed_run_session(session);
+    verify_db.seed_live_attempt_with_artifacts_for_run_session(
+        "attempt-live-historical-missing-lineage-1",
+        "rs-live-historical-missing-lineage",
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--since")
+        .arg("4m")
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
+    assert!(
+        text.contains("config/lifecycle consistency was not evaluated"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("failed to connect to local verification database"),
+        "{text}"
+    );
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
