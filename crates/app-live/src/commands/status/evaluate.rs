@@ -133,29 +133,39 @@ fn adopted_summary(
         .enable_all()
         .build()
         .map_err(|error| error.to_string())?;
-    let (pool, state) = runtime.block_on(async {
+    let (pool, state, active_operator_strategy_revision) = runtime.block_on(async {
         let pool = connect_pool_from_env()
             .await
             .map_err(|error| error.to_string())?;
-        let state = if config.target_source().is_some() {
-            load_target_control_plane_state(&pool, config_path)
-                .await
-                .map_err(|error| error.to_string())?
+        let (state, active_operator_strategy_revision) = if config.target_source().is_some() {
+            (
+                load_target_control_plane_state(&pool, config_path)
+                    .await
+                    .map_err(|error| error.to_string())?,
+                None,
+            )
         } else {
-            let active_operator_target_revision = RuntimeProgressRepo
+            let progress = RuntimeProgressRepo
                 .current(&pool)
                 .await
-                .map_err(|error| error.to_string())?
-                .and_then(|progress| progress.operator_target_revision);
-            TargetControlPlaneState {
-                configured_operator_target_revision: None,
-                active_operator_target_revision,
-                restart_needed: None,
-                provenance: None,
-                latest_action: None,
-            }
+                .map_err(|error| error.to_string())?;
+            let active_operator_target_revision = progress
+                .as_ref()
+                .and_then(|progress| progress.operator_target_revision.clone());
+            let active_operator_strategy_revision =
+                progress.and_then(|progress| progress.operator_strategy_revision);
+            (
+                TargetControlPlaneState {
+                    configured_operator_target_revision: None,
+                    active_operator_target_revision,
+                    restart_needed: None,
+                    provenance: None,
+                    latest_action: None,
+                },
+                active_operator_strategy_revision,
+            )
         };
-        Ok::<_, String>((pool, state))
+        Ok::<_, String>((pool, state, active_operator_strategy_revision))
     })?;
 
     let mode = if smoke_mode {
@@ -281,10 +291,17 @@ fn adopted_summary(
     } else {
         format!("rollout must cover adopted families: {family_ids_label}")
     };
-    let active_target = state.active_operator_target_revision.clone();
-    let restart_needed = active_target
+    let strategy_only_adopted = config.target_source().is_none();
+    let active_revision = if strategy_only_adopted {
+        active_operator_strategy_revision
+            .clone()
+            .or_else(|| state.active_operator_target_revision.clone())
+    } else {
+        state.active_operator_target_revision.clone()
+    };
+    let restart_needed = active_revision
         .as_deref()
-        .map(|active| active != configured_revision);
+        .map(|active| active != configured_revision.as_str());
 
     if restart_needed == Some(true) {
         let mut actions = Vec::new();
@@ -303,12 +320,17 @@ fn adopted_summary(
 
         let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
         details.configured_target = Some(configured_revision.clone());
-        details.active_target = active_target;
+        details.active_target = active_revision.clone();
         details.target_source = Some(StatusTargetSource::AdoptedTargets);
         details.rollout_state = Some(rollout_state);
         details.restart_needed = Some(true);
+        let anchor_label = if strategy_only_adopted {
+            "operator_strategy_revision"
+        } else {
+            "operator_target_revision"
+        };
         details.reason = Some(format!(
-            "configured and active operator_target_revision differ; {rollout_reason}"
+            "configured and active {anchor_label} differ; {rollout_reason}"
         ));
 
         return Ok(StatusOutcome::Summary(Box::new(StatusSummary {
@@ -347,7 +369,7 @@ fn adopted_summary(
 
     let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
     details.configured_target = Some(configured_revision);
-    details.active_target = active_target;
+    details.active_target = active_revision;
     details.target_source = Some(StatusTargetSource::AdoptedTargets);
     details.rollout_state = Some(rollout_state);
     details.restart_needed = restart_needed;

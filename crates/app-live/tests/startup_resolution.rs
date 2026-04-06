@@ -90,6 +90,19 @@ async fn startup_resolution_supports_distinct_operator_strategy_revision_anchor(
     assert!(resolved.targets.targets().contains_key("family-a"));
 }
 
+#[tokio::test]
+async fn startup_resolution_fails_closed_when_operator_strategy_revision_provenance_is_missing() {
+    let db = TestDatabase::new().await;
+
+    let err = resolve_startup_targets(&db.pool, &sample_neutral_live_view("strategy-rev-missing"))
+        .await
+        .expect_err("missing strategy provenance should fail closed");
+
+    let text = err.to_string();
+    assert!(text.contains("strategy-rev-missing"), "{text}");
+    assert!(text.contains("provenance"), "{text}");
+}
+
 struct TestDatabase {
     pool: PgPool,
 }

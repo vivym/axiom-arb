@@ -11,7 +11,8 @@ use persistence::{
     models::{
         AdoptableStrategyRevisionRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
     },
-    RunSessionRow, RunSessionState, StrategyAdoptionRepo, StrategyControlArtifactRepo,
+    RunSessionRow, RunSessionState, RuntimeProgressRepo, StrategyAdoptionRepo,
+    StrategyControlArtifactRepo,
 };
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -554,6 +555,90 @@ fn status_pure_neutral_adopted_config_with_distinct_strategy_revision_matches_re
     );
     assert!(
         !combined.contains("resolved adopted target set did not contain any families"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_with_missing_strategy_provenance_reports_specific_reason() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace(
+            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"strategy-rev-missing\"",
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(combined.contains("strategy-rev-missing"), "{combined}");
+    assert!(combined.contains("provenance"), "{combined}");
+    assert!(
+        !combined.contains("resolved adopted target set did not contain any families"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_prefers_active_strategy_anchor_for_restart_detection() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config
+            .replace(
+                "operator_target_revision = \"targets-rev-9\"",
+                "operator_strategy_revision = \"strategy-rev-12\"",
+            )
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
+    });
+    seed_strategy_adoption_lineage(
+        database.database_url(),
+        "strategy-candidate-12",
+        "adoptable-strategy-12",
+        "strategy-rev-12",
+        "targets-rev-9",
+    );
+    seed_runtime_progress_with_strategy_anchor(
+        database.database_url(),
+        Some("targets-rev-active"),
+        Some("strategy-rev-12"),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        !combined.contains("Readiness: restart-required"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Readiness: smoke-config-ready"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("configured and active operator_target_revision differ"),
         "{combined}"
     );
 
@@ -1242,6 +1327,37 @@ fn seed_strategy_adoption_lineage(
             .await
             .expect("strategy provenance should persist");
 
+        pool.close().await;
+    });
+}
+
+fn seed_runtime_progress_with_strategy_anchor(
+    database_url: &str,
+    operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("test pool should connect");
+        RuntimeProgressRepo
+            .record_progress_with_strategy_revision(
+                &pool,
+                41,
+                7,
+                Some("snapshot-7"),
+                operator_target_revision,
+                operator_strategy_revision,
+                None,
+            )
+            .await
+            .expect("runtime progress should persist with strategy anchor");
         pool.close().await;
     });
 }

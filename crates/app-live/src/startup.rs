@@ -34,6 +34,9 @@ pub enum StartupError {
     MissingAdoptionProvenance {
         operator_target_revision: String,
     },
+    MissingStrategyAdoptionProvenance {
+        operator_strategy_revision: String,
+    },
     MissingRenderedLiveTargets {
         operator_target_revision: String,
     },
@@ -59,6 +62,12 @@ impl fmt::Display for StartupError {
             } => write!(
                 f,
                 "operator_target_revision {operator_target_revision} could not be linked back to a candidate adoption provenance chain"
+            ),
+            Self::MissingStrategyAdoptionProvenance {
+                operator_strategy_revision,
+            } => write!(
+                f,
+                "operator_strategy_revision {operator_strategy_revision} could not be linked back to a strategy adoption provenance chain"
             ),
             Self::MissingRenderedLiveTargets {
                 operator_target_revision,
@@ -115,17 +124,11 @@ pub async fn resolve_startup_targets(
 
     if config.has_adopted_strategy_source() {
         if let Some(operator_strategy_revision) = config.operator_strategy_revision() {
-            if StrategyAdoptionRepo
-                .get_by_operator_strategy_revision(pool, operator_strategy_revision)
-                .await?
-                .is_some()
-            {
-                return resolve_adopted_targets_from_operator_strategy_revision(
-                    pool,
-                    operator_strategy_revision,
-                )
-                .await;
-            }
+            return resolve_adopted_targets_from_operator_strategy_revision(
+                pool,
+                operator_strategy_revision,
+            )
+            .await;
         }
     }
 
@@ -176,14 +179,14 @@ async fn resolve_adopted_targets_from_operator_strategy_revision(
     let provenance = StrategyAdoptionRepo
         .get_by_operator_strategy_revision(pool, operator_strategy_revision)
         .await?
-        .ok_or_else(|| StartupError::MissingAdoptionProvenance {
-            operator_target_revision: operator_strategy_revision.to_owned(),
+        .ok_or_else(|| StartupError::MissingStrategyAdoptionProvenance {
+            operator_strategy_revision: operator_strategy_revision.to_owned(),
         })?;
     let adoptable = StrategyControlArtifactRepo
         .get_adoptable_strategy_revision(pool, &provenance.adoptable_strategy_revision)
         .await?
-        .ok_or_else(|| StartupError::MissingAdoptionProvenance {
-            operator_target_revision: operator_strategy_revision.to_owned(),
+        .ok_or_else(|| StartupError::MissingStrategyAdoptionProvenance {
+            operator_strategy_revision: operator_strategy_revision.to_owned(),
         })?;
     let targets = parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
 
