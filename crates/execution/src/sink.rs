@@ -77,19 +77,15 @@ impl LiveVenueSink {
         signer: Arc<dyn SignerProvider>,
         submit_provider: Arc<dyn VenueExecutionProvider>,
     ) -> Self {
-        Self::default().register_route_execution_adapter(Arc::new(NegRiskRouteExecutionAdapter {
-            signer: Some(signer),
-            submit_provider: Some(submit_provider),
-        }))
+        Self::default().register_route_execution_adapter(Arc::new(
+            NegRiskRouteExecutionAdapter::with_submit_provider(signer, submit_provider),
+        ))
     }
 
     pub fn with_order_signer(order_signer: Arc<dyn OrderSigner>) -> Self {
-        Self::default().register_route_execution_adapter(Arc::new(NegRiskRouteExecutionAdapter {
-            signer: Some(Arc::new(OrderSignerAdapter {
-                inner: order_signer,
-            })),
-            submit_provider: None,
-        }))
+        Self::default().register_route_execution_adapter(Arc::new(
+            NegRiskRouteExecutionAdapter::with_order_signer(order_signer),
+        ))
     }
 
     pub fn with_order_signer_and_hook(
@@ -110,7 +106,7 @@ impl LiveVenueSink {
         Self::default().register_route_execution_adapter(route_execution_adapter)
     }
 
-    fn register_route_execution_adapter(
+    pub fn register_route_execution_adapter(
         mut self,
         route_execution_adapter: Arc<dyn RouteExecutionAdapter>,
     ) -> Self {
@@ -261,9 +257,42 @@ impl VenueExecutionProvider for HookSubmitProvider {
 }
 
 #[derive(Clone)]
-struct NegRiskRouteExecutionAdapter {
+pub struct NegRiskRouteExecutionAdapter {
     signer: Option<Arc<dyn SignerProvider>>,
     submit_provider: Option<Arc<dyn VenueExecutionProvider>>,
+}
+
+impl NegRiskRouteExecutionAdapter {
+    pub fn with_submit_provider(
+        signer: Arc<dyn SignerProvider>,
+        submit_provider: Arc<dyn VenueExecutionProvider>,
+    ) -> Self {
+        Self {
+            signer: Some(signer),
+            submit_provider: Some(submit_provider),
+        }
+    }
+
+    pub fn with_order_signer(order_signer: Arc<dyn OrderSigner>) -> Self {
+        Self {
+            signer: Some(Arc::new(OrderSignerAdapter {
+                inner: order_signer,
+            })),
+            submit_provider: None,
+        }
+    }
+
+    pub fn with_order_signer_and_hook(
+        order_signer: Arc<dyn OrderSigner>,
+        hook: Arc<dyn SignedFamilyHook>,
+    ) -> Self {
+        Self::with_submit_provider(
+            Arc::new(OrderSignerAdapter {
+                inner: order_signer,
+            }),
+            Arc::new(HookSubmitProvider { hook }),
+        )
+    }
 }
 
 impl RouteExecutionAdapter for NegRiskRouteExecutionAdapter {
