@@ -7,8 +7,14 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
-use persistence::{RunSessionRow, RunSessionState};
+use persistence::{
+    models::{
+        AdoptableStrategyRevisionRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
+    RunSessionRow, RunSessionState, StrategyAdoptionRepo, StrategyControlArtifactRepo,
+};
 use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use support::{cli, status_db::TestDatabase};
 
 #[test]
@@ -506,6 +512,53 @@ fn status_pure_neutral_adopted_config_matches_strategy_only_relevant_run_session
     );
 
     database.cleanup();
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_with_distinct_strategy_revision_matches_relevant_session() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace(
+            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"strategy-rev-12\"",
+        )
+    });
+    seed_strategy_adoption_lineage(
+        database.database_url(),
+        "strategy-candidate-12",
+        "adoptable-strategy-12",
+        "strategy-rev-12",
+        "targets-rev-9",
+    );
+    database.seed_run_session(strategy_only_smoke_run_session(
+        "rs-strategy-distinct",
+        &config,
+        "strategy-rev-12",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(1),
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-strategy-distinct"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("resolved adopted target set did not contain any families"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
 }
 
 #[test]
@@ -1110,6 +1163,87 @@ fn strategy_only_smoke_run_session(
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: true,
     }
+}
+
+fn seed_strategy_adoption_lineage(
+    database_url: &str,
+    strategy_candidate_revision: &str,
+    adoptable_strategy_revision: &str,
+    operator_strategy_revision: &str,
+    rendered_operator_target_revision: &str,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("test pool should connect");
+
+        StrategyControlArtifactRepo
+            .upsert_strategy_candidate_set(
+                &pool,
+                &StrategyCandidateSetRow {
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    snapshot_id: "snapshot-strategy-12".to_owned(),
+                    source_revision: "discovery-strategy-12".to_owned(),
+                    payload: serde_json::json!({
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "snapshot_id": "snapshot-strategy-12",
+                    }),
+                },
+            )
+            .await
+            .expect("strategy candidate row should persist");
+
+        StrategyControlArtifactRepo
+            .upsert_adoptable_strategy_revision(
+                &pool,
+                &AdoptableStrategyRevisionRow {
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    rendered_operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    payload: serde_json::json!({
+                        "adoptable_strategy_revision": adoptable_strategy_revision,
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "rendered_operator_strategy_revision": operator_strategy_revision,
+                        "rendered_operator_target_revision": rendered_operator_target_revision,
+                        "rendered_live_targets": {
+                            "family-a": {
+                                "family_id": "family-a",
+                                "members": [
+                                    {
+                                        "condition_id": "condition-1",
+                                        "token_id": "token-1",
+                                        "price": "0.43",
+                                        "quantity": "5"
+                                    }
+                                ]
+                            }
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("adoptable strategy row should persist");
+
+        StrategyAdoptionRepo
+            .upsert_provenance(
+                &pool,
+                &StrategyAdoptionProvenanceRow {
+                    operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                },
+            )
+            .await
+            .expect("strategy provenance should persist");
+
+        pool.close().await;
+    });
 }
 
 fn config_fingerprint(config_path: &Path) -> String {

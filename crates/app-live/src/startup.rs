@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, fmt};
 
 use config_schema::AppLiveConfigView;
-use persistence::{CandidateAdoptionRepo, CandidateArtifactRepo, PersistenceError};
+use persistence::{
+    CandidateAdoptionRepo, CandidateArtifactRepo, PersistenceError, StrategyAdoptionRepo,
+    StrategyControlArtifactRepo,
+};
 use sqlx::PgPool;
 
 use crate::config::{
@@ -112,12 +115,12 @@ pub async fn resolve_startup_targets(
 
     if config.has_adopted_strategy_source() {
         if let Some(operator_strategy_revision) = config.operator_strategy_revision() {
-            if CandidateAdoptionRepo
-                .get_by_operator_target_revision(pool, operator_strategy_revision)
+            if StrategyAdoptionRepo
+                .get_by_operator_strategy_revision(pool, operator_strategy_revision)
                 .await?
                 .is_some()
             {
-                return resolve_adopted_targets_from_operator_target_revision(
+                return resolve_adopted_targets_from_operator_strategy_revision(
                     pool,
                     operator_strategy_revision,
                 )
@@ -155,25 +158,7 @@ async fn resolve_adopted_targets_from_operator_target_revision(
         .ok_or_else(|| StartupError::MissingAdoptionProvenance {
             operator_target_revision: operator_target_revision.to_owned(),
         })?;
-    let rendered_live_targets = adoptable
-        .payload
-        .get("rendered_live_targets")
-        .ok_or_else(|| StartupError::MissingRenderedLiveTargets {
-            operator_target_revision: operator_target_revision.to_owned(),
-        })?
-        .clone();
-    let targets =
-        serde_json::from_value::<BTreeMap<String, NegRiskFamilyLiveTarget>>(rendered_live_targets)
-            .map_err(|error| StartupError::InvalidRenderedLiveTargets {
-                operator_target_revision: operator_target_revision.to_owned(),
-                message: error.to_string(),
-            })?;
-
-    if targets.is_empty() {
-        return Err(StartupError::EmptyRenderedLiveTargets {
-            operator_target_revision: operator_target_revision.to_owned(),
-        });
-    }
+    let targets = parse_rendered_live_targets(&adoptable.payload, operator_target_revision)?;
 
     Ok(ResolvedTargets {
         targets: NegRiskLiveTargetSet::from_targets_with_revision(
@@ -182,6 +167,59 @@ async fn resolve_adopted_targets_from_operator_target_revision(
         ),
         operator_target_revision: Some(operator_target_revision.to_owned()),
     })
+}
+
+async fn resolve_adopted_targets_from_operator_strategy_revision(
+    pool: &PgPool,
+    operator_strategy_revision: &str,
+) -> Result<ResolvedTargets, StartupError> {
+    let provenance = StrategyAdoptionRepo
+        .get_by_operator_strategy_revision(pool, operator_strategy_revision)
+        .await?
+        .ok_or_else(|| StartupError::MissingAdoptionProvenance {
+            operator_target_revision: operator_strategy_revision.to_owned(),
+        })?;
+    let adoptable = StrategyControlArtifactRepo
+        .get_adoptable_strategy_revision(pool, &provenance.adoptable_strategy_revision)
+        .await?
+        .ok_or_else(|| StartupError::MissingAdoptionProvenance {
+            operator_target_revision: operator_strategy_revision.to_owned(),
+        })?;
+    let targets = parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
+
+    Ok(ResolvedTargets {
+        targets: NegRiskLiveTargetSet::from_targets_with_revision(
+            operator_strategy_revision.to_owned(),
+            targets,
+        ),
+        operator_target_revision: Some(operator_strategy_revision.to_owned()),
+    })
+}
+
+fn parse_rendered_live_targets(
+    payload: &serde_json::Value,
+    operator_revision: &str,
+) -> Result<BTreeMap<String, NegRiskFamilyLiveTarget>, StartupError> {
+    let rendered_live_targets = payload
+        .get("rendered_live_targets")
+        .ok_or_else(|| StartupError::MissingRenderedLiveTargets {
+            operator_target_revision: operator_revision.to_owned(),
+        })?
+        .clone();
+    let targets =
+        serde_json::from_value::<BTreeMap<String, NegRiskFamilyLiveTarget>>(rendered_live_targets)
+            .map_err(|error| StartupError::InvalidRenderedLiveTargets {
+                operator_target_revision: operator_revision.to_owned(),
+                message: error.to_string(),
+            })?;
+
+    if targets.is_empty() {
+        return Err(StartupError::EmptyRenderedLiveTargets {
+            operator_target_revision: operator_revision.to_owned(),
+        });
+    }
+
+    Ok(targets)
 }
 
 #[cfg(test)]

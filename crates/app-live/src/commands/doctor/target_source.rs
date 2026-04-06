@@ -160,13 +160,14 @@ fn evaluate_live(
         };
         report.push_check("Target Source", DoctorCheckStatus::Pass, restart_needed, "");
     } else {
-        let active_operator_target_revision = live_context
+        let (active_operator_target_revision, active_operator_strategy_revision) = live_context
             .runtime
             .block_on(async {
-                RuntimeProgressRepo
-                    .current(&pool)
-                    .await
-                    .map(|progress| progress.and_then(|row| row.operator_target_revision))
+                RuntimeProgressRepo.current(&pool).await.map(|progress| {
+                    progress
+                        .map(|row| (row.operator_target_revision, row.operator_strategy_revision))
+                        .unwrap_or((None, None))
+                })
             })
             .map_err(|error| {
                 report.push_check(
@@ -187,21 +188,22 @@ fn evaluate_live(
             ),
             "",
         );
+        let active_operator_strategy_revision = active_operator_strategy_revision
+            .as_deref()
+            .or(active_operator_target_revision.as_deref());
         report.push_check(
             "Target Source",
             DoctorCheckStatus::Pass,
             format!(
-                "active operator target revision: {}",
-                active_operator_target_revision
-                    .as_deref()
-                    .unwrap_or("unavailable")
+                "active operator strategy revision: {}",
+                active_operator_strategy_revision.unwrap_or("unavailable")
             ),
             "",
         );
 
         let restart_needed = match (
             config.operator_strategy_revision(),
-            active_operator_target_revision.as_deref(),
+            active_operator_strategy_revision,
         ) {
             (Some(configured), Some(active)) => {
                 if configured == active {
