@@ -3,10 +3,14 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::auth::RelayerAuth;
 use crate::metadata::{
     refresh_neg_risk_metadata_from_api, NegRiskMarketMetadata, NegRiskMetadataCache,
 };
-use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi, PolymarketStreamApi};
+use crate::relayer::{RelayerTransaction, RelayerTransactionType};
+use crate::sdk_backend::{
+    PolymarketClobApi, PolymarketMetadataApi, PolymarketRelayerApi, PolymarketStreamApi,
+};
 use crate::{MarketWsEvent, PolymarketGatewayError, UserWsEvent};
 
 #[derive(Clone)]
@@ -14,6 +18,7 @@ pub struct PolymarketGateway {
     clob_api: Option<Arc<dyn PolymarketClobApi>>,
     stream_api: Option<Arc<dyn PolymarketStreamApi>>,
     metadata_api: Option<Arc<dyn PolymarketMetadataApi>>,
+    relayer_api: Option<Arc<dyn PolymarketRelayerApi>>,
     metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     metadata_refresh_lock: Arc<AsyncMutex<()>>,
 }
@@ -30,6 +35,7 @@ impl PolymarketGateway {
             clob_api: None,
             stream_api: None,
             metadata_api: None,
+            relayer_api: None,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
         }
@@ -53,6 +59,13 @@ impl PolymarketGateway {
     pub fn from_metadata_api(metadata_api: Arc<dyn PolymarketMetadataApi>) -> Self {
         let mut gateway = Self::empty();
         gateway.metadata_api = Some(metadata_api);
+        gateway
+    }
+
+    #[must_use]
+    pub fn from_relayer_api(relayer_api: Arc<dyn PolymarketRelayerApi>) -> Self {
+        let mut gateway = Self::empty();
+        gateway.relayer_api = Some(relayer_api);
         gateway
     }
 
@@ -103,6 +116,24 @@ impl PolymarketGateway {
         .await
     }
 
+    pub async fn recent_transactions(
+        &self,
+        auth: &RelayerAuth<'_>,
+    ) -> Result<Vec<RelayerTransaction>, PolymarketGatewayError> {
+        self.relayer_api()?.recent_transactions(auth).await
+    }
+
+    pub async fn current_nonce(
+        &self,
+        auth: &RelayerAuth<'_>,
+        address: &str,
+        wallet_type: RelayerTransactionType,
+    ) -> Result<String, PolymarketGatewayError> {
+        self.relayer_api()?
+            .current_nonce(auth, address, wallet_type)
+            .await
+    }
+
     fn clob_api(&self) -> Result<&Arc<dyn PolymarketClobApi>, PolymarketGatewayError> {
         self.clob_api.as_ref().ok_or_else(|| {
             PolymarketGatewayError::protocol("clob api is not configured on this gateway")
@@ -118,6 +149,12 @@ impl PolymarketGateway {
     fn metadata_api(&self) -> Result<&Arc<dyn PolymarketMetadataApi>, PolymarketGatewayError> {
         self.metadata_api.as_ref().ok_or_else(|| {
             PolymarketGatewayError::protocol("metadata api is not configured on this gateway")
+        })
+    }
+
+    fn relayer_api(&self) -> Result<&Arc<dyn PolymarketRelayerApi>, PolymarketGatewayError> {
+        self.relayer_api.as_ref().ok_or_else(|| {
+            PolymarketGatewayError::protocol("relayer api is not configured on this gateway")
         })
     }
 }

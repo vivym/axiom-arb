@@ -25,8 +25,9 @@ use venue_polymarket::{
     FlexibleStringList, GammaEvent, GammaMarket, L2AuthHeaders, MarketTradePriceUpdate,
     MarketWsEvent, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
     PolymarketHeartbeatStatus, PolymarketMetadataApi, PolymarketOpenOrderSummary,
-    PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
-    PolymarketUserStreamAuth, RelayerAuth, SignerContext, UserTradeUpdate, UserWsEvent,
+    PolymarketRelayerApi, PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi,
+    PolymarketSubmitResponse, PolymarketUserStreamAuth, RelayerAuth, RelayerTransaction,
+    RelayerTransactionType, SignerContext, UserTradeUpdate, UserWsEvent,
     VenueProducerInstrumentation,
 };
 
@@ -145,6 +146,31 @@ impl PolymarketMetadataApi for SequencedMetadataApi {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ScriptedRelayerApi {
+    recent_transactions: Result<Vec<RelayerTransaction>, PolymarketGatewayError>,
+    current_nonce: Result<String, PolymarketGatewayError>,
+}
+
+#[async_trait]
+impl PolymarketRelayerApi for ScriptedRelayerApi {
+    async fn recent_transactions(
+        &self,
+        _auth: &RelayerAuth<'_>,
+    ) -> Result<Vec<RelayerTransaction>, PolymarketGatewayError> {
+        self.recent_transactions.clone()
+    }
+
+    async fn current_nonce(
+        &self,
+        _auth: &RelayerAuth<'_>,
+        _address: &str,
+        _wallet_type: RelayerTransactionType,
+    ) -> Result<String, PolymarketGatewayError> {
+        self.current_nonce.clone()
+    }
+}
+
 #[allow(dead_code)]
 pub fn scripted_open_order(order_id: &str) -> PolymarketOpenOrderSummary {
     PolymarketOpenOrderSummary {
@@ -225,6 +251,17 @@ pub fn scripted_gateway_with_submit_rejection(status: u16, body: &str) -> Polyma
         submit_result: Err(PolymarketGatewayError::upstream_response(format!(
             "{status}: {body}"
         ))),
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_relayer(
+    recent_transactions: Result<Vec<RelayerTransaction>, PolymarketGatewayError>,
+    current_nonce: Result<String, PolymarketGatewayError>,
+) -> PolymarketGateway {
+    PolymarketGateway::from_relayer_api(Arc::new(ScriptedRelayerApi {
+        recent_transactions,
+        current_nonce,
     }))
 }
 

@@ -49,8 +49,8 @@ pub use rest::{
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
 #[doc(hidden)]
 pub use sdk_backend::{
-    LiveClobSdkApi, LiveMetadataSdkApi, LiveWsSdkApi, PolymarketClobApi, PolymarketMetadataApi,
-    PolymarketStreamApi,
+    LiveClobSdkApi, LiveMetadataSdkApi, LiveRelayerApi, LiveWsSdkApi, PolymarketClobApi,
+    PolymarketMetadataApi, PolymarketRelayerApi, PolymarketStreamApi,
 };
 pub use url::Url as PolymarketUrl;
 pub use ws_client::{
