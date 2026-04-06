@@ -418,11 +418,37 @@ pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
 where
     S: BootstrapSource,
 {
+    run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented(
+        source,
+        instrumentation,
+        None,
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+        real_user_shadow_smoke,
+    )
+}
+
+pub fn run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented<S>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    operator_strategy_revision: Option<&str>,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
     let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
-    let durable_state =
-        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?;
+    let durable_state = load_durable_live_startup_state_for_strategy(
+        operator_strategy_revision,
+        operator_target_revision.as_deref(),
+        load_shadow_state,
+    )?;
     validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
@@ -482,7 +508,11 @@ where
     }
 
     let result = supervisor.run_startup()?;
-    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    persist_operator_startup_anchor(
+        &result.summary,
+        operator_target_revision.as_deref(),
+        operator_strategy_revision,
+    )?;
     Ok(result)
 }
 
@@ -519,6 +549,14 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
 }
 
 pub(crate) fn load_durable_live_startup_state(
+    operator_target_revision: Option<&str>,
+    load_shadow_state: bool,
+) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
+    load_durable_live_startup_state_for_strategy(None, operator_target_revision, load_shadow_state)
+}
+
+pub(crate) fn load_durable_live_startup_state_for_strategy(
+    operator_strategy_revision: Option<&str>,
     operator_target_revision: Option<&str>,
     load_shadow_state: bool,
 ) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
@@ -623,8 +661,9 @@ pub(crate) fn load_durable_live_startup_state(
         } else {
             CandidateRestoreStatus::default()
         };
-        validate_operator_target_revision(
+        validate_operator_revision(
             progress.as_ref(),
+            operator_strategy_revision,
             operator_target_revision,
             has_durable_follow_up_work,
         )?;
@@ -661,12 +700,44 @@ fn validate_real_user_shadow_smoke_restore(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_operator_target_revision(
     progress: Option<&RuntimeProgressRow>,
     expected_revision: Option<&str>,
     has_durable_follow_up_work: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(expected_revision) = expected_revision else {
+    validate_operator_revision(progress, None, expected_revision, has_durable_follow_up_work)
+}
+
+fn validate_operator_revision(
+    progress: Option<&RuntimeProgressRow>,
+    expected_strategy_revision: Option<&str>,
+    expected_target_revision: Option<&str>,
+    has_durable_follow_up_work: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(expected_strategy_revision) = expected_strategy_revision {
+        if !has_durable_follow_up_work {
+            return Ok(());
+        }
+
+        let Some(progress) = progress else {
+            return Err(boxed_error(
+                "operator strategy revision anchor is required when a startup strategy bundle is supplied",
+            ));
+        };
+
+        return match progress.operator_strategy_revision.as_deref() {
+            Some(actual_revision) if actual_revision == expected_strategy_revision => Ok(()),
+            Some(actual_revision) => Err(boxed_error(format!(
+                "operator strategy revision anchor mismatch: persisted={actual_revision} configured={expected_strategy_revision}"
+            ))),
+            None => Err(boxed_error(
+                "operator strategy revision anchor is required when a startup strategy bundle is supplied",
+            )),
+        };
+    }
+
+    let Some(expected_target_revision) = expected_target_revision else {
         return Ok(());
     };
 
@@ -681,9 +752,9 @@ fn validate_operator_target_revision(
     };
 
     match progress.operator_target_revision.as_deref() {
-        Some(actual_revision) if actual_revision == expected_revision => Ok(()),
+        Some(actual_revision) if actual_revision == expected_target_revision => Ok(()),
         Some(actual_revision) => Err(boxed_error(format!(
-            "operator target revision anchor mismatch: persisted={actual_revision} configured={expected_revision}"
+            "operator target revision anchor mismatch: persisted={actual_revision} configured={expected_target_revision}"
         ))),
         None => Err(boxed_error(
             "operator target revision anchor is required when live operator targets are supplied",
@@ -691,14 +762,15 @@ fn validate_operator_target_revision(
     }
 }
 
-pub(crate) fn persist_operator_target_revision_anchor(
+pub(crate) fn persist_operator_startup_anchor(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     persist_operator_target_revision_anchor_with_run_session_id(
         summary,
         operator_target_revision,
-        None,
+        operator_strategy_revision,
         None,
     )
 }
@@ -709,9 +781,9 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     operator_strategy_revision: Option<&str>,
     active_run_session_id: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(operator_target_revision) = operator_target_revision else {
+    if operator_target_revision.is_none() && operator_strategy_revision.is_none() {
         return Ok(());
-    };
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -729,7 +801,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
                     ))
                 })?,
                 summary.published_snapshot_id.as_deref(),
-                Some(operator_target_revision),
+                operator_target_revision,
                 operator_strategy_revision,
                 active_run_session_id,
             )

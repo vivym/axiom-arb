@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use domain::{ActivationDecision, ExecutionMode};
 
-use crate::rollout::{index_rules, resolve_rule, RolloutRule, RolloutRuleMap};
+use crate::rollout::{index_rules, is_risk_expanding_route, resolve_rule, RolloutRule, RolloutRuleMap};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivationPolicy {
@@ -131,7 +131,7 @@ fn clamp_phase_one_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
 }
 
 fn clamp_real_user_shadow_smoke_mode(route: &str, mode: ExecutionMode) -> ExecutionMode {
-    if route == crate::negrisk::ROUTE && mode == ExecutionMode::Live {
+    if is_risk_expanding_route(route) && mode == ExecutionMode::Live {
         return ExecutionMode::Shadow;
     }
 

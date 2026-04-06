@@ -8,8 +8,8 @@ use persistence::{
 use sqlx::PgPool;
 
 use crate::config::{
-    ConfigError, LocalSignerConfig, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet,
-    PolymarketSourceConfig,
+    neg_risk_live_targets_from_route_artifacts, ConfigError, LocalSignerConfig,
+    NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, PolymarketSourceConfig, RouteRuntimeArtifact,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +26,13 @@ pub struct ResolvedTargets {
     pub operator_target_revision: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStrategyRevision {
+    pub operator_strategy_revision: Option<String>,
+    pub route_artifacts: BTreeMap<String, Vec<RouteRuntimeArtifact>>,
+    pub compatibility_mode: bool,
+}
+
 #[derive(Debug)]
 pub enum StartupError {
     Config(ConfigError),
@@ -36,6 +43,16 @@ pub enum StartupError {
     },
     MissingStrategyAdoptionProvenance {
         operator_strategy_revision: String,
+    },
+    MissingRouteArtifacts {
+        operator_strategy_revision: String,
+    },
+    EmptyRouteArtifacts {
+        operator_strategy_revision: String,
+    },
+    InvalidRouteArtifacts {
+        operator_strategy_revision: String,
+        message: String,
     },
     MissingRenderedLiveTargets {
         operator_target_revision: String,
@@ -68,6 +85,25 @@ impl fmt::Display for StartupError {
             } => write!(
                 f,
                 "operator_strategy_revision {operator_strategy_revision} could not be linked back to a strategy adoption provenance chain"
+            ),
+            Self::MissingRouteArtifacts {
+                operator_strategy_revision,
+            } => write!(
+                f,
+                "missing route_artifacts for operator_strategy_revision {operator_strategy_revision}"
+            ),
+            Self::EmptyRouteArtifacts {
+                operator_strategy_revision,
+            } => write!(
+                f,
+                "empty route_artifacts for operator_strategy_revision {operator_strategy_revision}"
+            ),
+            Self::InvalidRouteArtifacts {
+                operator_strategy_revision,
+                message,
+            } => write!(
+                f,
+                "invalid route_artifacts for operator_strategy_revision {operator_strategy_revision}: {message}"
             ),
             Self::MissingRenderedLiveTargets {
                 operator_target_revision,
@@ -110,39 +146,56 @@ pub async fn resolve_startup_targets(
     pool: &PgPool,
     config: &AppLiveConfigView<'_>,
 ) -> Result<ResolvedTargets, StartupError> {
+    let resolved = resolve_startup_strategy_revision(pool, config).await?;
+    let targets = neg_risk_live_targets_from_route_artifacts(
+        &resolved.route_artifacts,
+        resolved.operator_strategy_revision.as_deref(),
+    )?;
+    let operator_target_revision = resolved
+        .operator_strategy_revision
+        .clone()
+        .or_else(|| (!targets.is_empty()).then(|| targets.revision().to_owned()));
+
+    Ok(ResolvedTargets {
+        targets,
+        operator_target_revision,
+    })
+}
+
+pub async fn resolve_startup_strategy_revision(
+    pool: &PgPool,
+    config: &AppLiveConfigView<'_>,
+) -> Result<ResolvedStrategyRevision, StartupError> {
     if let Some(target_source) = config.target_source().filter(|source| source.is_adopted()) {
         let operator_target_revision = target_source
             .operator_target_revision()
             .ok_or(StartupError::MissingOperatorTargetRevision)?
             .to_owned();
-        return resolve_adopted_targets_from_operator_target_revision(
+        let targets = resolve_adopted_targets_from_operator_target_revision(
             pool,
             &operator_target_revision,
         )
-        .await;
+        .await?
+        .targets;
+        return Ok(ResolvedStrategyRevision {
+            operator_strategy_revision: Some(operator_target_revision.clone()),
+            route_artifacts: compatibility_route_artifacts_from_targets(&targets),
+            compatibility_mode: false,
+        });
     }
 
     if config.has_adopted_strategy_source() {
         if let Some(operator_strategy_revision) = config.operator_strategy_revision() {
-            return resolve_adopted_targets_from_operator_strategy_revision(
-                pool,
-                operator_strategy_revision,
-            )
-            .await;
+            return resolve_adopted_strategy_revision(pool, operator_strategy_revision).await;
         }
     }
 
-    {
-        let targets = NegRiskLiveTargetSet::try_from(config)?;
-        let operator_target_revision = config
-            .operator_strategy_revision()
-            .map(str::to_owned)
-            .or_else(|| (!targets.is_empty()).then(|| targets.revision().to_owned()));
-        return Ok(ResolvedTargets {
-            targets,
-            operator_target_revision,
-        });
-    }
+    let targets = NegRiskLiveTargetSet::try_from(config)?;
+    Ok(ResolvedStrategyRevision {
+        operator_strategy_revision: config.operator_strategy_revision().map(str::to_owned),
+        route_artifacts: compatibility_route_artifacts_from_targets(&targets),
+        compatibility_mode: config.is_legacy_explicit_strategy_config(),
+    })
 }
 
 async fn resolve_adopted_targets_from_operator_target_revision(
@@ -172,10 +225,10 @@ async fn resolve_adopted_targets_from_operator_target_revision(
     })
 }
 
-async fn resolve_adopted_targets_from_operator_strategy_revision(
+async fn resolve_adopted_strategy_revision(
     pool: &PgPool,
     operator_strategy_revision: &str,
-) -> Result<ResolvedTargets, StartupError> {
+) -> Result<ResolvedStrategyRevision, StartupError> {
     let provenance = StrategyAdoptionRepo
         .get_by_operator_strategy_revision(pool, operator_strategy_revision)
         .await?
@@ -188,15 +241,118 @@ async fn resolve_adopted_targets_from_operator_strategy_revision(
         .ok_or_else(|| StartupError::MissingStrategyAdoptionProvenance {
             operator_strategy_revision: operator_strategy_revision.to_owned(),
         })?;
-    let targets = parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
+    let route_artifacts =
+        parse_route_artifacts(&adoptable.payload, operator_strategy_revision).or_else(|error| {
+            match error {
+                StartupError::MissingRouteArtifacts { .. } => {
+                    let targets = parse_rendered_live_targets(&adoptable.payload, operator_strategy_revision)?;
+                    Ok(compatibility_route_artifacts_from_targets(
+                        &NegRiskLiveTargetSet::from_targets_with_revision(
+                            operator_strategy_revision.to_owned(),
+                            targets,
+                        ),
+                    ))
+                }
+                other => Err(other),
+            }
+        })?;
 
-    Ok(ResolvedTargets {
-        targets: NegRiskLiveTargetSet::from_targets_with_revision(
-            operator_strategy_revision.to_owned(),
-            targets,
-        ),
-        operator_target_revision: Some(operator_strategy_revision.to_owned()),
+    Ok(ResolvedStrategyRevision {
+        operator_strategy_revision: Some(operator_strategy_revision.to_owned()),
+        route_artifacts,
+        compatibility_mode: false,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct SerializedRouteArtifactKey {
+    route: String,
+    scope: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SerializedRouteArtifact {
+    key: SerializedRouteArtifactKey,
+    route_policy_version: String,
+    semantic_digest: String,
+    content: serde_json::Value,
+}
+
+fn parse_route_artifacts(
+    payload: &serde_json::Value,
+    operator_strategy_revision: &str,
+) -> Result<BTreeMap<String, Vec<RouteRuntimeArtifact>>, StartupError> {
+    let artifacts = payload
+        .get("route_artifacts")
+        .ok_or_else(|| StartupError::MissingRouteArtifacts {
+            operator_strategy_revision: operator_strategy_revision.to_owned(),
+        })?
+        .clone();
+    let artifacts = serde_json::from_value::<Vec<SerializedRouteArtifact>>(artifacts).map_err(
+        |error| StartupError::InvalidRouteArtifacts {
+            operator_strategy_revision: operator_strategy_revision.to_owned(),
+            message: error.to_string(),
+        },
+    )?;
+
+    if artifacts.is_empty() {
+        return Err(StartupError::EmptyRouteArtifacts {
+            operator_strategy_revision: operator_strategy_revision.to_owned(),
+        });
+    }
+
+    let mut grouped = BTreeMap::new();
+    for artifact in artifacts {
+        grouped
+            .entry(artifact.key.route)
+            .or_insert_with(Vec::new)
+            .push(RouteRuntimeArtifact {
+                scope: artifact.key.scope,
+                route_policy_version: artifact.route_policy_version,
+                semantic_digest: artifact.semantic_digest,
+                content: artifact.content,
+            });
+    }
+    Ok(grouped)
+}
+
+fn compatibility_route_artifacts_from_targets(
+    targets: &NegRiskLiveTargetSet,
+) -> BTreeMap<String, Vec<RouteRuntimeArtifact>> {
+    let mut route_artifacts = BTreeMap::new();
+    route_artifacts.insert(
+        "full-set".to_owned(),
+        vec![RouteRuntimeArtifact {
+            scope: "default".to_owned(),
+            route_policy_version: "full-set-route-policy-v1".to_owned(),
+            semantic_digest: "full-set-basis-default".to_owned(),
+            content: serde_json::json!({
+                "config_basis_digest": "full-set-basis-default",
+                "mode": "static-default",
+            }),
+        }],
+    );
+    route_artifacts.insert(
+        "neg-risk".to_owned(),
+        targets
+            .targets()
+            .values()
+            .map(|target| RouteRuntimeArtifact {
+                scope: target.family_id.clone(),
+                route_policy_version: "neg-risk-route-policy-v1".to_owned(),
+                semantic_digest: target.family_id.clone(),
+                content: serde_json::json!({
+                    "family_id": target.family_id,
+                    "rendered_live_target": target,
+                    "target_id": format!("candidate-target-{}", target.family_id),
+                    "validation": {
+                        "status": "adoptable",
+                    },
+                }),
+            })
+            .collect(),
+    );
+    route_artifacts
 }
 
 fn parse_rendered_live_targets(
