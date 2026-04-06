@@ -20,13 +20,14 @@ That ownership is already producing real protocol drift:
 - stale auth semantics caused `401 Unauthorized`
 - request construction and response handling are coupled to repo-specific assumptions instead of the official client contract
 
-The recommended fix is a one-time internal rewrite of `venue-polymarket` around the official Rust SDK `polymarket-client-sdk`, while keeping `app-live` and the control plane repo-owned.
+The recommended fix is a staged internal rewrite of `venue-polymarket` around the official Rust SDK `polymarket-client-sdk`, while keeping `app-live` and the control plane repo-owned.
 
 The key strategy is:
 
 - keep `venue-polymarket` as the only Polymarket integration crate
 - rewrite its internals around official SDK-backed capabilities
-- delete repo-owned transport/auth main paths instead of carrying dual stacks
+- build the new protocol core now, but defer main-path cutover until the strategy-neutral control-plane work lands
+- delete repo-owned transport/auth main paths only in the final cutover phase
 - preserve `app-live` as the control-plane owner
 - preserve relayer support inside the same crate, but as a repo-owned backend behind the same gateway surface
 - explicitly design the new surface so the `strategy-neutral-control-plane` work can plug into it without another protocol-layer rewrite
@@ -34,7 +35,7 @@ The key strategy is:
 In short:
 
 - external boundary stays stable at the crate level
-- internal protocol implementation is replaced wholesale
+- internal protocol implementation is replaced wholesale, but in two execution phases
 - control-plane semantics are not changed in this project
 
 ## 2. Current Repository Reality
@@ -100,6 +101,7 @@ This design should guarantee the following:
   - runtime submit/reconcile
   - heartbeat
   - websocket feeds
+- the work can be split so that low-risk protocol-core work starts immediately, while high-conflict cutover work waits for the strategy-neutral control-plane merge
 
 ## 4. Non-Goals
 
@@ -112,6 +114,7 @@ This design does not define:
 - new market selection logic
 - new planner or risk logic
 - long-term support for legacy static signer semantics
+- an immediate pre-merge cutover of all `app-live` call sites to the new gateway
 
 ## 5. Approaches Considered
 
@@ -170,9 +173,9 @@ Cons:
 
 ### 5.4 Recommendation
 
-Choose Option B.
+Choose Option B, but execute it in two phases.
 
-This gives the repository one Polymarket boundary, one protocol implementation path, and no long-lived migration shell.
+This gives the repository one Polymarket boundary, one protocol implementation path, and no long-lived migration shell, while avoiding unnecessary rework against the in-flight strategy-neutral branch.
 
 ## 6. Architecture Decision
 
@@ -245,6 +248,13 @@ Hard rules:
 - upper layers must not know request paths, auth formulas, or websocket auth payload details
 - capability APIs must not encode `neg-risk` as the only live route
 
+The route-agnostic requirement applies to the venue gateway boundary, not to every route-owned payload adapter above it.
+
+That means:
+
+- auth, transport, connectivity, market data, and stream APIs must not encode `neg-risk`
+- route adapters may still translate route-owned execution payloads into venue-facing calls above the gateway
+
 ## 8. Auth And Config Model
 
 ### 8.1 Replace Static Signer Semantics
@@ -278,13 +288,18 @@ They should not persist:
 
 ### 8.3 Legacy Static Signer Path
 
-Because the project goal is to avoid historical baggage, the old static signer path should not survive as a full compatibility mode.
+Because the project goal is to avoid historical baggage, the old static signer path should not survive as a long-term compatibility mode.
 
 Recommended handling:
 
-- remove it from normal runtime construction
-- reject it explicitly during config loading or validation if still present
-- update docs and examples so `[polymarket.account]` is the only supported mainline authenticated path
+- Phase A:
+  - do not extend it
+  - do not route any new protocol-core code through it
+  - keep parse-time support only where needed to avoid creating an unnecessary merge hotspot before strategy-neutral lands
+- Phase B:
+  - remove it from normal runtime construction
+  - reject it explicitly during config loading or validation if still present
+  - update docs and examples so `[polymarket.account]` is the only supported mainline authenticated path
 
 ## 9. Contract With Strategy-Neutral Control Plane
 
@@ -316,9 +331,38 @@ That means:
 - no family-shaped assumptions in the top-level public API
 - no control-plane-specific revision language inside venue integration types
 
+### 9.4 Known Overlap Zones
+
+Even with the intended boundary, later merge work is still expected in a few places:
+
+- `crates/config-schema/src/validate.rs`
+- `crates/app-live/src/config.rs`
+- `crates/app-live/src/source_tasks.rs`
+- `crates/app-live/src/commands/doctor/connectivity.rs`
+- shared config and command test fixtures
+
+These are not reasons to stop the rewrite, but they are explicit merge hotspots and should be treated as deferred cutover work rather than Phase A targets.
+
 ## 10. Runtime And Command Integration
 
 The rewrite should change `app-live` only where it currently depends on protocol details.
+
+### 10.0 Order Signing Ownership
+
+This rewrite must preserve the current repository ownership split unless and until a separate design changes it.
+
+Current ownership is:
+
+- repo-owned execution code produces signed order payload material
+- venue code translates that signed payload into Polymarket submission format and transmits it
+
+This project should keep that split.
+
+That means:
+
+- the SDK becomes the transport/auth/session owner
+- the repository remains the owner of execution-plan signing and signed-order intent construction
+- moving order construction or signing authority into the SDK is out of scope for this rewrite
 
 ### 10.1 `doctor`
 
@@ -336,7 +380,23 @@ Runtime providers should consume `PolymarketExecutionSource`.
 
 They may remain repo-owned provider types, but they should no longer store transport-facing auth header payloads.
 
-### 10.3 Metadata Discovery
+For reconciliation truth:
+
+- order-reference reconciliation may continue to use authenticated order visibility
+- transaction-reference reconciliation may continue to use relayer-backed visibility
+- any future attempt to unify those truths should be a separate design decision, not an implicit side effect of the SDK rewrite
+
+### 10.3 Async Boundary
+
+This rewrite should not expand into a repository-wide async trait conversion.
+
+Recommended rule:
+
+- Phase A may introduce async-native gateway internals
+- Phase A should keep the current sync-facing execution/provider traits intact
+- Phase B may replace the current ad hoc Tokio bridging with a more deliberate adapter, but only after the strategy-neutral merge reduces surrounding churn
+
+### 10.4 Metadata Discovery
 
 Discovery should consume `PolymarketMetadataSource`.
 
@@ -349,7 +409,7 @@ The repository may keep its own policy on:
 
 But the transport and session semantics should come from the SDK backend.
 
-### 10.4 Market And User Streams
+### 10.5 Market And User Streams
 
 Runtime stream tasks should consume `PolymarketMarketStreamSource` and `PolymarketUserStreamSource`.
 
@@ -384,9 +444,17 @@ They should not need to pattern-match SDK internals directly.
 
 ## 12. Implementation Shape
 
-This is a one-time rewrite, but it should still be executed in ordered slices.
+This is a one-time rewrite, but it should be executed in two phases.
 
-### 12.1 Slice 1: Define The New Public Surface
+### 12.1 Phase A: Build The Protocol Core Now
+
+Phase A is allowed to start before the strategy-neutral control-plane branch merges.
+
+The goal is to build the new protocol core with minimal merge risk.
+
+Phase A should stay concentrated in `crates/venue-polymarket/*` and related tests.
+
+#### Slice A1: Define The New Public Surface
 
 - create the new capability-oriented types in `venue-polymarket`
 - remove or deprecate old public exports
@@ -394,7 +462,7 @@ This is a one-time rewrite, but it should still be executed in ordered slices.
 
 This slice sets the target architecture before wiring SDK details.
 
-### 12.2 Slice 2: Replace Authenticated CLOB REST
+#### Slice A2: Replace Authenticated CLOB REST Internals
 
 Integrate official SDK-backed support for:
 
@@ -406,11 +474,11 @@ Integrate official SDK-backed support for:
 
 This slice addresses the current live blocker first.
 
-### 12.3 Slice 3: Replace Websocket Integration
+#### Slice A3: Replace Websocket Internals
 
 Integrate official SDK-backed market and user stream sessions, then map them into the repo-owned event types already consumed by runtime tasks.
 
-### 12.4 Slice 4: Replace Gamma/Data Metadata Transport
+#### Slice A4: Replace Gamma/Data Metadata Internals
 
 Integrate official SDK-backed metadata fetches and retain repo-owned policy above that transport layer:
 
@@ -419,7 +487,21 @@ Integrate official SDK-backed metadata fetches and retain repo-owned policy abov
 - cadence
 - operator-visible diagnostics
 
-### 12.5 Slice 5: Rewire `app-live`
+#### Slice A5: Preserve A Controlled Compatibility Shell
+
+Until Phase B, the repository may temporarily keep old wiring alive at the `app-live` boundary.
+
+Hard rules:
+
+- no new features should be added to the old transport path
+- old wiring exists only as a short-lived cutover shell
+- tests for the new gateway must not depend on the old auth/header/request-builder APIs
+
+### 12.2 Phase B: Cut Over After Strategy-Neutral Merge
+
+Phase B should begin only after the strategy-neutral control-plane branch is merged or otherwise stabilized enough that the overlapping files are no longer moving underneath the rewrite.
+
+#### Slice B1: Rewire `app-live`
 
 Move all Polymarket call sites in `app-live` to capability-oriented construction:
 
@@ -427,6 +509,13 @@ Move all Polymarket call sites in `app-live` to capability-oriented construction
 - runtime provider construction
 - discovery wiring
 - websocket task construction
+
+#### Slice B2: Remove Old Auth And Transport Paths
+
+- delete the old transport path
+- remove static signer mainline support
+- remove stale public exports and request-builder APIs
+- collapse app-side wiring to the new gateway only
 
 After this slice, the old transport path should be deleted.
 
@@ -465,7 +554,8 @@ Because the strategy-neutral control-plane project is already active in another 
 Recommended rules:
 
 - keep most code churn inside `crates/venue-polymarket/*`
-- keep `app-live` edits focused on provider/gateway wiring only
+- keep Phase A `app-live` edits near zero
+- keep Phase B `app-live` edits focused on provider/gateway wiring only
 - avoid rewriting `status`, `apply`, `doctor`, or `verify` product semantics beyond the Polymarket transport boundary
 - avoid introducing new control-plane concepts in config and persistence
 
@@ -474,6 +564,7 @@ If these rules are followed, later merge conflicts should collapse mostly to:
 - constructor wiring
 - config field reshaping
 - test fixture updates
+- removal of the temporary compatibility shell
 
 rather than architecture-level rework.
 
@@ -487,3 +578,5 @@ This project is complete when:
 - `app-live` no longer relies on static L2 auth material or direct transport request construction
 - the current real-user smoke path can authenticate and progress using the rewritten gateway
 - the resulting venue boundary is compatible with the strategy-neutral control-plane project without another venue rewrite
+- Phase A delivers reusable SDK-backed protocol core without painting the repository into a pre-merge cutover corner
+- Phase B completes the actual mainline switch and old-path deletion after the control-plane branch lands
