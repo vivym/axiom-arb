@@ -495,12 +495,14 @@ impl DiscoverySupervisor {
         }
 
         let _ = self.pricing;
-        let (candidate_set, disposition, summary) =
-            self.validation.candidate_set_from_publication(
-                &publication,
-                operator_target_revision.as_deref(),
-                authoritative,
-            )?;
+        let (candidate_set, _, _) = self.validation.candidate_set_from_publication(
+            &publication,
+            operator_target_revision.as_deref(),
+            authoritative,
+        )?;
+        let candidate_set = apply_candidate_restriction(candidate_set, &restriction);
+        let summary = ValidationSummary::from_targets(&candidate_set.targets);
+        let disposition = summary.aggregate_disposition().to_owned();
         let candidate = self.bridge.render_candidate_with_full_set_basis(
             &candidate_set,
             &rendered_live_targets,
@@ -619,4 +621,30 @@ fn deferred_reason(discovery_record: &FamilyDiscoveryRecord) -> String {
     } else {
         "candidate generation deferred by conservative discovery policy".to_owned()
     }
+}
+
+fn apply_candidate_restriction(
+    mut candidate_set: CandidateTargetSet,
+    restriction: &crate::queues::CandidateRestrictionTruth,
+) -> CandidateTargetSet {
+    let Some(reason) = restriction.hard_gate_reason() else {
+        return candidate_set;
+    };
+
+    let reason = reason.to_owned();
+    let mut gated = false;
+    for target in &mut candidate_set.targets {
+        if matches!(target.validation, CandidateValidationResult::Adoptable) {
+            target.validation = CandidateValidationResult::Deferred {
+                reason: reason.clone(),
+            };
+            gated = true;
+        }
+    }
+
+    if gated {
+        candidate_set.adoptable_revision = None;
+    }
+
+    candidate_set
 }

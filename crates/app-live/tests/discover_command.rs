@@ -208,6 +208,90 @@ fn discover_reports_route_local_diffs_to_stdout_when_bundle_changes() {
 }
 
 #[test]
+fn discover_diffs_against_immediately_previous_refresh_even_when_bundle_identity_repeats() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::with_responses(vec![
+        page_one_ok(),
+        page_two_empty(),
+        page_one_changed(),
+        page_two_empty(),
+        page_one_ok(),
+        page_two_empty(),
+        page_one_ok(),
+        page_two_empty(),
+    ]);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let first_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("first discover should execute");
+    let first_text = cli::combined(&first_output);
+    assert!(first_output.status.success(), "{first_text}");
+
+    let second_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("second discover should execute");
+    let second_text = cli::combined(&second_output);
+    assert!(second_output.status.success(), "{second_text}");
+    assert!(
+        second_text.contains("route_diff_count = 2"),
+        "{second_text}"
+    );
+
+    let third_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("third discover should execute");
+    let third_text = cli::combined(&third_output);
+    assert!(third_output.status.success(), "{third_text}");
+    assert!(third_text.contains("route_diff_count = 2"), "{third_text}");
+    assert!(
+        third_text.contains("route_diff = changed route=neg-risk scope=family-a"),
+        "{third_text}"
+    );
+    assert!(
+        third_text.contains("route_diff = removed route=neg-risk scope=family-b"),
+        "{third_text}"
+    );
+    assert!(
+        !third_text.contains("route_diff = added route=neg-risk scope=family-b"),
+        "{third_text}"
+    );
+
+    let fourth_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("fourth discover should execute");
+    let fourth_text = cli::combined(&fourth_output);
+    assert!(fourth_output.status.success(), "{fourth_text}");
+    assert!(
+        fourth_text.contains("route_diff_count = 0"),
+        "{fourth_text}"
+    );
+    assert!(fourth_text.contains("route_diff = none"), "{fourth_text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn discover_keeps_full_set_route_digest_stable_when_neg_risk_metadata_changes() {
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::with_responses(vec![

@@ -283,6 +283,68 @@ async fn provenance_pairing_must_match_the_adoptable_revision_candidate() {
 }
 
 #[tokio::test]
+async fn discover_refresh_history_tracks_immediate_previous_materialization_order() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let artifacts = StrategyControlArtifactRepo;
+    for revision in ["candidate-a", "candidate-b"] {
+        artifacts
+            .upsert_strategy_candidate_set(
+                &db.pool,
+                &StrategyCandidateSetRow {
+                    strategy_candidate_revision: revision.to_owned(),
+                    snapshot_id: format!("snapshot-{revision}"),
+                    source_revision: format!("discovery-{revision}"),
+                    payload: json!({
+                        "strategy_candidate_revision": revision,
+                        "snapshot_id": format!("snapshot-{revision}"),
+                        "source_revision": format!("discovery-{revision}"),
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let first_refresh = artifacts
+        .append_discover_refresh(&db.pool, "candidate-a")
+        .await
+        .unwrap();
+    let second_refresh = artifacts
+        .append_discover_refresh(&db.pool, "candidate-b")
+        .await
+        .unwrap();
+    let third_refresh = artifacts
+        .append_discover_refresh(&db.pool, "candidate-a")
+        .await
+        .unwrap();
+
+    let previous_for_second = artifacts
+        .previous_discover_refresh_candidate_set(&db.pool, second_refresh)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        previous_for_second.strategy_candidate_revision,
+        "candidate-a"
+    );
+
+    let previous_for_third = artifacts
+        .previous_discover_refresh_candidate_set(&db.pool, third_refresh)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        previous_for_third.strategy_candidate_revision,
+        "candidate-b"
+    );
+    assert!(third_refresh > first_refresh);
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn lookup_rejects_mismatched_rendered_operator_strategy_revision() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

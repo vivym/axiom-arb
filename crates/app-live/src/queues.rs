@@ -125,12 +125,19 @@ impl SnapshotDispatchQueue {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateRestrictionTruth {
     Eligible,
+    Advisory { reason: String },
     Restricted { reason: String },
 }
 
 impl CandidateRestrictionTruth {
     pub fn eligible() -> Self {
         Self::Eligible
+    }
+
+    pub fn advisory(reason: impl Into<String>) -> Self {
+        Self::Advisory {
+            reason: reason.into(),
+        }
     }
 
     pub fn restricted(reason: impl Into<String>) -> Self {
@@ -142,7 +149,14 @@ impl CandidateRestrictionTruth {
     pub fn restriction_reason(&self) -> Option<&str> {
         match self {
             Self::Eligible => None,
+            Self::Advisory { reason } | Self::Restricted { reason } => Some(reason.as_str()),
+        }
+    }
+
+    pub fn hard_gate_reason(&self) -> Option<&str> {
+        match self {
             Self::Restricted { reason } => Some(reason.as_str()),
+            Self::Eligible | Self::Advisory { .. } => None,
         }
     }
 }

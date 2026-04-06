@@ -313,7 +313,7 @@ fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_back
 }
 
 #[test]
-fn discovery_supervisor_reports_restricted_candidate_as_warning_without_changing_bundle_content() {
+fn discovery_supervisor_reports_restricted_candidate_as_hard_gate() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
@@ -342,14 +342,14 @@ fn discovery_supervisor_reports_restricted_candidate_as_warning_without_changing
     });
 
     assert!(report.candidate_revision.is_some());
-    assert!(report.adoptable_revision.is_some());
-    assert!(report.operator_target_revision.is_some());
+    assert_eq!(report.adoptable_revision, None);
+    assert_eq!(report.operator_target_revision, None);
     assert_eq!(report.target_count, 1);
-    assert_eq!(report.adoptable_target_count, 1);
-    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.adoptable_target_count, 0);
+    assert_eq!(report.deferred_target_count, 1);
     assert_eq!(report.excluded_target_count, 0);
     assert!(!report.live_dispatch_woken);
-    assert_eq!(report.disposition, "adoptable");
+    assert_eq!(report.disposition, "deferred");
     assert_eq!(
         report.warnings,
         vec!["candidate generation halted by validation truth".to_owned()]
@@ -488,7 +488,7 @@ fn discovery_supervisor_reuses_bundle_identity_when_only_publication_provenance_
 }
 
 #[test]
-fn discovery_supervisor_ignores_readiness_only_restrictions_for_bundle_identity() {
+fn discovery_supervisor_ignores_readiness_only_advisories_for_bundle_identity() {
     let publication = ready_candidate_publication_fixture("candidate-pub-readiness", &["family-a"]);
     let eligible_report =
         discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
@@ -504,7 +504,7 @@ fn discovery_supervisor_ignores_readiness_only_restrictions_for_bundle_identity(
             [DirtyDomain::Candidates],
             None,
             sample_rendered_live_targets(),
-            CandidateRestrictionTruth::restricted("connectivity degraded"),
+            CandidateRestrictionTruth::advisory("connectivity degraded"),
         ));
 
     assert_eq!(

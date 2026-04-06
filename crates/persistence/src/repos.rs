@@ -2457,6 +2457,51 @@ impl StrategyControlArtifactRepo {
             .map(map_adoptable_strategy_revision_row)
             .transpose()
     }
+
+    pub async fn append_discover_refresh(
+        &self,
+        pool: &PgPool,
+        strategy_candidate_revision: &str,
+    ) -> Result<i64> {
+        sqlx::query_scalar(
+            r#"
+            INSERT INTO discover_refresh_history (strategy_candidate_revision)
+            VALUES ($1)
+            RETURNING refresh_seq
+            "#,
+        )
+        .bind(strategy_candidate_revision)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+    }
+
+    pub async fn previous_discover_refresh_candidate_set(
+        &self,
+        pool: &PgPool,
+        refresh_seq: i64,
+    ) -> Result<Option<StrategyCandidateSetRow>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                candidate.strategy_candidate_revision,
+                candidate.snapshot_id,
+                candidate.source_revision,
+                candidate.payload
+            FROM discover_refresh_history AS history
+            JOIN strategy_candidate_sets AS candidate
+              ON candidate.strategy_candidate_revision = history.strategy_candidate_revision
+            WHERE history.refresh_seq < $1
+            ORDER BY history.refresh_seq DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(refresh_seq)
+        .fetch_optional(pool)
+        .await?;
+
+        row.map(map_strategy_candidate_set_row).transpose()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

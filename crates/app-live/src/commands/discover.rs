@@ -10,7 +10,6 @@ use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig}
 use persistence::{connect_pool_from_env, StrategyControlArtifactRepo};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::Row;
 use state::{
     CandidateProjectionReadiness, CandidatePublication, DirtyDomain, StateApplier, StateStore,
 };
@@ -126,9 +125,11 @@ pub(crate) async fn run_discover_from_config(
                         ),
                     )
                 })?;
+            let refresh_seq = artifacts
+                .append_discover_refresh(&pool, candidate_revision)
+                .await?;
             let route_diffs =
-                route_diffs_from_previous_bundle(&pool, candidate_revision, &candidate.payload)
-                    .await?;
+                route_diffs_from_previous_bundle(&pool, refresh_seq, &candidate.payload).await?;
             (route_artifact_count(&candidate.payload)?, route_diffs)
         }
         None => (0, vec![]),
@@ -276,58 +277,16 @@ fn route_diffs(
 
 async fn route_diffs_from_previous_bundle(
     pool: &sqlx::PgPool,
-    current_revision: &str,
+    refresh_seq: i64,
     current_payload: &serde_json::Value,
 ) -> Result<Vec<String>, io::Error> {
-    let current = route_artifact_map(current_payload)?;
-    let rows = sqlx::query(
-        r#"
-        SELECT strategy_candidate_revision, payload
-        FROM strategy_candidate_sets
-        WHERE strategy_candidate_revision <> $1
-        "#,
-    )
-    .bind(current_revision)
-    .fetch_all(pool)
-    .await
-    .map_err(|error| io::Error::other(error.to_string()))?;
-
-    let previous = rows
-        .into_iter()
-        .map(|row| {
-            let revision: String = row
-                .try_get("strategy_candidate_revision")
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-            let payload: serde_json::Value = row
-                .try_get("payload")
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-            let artifacts = route_artifact_map(&payload)?;
-            Ok((revision, payload, similarity_score(&current, &artifacts)))
-        })
-        .collect::<Result<Vec<_>, io::Error>>()?
-        .into_iter()
-        .max_by(|left, right| left.2.cmp(&right.2).then(left.0.cmp(&right.0)));
-
-    previous
-        .map(|(_, payload, _)| route_diffs(&payload, current_payload))
+    StrategyControlArtifactRepo
+        .previous_discover_refresh_candidate_set(pool, refresh_seq)
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?
+        .map(|previous| route_diffs(&previous.payload, current_payload))
         .transpose()
         .map(Option::unwrap_or_default)
-}
-
-fn similarity_score(
-    current: &BTreeMap<RouteArtifactKey, String>,
-    candidate: &BTreeMap<RouteArtifactKey, String>,
-) -> (usize, usize) {
-    let shared_keys = current
-        .keys()
-        .filter(|key| candidate.contains_key(*key))
-        .count();
-    let matching_digests = current
-        .iter()
-        .filter(|(key, digest)| candidate.get(*key).is_some_and(|value| value == *digest))
-        .count();
-
-    (matching_digests, shared_keys)
 }
 
 fn route_artifact_map(
