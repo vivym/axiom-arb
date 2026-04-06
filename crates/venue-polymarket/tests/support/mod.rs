@@ -11,17 +11,136 @@ use std::{
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use domain::{SignatureType, WalletRoute};
 use observability::RuntimeMetricsRecorder;
 use reqwest::Url;
+use serde_json::json;
 use tracing::{
     field::{Field, Visit},
     span::{Attributes, Id, Record},
     Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
-    L2AuthHeaders, PolymarketRestClient, RelayerAuth, SignerContext, VenueProducerInstrumentation,
+    L2AuthHeaders, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
+    PolymarketHeartbeatStatus, PolymarketOpenOrderSummary, PolymarketRestClient,
+    PolymarketSignedOrder, PolymarketSubmitResponse, RelayerAuth, SignerContext,
+    VenueProducerInstrumentation,
 };
+
+#[derive(Debug, Clone)]
+struct ScriptedClobApi {
+    open_orders: Vec<PolymarketOpenOrderSummary>,
+    heartbeat: PolymarketHeartbeatStatus,
+    submit_result: Result<PolymarketSubmitResponse, PolymarketGatewayError>,
+}
+
+#[async_trait]
+impl PolymarketClobApi for ScriptedClobApi {
+    async fn open_orders(
+        &self,
+        _query: &venue_polymarket::PolymarketOrderQuery,
+    ) -> Result<Vec<PolymarketOpenOrderSummary>, PolymarketGatewayError> {
+        Ok(self.open_orders.clone())
+    }
+
+    async fn submit_order(
+        &self,
+        _order: &PolymarketSignedOrder,
+    ) -> Result<PolymarketSubmitResponse, PolymarketGatewayError> {
+        self.submit_result.clone()
+    }
+
+    async fn post_heartbeat(
+        &self,
+        _previous_heartbeat_id: Option<&str>,
+    ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
+        Ok(self.heartbeat.clone())
+    }
+}
+
+#[allow(dead_code)]
+pub fn scripted_open_order(order_id: &str) -> PolymarketOpenOrderSummary {
+    PolymarketOpenOrderSummary {
+        order_id: order_id.to_owned(),
+    }
+}
+
+#[allow(dead_code)]
+pub fn sample_signed_order() -> PolymarketSignedOrder {
+    PolymarketSignedOrder {
+        order: json!({
+            "maker": "0x0000000000000000000000000000000000000001",
+            "signer": "0x0000000000000000000000000000000000000001",
+            "taker": "0x0000000000000000000000000000000000000000",
+            "tokenId": "100",
+            "makerAmount": "10",
+            "takerAmount": "20",
+            "side": "BUY",
+            "expiration": "1700000000",
+            "nonce": "1",
+            "feeRateBps": "0",
+            "signature": "0x1111",
+            "salt": 1,
+            "signatureType": 0
+        }),
+        owner: "550e8400-e29b-41d4-a716-446655440000".to_owned(),
+        order_type: "GTC".to_owned(),
+        defer_exec: false,
+    }
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_open_orders(
+    open_orders: Vec<PolymarketOpenOrderSummary>,
+) -> PolymarketGateway {
+    PolymarketGateway::from_clob_api(Arc::new(ScriptedClobApi {
+        open_orders,
+        heartbeat: PolymarketHeartbeatStatus {
+            heartbeat_id: "hb-default".to_owned(),
+            valid: true,
+        },
+        submit_result: Ok(PolymarketSubmitResponse {
+            order_id: "order-default".to_owned(),
+            status: "LIVE".to_owned(),
+            success: true,
+            error_message: None,
+            transaction_hashes: Vec::new(),
+        }),
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_heartbeat(heartbeat_id: &str) -> PolymarketGateway {
+    PolymarketGateway::from_clob_api(Arc::new(ScriptedClobApi {
+        open_orders: Vec::new(),
+        heartbeat: PolymarketHeartbeatStatus {
+            heartbeat_id: heartbeat_id.to_owned(),
+            valid: true,
+        },
+        submit_result: Ok(PolymarketSubmitResponse {
+            order_id: "order-default".to_owned(),
+            status: "LIVE".to_owned(),
+            success: true,
+            error_message: None,
+            transaction_hashes: Vec::new(),
+        }),
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_submit_rejection(status: u16, body: &str) -> PolymarketGateway {
+    PolymarketGateway::from_clob_api(Arc::new(ScriptedClobApi {
+        open_orders: Vec::new(),
+        heartbeat: PolymarketHeartbeatStatus {
+            heartbeat_id: "hb-default".to_owned(),
+            valid: true,
+        },
+        submit_result: Err(PolymarketGatewayError::upstream_response(format!(
+            "{status}: {body}"
+        ))),
+    }))
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
