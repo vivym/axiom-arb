@@ -1,6 +1,9 @@
 use domain::{ConditionId, EventFamilyId, OrderId, TokenId};
 use rust_decimal::Decimal;
 
+const FULL_SET_ROUTE: &str = "full-set";
+const NEG_RISK_ROUTE: &str = "neg-risk";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NegRiskMemberOrderPlan {
     pub condition_id: ConditionId,
@@ -30,6 +33,16 @@ pub enum ExecutionPlan {
 }
 
 impl ExecutionPlan {
+    pub fn route(&self) -> Option<&'static str> {
+        match self {
+            Self::FullSetBuyThenMerge { .. }
+            | Self::FullSetSplitThenSell { .. }
+            | Self::RedeemResolved { .. } => Some(FULL_SET_ROUTE),
+            Self::NegRiskSubmitFamily { .. } => Some(NEG_RISK_ROUTE),
+            Self::CancelStale { .. } => None,
+        }
+    }
+
     pub fn plan_id(&self) -> String {
         match self {
             Self::FullSetBuyThenMerge { condition_id } => {

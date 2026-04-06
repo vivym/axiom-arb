@@ -123,6 +123,26 @@ fn live_sink_rejects_negrisk_family_submit_plans_when_signer_is_missing_in_recov
 }
 
 #[test]
+fn live_sink_rejects_missing_route_execution_adapter() {
+    let sink = LiveVenueSink::noop();
+    let attempt = attempt_for("full-set", "default", ExecutionMode::Live);
+    let err = sink
+        .execute(
+            &ExecutionPlan::FullSetBuyThenMerge {
+                condition_id: ConditionId::from("condition-1"),
+            },
+            &attempt,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        execution::VenueSinkError::Rejected { reason }
+            if reason.contains("execution adapter")
+    ));
+}
+
+#[test]
 fn live_sink_forwards_signed_family_submission_to_hook_for_negrisk_family_submits() {
     let called = Arc::new(AtomicUsize::new(0));
     let hook = Arc::new(SpySignedFamilyHook {
@@ -250,23 +270,20 @@ fn sample_family_plan() -> ExecutionPlan {
 }
 
 fn live_attempt() -> ExecutionAttemptContext {
-    ExecutionAttemptContext {
-        attempt_id: "attempt-1".to_string(),
-        snapshot_id: "snapshot-1".to_string(),
-        execution_mode: ExecutionMode::Live,
-        route: "route".to_string(),
-        scope: "scope".to_string(),
-        matched_rule_id: None,
-    }
+    attempt_for("route", "scope", ExecutionMode::Live)
 }
 
 fn recovery_attempt() -> ExecutionAttemptContext {
+    attempt_for("route", "scope", ExecutionMode::RecoveryOnly)
+}
+
+fn attempt_for(route: &str, scope: &str, execution_mode: ExecutionMode) -> ExecutionAttemptContext {
     ExecutionAttemptContext {
         attempt_id: "attempt-1".to_string(),
         snapshot_id: "snapshot-1".to_string(),
-        execution_mode: ExecutionMode::RecoveryOnly,
-        route: "route".to_string(),
-        scope: "scope".to_string(),
+        execution_mode,
+        route: route.to_string(),
+        scope: scope.to_string(),
         matched_rule_id: None,
     }
 }

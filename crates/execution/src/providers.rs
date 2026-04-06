@@ -52,6 +52,16 @@ pub trait VenueExecutionProvider: Send + Sync {
     ) -> Result<LiveSubmitOutcome, SubmitProviderError>;
 }
 
+pub trait RouteExecutionAdapter: Send + Sync {
+    fn route(&self) -> &'static str;
+
+    fn submit_live(
+        &self,
+        plan: &ExecutionPlan,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError>;
+}
+
 pub trait ReconcileProvider: Send + Sync {
     fn reconcile_live(
         &self,
