@@ -17,10 +17,10 @@ use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::proxy::ProxyConfigError;
-use crate::sdk_backend::PolymarketMetadataApi;
+use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi};
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
-    PolymarketGatewayError,
+    PolymarketGatewayError, PolymarketOrderQuery,
 };
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -31,6 +31,7 @@ pub struct PolymarketRestClient {
     pub clob_host: Url,
     pub data_api_host: Url,
     pub relayer_host: Url,
+    pub(crate) clob_api: Option<Arc<dyn PolymarketClobApi>>,
     pub(crate) metadata_api: Option<Arc<dyn PolymarketMetadataApi>>,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
@@ -207,11 +208,18 @@ impl PolymarketRestClient {
             clob_host,
             data_api_host,
             relayer_host,
+            clob_api: None,
             metadata_api: None,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
             instrumentation: instrumentation.unwrap_or_else(VenueProducerInstrumentation::disabled),
         }
+    }
+
+    #[must_use]
+    pub fn with_clob_api(mut self, clob_api: Arc<dyn PolymarketClobApi>) -> Self {
+        self.clob_api = Some(clob_api);
+        self
     }
 
     #[must_use]
@@ -247,6 +255,16 @@ impl PolymarketRestClient {
         auth: &L2AuthHeaders<'_>,
         previous_heartbeat_id: &str,
     ) -> Result<HeartbeatFetchResult, RestError> {
+        if let Some(clob_api) = &self.clob_api {
+            let heartbeat = clob_api
+                .post_heartbeat(Some(previous_heartbeat_id))
+                .await
+                .map_err(RestError::from)?;
+            return Ok(HeartbeatFetchResult {
+                heartbeat_id: heartbeat.heartbeat_id,
+                valid: heartbeat.valid,
+            });
+        }
         let request = self.build_post_heartbeat_request(auth, previous_heartbeat_id)?;
         let response = self.http.execute(request).await?;
         let status = response.status();
@@ -277,6 +295,20 @@ impl PolymarketRestClient {
         &self,
         auth: &L2AuthHeaders<'_>,
     ) -> Result<Vec<OpenOrderSummary>, RestError> {
+        if let Some(clob_api) = &self.clob_api {
+            let orders = clob_api
+                .open_orders(&PolymarketOrderQuery::open_orders())
+                .await
+                .map_err(RestError::from)?;
+            return Ok(orders
+                .into_iter()
+                .map(|order| OpenOrderSummary {
+                    order_id: order.order_id,
+                    status: None,
+                    market: None,
+                })
+                .collect());
+        }
         let request = self.build_open_orders_request(auth)?;
         self.execute_json(request).await
     }
