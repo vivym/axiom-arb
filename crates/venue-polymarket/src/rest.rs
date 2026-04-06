@@ -17,7 +17,7 @@ use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::proxy::ProxyConfigError;
-use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi};
+use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi, PolymarketRelayerApi};
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
     PolymarketGatewayError, PolymarketOrderQuery,
@@ -32,6 +32,7 @@ pub struct PolymarketRestClient {
     pub data_api_host: Url,
     pub relayer_host: Url,
     pub(crate) clob_api: Option<Arc<dyn PolymarketClobApi>>,
+    pub(crate) relayer_api: Option<Arc<dyn PolymarketRelayerApi>>,
     pub(crate) metadata_api: Option<Arc<dyn PolymarketMetadataApi>>,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
@@ -209,6 +210,7 @@ impl PolymarketRestClient {
             data_api_host,
             relayer_host,
             clob_api: None,
+            relayer_api: None,
             metadata_api: None,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
@@ -219,6 +221,12 @@ impl PolymarketRestClient {
     #[must_use]
     pub fn with_clob_api(mut self, clob_api: Arc<dyn PolymarketClobApi>) -> Self {
         self.clob_api = Some(clob_api);
+        self
+    }
+
+    #[must_use]
+    pub fn with_relayer_api(mut self, relayer_api: Arc<dyn PolymarketRelayerApi>) -> Self {
+        self.relayer_api = Some(relayer_api);
         self
     }
 

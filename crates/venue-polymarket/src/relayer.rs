@@ -178,6 +178,12 @@ impl PolymarketRestClient {
         &self,
         auth: &RelayerAuth<'_>,
     ) -> Result<Vec<RelayerTransaction>, RestError> {
+        if let Some(relayer_api) = &self.relayer_api {
+            return relayer_api
+                .recent_transactions(auth)
+                .await
+                .map_err(RestError::from);
+        }
         let headers = build_relayer_auth_headers(auth)?;
         let request =
             self.build_get_request(&self.relayer_host, "transactions", &[], Some(headers))?;
@@ -202,6 +208,12 @@ impl PolymarketRestClient {
         address: &str,
         wallet_type: RelayerTransactionType,
     ) -> Result<String, RestError> {
+        if let Some(relayer_api) = &self.relayer_api {
+            return relayer_api
+                .current_nonce(auth, address, wallet_type)
+                .await
+                .map_err(RestError::from);
+        }
         let headers = build_relayer_auth_headers(auth)?;
         let query = [("address", address), ("type", wallet_type.as_query_value())];
         let request = self.build_get_request(&self.relayer_host, "nonce", &query, Some(headers))?;
