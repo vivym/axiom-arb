@@ -313,7 +313,7 @@ fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_back
 }
 
 #[test]
-fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_outputs() {
+fn discovery_supervisor_reports_restricted_candidate_as_warning_without_changing_bundle_content() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
@@ -342,14 +342,18 @@ fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_o
     });
 
     assert!(report.candidate_revision.is_some());
-    assert_eq!(report.adoptable_revision, None);
-    assert_eq!(report.operator_target_revision, None);
+    assert!(report.adoptable_revision.is_some());
+    assert!(report.operator_target_revision.is_some());
     assert_eq!(report.target_count, 1);
-    assert_eq!(report.adoptable_target_count, 0);
-    assert_eq!(report.deferred_target_count, 1);
+    assert_eq!(report.adoptable_target_count, 1);
+    assert_eq!(report.deferred_target_count, 0);
     assert_eq!(report.excluded_target_count, 0);
     assert!(!report.live_dispatch_woken);
-    assert_eq!(report.disposition, "deferred");
+    assert_eq!(report.disposition, "adoptable");
+    assert_eq!(
+        report.warnings,
+        vec!["candidate generation halted by validation truth".to_owned()]
+    );
     assert!(live_dispatch.coalesced().is_empty());
 }
 
@@ -480,6 +484,47 @@ fn discovery_supervisor_reuses_bundle_identity_when_only_publication_provenance_
     assert_eq!(
         first_report.operator_target_revision, second_report.operator_target_revision,
         "publication-only churn should not alter the rendered operator strategy identity"
+    );
+}
+
+#[test]
+fn discovery_supervisor_ignores_readiness_only_restrictions_for_bundle_identity() {
+    let publication = ready_candidate_publication_fixture("candidate-pub-readiness", &["family-a"]);
+    let eligible_report =
+        discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            None,
+            sample_rendered_live_targets(),
+            CandidateRestrictionTruth::eligible(),
+        ));
+    let restricted_report =
+        discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            None,
+            sample_rendered_live_targets(),
+            CandidateRestrictionTruth::restricted("connectivity degraded"),
+        ));
+
+    assert_eq!(
+        eligible_report.candidate_revision, restricted_report.candidate_revision,
+        "readiness-only restriction should not alter the strategy candidate identity"
+    );
+    assert_eq!(
+        eligible_report.adoptable_revision, restricted_report.adoptable_revision,
+        "readiness-only restriction should not alter the adoptable strategy identity"
+    );
+    assert_eq!(
+        eligible_report.operator_target_revision, restricted_report.operator_target_revision,
+        "readiness-only restriction should not alter the rendered operator strategy identity"
+    );
+    assert_eq!(restricted_report.disposition, "adoptable");
+    assert_eq!(restricted_report.deferred_target_count, 0);
+    assert_eq!(eligible_report.warnings, Vec::<String>::new());
+    assert_eq!(
+        restricted_report.warnings,
+        vec!["connectivity degraded".to_owned()]
     );
 }
 
@@ -756,14 +801,16 @@ where
 }
 
 fn discovery_report_for(publication: CandidatePublication) -> DiscoveryReport {
-    let candidate_notice = CandidateNotice::authoritative_from_publication(
+    discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
         &publication,
         [DirtyDomain::Candidates],
         None,
         sample_rendered_live_targets(),
         CandidateRestrictionTruth::eligible(),
-    );
+    ))
+}
 
+fn discovery_report_for_notice(candidate_notice: CandidateNotice) -> DiscoveryReport {
     let mut queue = CandidateNoticeQueue::default();
     queue.push(candidate_notice);
 

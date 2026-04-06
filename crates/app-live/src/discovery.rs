@@ -15,9 +15,7 @@ use sha2::{Digest, Sha256};
 use state::{CandidatePublication, DirtyDomain};
 
 use crate::config::NegRiskFamilyLiveTarget;
-use crate::queues::{
-    default_full_set_basis_digest, CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth,
-};
+use crate::queues::{default_full_set_basis_digest, CandidateNotice, CandidateNoticeQueue};
 
 const BUNDLE_POLICY_VERSION: &str = "strategy-bundle-v1";
 const FULL_SET_ROUTE_POLICY_VERSION: &str = "full-set-route-policy-v1";
@@ -34,6 +32,7 @@ pub struct DiscoveryReport {
     pub excluded_target_count: usize,
     pub live_dispatch_woken: bool,
     pub disposition: String,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,7 +337,6 @@ impl CandidateValidationEngine {
     fn candidate_set_from_publication(
         &self,
         publication: &CandidatePublication,
-        restriction: &CandidateRestrictionTruth,
         _operator_target_revision: Option<&str>,
         authoritative: bool,
     ) -> Result<(CandidateTargetSet, String, ValidationSummary), String> {
@@ -357,7 +355,7 @@ impl CandidateValidationEngine {
                 CandidateTarget::new(
                     format!("candidate-target-{}", record.family_id.as_str()),
                     EventFamilyId::from(record.family_id.as_str()),
-                    validation_for_record(record, restriction, authoritative),
+                    validation_for_record(record, authoritative),
                 )
             })
             .collect();
@@ -471,6 +469,10 @@ impl DiscoverySupervisor {
             authoritative,
             full_set_basis_digest,
         } = notice;
+        let warnings = restriction
+            .restriction_reason()
+            .map(|reason| vec![reason.to_owned()])
+            .unwrap_or_default();
 
         if !dirty_domains.contains(&DirtyDomain::Candidates) {
             return Ok(DiscoveryOutcome {
@@ -484,6 +486,7 @@ impl DiscoverySupervisor {
                     excluded_target_count: 0,
                     live_dispatch_woken: false,
                     disposition: "ignored".to_owned(),
+                    warnings: vec![],
                 },
                 candidate: None,
                 adoptable: None,
@@ -495,7 +498,6 @@ impl DiscoverySupervisor {
         let (candidate_set, disposition, summary) =
             self.validation.candidate_set_from_publication(
                 &publication,
-                &restriction,
                 operator_target_revision.as_deref(),
                 authoritative,
             )?;
@@ -517,6 +519,7 @@ impl DiscoverySupervisor {
                     excluded_target_count: summary.excluded_count,
                     live_dispatch_woken: false,
                     disposition,
+                    warnings,
                 },
                 candidate: Some(candidate),
                 adoptable: None,
@@ -547,6 +550,7 @@ impl DiscoverySupervisor {
                 excluded_target_count: summary.excluded_count,
                 live_dispatch_woken: false,
                 disposition,
+                warnings,
             },
             provenance: None,
             candidate: Some(rendered.candidate),
@@ -594,14 +598,11 @@ impl ValidationSummary {
 
 fn validation_for_record(
     discovery_record: &FamilyDiscoveryRecord,
-    restriction: &CandidateRestrictionTruth,
     authoritative: bool,
 ) -> CandidateValidationResult {
-    if matches!(restriction, CandidateRestrictionTruth::Restricted { .. })
-        || (!authoritative && discovery_record.backfill_completed_at.is_none())
-    {
+    if !authoritative && discovery_record.backfill_completed_at.is_none() {
         CandidateValidationResult::Deferred {
-            reason: deferred_reason(discovery_record, restriction),
+            reason: deferred_reason(discovery_record),
         }
     } else if discovery_record.family_id.as_str().trim().is_empty() {
         CandidateValidationResult::Rejected {
@@ -612,13 +613,8 @@ fn validation_for_record(
     }
 }
 
-fn deferred_reason(
-    discovery_record: &FamilyDiscoveryRecord,
-    restriction: &CandidateRestrictionTruth,
-) -> String {
-    if let Some(reason) = restriction.restriction_reason() {
-        reason.to_owned()
-    } else if discovery_record.backfill_completed_at.is_none() {
+fn deferred_reason(discovery_record: &FamilyDiscoveryRecord) -> String {
+    if discovery_record.backfill_completed_at.is_none() {
         "candidate generation deferred until discovery backfill completes".to_owned()
     } else {
         "candidate generation deferred by conservative discovery policy".to_owned()

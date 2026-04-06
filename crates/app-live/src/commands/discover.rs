@@ -1,10 +1,16 @@
-use std::{error::Error, io, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    io,
+    path::Path,
+};
 
 use chrono::Utc;
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 use persistence::{connect_pool_from_env, StrategyControlArtifactRepo};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use state::{
     CandidateProjectionReadiness, CandidatePublication, DirtyDomain, StateApplier, StateStore,
 };
@@ -23,6 +29,20 @@ pub(crate) struct DiscoverSummary {
     candidate_count: usize,
     adoptable_count: usize,
     recommended_adoptable_revision: Option<String>,
+    route_diffs: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct RouteArtifactKey {
+    route: String,
+    scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RouteArtifactSummary {
+    key: RouteArtifactKey,
+    semantic_digest: String,
 }
 
 pub fn execute(args: DiscoverArgs) -> Result<(), Box<dyn Error>> {
@@ -93,7 +113,7 @@ pub(crate) async fn run_discover_from_config(
 
     let pool = connect_pool_from_env().await?;
     let artifacts = StrategyControlArtifactRepo;
-    let candidate_count = match discovery_summary.candidate_revision.as_deref() {
+    let (candidate_count, route_diffs) = match discovery_summary.candidate_revision.as_deref() {
         Some(candidate_revision) => {
             let candidate = artifacts
                 .get_strategy_candidate_set(&pool, candidate_revision)
@@ -106,9 +126,12 @@ pub(crate) async fn run_discover_from_config(
                         ),
                     )
                 })?;
-            route_artifact_count(&candidate.payload)?
+            let route_diffs =
+                route_diffs_from_previous_bundle(&pool, candidate_revision, &candidate.payload)
+                    .await?;
+            (route_artifact_count(&candidate.payload)?, route_diffs)
         }
-        None => 0,
+        None => (0, vec![]),
     };
     let adoptable_count = match discovery_summary.adoptable_revision.as_deref() {
         Some(adoptable_revision) => {
@@ -132,6 +155,8 @@ pub(crate) async fn run_discover_from_config(
         candidate_count,
         adoptable_count,
         recommended_adoptable_revision: discovery_summary.adoptable_revision,
+        route_diffs,
+        warnings: discovery_summary.warnings,
     })
 }
 
@@ -145,6 +170,22 @@ fn render_discover_summary(summary: &DiscoverSummary) {
             .as_deref()
             .unwrap_or("none")
     );
+    println!("route_diff_count = {}", summary.route_diffs.len());
+    if summary.route_diffs.is_empty() {
+        println!("route_diff = none");
+    } else {
+        for route_diff in &summary.route_diffs {
+            println!("route_diff = {route_diff}");
+        }
+    }
+    println!("warning_count = {}", summary.warnings.len());
+    if summary.warnings.is_empty() {
+        println!("warning = none");
+    } else {
+        for warning in &summary.warnings {
+            println!("warning = {warning}");
+        }
+    }
 }
 
 fn authoritative_candidate_publication(
@@ -196,16 +237,156 @@ fn full_set_basis_digest(
 }
 
 fn route_artifact_count(payload: &serde_json::Value) -> Result<usize, io::Error> {
+    Ok(route_artifacts(payload)?.len())
+}
+
+fn route_diffs(
+    previous_payload: &serde_json::Value,
+    current_payload: &serde_json::Value,
+) -> Result<Vec<String>, io::Error> {
+    let previous = route_artifact_map(previous_payload)?;
+    let current = route_artifact_map(current_payload)?;
+    let mut keys = BTreeSet::new();
+    keys.extend(previous.keys().cloned());
+    keys.extend(current.keys().cloned());
+
+    let mut diffs = Vec::new();
+    for key in keys {
+        match (previous.get(&key), current.get(&key)) {
+            (Some(previous_digest), Some(current_digest)) if previous_digest != current_digest => {
+                diffs.push(format!(
+                    "changed route={} scope={} previous={} current={}",
+                    key.route, key.scope, previous_digest, current_digest
+                ));
+            }
+            (None, Some(current_digest)) => diffs.push(format!(
+                "added route={} scope={} current={}",
+                key.route, key.scope, current_digest
+            )),
+            (Some(previous_digest), None) => diffs.push(format!(
+                "removed route={} scope={} previous={}",
+                key.route, key.scope, previous_digest
+            )),
+            _ => {}
+        }
+    }
+
+    Ok(diffs)
+}
+
+async fn route_diffs_from_previous_bundle(
+    pool: &sqlx::PgPool,
+    current_revision: &str,
+    current_payload: &serde_json::Value,
+) -> Result<Vec<String>, io::Error> {
+    let current = route_artifact_map(current_payload)?;
+    let rows = sqlx::query(
+        r#"
+        SELECT strategy_candidate_revision, payload
+        FROM strategy_candidate_sets
+        WHERE strategy_candidate_revision <> $1
+        "#,
+    )
+    .bind(current_revision)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| io::Error::other(error.to_string()))?;
+
+    let previous = rows
+        .into_iter()
+        .map(|row| {
+            let revision: String = row
+                .try_get("strategy_candidate_revision")
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+            let payload: serde_json::Value = row
+                .try_get("payload")
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+            let artifacts = route_artifact_map(&payload)?;
+            Ok((revision, payload, similarity_score(&current, &artifacts)))
+        })
+        .collect::<Result<Vec<_>, io::Error>>()?
+        .into_iter()
+        .max_by(|left, right| left.2.cmp(&right.2).then(left.0.cmp(&right.0)));
+
+    previous
+        .map(|(_, payload, _)| route_diffs(&payload, current_payload))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+fn similarity_score(
+    current: &BTreeMap<RouteArtifactKey, String>,
+    candidate: &BTreeMap<RouteArtifactKey, String>,
+) -> (usize, usize) {
+    let shared_keys = current
+        .keys()
+        .filter(|key| candidate.contains_key(*key))
+        .count();
+    let matching_digests = current
+        .iter()
+        .filter(|(key, digest)| candidate.get(*key).is_some_and(|value| value == *digest))
+        .count();
+
+    (matching_digests, shared_keys)
+}
+
+fn route_artifact_map(
+    payload: &serde_json::Value,
+) -> Result<BTreeMap<RouteArtifactKey, String>, io::Error> {
+    route_artifacts(payload).map(|artifacts| {
+        artifacts
+            .into_iter()
+            .map(|artifact| (artifact.key, artifact.semantic_digest))
+            .collect()
+    })
+}
+
+fn route_artifacts(payload: &serde_json::Value) -> Result<Vec<RouteArtifactSummary>, io::Error> {
     payload
         .get("route_artifacts")
         .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
+        .map(|artifacts| {
+            artifacts
+                .iter()
+                .map(route_artifact_from_value)
+                .collect::<Result<Vec<_>, io::Error>>()
+        })
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "strategy payload is missing route_artifacts array",
             )
         })
+        .and_then(|result| result)
+}
+
+fn route_artifact_from_value(value: &serde_json::Value) -> Result<RouteArtifactSummary, io::Error> {
+    let route = value["key"]["route"].as_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "route artifact is missing key.route string",
+        )
+    })?;
+    let scope = value["key"]["scope"].as_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "route artifact is missing key.scope string",
+        )
+    })?;
+    let semantic_digest = value["semantic_digest"].as_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "route artifact is missing semantic_digest string",
+        )
+    })?;
+
+    Ok(RouteArtifactSummary {
+        key: RouteArtifactKey {
+            route: route.to_owned(),
+            scope: scope.to_owned(),
+        },
+        semantic_digest: semantic_digest.to_owned(),
+    })
 }
 
 #[cfg(test)]

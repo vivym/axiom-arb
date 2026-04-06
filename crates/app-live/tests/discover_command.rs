@@ -140,8 +140,68 @@ fn discover_noop_rediscovery_reuses_strategy_bundle_identity() {
     let second_revision = recommended_adoptable_revision(&second_text);
 
     assert_eq!(first_revision, second_revision);
+    assert!(
+        second_text.contains("route_diff_count = 0"),
+        "{second_text}"
+    );
+    assert!(second_text.contains("route_diff = none"), "{second_text}");
     assert_eq!(database.strategy_candidate_row_count(), 1);
     assert_eq!(database.strategy_adoptable_row_count(), 1);
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn discover_reports_route_local_diffs_to_stdout_when_bundle_changes() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::with_responses(vec![
+        page_one_ok(),
+        page_two_empty(),
+        page_one_changed(),
+        page_two_empty(),
+    ]);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let first_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("first discover should execute");
+    let first_text = cli::combined(&first_output);
+    assert!(first_output.status.success(), "{first_text}");
+
+    let second_output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("second discover should execute");
+    let second_text = cli::combined(&second_output);
+    assert!(second_output.status.success(), "{second_text}");
+
+    assert!(
+        second_text.contains("route_diff_count = 2"),
+        "{second_text}"
+    );
+    assert!(
+        second_text.contains("route_diff = changed route=neg-risk scope=family-a"),
+        "{second_text}"
+    );
+    assert!(
+        second_text.contains("route_diff = added route=neg-risk scope=family-b"),
+        "{second_text}"
+    );
+    assert!(
+        !second_text.contains("route_diff = added route=full-set scope=default"),
+        "{second_text}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
