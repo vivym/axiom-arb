@@ -236,7 +236,7 @@ pub struct NegRiskTargetMemberToml {
     pub quantity: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NegRiskTargetsToml {
     present: bool,
     items: Vec<NegRiskTargetToml>,
@@ -253,15 +253,6 @@ impl NegRiskTargetsToml {
 
     fn is_implicit_empty(&self) -> bool {
         !self.present && self.items.is_empty()
-    }
-}
-
-impl Default for NegRiskTargetsToml {
-    fn default() -> Self {
-        Self {
-            present: false,
-            items: Vec::new(),
-        }
     }
 }
 

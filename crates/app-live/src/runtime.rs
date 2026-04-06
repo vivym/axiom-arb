@@ -430,6 +430,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented<
     S,
 >(

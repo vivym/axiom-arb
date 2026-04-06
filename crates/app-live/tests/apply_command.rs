@@ -45,10 +45,11 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
     assert!(paper_text.contains("bootstrap"), "{paper_text}");
     assert!(paper_text.contains("run"), "{paper_text}");
 
+    let live_config = compatibility_mode_live_config_path();
     let live_output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
-        .arg(cli::config_fixture("app-live-live.toml"))
+        .arg(&live_config)
         .output()
         .expect("app-live apply should execute for live config");
     let live_text = cli::combined(&live_output);
@@ -59,6 +60,8 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
         "{live_text}"
     );
     assert!(live_text.contains("--adopt-compatibility"), "{live_text}");
+
+    let _ = fs::remove_file(live_config);
 }
 
 #[test]
@@ -191,10 +194,11 @@ fn apply_live_generic_blocked_stops_with_existing_blocking_guidance() {
 
 #[test]
 fn apply_live_legacy_explicit_targets_require_explicit_compatibility_migration() {
+    let config_path = compatibility_mode_live_config_path();
     let output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
-        .arg(cli::config_fixture("app-live-live.toml"))
+        .arg(&config_path)
         .output()
         .expect("app-live apply should execute for legacy explicit live config");
 
@@ -207,6 +211,8 @@ fn apply_live_legacy_explicit_targets_require_explicit_compatibility_migration()
         !text.contains("fix the blocking issue, then rerun app-live status --config"),
         "{text}"
     );
+
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
@@ -1257,6 +1263,14 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     ));
     fs::write(&path, edited).expect("temp fixture should be writable");
     path
+}
+
+fn compatibility_mode_live_config_path() -> PathBuf {
+    temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{config}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n"
+        )
+    })
 }
 
 fn section_text<'a>(text: &'a str, title: &str) -> &'a str {

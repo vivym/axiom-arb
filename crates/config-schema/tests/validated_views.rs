@@ -687,8 +687,11 @@ fn live_view_accepts_fully_populated_live_fixture() {
     let live = validated.for_app_live().expect("live view should validate");
     assert_eq!(live.mode(), RuntimeModeToml::Live);
     assert!(!live.real_user_shadow_smoke());
+    assert!(live.has_polymarket_account());
     assert!(live.has_polymarket_source());
-    assert!(live.has_polymarket_signer());
+    assert!(!live.has_polymarket_signer());
+    assert!(!live.has_target_source());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
 }
 
 #[test]
@@ -703,30 +706,23 @@ fn live_view_exposes_consumer_scoped_wrappers() {
     assert_eq!(source.clob_host(), "https://clob.polymarket.com");
     assert_eq!(source.heartbeat_interval_seconds(), 15);
 
-    let signer = live
-        .polymarket_signer()
-        .expect("live fixture should include signer");
-    assert_eq!(signer.signature_type_label(), "Eoa");
-    assert_eq!(signer.wallet_route_label(), "Eoa");
+    let account = live
+        .account()
+        .expect("live fixture should include account credentials");
+    assert_eq!(account.signature_type_label(), "Eoa");
+    assert_eq!(account.wallet_route_label(), "Eoa");
 
     let relayer_auth = live
         .polymarket_relayer_auth()
         .expect("live fixture should include relayer auth");
-    assert!(relayer_auth.is_builder_api_key());
-    assert_eq!(relayer_auth.api_key(), "builder-api-key-1");
+    assert_eq!(
+        relayer_auth.kind(),
+        config_schema::AppLivePolymarketRelayerAuthKind::RelayerApiKey
+    );
+    assert_eq!(relayer_auth.api_key(), "relay-key");
 
-    let targets = live.negrisk_targets();
-    let family = targets
-        .iter()
-        .next()
-        .expect("live fixture should include targets");
-    assert_eq!(family.family_id(), "family-a");
-    let member = family
-        .members()
-        .iter()
-        .next()
-        .expect("family should include members");
-    assert_eq!(member.token_id(), "token-1");
+    assert!(live.negrisk_targets().iter().next().is_none());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
 }
 
 fn validated_err(extra: &str) -> String {

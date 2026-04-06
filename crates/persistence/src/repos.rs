@@ -2135,6 +2135,7 @@ impl RuntimeProgressRepo {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_progress_with_strategy_revision(
         &self,
         pool: &PgPool,

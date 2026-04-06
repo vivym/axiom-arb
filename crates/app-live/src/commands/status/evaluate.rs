@@ -450,9 +450,7 @@ fn legacy_explicit_targets_summary_from_raw(
         return None;
     }
 
-    let Some(negrisk) = raw.negrisk.as_ref() else {
-        return None;
-    };
+    let negrisk = raw.negrisk.as_ref()?;
 
     if !negrisk.targets.is_present() {
         return None;

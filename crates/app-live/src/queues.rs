@@ -216,7 +216,7 @@ impl CandidateNotice {
         restriction: CandidateRestrictionTruth,
         authoritative: bool,
     ) -> Self {
-        let notice = Self {
+        Self {
             publication: publication.clone(),
             dirty_domains: dirty_domains.into_iter().collect(),
             operator_target_revision: operator_target_revision.map(str::to_owned),
@@ -224,9 +224,7 @@ impl CandidateNotice {
             restriction,
             authoritative,
             full_set_basis_digest: default_full_set_basis_digest(),
-        };
-
-        notice
+        }
     }
 
     pub fn with_full_set_basis_digest(mut self, full_set_basis_digest: impl Into<String>) -> Self {

@@ -199,6 +199,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented<
     S,
 >(

@@ -894,7 +894,7 @@ fn status_adopted_source_with_broken_durable_provenance_is_blocked() {
 
 #[test]
 fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
-    let config = cli::config_fixture("app-live-live.toml");
+    let config = compatibility_mode_live_config_path();
 
     let output = Command::new(cli::app_live_binary())
         .arg("status")
@@ -920,6 +920,8 @@ fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
         "{combined}"
     );
     assert!(combined.contains("--adopt-compatibility"), "{combined}");
+
+    let _ = fs::remove_file(config);
 }
 
 #[test]
@@ -976,15 +978,7 @@ fn status_output_uses_summary_key_details_next_actions_order() {
 
 #[test]
 fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
-    let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        let without_target_source = config.replace(
-            "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
-            "",
-        );
-        format!(
-            "{without_target_source}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n"
-        )
-    });
+    let config = compatibility_mode_live_config_path();
 
     let output = Command::new(cli::app_live_binary())
         .arg("status")
@@ -1200,6 +1194,18 @@ fn status_rollout_state_labels_are_structured() {
     }
 }
 static NEXT_TEMP_CONFIG_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn compatibility_mode_live_config_path() -> PathBuf {
+    temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        let without_target_source = config.replace(
+            "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
+            "",
+        );
+        format!(
+            "{without_target_source}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n"
+        )
+    })
+}
 
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture(relative);
