@@ -192,6 +192,12 @@ signature = "builder-signature-1"
     let validated = ValidatedConfig::new(raw).unwrap();
     let live = validated.for_app_live().unwrap();
 
+    let rollout = live
+        .negrisk_rollout()
+        .expect("pure neutral rollout should bridge into live view");
+    assert_eq!(rollout.approved_families(), &["family-a".to_owned()]);
+    assert_eq!(rollout.ready_families(), &["family-a".to_owned()]);
+    assert!(live.has_adopted_strategy_source());
     assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
     assert!(!live.is_legacy_explicit_strategy_config());
 }

@@ -163,12 +163,7 @@ fn detect_existing_bootstrap_mode(
         && raw
             .negrisk
             .as_ref()
-            .and_then(|negrisk| negrisk.target_source.as_ref())
-            .is_none()
-        && raw
-            .negrisk
-            .as_ref()
-            .is_some_and(|negrisk| !negrisk.targets.is_empty())
+            .is_some_and(|negrisk| negrisk.targets.is_present())
     {
         return Ok(ExistingBootstrapMode::Smoke(
             SmokeFollowUp::LegacyExplicitTargets,
@@ -181,16 +176,16 @@ fn detect_existing_bootstrap_mode(
     match config.mode() {
         RuntimeModeToml::Paper => Ok(ExistingBootstrapMode::Paper),
         RuntimeModeToml::Live if config.real_user_shadow_smoke() => {
-            let follow_up = match raw
-                .negrisk
-                .as_ref()
-                .and_then(|negrisk| negrisk.target_source.as_ref())
-            {
-                Some(target_source) if target_source.operator_target_revision.is_some() => {
+            let follow_up = if config.is_legacy_explicit_strategy_config() {
+                SmokeFollowUp::LegacyExplicitTargets
+            } else if config.has_adopted_strategy_source() {
+                if config.operator_strategy_revision().is_some() {
                     SmokeFollowUp::AlreadyAdopted
+                } else {
+                    SmokeFollowUp::NeedsAdoption
                 }
-                Some(_) => SmokeFollowUp::NeedsAdoption,
-                None => SmokeFollowUp::LegacyExplicitTargets,
+            } else {
+                SmokeFollowUp::LegacyExplicitTargets
             };
             Ok(ExistingBootstrapMode::Smoke(follow_up))
         }
@@ -378,4 +373,93 @@ fn smoke_rollout_is_ready(
     Ok(family_ids
         .iter()
         .all(|family_id| approved.contains(family_id) && ready.contains(family_id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{detect_existing_bootstrap_mode, ExistingBootstrapMode, SmokeFollowUp};
+
+    static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn detect_existing_bootstrap_mode_treats_pure_neutral_smoke_as_already_adopted() {
+        let path = write_temp_config(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        );
+
+        let mode = detect_existing_bootstrap_mode(&path).expect("mode detection should succeed");
+        assert!(matches!(
+            mode,
+            ExistingBootstrapMode::Smoke(SmokeFollowUp::AlreadyAdopted)
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn detect_existing_bootstrap_mode_treats_explicit_empty_targets_as_legacy_compatibility() {
+        let path = write_temp_config(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[negrisk]
+targets = []
+"#,
+        );
+
+        let mode = detect_existing_bootstrap_mode(&path).expect("mode detection should succeed");
+        assert!(matches!(
+            mode,
+            ExistingBootstrapMode::Smoke(SmokeFollowUp::LegacyExplicitTargets)
+        ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn write_temp_config(text: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "app-live-bootstrap-flow-{}-{}.toml",
+            std::process::id(),
+            NEXT_TEMP_CONFIG_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, text).expect("temp config should be writable");
+        path
+    }
 }

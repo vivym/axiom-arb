@@ -149,7 +149,11 @@ fn startup_revision_snapshot(
     Ok(StartupRevisionSnapshot {
         target_source_kind,
         startup_target_revision_at_start,
-        configured_operator_strategy_revision: None,
+        configured_operator_strategy_revision: if config.target_source().is_some() {
+            None
+        } else {
+            config.operator_strategy_revision().map(str::to_owned)
+        },
         configured_operator_target_revision,
         active_operator_target_revision_at_start,
         active_operator_strategy_revision_at_start,
@@ -163,19 +167,32 @@ fn startup_snapshot_target_source(
         return Ok(("explicit".to_owned(), "paper-runtime".to_owned(), None));
     }
 
-    if let Some(target_source) = config.target_source() {
-        if target_source.is_adopted() {
-            let configured = target_source
-                .operator_target_revision()
+    if config.has_adopted_strategy_source() {
+        let configured_target = config.target_source().and_then(|target_source| {
+            if target_source.is_adopted() {
+                target_source.operator_target_revision()
+            } else {
+                None
+            }
+        });
+        let startup_revision = if let Some(configured_target) = configured_target {
+            configured_target.to_owned()
+        } else {
+            config
+                .operator_strategy_revision()
                 .map(str::to_owned)
                 .ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "adopted run session snapshot requires operator_target_revision",
+                        "adopted run session snapshot requires operator_strategy_revision",
                     )
-                })?;
-            return Ok(("adopted".to_owned(), configured.clone(), Some(configured)));
-        }
+                })?
+        };
+        return Ok((
+            "adopted".to_owned(),
+            startup_revision,
+            configured_target.map(str::to_owned),
+        ));
     }
 
     let targets = NegRiskLiveTargetSet::try_from(config)?;
@@ -327,6 +344,34 @@ operator_target_revision = "targets-rev-11"
             Some("targets-rev-active")
         );
         assert_eq!(snapshot.active_operator_strategy_revision_at_start, None);
+    }
+
+    #[test]
+    fn startup_revision_snapshot_treats_pure_neutral_strategy_control_as_adopted_source() {
+        let config = live_view(
+            r#"
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+"#,
+        );
+
+        let snapshot = startup_revision_snapshot(&config, None).unwrap();
+
+        assert_eq!(snapshot.target_source_kind, "adopted");
+        assert_eq!(snapshot.startup_target_revision_at_start, "strategy-rev-12");
+        assert_eq!(
+            snapshot.configured_operator_strategy_revision.as_deref(),
+            Some("strategy-rev-12")
+        );
+        assert_eq!(snapshot.configured_operator_target_revision, None);
     }
 
     fn live_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {

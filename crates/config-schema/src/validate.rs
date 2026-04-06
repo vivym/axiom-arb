@@ -3,10 +3,10 @@ use std::sync::OnceLock;
 
 use crate::error::ConfigSchemaError;
 use crate::raw::{
-    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetSourceKindToml,
-    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml,
-    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
-    RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskTargetMemberToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml,
+    NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml, PolymarketRelayerAuthToml,
+    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
+    RuntimeModeToml, SignatureTypeToml, StrategyControlSourceToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -83,7 +83,8 @@ pub struct AppLiveNegRiskTargetsView<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppLiveNegRiskRolloutView<'a> {
-    raw: &'a NegRiskRolloutToml,
+    approved_families: &'a [String],
+    ready_families: &'a [String],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -216,11 +217,46 @@ impl<'a> AppLiveConfigView<'a> {
     }
 
     pub fn negrisk_rollout(&self) -> Option<AppLiveNegRiskRolloutView<'a>> {
-        self.raw
+        if let Some(rollout) = self
+            .raw
             .negrisk
             .as_ref()
             .and_then(|negrisk| negrisk.rollout.as_ref())
-            .map(|raw| AppLiveNegRiskRolloutView { raw })
+        {
+            return Some(AppLiveNegRiskRolloutView {
+                approved_families: &rollout.approved_families,
+                ready_families: &rollout.ready_families,
+            });
+        }
+
+        self.raw
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .and_then(|neg_risk| neg_risk.rollout.as_ref())
+            .map(|rollout| AppLiveNegRiskRolloutView {
+                approved_families: &rollout.approved_scopes,
+                ready_families: &rollout.ready_scopes,
+            })
+    }
+
+    pub fn has_adopted_strategy_source(&self) -> bool {
+        if let Some(target_source) = self
+            .raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+        {
+            return matches!(target_source.source, NegRiskTargetSourceKindToml::Adopted);
+        }
+
+        self.raw
+            .strategy_control
+            .as_ref()
+            .map(|strategy_control| {
+                matches!(strategy_control.source, StrategyControlSourceToml::Adopted)
+            })
+            .unwrap_or(false)
     }
 
     pub fn operator_strategy_revision(&self) -> Option<&'a str> {
@@ -425,11 +461,11 @@ impl<'a> AppLiveNegRiskTargetsView<'a> {
 
 impl<'a> AppLiveNegRiskRolloutView<'a> {
     pub fn approved_families(&self) -> &'a [String] {
-        &self.raw.approved_families
+        self.approved_families
     }
 
     pub fn ready_families(&self) -> &'a [String] {
-        &self.raw.ready_families
+        self.ready_families
     }
 }
 

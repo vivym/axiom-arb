@@ -75,7 +75,7 @@ pub struct PolymarketToml {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct StrategyControlToml {
     pub source: StrategyControlSourceToml,
-    #[serde(default)]
+    #[serde(default, alias = "operator_target_revision")]
     pub operator_strategy_revision: Option<String>,
 }
 

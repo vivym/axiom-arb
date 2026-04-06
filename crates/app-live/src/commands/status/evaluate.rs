@@ -46,24 +46,22 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
                         RuntimeModeToml::Paper => StatusOutcome::Summary(Box::new(paper_summary())),
                         RuntimeModeToml::Live => {
                             let smoke_mode = config.real_user_shadow_smoke();
-                            match config.target_source().map(|source| source.is_adopted()) {
-                                Some(true) => {
-                                    match adopted_summary(config_path, &config, smoke_mode) {
-                                        Ok(outcome) => outcome,
-                                        Err(reason) => StatusOutcome::Summary(Box::new(
-                                            blocked_summary(reason),
-                                        )),
+                            if config.has_adopted_strategy_source() {
+                                match adopted_summary(config_path, &config, smoke_mode) {
+                                    Ok(outcome) => outcome,
+                                    Err(reason) => {
+                                        StatusOutcome::Summary(Box::new(blocked_summary(reason)))
                                     }
                                 }
-                                _ if config.negrisk_targets().iter().next().is_some() => {
-                                    StatusOutcome::Summary(Box::new(
-                                        legacy_explicit_targets_summary(smoke_mode),
-                                    ))
-                                }
-                                _ => StatusOutcome::Summary(Box::new(blocked_summary(
+                            } else if config.is_legacy_explicit_strategy_config() {
+                                StatusOutcome::Summary(Box::new(legacy_explicit_targets_summary(
+                                    smoke_mode,
+                                )))
+                            } else {
+                                StatusOutcome::Summary(Box::new(blocked_summary(
                                     "high-level status requires an adopted target source"
                                         .to_owned(),
-                                ))),
+                                )))
                             }
                         }
                     },
@@ -139,9 +137,24 @@ fn adopted_summary(
         let pool = connect_pool_from_env()
             .await
             .map_err(|error| error.to_string())?;
-        let state = load_target_control_plane_state(&pool, config_path)
-            .await
-            .map_err(|error| error.to_string())?;
+        let state = if config.target_source().is_some() {
+            load_target_control_plane_state(&pool, config_path)
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            let active_operator_target_revision = RuntimeProgressRepo
+                .current(&pool)
+                .await
+                .map_err(|error| error.to_string())?
+                .and_then(|progress| progress.operator_target_revision);
+            TargetControlPlaneState {
+                configured_operator_target_revision: None,
+                active_operator_target_revision,
+                restart_needed: None,
+                provenance: None,
+                latest_action: None,
+            }
+        };
         Ok::<_, String>((pool, state))
     })?;
 
@@ -152,6 +165,20 @@ fn adopted_summary(
     };
     let configured_target = match state.configured_operator_target_revision.clone() {
         Some(revision) => revision,
+        None if config.target_source().is_none() => match config.operator_strategy_revision() {
+            Some(revision) => revision.to_owned(),
+            None => {
+                let catalog = runtime.block_on(async {
+                    load_target_candidates_catalog(&pool)
+                        .await
+                        .map_err(|error| error.to_string())
+                })?;
+                let summary = summarize_target_candidates(&catalog);
+                return Ok(StatusOutcome::Summary(Box::new(pre_adoption_summary(
+                    mode, &state, &summary,
+                ))));
+            }
+        },
         None => {
             let catalog = runtime.block_on(async {
                 load_target_candidates_catalog(&pool)
@@ -391,9 +418,11 @@ fn legacy_explicit_targets_summary_from_raw(
         return None;
     }
 
-    let negrisk = raw.negrisk.as_ref()?;
+    let Some(negrisk) = raw.negrisk.as_ref() else {
+        return None;
+    };
 
-    if negrisk.target_source.is_some() || negrisk.targets.is_empty() {
+    if !negrisk.targets.is_present() {
         return None;
     }
 
@@ -550,8 +579,10 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::rollout_covers_families;
-    use config_schema::{load_raw_config_from_path, ValidatedConfig};
+    use super::{legacy_explicit_targets_summary_from_raw, rollout_covers_families};
+    use config_schema::{
+        load_raw_config_from_path, load_raw_config_from_str, RuntimeModeToml, ValidatedConfig,
+    };
 
     static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -627,6 +658,45 @@ mod tests {
         assert!(result);
 
         let _ = fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn rollout_reads_route_owned_scopes_when_legacy_rollout_is_missing() {
+        let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+            config
+                .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+                .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
+        });
+        let result = with_validated_app_live_config(&config_path, |config| {
+            rollout_covers_families(&config, &["family-a".to_owned()].into_iter().collect())
+        });
+
+        assert!(result);
+
+        let _ = fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn legacy_explicit_summary_detects_explicit_empty_targets_table() {
+        let raw = load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[negrisk]
+targets = []
+"#,
+        )
+        .expect("config should parse");
+
+        let summary = legacy_explicit_targets_summary_from_raw(&raw)
+            .expect("explicit targets table should be treated as compatibility mode");
+        assert_eq!(raw.runtime.mode, RuntimeModeToml::Live);
+        assert_eq!(
+            summary.details.target_source,
+            Some(super::StatusTargetSource::LegacyExplicitTargets)
+        );
     }
 
     fn with_validated_app_live_config<T>(

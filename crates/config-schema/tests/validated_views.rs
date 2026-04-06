@@ -144,6 +144,7 @@ address = "0x1111111111111111111111111111111111111111"
     let validated = ValidatedConfig::new(raw).unwrap();
     let live = validated.for_app_live().unwrap();
 
+    assert!(live.has_adopted_strategy_source());
     assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
     assert!(!live.has_target_source());
     assert!(!live.is_legacy_explicit_strategy_config());
@@ -204,8 +205,12 @@ signature = "builder-signature-1"
     let validated = ValidatedConfig::new(raw).unwrap();
     let live = validated.for_app_live().unwrap();
 
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should bridge into negrisk rollout view");
+    assert_eq!(rollout.approved_families(), &["family-a".to_owned()]);
+    assert_eq!(rollout.ready_families(), &["family-a".to_owned()]);
     assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
-    assert!(live.negrisk_rollout().is_none());
 }
 
 #[test]
@@ -665,7 +670,7 @@ fn smoke_view_accepts_operator_facing_live_fixture() {
     assert!(live.has_polymarket_account());
     assert!(live.has_polymarket_source());
     assert!(!live.has_target_source());
-    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert_eq!(live.operator_strategy_revision(), Some("targets-rev-9"));
     assert_eq!(
         live.polymarket_source()
             .expect("operator smoke fixture should include source settings")

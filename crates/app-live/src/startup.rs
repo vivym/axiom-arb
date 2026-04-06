@@ -98,65 +98,144 @@ pub async fn resolve_startup_targets(
     pool: &PgPool,
     config: &AppLiveConfigView<'_>,
 ) -> Result<ResolvedTargets, StartupError> {
-    let Some(target_source) = config.target_source() else {
-        let targets = NegRiskLiveTargetSet::try_from(config)?;
-        let operator_target_revision = (!targets.is_empty()).then(|| targets.revision().to_owned());
-        return Ok(ResolvedTargets {
-            targets,
-            operator_target_revision,
-        });
-    };
+    if let Some(target_source) = config.target_source().filter(|source| source.is_adopted()) {
+        let operator_target_revision = target_source
+            .operator_target_revision()
+            .ok_or(StartupError::MissingOperatorTargetRevision)?
+            .to_owned();
+        return resolve_adopted_targets_from_operator_target_revision(
+            pool,
+            &operator_target_revision,
+        )
+        .await;
+    }
 
-    if !target_source.is_adopted() {
+    if config.has_adopted_strategy_source() {
+        if let Some(operator_strategy_revision) = config.operator_strategy_revision() {
+            if CandidateAdoptionRepo
+                .get_by_operator_target_revision(pool, operator_strategy_revision)
+                .await?
+                .is_some()
+            {
+                return resolve_adopted_targets_from_operator_target_revision(
+                    pool,
+                    operator_strategy_revision,
+                )
+                .await;
+            }
+        }
+    }
+
+    {
         let targets = NegRiskLiveTargetSet::try_from(config)?;
-        let operator_target_revision = (!targets.is_empty()).then(|| targets.revision().to_owned());
+        let operator_target_revision = config
+            .operator_strategy_revision()
+            .map(str::to_owned)
+            .or_else(|| (!targets.is_empty()).then(|| targets.revision().to_owned()));
         return Ok(ResolvedTargets {
             targets,
             operator_target_revision,
         });
     }
+}
 
-    let operator_target_revision = target_source
-        .operator_target_revision()
-        .ok_or(StartupError::MissingOperatorTargetRevision)?
-        .to_owned();
+async fn resolve_adopted_targets_from_operator_target_revision(
+    pool: &PgPool,
+    operator_target_revision: &str,
+) -> Result<ResolvedTargets, StartupError> {
     let provenance = CandidateAdoptionRepo
-        .get_by_operator_target_revision(pool, &operator_target_revision)
+        .get_by_operator_target_revision(pool, operator_target_revision)
         .await?
         .ok_or_else(|| StartupError::MissingAdoptionProvenance {
-            operator_target_revision: operator_target_revision.clone(),
+            operator_target_revision: operator_target_revision.to_owned(),
         })?;
     let adoptable = CandidateArtifactRepo
         .get_adoptable_target_revision(pool, &provenance.adoptable_revision)
         .await?
         .ok_or_else(|| StartupError::MissingAdoptionProvenance {
-            operator_target_revision: operator_target_revision.clone(),
+            operator_target_revision: operator_target_revision.to_owned(),
         })?;
     let rendered_live_targets = adoptable
         .payload
         .get("rendered_live_targets")
         .ok_or_else(|| StartupError::MissingRenderedLiveTargets {
-            operator_target_revision: operator_target_revision.clone(),
+            operator_target_revision: operator_target_revision.to_owned(),
         })?
         .clone();
     let targets =
         serde_json::from_value::<BTreeMap<String, NegRiskFamilyLiveTarget>>(rendered_live_targets)
             .map_err(|error| StartupError::InvalidRenderedLiveTargets {
-                operator_target_revision: operator_target_revision.clone(),
+                operator_target_revision: operator_target_revision.to_owned(),
                 message: error.to_string(),
             })?;
 
     if targets.is_empty() {
         return Err(StartupError::EmptyRenderedLiveTargets {
-            operator_target_revision,
+            operator_target_revision: operator_target_revision.to_owned(),
         });
     }
 
     Ok(ResolvedTargets {
         targets: NegRiskLiveTargetSet::from_targets_with_revision(
-            operator_target_revision.clone(),
+            operator_target_revision.to_owned(),
             targets,
         ),
-        operator_target_revision: Some(operator_target_revision),
+        operator_target_revision: Some(operator_target_revision.to_owned()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use config_schema::{load_raw_config_from_str, ValidatedConfig};
+    use sqlx::postgres::PgPoolOptions;
+
+    use super::resolve_startup_targets;
+
+    #[tokio::test]
+    async fn resolve_startup_targets_accepts_pure_neutral_strategy_control_without_legacy_target_source(
+    ) {
+        let raw = load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        )
+        .unwrap();
+        let validated = ValidatedConfig::new(raw).unwrap();
+        let config = validated.for_app_live().unwrap();
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://axiom:axiom@localhost:5432/axiom_arb")
+            .expect("lazy pool should initialize");
+
+        let resolved = resolve_startup_targets(&pool, &config)
+            .await
+            .expect("pure neutral startup resolution should not require legacy target_source");
+
+        assert!(resolved.targets.is_empty());
+        assert_eq!(resolved.operator_target_revision, None);
+    }
 }

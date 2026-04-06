@@ -4,7 +4,7 @@ real_user_shadow_smoke = true
 
 [strategy_control]
 source = "adopted"
-operator_strategy_revision = "strategy-rev-12"
+operator_target_revision = "targets-rev-9"
 
 [strategies.full_set]
 enabled = true
