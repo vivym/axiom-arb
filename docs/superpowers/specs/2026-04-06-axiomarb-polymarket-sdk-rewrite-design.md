@@ -389,7 +389,18 @@ This preserves the current repo-owned signing boundary while keeping the gateway
 
 ### 10.1 `doctor`
 
-`doctor` should consume `PolymarketExecutionSource` and `PolymarketRelayerSource` capability probes.
+`doctor` should consume capability probes that cover:
+
+- authenticated REST
+- market websocket reachability
+- user websocket reachability
+- relayer reachability
+
+This may be expressed either as:
+
+- `PolymarketExecutionSource` + `PolymarketMarketStreamSource` + `PolymarketUserStreamSource` + `PolymarketRelayerSource`
+
+or as a dedicated repo-owned probe facade that delegates to those capabilities internally.
 
 It should not know:
 
@@ -559,9 +570,13 @@ After this slice, the old transport path should be deleted.
 
 ## 13. Testing Strategy
 
-The rewrite should be verified at three layers.
+The rewrite should be verified differently in Phase A and Phase B.
 
-### 13.1 Unit Tests
+### 13.1 Phase A Tests
+
+Phase A should focus on protocol-core correctness.
+
+Unit tests:
 
 - config-to-credential mapping
 - error categorization
@@ -569,15 +584,19 @@ The rewrite should be verified at three layers.
 - malformed metadata policy handling
 - relayer gateway mapping
 
-### 13.2 Integration Tests
+Integration tests:
 
-- `doctor` authenticated connectivity
-- discovery metadata refresh
-- submit/reconcile behavior
-- heartbeat polling
-- market/user stream message projection
+- authenticated REST behavior through the new gateway
+- heartbeat behavior through the new gateway
+- metadata refresh through the new gateway
+- market/user stream projection through the new gateway
+- reconcile behavior through the new gateway
 
-### 13.3 End-To-End Operator Flows
+Phase A does not require full operator-flow cutover tests on the existing mainline path.
+
+### 13.2 Phase B Tests
+
+Phase B should add the app-facing cutover verification.
 
 At minimum:
 
