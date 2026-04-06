@@ -29,9 +29,16 @@ address = "0xYOUR_RELAYER_API_KEY_ADDRESS"
 # secret = "YOUR_BUILDER_SECRET"
 # passphrase = "YOUR_BUILDER_PASSPHRASE"
 
-[negrisk.target_source]
+[strategy_control]
 source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
 
-[negrisk.rollout]
-approved_families = []
-ready_families = []
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []

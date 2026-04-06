@@ -1,6 +1,6 @@
 # Real-User Shadow Smoke Runbook
 
-Use this only for a manual operator smoke. The smoke path is shadow-only for `neg-risk` and does not represent production readiness or live-submit readiness.
+Use this only for a manual operator smoke. The smoke path is shadow-only for every risk-expanding route, including `full-set` and `neg-risk`, and does not represent production readiness or live-submit readiness.
 
 ## Preflight
 
@@ -16,7 +16,7 @@ Prepare a smoke config at `config/axiom-arb.local.toml` with the preferred high-
 cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml
 ```
 
-For smoke, `bootstrap` is the Day 0 happy path. It reuses the init wizard, keeps startup authority on `[negrisk.target_source].operator_target_revision`, and when no target anchor or discovery artifacts exist yet it runs `discover` first. From there it either lists adoptable revisions and waits for explicit confirmation, or it truthfully stops at `discovery-ready-not-adoptable` with the recorded reasons. If you prefer the lower-level Day 0 fallback, run `app-live init`, then `app-live discover`, then `targets candidates`, and finally `targets adopt`. The smoke config must keep rollout lists empty until the operator explicitly confirms the smoke-only rollout posture:
+For smoke, `bootstrap` is the Day 0 happy path. It reuses the init wizard, keeps startup authority on `[strategy_control].operator_strategy_revision`, and when no strategy anchor or discovery artifacts exist yet it runs `discover` first. From there it either lists adoptable revisions and waits for explicit confirmation, or it truthfully stops at `discovery-ready-not-adoptable` with the recorded reasons. If you prefer the lower-level Day 0 fallback, run `app-live init`, then `app-live discover`, then `targets candidates`, and finally `targets adopt`. The smoke config must keep rollout lists empty until the operator explicitly confirms the smoke-only rollout posture:
 
 ```toml
 [runtime]
@@ -24,7 +24,9 @@ mode = "live"
 real_user_shadow_smoke = true
 ```
 
-Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-target startup path; let the config model and startup flow resolve the adopted target revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the `neg-risk` shadow-ready rollout state. Discovery persistence and adoption lineage are different lifecycle facts: `discover` writes candidate/adoptable artifacts, while `targets adopt` writes canonical provenance and adoption history for the chosen startup revision.
+Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-revision startup path; let the config model and startup flow resolve the adopted strategy revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the smoke-ready rollout posture for adopted `neg-risk` scopes. Discovery persistence and adoption lineage are different lifecycle facts: `discover` writes candidate/adoptable artifacts, while `targets adopt` writes canonical provenance and adoption history for the chosen startup revision.
+
+If the config is still using legacy explicit `[[negrisk.targets]]`, smoke commands treat that as read-only compatibility mode. `status`, `doctor`, `verify`, and `run` can still read it, but high-level mutation flows do not auto-migrate it; use `targets adopt` explicitly when you want to enter the neutral adopted-revision model.
 
 If Polymarket traffic must traverse an outbound proxy, add this operator-local block:
 
@@ -35,7 +37,7 @@ proxy_url = "http://127.0.0.1:7897"
 
 The built-in Polymarket data API default now points at `https://gamma-api.polymarket.com`. The Rust REST and websocket clients honor the explicit `[polymarket.http]` proxy setting, but they do not automatically read macOS system proxy settings.
 
-If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted family ids into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
+If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted `neg-risk` scopes into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
 
 The runtime now records a durable `run_session`, so the operator-facing lifecycle summary is session-aware instead of purely heuristic:
 
@@ -44,7 +46,7 @@ The runtime now records a durable `run_session`, so the operator-facing lifecycl
 - `stale` is projected from freshness; it is not stored as a separate durable truth value.
 - `verify` defaults to the latest relevant run session and only falls back to evidence-only when a historical window cannot be tied to a single session.
 
-Before running the smoke with the lower-level Day 0 fallback, materialize discovery artifacts first, then inspect the current control-plane state and adopt the startup-scoped target revision you intend to test:
+Before running the smoke with the lower-level Day 0 fallback, materialize discovery artifacts first, then inspect the current control-plane state and adopt the startup-scoped strategy revision you intend to test:
 
 ```bash
 cargo run -p app-live -- discover --config config/axiom-arb.local.toml
@@ -64,7 +66,7 @@ cargo run -p app-live -- status --config config/axiom-arb.local.toml
 - `smoke-config-ready`
 - `blocked`
 
-Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary. For the preferred high-level path, hand the smoke back to `apply`; it can inline the same smoke-only target adoption and rollout work without changing startup authority.
+Use `targets status` and `targets show-current` only when you need the lower-level control-plane provenance behind that summary. For the preferred high-level path, hand the smoke back to `apply`; it can inline the same smoke-only strategy adoption and rollout work without changing startup authority.
 
 ## Run
 
@@ -77,7 +79,7 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml
 cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 ```
 
-`apply` is the Day 1+ smoke path. It is smoke-only, reuses `status`, can inline an explicit adopt only when readiness is already `adoptable-ready`, can explicitly enable the smoke-only rollout posture for the adopted families, runs `doctor`, and stops at ready unless you also pass `--start`. It does not run `discover`, and it does not chain `verify`; run that explicitly after the runtime work you want to inspect.
+`apply` is the Day 1+ smoke path. It is smoke-only, reuses `status`, can inline an explicit adopt only when readiness is already `adoptable-ready`, can explicitly enable the smoke-only rollout posture for the adopted scopes, runs `doctor`, and stops at ready unless you also pass `--start`. It does not run `discover`, and it does not chain `verify`; run that explicitly after the runtime work you want to inspect.
 
 If you are using the lower-level path, preflight the smoke config, then start `app-live` with the smoke config:
 
@@ -100,10 +102,10 @@ Interpret `status` before `apply` like this:
   - `apply` can inline the adoptable revision selection for smoke
   - or drop to `targets candidates` / `targets adopt` if you want lower-level control
 - `smoke-rollout-required`
-  - config and adopted target are present, but rollout is still intentionally empty
-  - `apply` can explicitly enable the smoke-only rollout posture for the adopted family set
+  - config and adopted revision are present, but rollout is still intentionally empty
+  - `apply` can explicitly enable the smoke-only rollout posture for the adopted scopes
 - `smoke-config-ready`
-  - config, adopted target, and smoke rollout are aligned
+  - config, adopted revision, and smoke rollout are aligned
   - `apply` will run `doctor` and stop at ready, or continue into `run` if you pass `--start`
 - `restart-required`
   - the configured revision is not the active revision yet
@@ -111,7 +113,7 @@ Interpret `status` before `apply` like this:
 - `blocked`
   - fix the reported blocker first, then rerun `status` or `apply`
 
-`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps the `neg-risk` route on the shadow path even though the runtime itself is in `live` mode. `apply` reuses that same `doctor -> run` sequence; it does not bypass preflight, and it does not claim any process-management ability beyond the foreground `run` it starts itself.
+`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps every risk-expanding route on the shadow path even though the runtime itself is in `live` mode. `apply` reuses that same `doctor -> run` sequence; it does not bypass preflight, and it does not claim any process-management ability beyond the foreground `run` it starts itself.
 
 After `run`, use the high-level verifier as the default happy path:
 
@@ -125,13 +127,13 @@ Interpret the verifier like this:
   - confirms the verifier inferred the smoke path
 - `Verdict: PASS`
   - shadow-only run evidence is present
-  - no forbidden live side effects were observed
+  - no credible live strategy attempts were observed on any risk-expanding route
 - `Verdict: PASS WITH WARNINGS`
   - a real smoke run happened
   - but rollout-not-ready or missing stronger replay evidence makes the result incomplete
 - `Verdict: FAIL`
   - no credible run evidence exists
-  - or forbidden live side effects were observed
+  - or credible live strategy attempts were observed on at least one risk-expanding route
 
 `verify` is intentionally local-only. It does not do venue probes and it does not replace `doctor`; it validates what the latest local smoke run actually produced. Its `Run Session` line is the concrete lifecycle anchor for the verdict and should appear before `Next Actions`.
 
@@ -144,13 +146,13 @@ Interpret the ending of the `doctor` report like this:
 - `Overall: FAIL`
   - follow the printed next action first, then rerun `doctor`
 
-When `doctor` prints next actions for target setup and you stay on the high-level smoke path, the normal Day 1+ follow-up is:
+When `doctor` prints next actions for strategy-control setup and you stay on the high-level smoke path, the normal Day 1+ follow-up is:
 
 ```bash
 cargo run -p app-live -- apply --config config/axiom-arb.local.toml
 ```
 
-If you need the lower-level target workflow instead, use:
+If you need the lower-level strategy-control workflow instead, use:
 
 ```bash
 cargo run -p app-live -- discover --config config/axiom-arb.local.toml
@@ -159,13 +161,13 @@ cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --ad
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
 ```
 
-If the wrong target revision was adopted for the smoke, revert it with:
+If the wrong strategy revision was adopted for the smoke, revert it with:
 
 ```bash
 cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
 ```
 
-Adopt and rollback only rewrite the configured `operator_target_revision` in the TOML. They do not hot-reload the running daemon.
+Adopt and rollback only rewrite the configured `operator_strategy_revision` in the TOML. In compatibility mode, the first `targets adopt` is also the explicit migration step into the neutral control plane. They do not hot-reload the running daemon.
 
 If you need deeper debugging beyond `verify`, capture replay-visible state after the smoke with:
 
@@ -175,7 +177,7 @@ cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0 --l
 
 ## Deeper Debugging
 
-Use SQL only when `verify` fails or when you need to inspect the raw evidence behind its verdict.
+Use SQL only when `verify` fails or when you need to inspect the raw evidence behind its verdict. For smoke, any live evidence on a risk-expanding route is a failure. The SQL below focuses on `neg-risk` because that is where rollout-scoped smoke work exists today; a live `full-set` attempt would also fail the smoke contract.
 
 Check that `neg-risk` only produced shadow attempts:
 
