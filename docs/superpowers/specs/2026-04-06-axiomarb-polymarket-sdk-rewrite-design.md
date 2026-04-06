@@ -337,6 +337,7 @@ Even with the intended boundary, later merge work is still expected in a few pla
 
 - `crates/config-schema/src/validate.rs`
 - `crates/app-live/src/config.rs`
+- `crates/app-live/src/commands/init/render.rs`
 - `crates/app-live/src/source_tasks.rs`
 - `crates/app-live/src/commands/doctor/connectivity.rs`
 - shared config and command test fixtures
@@ -363,6 +364,24 @@ That means:
 - the SDK becomes the transport/auth/session owner
 - the repository remains the owner of execution-plan signing and signed-order intent construction
 - moving order construction or signing authority into the SDK is out of scope for this rewrite
+
+### 10.0.1 Venue-Facing Signed Payload Boundary
+
+The gateway must not consume `SignedFamilySubmission` directly.
+
+Instead, the repository should introduce stable venue-facing Polymarket DTOs above the gateway, for example:
+
+- `PolymarketSignedOrder`
+- `PolymarketCancelOrder`
+- `PolymarketOrderQuery`
+
+Required rules:
+
+- route-specific payloads such as `SignedFamilySubmission` stay above the gateway
+- route adapters or repo-owned providers translate route-owned payloads into these venue-facing DTOs
+- the gateway consumes only Polymarket-facing signed order primitives, never `neg-risk` family semantics directly
+
+This preserves the current repo-owned signing boundary while keeping the gateway route-agnostic.
 
 ### 10.1 `doctor`
 
@@ -394,7 +413,13 @@ Recommended rule:
 
 - Phase A may introduce async-native gateway internals
 - Phase A should keep the current sync-facing execution/provider traits intact
-- Phase B may replace the current ad hoc Tokio bridging with a more deliberate adapter, but only after the strategy-neutral merge reduces surrounding churn
+- Phase B should replace the current ad hoc Tokio bridging with a deliberate shared adapter, but only after the strategy-neutral merge reduces surrounding churn
+
+Hard rules:
+
+- constructing a fresh Tokio runtime per provider call is not an acceptable end state
+- the preferred Phase B shape is a shared async adapter behind the existing sync-facing seams
+- widening `execution` or `app-live` traits to async should happen only if the shared-adapter approach proves insufficient and only under a separate explicit design decision
 
 ### 10.4 Metadata Discovery
 
@@ -457,10 +482,15 @@ Phase A should stay concentrated in `crates/venue-polymarket/*` and related test
 #### Slice A1: Define The New Public Surface
 
 - create the new capability-oriented types in `venue-polymarket`
-- remove or deprecate old public exports
+- keep old public exports available during Phase A, but mark them as legacy cutover shell only
 - define the stable repo-owned output models and error categories
 
 This slice sets the target architecture before wiring SDK details.
+
+Hard rule:
+
+- Phase A must not break existing `app-live` call sites merely by removing old exports
+- true public-export removal belongs to Phase B cutover
 
 #### Slice A2: Replace Authenticated CLOB REST Internals
 
