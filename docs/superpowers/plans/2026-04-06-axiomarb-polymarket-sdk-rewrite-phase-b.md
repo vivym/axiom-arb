@@ -6,7 +6,7 @@
 
 **Goal:** Cut `app-live` and config/mainline runtime wiring over to the SDK-backed Polymarket gateway, then delete the old transport/auth main path after `strategy-neutral-control-plane` has landed.
 
-**Architecture:** Treat this as post-merge cutover work. Rebase onto the strategy-neutral control-plane result first, then rewire config/auth handling, doctor probes, runtime providers, discovery wiring, and docs to the new gateway. Remove the temporary compatibility shell only after the new app-facing path is fully verified.
+**Architecture:** Treat this as post-merge cutover work. Rebase onto the strategy-neutral control-plane result first, then rewire config/auth handling, doctor probes, runtime providers, discovery wiring, and docs to the new gateway. Remove the temporary compatibility shell only after the new app-facing path is fully verified. In particular, treat the Phase A gateway-backed websocket shell as an event-compatibility seam rather than the final mainline design: Phase B must replace it with a stateful SDK subscription model before deleting the legacy websocket transport path.
 
 **Tech Stack:** Rust, existing `app-live` and `config-schema` crates, Phase A gateway in `venue-polymarket`, `cargo test`, `cargo fmt`, `cargo clippy`
 
@@ -289,6 +289,7 @@ Rules:
 - no fresh `Runtime::new()` per provider call
 - route-owned signed payloads get translated into `PolymarketSignedOrder` before crossing the gateway
 - discovery/metadata and stream tasks all use the same gateway-backed construction path
+- do not treat the Phase A gateway-backed websocket shell as the final runtime shape; replace it with a stateful SDK subscription path before removing the legacy websocket transport path
 
 - [ ] **Step 4: Re-run the runtime-cutover tests**
 
