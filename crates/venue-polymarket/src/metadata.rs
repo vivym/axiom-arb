@@ -1,10 +1,19 @@
-use std::{collections::HashMap, fmt, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
+use async_trait::async_trait;
 use domain::{MarketRoute, NegRiskVariant};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex as AsyncMutex;
 
+use crate::errors::PolymarketGatewayError;
 use crate::rest::{PolymarketRestClient, RestError};
+use crate::sdk_backend::PolymarketMetadataApi;
 
 const NEG_RISK_PAGE_LIMIT: usize = 100;
 const NEG_RISK_PAGE_MAX_ATTEMPTS: usize = 2;
@@ -90,6 +99,12 @@ impl From<NegRiskMetadataError> for RestError {
     }
 }
 
+impl From<NegRiskMetadataError> for PolymarketGatewayError {
+    fn from(value: NegRiskMetadataError) -> Self {
+        PolymarketGatewayError::policy(value.to_string())
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct NegRiskMetadataCache {
     current: Option<NegRiskDiscoverySnapshot>,
@@ -143,49 +158,49 @@ impl CanonicalNegRiskRow {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct GammaEvent {
+#[derive(Debug, Clone, Deserialize)]
+pub struct GammaEvent {
     #[serde(default)]
-    id: Option<String>,
+    pub id: Option<String>,
     #[serde(default)]
-    title: Option<String>,
+    pub title: Option<String>,
     #[serde(default, alias = "parentEvent", alias = "familyId")]
-    parent_event_id: Option<String>,
+    pub parent_event_id: Option<String>,
     #[serde(default, alias = "negRisk")]
-    neg_risk: Option<bool>,
+    pub neg_risk: Option<bool>,
     #[serde(default, alias = "enableNegRisk")]
-    enable_neg_risk: Option<bool>,
+    pub enable_neg_risk: Option<bool>,
     #[serde(default, alias = "negRiskAugmented")]
-    neg_risk_augmented: Option<bool>,
+    pub neg_risk_augmented: Option<bool>,
     #[serde(default)]
-    markets: Vec<GammaMarket>,
+    pub markets: Vec<GammaMarket>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GammaMarket {
+#[derive(Debug, Clone, Deserialize)]
+pub struct GammaMarket {
     #[serde(default, alias = "conditionId")]
-    condition_id: Option<String>,
+    pub condition_id: Option<String>,
     #[serde(default, alias = "clobTokenIds")]
-    clob_token_ids: FlexibleStringList,
+    pub clob_token_ids: FlexibleStringList,
     #[serde(default, alias = "groupItemTitle")]
-    group_item_title: Option<String>,
+    pub group_item_title: Option<String>,
     #[serde(default)]
-    title: Option<String>,
+    pub title: Option<String>,
     #[serde(default, alias = "shortOutcomes")]
-    short_outcomes: FlexibleStringList,
+    pub short_outcomes: FlexibleStringList,
     #[serde(default, alias = "outcomes")]
-    outcomes: FlexibleStringList,
+    pub outcomes: FlexibleStringList,
     #[serde(default)]
-    question: Option<String>,
+    pub question: Option<String>,
     #[serde(default, alias = "negRisk")]
-    neg_risk: Option<bool>,
+    pub neg_risk: Option<bool>,
     #[serde(default, alias = "negRiskOther")]
-    neg_risk_other: Option<bool>,
+    pub neg_risk_other: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-enum FlexibleStringList {
+pub enum FlexibleStringList {
     Values(Vec<String>),
     Text(String),
 }
@@ -203,6 +218,202 @@ impl FlexibleStringList {
             Self::Text(text) => parse_string_list(&text),
         }
     }
+}
+
+#[async_trait]
+pub trait NegRiskMetadataPageFetcher {
+    type Error;
+
+    async fn fetch_neg_risk_metadata_page(
+        &self,
+        offset: usize,
+    ) -> Result<Vec<GammaEvent>, Self::Error>;
+}
+
+struct GatewayMetadataFetcher<'a> {
+    api: &'a dyn PolymarketMetadataApi,
+}
+
+#[async_trait]
+impl NegRiskMetadataPageFetcher for GatewayMetadataFetcher<'_> {
+    type Error = PolymarketGatewayError;
+
+    async fn fetch_neg_risk_metadata_page(
+        &self,
+        offset: usize,
+    ) -> Result<Vec<GammaEvent>, Self::Error> {
+        self.api
+            .fetch_neg_risk_metadata_page(offset, NEG_RISK_PAGE_LIMIT)
+            .await
+    }
+}
+
+pub(crate) async fn refresh_neg_risk_metadata_from_api(
+    api: &dyn PolymarketMetadataApi,
+    state: &Arc<Mutex<NegRiskMetadataCache>>,
+    lock: &Arc<AsyncMutex<()>>,
+) -> Result<Vec<NegRiskMarketMetadata>, PolymarketGatewayError> {
+    let _refresh_guard = lock.lock().await;
+    let mut cache = state.lock().expect("neg-risk metadata cache poisoned");
+    let discovery = discover_neg_risk_metadata_rows_from_api(api).await?;
+
+    let NegRiskDiscovery {
+        rows,
+        metadata_snapshot_hash,
+    } = discovery;
+    let discovery_revision = cache
+        .current
+        .as_ref()
+        .map_or(1, |snapshot| snapshot.discovery_revision + 1);
+    let rows = rows
+        .into_iter()
+        .map(|row| row.into_public(discovery_revision, metadata_snapshot_hash.clone()))
+        .collect::<Vec<_>>();
+    let snapshot = NegRiskDiscoverySnapshot {
+        discovery_revision,
+        metadata_snapshot_hash,
+        rows: rows.clone(),
+    };
+
+    if let Some(previous) = cache.current.replace(snapshot) {
+        cache.history.push(previous);
+    }
+
+    Ok(rows)
+}
+
+async fn discover_neg_risk_metadata_rows_from_api(
+    api: &dyn PolymarketMetadataApi,
+) -> Result<NegRiskDiscovery, PolymarketGatewayError> {
+    let fetcher = GatewayMetadataFetcher { api };
+    let mut rows = Vec::<CanonicalNegRiskRow>::new();
+    let mut seen = HashMap::<NegRiskMemberKey, usize>::new();
+    let mut offset = 0usize;
+    let mut skipped_malformed_rows = 0usize;
+
+    loop {
+        let page = fetcher.fetch_neg_risk_metadata_page(offset).await?;
+        let page_count = page.len();
+        tracing::debug!(offset, page_count, "discover fetched metadata page");
+
+        for event in page {
+            let Some(event_id) = normalized_optional_string(event.id.clone()) else {
+                let skipped_rows = event
+                    .markets
+                    .iter()
+                    .filter(|market| {
+                        event.neg_risk.unwrap_or(false) || market.neg_risk.unwrap_or(false)
+                    })
+                    .count()
+                    .max(1);
+                skipped_malformed_rows += skipped_rows;
+                tracing::warn!(skipped_rows, "skipping malformed neg-risk event missing id");
+                continue;
+            };
+            let family_id = event
+                .parent_event_id
+                .clone()
+                .and_then(|value| normalized_optional_string(Some(value)))
+                .unwrap_or_else(|| event_id.clone());
+
+            for market in event.markets {
+                let is_neg_risk =
+                    event.neg_risk.unwrap_or(false) || market.neg_risk.unwrap_or(false);
+                if !is_neg_risk {
+                    continue;
+                }
+
+                let Some(condition_id) = normalized_optional_string(market.condition_id.clone())
+                else {
+                    skipped_malformed_rows += 1;
+                    tracing::warn!(
+                        event_id,
+                        raw_condition_id = ?market.condition_id,
+                        raw_clob_token_ids = ?market.clob_token_ids.clone().into_vec(),
+                        "skipping malformed neg-risk market missing condition id"
+                    );
+                    continue;
+                };
+                let Some(token_id) = market.yes_token_id() else {
+                    skipped_malformed_rows += 1;
+                    tracing::warn!(
+                        event_id,
+                        condition_id,
+                        raw_clob_token_ids = ?market.clob_token_ids.clone().into_vec(),
+                        "skipping malformed neg-risk market missing token id"
+                    );
+                    continue;
+                };
+                let outcome_label = market.outcome_label(event.title.as_deref());
+                let is_other = market.neg_risk_other.unwrap_or(false)
+                    || outcome_label.eq_ignore_ascii_case("other");
+                let is_placeholder =
+                    outcome_label.is_empty() || outcome_label.eq_ignore_ascii_case("placeholder");
+                let neg_risk_variant =
+                    classify_variant(is_neg_risk, event.enable_neg_risk, event.neg_risk_augmented);
+                let row = CanonicalNegRiskRow {
+                    event_family_id: family_id.clone(),
+                    event_id: event_id.clone(),
+                    condition_id: condition_id.clone(),
+                    token_id: token_id.clone(),
+                    outcome_label,
+                    route: MarketRoute::NegRisk,
+                    enable_neg_risk: event.enable_neg_risk,
+                    neg_risk_augmented: event.neg_risk_augmented,
+                    neg_risk_variant,
+                    is_placeholder,
+                    is_other,
+                };
+                let key = NegRiskMemberKey {
+                    event_family_id: row.event_family_id.clone(),
+                    condition_id: row.condition_id.clone(),
+                    token_id: row.token_id.clone(),
+                };
+
+                if let Some(existing_index) = seen.get(&key).copied() {
+                    let existing = &rows[existing_index];
+                    if existing != &row {
+                        return Err(PolymarketGatewayError::policy(
+                            NegRiskMetadataError::ConflictingDuplicateRow {
+                                event_family_id: row.event_family_id,
+                                condition_id: row.condition_id,
+                                token_id: row.token_id,
+                                existing_outcome_label: existing.outcome_label.clone(),
+                                incoming_outcome_label: row.outcome_label,
+                            }
+                            .to_string(),
+                        ));
+                    }
+                    continue;
+                }
+
+                seen.insert(key, rows.len());
+                rows.push(row);
+            }
+        }
+
+        if page_count == 0 {
+            break;
+        }
+
+        offset += NEG_RISK_PAGE_LIMIT;
+    }
+
+    if rows.is_empty() && skipped_malformed_rows > 0 {
+        return Err(PolymarketGatewayError::policy(
+            NegRiskMetadataError::NoValidRowsAfterFiltering {
+                skipped_rows: skipped_malformed_rows,
+            }
+            .to_string(),
+        ));
+    }
+
+    canonicalize_rows(&mut rows);
+    let metadata_snapshot_hash = snapshot_hash(&rows);
+    Ok(NegRiskDiscovery {
+        rows,
+        metadata_snapshot_hash,
+    })
 }
 
 impl PolymarketRestClient {
@@ -301,10 +512,7 @@ impl PolymarketRestClient {
                         .count()
                         .max(1);
                     skipped_malformed_rows += skipped_rows;
-                    tracing::warn!(
-                        skipped_rows,
-                        "skipping malformed neg-risk event missing id"
-                    );
+                    tracing::warn!(skipped_rows, "skipping malformed neg-risk event missing id");
                     continue;
                 };
                 let family_id = event
@@ -320,7 +528,8 @@ impl PolymarketRestClient {
                         continue;
                     }
 
-                    let Some(condition_id) = normalized_optional_string(market.condition_id.clone())
+                    let Some(condition_id) =
+                        normalized_optional_string(market.condition_id.clone())
                     else {
                         skipped_malformed_rows += 1;
                         tracing::warn!(

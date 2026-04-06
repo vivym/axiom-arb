@@ -33,6 +33,8 @@ pub use heartbeat::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
 };
 pub use instrumentation::VenueProducerInstrumentation;
+#[doc(hidden)]
+pub use metadata::{FlexibleStringList, GammaEvent, GammaMarket, NegRiskMetadataPageFetcher};
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};
 pub use negrisk_live::{PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider};
 pub use orders::{
@@ -46,7 +48,10 @@ pub use rest::{
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
 #[doc(hidden)]
-pub use sdk_backend::{LiveClobSdkApi, LiveWsSdkApi, PolymarketClobApi, PolymarketStreamApi};
+pub use sdk_backend::{
+    LiveClobSdkApi, LiveMetadataSdkApi, LiveWsSdkApi, PolymarketClobApi, PolymarketMetadataApi,
+    PolymarketStreamApi,
+};
 pub use url::Url as PolymarketUrl;
 pub use ws_client::{
     PolymarketWsClient, WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp,

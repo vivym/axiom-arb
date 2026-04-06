@@ -1,14 +1,21 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
+use tokio::sync::Mutex as AsyncMutex;
 
-use crate::sdk_backend::{PolymarketClobApi, PolymarketStreamApi};
+use crate::metadata::{
+    refresh_neg_risk_metadata_from_api, NegRiskMarketMetadata, NegRiskMetadataCache,
+};
+use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi, PolymarketStreamApi};
 use crate::{MarketWsEvent, PolymarketGatewayError, UserWsEvent};
 
 #[derive(Clone)]
 pub struct PolymarketGateway {
     clob_api: Option<Arc<dyn PolymarketClobApi>>,
     stream_api: Option<Arc<dyn PolymarketStreamApi>>,
+    metadata_api: Option<Arc<dyn PolymarketMetadataApi>>,
+    metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
+    metadata_refresh_lock: Arc<AsyncMutex<()>>,
 }
 
 impl std::fmt::Debug for PolymarketGateway {
@@ -18,20 +25,35 @@ impl std::fmt::Debug for PolymarketGateway {
 }
 
 impl PolymarketGateway {
-    #[must_use]
-    pub fn from_clob_api(clob_api: Arc<dyn PolymarketClobApi>) -> Self {
+    fn empty() -> Self {
         Self {
-            clob_api: Some(clob_api),
+            clob_api: None,
             stream_api: None,
+            metadata_api: None,
+            metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
+            metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
         }
     }
 
     #[must_use]
+    pub fn from_clob_api(clob_api: Arc<dyn PolymarketClobApi>) -> Self {
+        let mut gateway = Self::empty();
+        gateway.clob_api = Some(clob_api);
+        gateway
+    }
+
+    #[must_use]
     pub fn from_stream_api(stream_api: Arc<dyn PolymarketStreamApi>) -> Self {
-        Self {
-            clob_api: None,
-            stream_api: Some(stream_api),
-        }
+        let mut gateway = Self::empty();
+        gateway.stream_api = Some(stream_api);
+        gateway
+    }
+
+    #[must_use]
+    pub fn from_metadata_api(metadata_api: Arc<dyn PolymarketMetadataApi>) -> Self {
+        let mut gateway = Self::empty();
+        gateway.metadata_api = Some(metadata_api);
+        gateway
     }
 
     pub async fn open_orders(
@@ -70,6 +92,17 @@ impl PolymarketGateway {
         self.stream_api()?.user_events(&auth, &condition_ids).await
     }
 
+    pub async fn refresh_neg_risk_metadata(
+        &self,
+    ) -> Result<Vec<NegRiskMarketMetadata>, PolymarketGatewayError> {
+        refresh_neg_risk_metadata_from_api(
+            self.metadata_api()?.as_ref(),
+            &self.metadata_state,
+            &self.metadata_refresh_lock,
+        )
+        .await
+    }
+
     fn clob_api(&self) -> Result<&Arc<dyn PolymarketClobApi>, PolymarketGatewayError> {
         self.clob_api.as_ref().ok_or_else(|| {
             PolymarketGatewayError::protocol("clob api is not configured on this gateway")
@@ -79,6 +112,12 @@ impl PolymarketGateway {
     fn stream_api(&self) -> Result<&Arc<dyn PolymarketStreamApi>, PolymarketGatewayError> {
         self.stream_api.as_ref().ok_or_else(|| {
             PolymarketGatewayError::protocol("stream api is not configured on this gateway")
+        })
+    }
+
+    fn metadata_api(&self) -> Result<&Arc<dyn PolymarketMetadataApi>, PolymarketGatewayError> {
+        self.metadata_api.as_ref().ok_or_else(|| {
+            PolymarketGatewayError::protocol("metadata api is not configured on this gateway")
         })
     }
 }

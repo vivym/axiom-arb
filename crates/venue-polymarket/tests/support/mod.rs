@@ -22,8 +22,9 @@ use tracing::{
     Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
-    L2AuthHeaders, MarketTradePriceUpdate, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
-    PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
+    FlexibleStringList, GammaEvent, GammaMarket, L2AuthHeaders, MarketTradePriceUpdate,
+    MarketWsEvent, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
+    PolymarketHeartbeatStatus, PolymarketMetadataApi, PolymarketOpenOrderSummary,
     PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
     PolymarketUserStreamAuth, RelayerAuth, SignerContext, UserTradeUpdate, UserWsEvent,
     VenueProducerInstrumentation,
@@ -81,6 +82,23 @@ impl PolymarketStreamApi for ScriptedStreamApi {
         _condition_ids: &[String],
     ) -> Result<Vec<UserWsEvent>, PolymarketGatewayError> {
         Ok(self.user_events.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScriptedMetadataApi {
+    pages: Vec<Vec<GammaEvent>>,
+}
+
+#[async_trait]
+impl PolymarketMetadataApi for ScriptedMetadataApi {
+    async fn fetch_neg_risk_metadata_page(
+        &self,
+        offset: usize,
+        _limit: usize,
+    ) -> Result<Vec<GammaEvent>, PolymarketGatewayError> {
+        let page_index = offset / 100;
+        Ok(self.pages.get(page_index).cloned().unwrap_or_default())
     }
 }
 
@@ -216,6 +234,67 @@ pub fn scripted_gateway_with_user_events(events: Vec<UserWsEvent>) -> Polymarket
         market_events: Vec::new(),
         user_events: events,
     }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_valid_and_malformed_metadata() -> PolymarketGateway {
+    PolymarketGateway::from_metadata_api(Arc::new(ScriptedMetadataApi {
+        pages: vec![
+            vec![malformed_neg_risk_event(), valid_neg_risk_event()],
+            Vec::new(),
+        ],
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_all_malformed_metadata() -> PolymarketGateway {
+    PolymarketGateway::from_metadata_api(Arc::new(ScriptedMetadataApi {
+        pages: vec![vec![malformed_neg_risk_event()], Vec::new()],
+    }))
+}
+
+fn malformed_neg_risk_event() -> GammaEvent {
+    GammaEvent {
+        id: Some("316248".to_owned()),
+        title: Some("Malformed".to_owned()),
+        parent_event_id: Some("family-malformed".to_owned()),
+        neg_risk: Some(true),
+        enable_neg_risk: Some(true),
+        neg_risk_augmented: Some(false),
+        markets: vec![GammaMarket {
+            condition_id: Some("".to_owned()),
+            clob_token_ids: FlexibleStringList::Values(Vec::new()),
+            group_item_title: Some("Bad".to_owned()),
+            title: None,
+            short_outcomes: FlexibleStringList::Values(vec!["Bad".to_owned()]),
+            outcomes: FlexibleStringList::Values(vec!["Bad".to_owned()]),
+            question: Some("Malformed?".to_owned()),
+            neg_risk: Some(true),
+            neg_risk_other: Some(false),
+        }],
+    }
+}
+
+fn valid_neg_risk_event() -> GammaEvent {
+    GammaEvent {
+        id: Some("event-valid-1".to_owned()),
+        title: Some("Valid".to_owned()),
+        parent_event_id: Some("family-valid-1".to_owned()),
+        neg_risk: Some(true),
+        enable_neg_risk: Some(true),
+        neg_risk_augmented: Some(false),
+        markets: vec![GammaMarket {
+            condition_id: Some("condition-valid-1".to_owned()),
+            clob_token_ids: FlexibleStringList::Values(vec!["token-valid-1".to_owned()]),
+            group_item_title: Some("Valid".to_owned()),
+            title: None,
+            short_outcomes: FlexibleStringList::Values(vec!["Valid".to_owned()]),
+            outcomes: FlexibleStringList::Values(vec!["Valid".to_owned()]),
+            question: Some("Valid?".to_owned()),
+            neg_risk: Some(true),
+            neg_risk_other: Some(false),
+        }],
+    }
 }
 
 #[allow(dead_code)]
