@@ -422,6 +422,7 @@ where
         source,
         instrumentation,
         None,
+        false,
         neg_risk_live_targets,
         neg_risk_live_approved_families,
         neg_risk_live_ready_families,
@@ -429,10 +430,13 @@ where
     )
 }
 
-pub fn run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented<S>(
+pub fn run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented<
+    S,
+>(
     source: &S,
     instrumentation: AppInstrumentation,
     operator_strategy_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
     neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
@@ -447,6 +451,7 @@ where
     let durable_state = load_durable_live_startup_state_for_strategy(
         operator_strategy_revision,
         operator_target_revision.as_deref(),
+        allow_legacy_target_source_resume,
         load_shadow_state,
     )?;
     validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
@@ -552,12 +557,18 @@ pub(crate) fn load_durable_live_startup_state(
     operator_target_revision: Option<&str>,
     load_shadow_state: bool,
 ) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
-    load_durable_live_startup_state_for_strategy(None, operator_target_revision, load_shadow_state)
+    load_durable_live_startup_state_for_strategy(
+        None,
+        operator_target_revision,
+        false,
+        load_shadow_state,
+    )
 }
 
 pub(crate) fn load_durable_live_startup_state_for_strategy(
     operator_strategy_revision: Option<&str>,
     operator_target_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
     load_shadow_state: bool,
 ) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -665,6 +676,7 @@ pub(crate) fn load_durable_live_startup_state_for_strategy(
             progress.as_ref(),
             operator_strategy_revision,
             operator_target_revision,
+            allow_legacy_target_source_resume,
             has_durable_follow_up_work,
         )?;
         let (last_journal_seq, last_state_version, published_snapshot_id) =
@@ -706,13 +718,20 @@ fn validate_operator_target_revision(
     expected_revision: Option<&str>,
     has_durable_follow_up_work: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    validate_operator_revision(progress, None, expected_revision, has_durable_follow_up_work)
+    validate_operator_revision(
+        progress,
+        None,
+        expected_revision,
+        false,
+        has_durable_follow_up_work,
+    )
 }
 
 fn validate_operator_revision(
     progress: Option<&RuntimeProgressRow>,
     expected_strategy_revision: Option<&str>,
     expected_target_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
     has_durable_follow_up_work: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(expected_strategy_revision) = expected_strategy_revision {
@@ -731,9 +750,17 @@ fn validate_operator_revision(
             Some(actual_revision) => Err(boxed_error(format!(
                 "operator strategy revision anchor mismatch: persisted={actual_revision} configured={expected_strategy_revision}"
             ))),
-            None => Err(boxed_error(
-                "operator strategy revision anchor is required when a startup strategy bundle is supplied",
-            )),
+            None => {
+                if allow_legacy_target_source_resume
+                    && progress.operator_target_revision.as_deref()
+                        == Some(expected_strategy_revision)
+                {
+                    return Ok(());
+                }
+                Err(boxed_error(
+                    "operator strategy revision anchor is required when a startup strategy bundle is supplied",
+                ))
+            }
         };
     }
 
@@ -1083,7 +1110,7 @@ mod tests {
     use super::{
         attempt_row_with_run_session_id, durable_live_execution_records, durable_progress_anchor,
         durable_shadow_execution_state, execution_attempt_row_for_live_record,
-        validate_operator_target_revision,
+        validate_operator_revision, validate_operator_target_revision,
     };
     use crate::negrisk_live::NegRiskLiveExecutionRecord;
 
@@ -1205,6 +1232,52 @@ mod tests {
     #[test]
     fn operator_targets_allow_missing_revision_anchor_without_follow_up_work() {
         validate_operator_target_revision(None, Some("targets-rev-current"), false).unwrap();
+    }
+
+    #[test]
+    fn strategy_resume_accepts_legacy_target_only_anchor_for_adopted_target_source() {
+        validate_operator_revision(
+            Some(&RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-9".to_owned()),
+                operator_strategy_revision: None,
+                active_run_session_id: None,
+            }),
+            Some("targets-rev-9"),
+            Some("targets-rev-9"),
+            true,
+            true,
+        )
+        .expect("legacy adopted target-source resume should accept target-only anchor");
+    }
+
+    #[test]
+    fn strategy_resume_requires_strategy_anchor_when_legacy_fallback_is_disabled() {
+        let err = validate_operator_revision(
+            Some(&RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-9".to_owned()),
+                operator_strategy_revision: None,
+                active_run_session_id: None,
+            }),
+            Some("targets-rev-9"),
+            Some("targets-rev-9"),
+            false,
+            true,
+        )
+        .expect_err(
+            "strategy bundles should still require strategy anchor without legacy fallback",
+        );
+
+        assert!(
+            err.to_string()
+                .contains("operator strategy revision anchor is required"),
+            "{err}"
+        );
     }
 
     #[test]

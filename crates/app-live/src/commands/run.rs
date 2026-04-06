@@ -4,15 +4,15 @@ use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig}
 use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
-use crate::{
-    build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
-    load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
-    startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError,
-    LocalSignerConfig, NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
-};
 use crate::cli::RunArgs;
 use crate::config::neg_risk_live_targets_from_route_artifacts;
 use crate::daemon::run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented;
+use crate::{
+    build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
+    load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
+    startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError, LocalSignerConfig,
+    NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
+};
 
 pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
     run_from_config_path(&args.config)
@@ -51,6 +51,10 @@ fn run_from_config_path_for_source(
             }
             RuntimeModeToml::Live => {
                 let resolved_strategy = load_resolved_strategy_revision_from_config(&config)?;
+                let allow_legacy_target_source_resume = config
+                    .target_source()
+                    .map(|source| source.is_adopted())
+                    .unwrap_or(false);
                 let neg_risk_live_targets = neg_risk_live_targets_from_route_artifacts(
                     &resolved_strategy.route_artifacts,
                     resolved_strategy.operator_strategy_revision.as_deref(),
@@ -98,6 +102,7 @@ fn run_from_config_path_for_source(
                     &source,
                     instrumentation,
                     resolved_strategy.operator_strategy_revision.as_deref(),
+                    allow_legacy_target_source_resume,
                     neg_risk_live_targets,
                     neg_risk_live_approved_families,
                     neg_risk_live_ready_families,

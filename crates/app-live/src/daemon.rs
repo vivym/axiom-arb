@@ -190,6 +190,7 @@ where
         source,
         instrumentation,
         None,
+        false,
         neg_risk_live_targets,
         neg_risk_live_approved_families,
         neg_risk_live_ready_families,
@@ -204,6 +205,7 @@ pub(crate) fn run_live_daemon_from_durable_store_with_strategy_revision_and_sess
     source: &S,
     instrumentation: AppInstrumentation,
     operator_strategy_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
     neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
@@ -220,6 +222,7 @@ where
         load_durable_live_startup_state_for_strategy(
             operator_strategy_revision,
             operator_target_revision.as_deref(),
+            allow_legacy_target_source_resume,
             load_shadow_state,
         )?
     } else {
