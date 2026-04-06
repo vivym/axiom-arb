@@ -163,7 +163,7 @@ fn adopted_summary(
     } else {
         StatusMode::Live
     };
-    let configured_target = match state.configured_operator_target_revision.clone() {
+    let configured_revision = match state.configured_operator_target_revision.clone() {
         Some(revision) => revision,
         None if config.target_source().is_none() => match config.operator_strategy_revision() {
             Some(revision) => revision.to_owned(),
@@ -190,6 +190,11 @@ fn adopted_summary(
                 mode, &state, &summary,
             ))));
         }
+    };
+    let (configured_target_query, configured_strategy_query) = if config.target_source().is_some() {
+        (Some(configured_revision.as_str()), None)
+    } else {
+        (None, Some(configured_revision.as_str()))
     };
     let config_path_string = config_path.display().to_string();
     let config_fingerprint = config_fingerprint(config_path).map_err(|error| error.to_string())?;
@@ -220,8 +225,8 @@ fn adopted_summary(
                         mode: "live",
                         config_path: &config_path_string,
                         config_fingerprint: &config_fingerprint,
-                        configured_target: Some(configured_target.as_str()),
-                        configured_strategy: None,
+                        configured_target: configured_target_query,
+                        configured_strategy: configured_strategy_query,
                         startup_target_revision_at_start: &startup_target_revision,
                         rollout_state,
                         stale_after: RUN_SESSION_STALE_AFTER,
@@ -279,7 +284,7 @@ fn adopted_summary(
     let active_target = state.active_operator_target_revision.clone();
     let restart_needed = active_target
         .as_deref()
-        .map(|active| active != configured_target);
+        .map(|active| active != configured_revision);
 
     if restart_needed == Some(true) {
         let mut actions = Vec::new();
@@ -297,7 +302,7 @@ fn adopted_summary(
         }
 
         let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
-        details.configured_target = Some(configured_target.clone());
+        details.configured_target = Some(configured_revision.clone());
         details.active_target = active_target;
         details.target_source = Some(StatusTargetSource::AdoptedTargets);
         details.rollout_state = Some(rollout_state);
@@ -341,7 +346,7 @@ fn adopted_summary(
     };
 
     let mut details = session_details(&relevant_run_session, &conflicting_active_run_session);
-    details.configured_target = Some(configured_target);
+    details.configured_target = Some(configured_revision);
     details.active_target = active_target;
     details.target_source = Some(StatusTargetSource::AdoptedTargets);
     details.rollout_state = Some(rollout_state);

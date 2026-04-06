@@ -498,6 +498,80 @@ operator_target_revision = "targets-rev-9"
 }
 
 #[tokio::test]
+async fn doctor_pure_neutral_adopted_config_does_not_take_explicit_targets_shortcut() {
+    let database = TestDatabase::new().await;
+    let venue = MockDoctorVenue::success();
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Target Source", "PASS");
+    assert!(
+        !combined.contains("[SKIP] control-plane checks not required for explicit targets"),
+        "{combined}"
+    );
+}
+
+#[tokio::test]
 async fn doctor_smoke_mode_reports_runtime_safety_as_pass() {
     let database = TestDatabase::new().await;
     let venue = MockDoctorVenue::success();

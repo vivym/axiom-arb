@@ -374,14 +374,14 @@ fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
     let database = TestDatabase::new();
     let config = cli::config_fixture("app-live-ux-smoke.toml");
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-new",
         &config,
         "targets-rev-9",
         RunSessionState::Exited,
         Utc::now() - Duration::minutes(1),
     ));
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-old",
         &config,
         "targets-rev-8",
@@ -478,11 +478,42 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
 }
 
 #[test]
+fn status_pure_neutral_adopted_config_matches_strategy_only_relevant_run_session() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    database.seed_run_session(strategy_only_smoke_run_session(
+        "rs-strategy-only",
+        &config,
+        "targets-rev-9",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(1),
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-strategy-only"),
+        "{combined}"
+    );
+
+    database.cleanup();
+}
+
+#[test]
 fn status_projects_overdue_running_session_as_stale() {
     let database = TestDatabase::new();
     let config = cli::config_fixture("app-live-ux-smoke.toml");
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-stale",
         &config,
         "targets-rev-9",
@@ -1046,10 +1077,10 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     path
 }
 
-fn smoke_run_session(
+fn strategy_only_smoke_run_session(
     run_session_id: &str,
     config_path: &Path,
-    startup_target_revision_at_start: &str,
+    startup_strategy_revision_at_start: &str,
     state: RunSessionState,
     started_at: chrono::DateTime<Utc>,
 ) -> RunSessionRow {
@@ -1067,11 +1098,15 @@ fn smoke_run_session(
         config_path: config_path.display().to_string(),
         config_fingerprint: config_fingerprint(config_path),
         target_source_kind: "adopted".to_owned(),
-        startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
-        configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
-        active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
-        configured_operator_strategy_revision: None,
-        active_operator_strategy_revision_at_start: None,
+        startup_target_revision_at_start: startup_strategy_revision_at_start.to_owned(),
+        configured_operator_target_revision: None,
+        active_operator_target_revision_at_start: Some(
+            startup_strategy_revision_at_start.to_owned(),
+        ),
+        configured_operator_strategy_revision: Some(startup_strategy_revision_at_start.to_owned()),
+        active_operator_strategy_revision_at_start: Some(
+            startup_strategy_revision_at_start.to_owned(),
+        ),
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: true,
     }
