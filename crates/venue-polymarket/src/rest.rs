@@ -17,21 +17,34 @@ use crate::instrumentation::VenueProducerInstrumentation;
 use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::proxy::ProxyConfigError;
+use crate::sdk_backend::PolymarketMetadataApi;
 use crate::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
+    PolymarketGatewayError,
 };
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PolymarketRestClient {
     http: Client,
     pub clob_host: Url,
     pub data_api_host: Url,
     pub relayer_host: Url,
+    pub(crate) metadata_api: Option<Arc<dyn PolymarketMetadataApi>>,
     pub(crate) metadata_state: Arc<Mutex<NegRiskMetadataCache>>,
     pub(crate) metadata_refresh_lock: Arc<AsyncMutex<()>>,
     pub(crate) instrumentation: VenueProducerInstrumentation,
+}
+
+impl fmt::Debug for PolymarketRestClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PolymarketRestClient")
+            .field("clob_host", &self.clob_host)
+            .field("data_api_host", &self.data_api_host)
+            .field("relayer_host", &self.relayer_host)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -45,6 +58,7 @@ pub enum RestError {
     Auth(AuthError),
     Http(reqwest::Error),
     HttpResponse { status: StatusCode, body: String },
+    Gateway(PolymarketGatewayError),
     Metadata(NegRiskMetadataError),
     Url(url::ParseError),
     MissingField(&'static str),
@@ -106,6 +120,7 @@ impl fmt::Display for RestError {
             Self::HttpResponse { status, body } => {
                 write!(f, "http response error {status}: {body}")
             }
+            Self::Gateway(err) => write!(f, "gateway error: {err}"),
             Self::Metadata(err) => write!(f, "metadata error: {err}"),
             Self::Url(err) => write!(f, "url error: {err}"),
             Self::MissingField(field) => write!(f, "missing response field: {field}"),
@@ -135,6 +150,12 @@ impl From<AuthError> for RestError {
 impl From<reqwest::Error> for RestError {
     fn from(value: reqwest::Error) -> Self {
         Self::Http(value)
+    }
+}
+
+impl From<PolymarketGatewayError> for RestError {
+    fn from(value: PolymarketGatewayError) -> Self {
+        Self::Gateway(value)
     }
 }
 
@@ -186,10 +207,17 @@ impl PolymarketRestClient {
             clob_host,
             data_api_host,
             relayer_host,
+            metadata_api: None,
             metadata_state: Arc::new(Mutex::new(NegRiskMetadataCache::default())),
             metadata_refresh_lock: Arc::new(AsyncMutex::new(())),
             instrumentation: instrumentation.unwrap_or_else(VenueProducerInstrumentation::disabled),
         }
+    }
+
+    #[must_use]
+    pub fn with_metadata_api(mut self, metadata_api: Arc<dyn PolymarketMetadataApi>) -> Self {
+        self.metadata_api = Some(metadata_api);
+        self
     }
 
     pub async fn fetch_clob_status(&self) -> Result<VenueStatusResponse, RestError> {

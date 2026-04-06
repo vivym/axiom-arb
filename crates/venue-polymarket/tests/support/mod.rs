@@ -102,6 +102,49 @@ impl PolymarketMetadataApi for ScriptedMetadataApi {
     }
 }
 
+#[derive(Debug)]
+struct SequencedMetadataApi {
+    refreshes: Vec<Vec<Vec<GammaEvent>>>,
+    current_refresh: Mutex<Option<usize>>,
+}
+
+#[async_trait]
+impl PolymarketMetadataApi for SequencedMetadataApi {
+    async fn fetch_neg_risk_metadata_page(
+        &self,
+        offset: usize,
+        _limit: usize,
+    ) -> Result<Vec<GammaEvent>, PolymarketGatewayError> {
+        let page_index = offset / 100;
+        let refresh_index = {
+            let mut current_refresh = self
+                .current_refresh
+                .lock()
+                .expect("metadata refresh sequence lock poisoned");
+            match (*current_refresh, offset) {
+                (None, 0) => {
+                    *current_refresh = Some(0);
+                    0
+                }
+                (Some(index), 0) => {
+                    let next_index = index.saturating_add(1);
+                    *current_refresh = Some(next_index);
+                    next_index
+                }
+                (Some(index), _) => index,
+                (None, _) => 0,
+            }
+        };
+
+        Ok(self
+            .refreshes
+            .get(refresh_index)
+            .and_then(|pages| pages.get(page_index))
+            .cloned()
+            .unwrap_or_default())
+    }
+}
+
 #[allow(dead_code)]
 pub fn scripted_open_order(order_id: &str) -> PolymarketOpenOrderSummary {
     PolymarketOpenOrderSummary {
@@ -238,19 +281,43 @@ pub fn scripted_gateway_with_user_events(events: Vec<UserWsEvent>) -> Polymarket
 
 #[allow(dead_code)]
 pub fn scripted_gateway_with_valid_and_malformed_metadata() -> PolymarketGateway {
-    PolymarketGateway::from_metadata_api(Arc::new(ScriptedMetadataApi {
-        pages: vec![
-            vec![malformed_neg_risk_event(), valid_neg_risk_event()],
-            Vec::new(),
-        ],
-    }))
+    PolymarketGateway::from_metadata_api(scripted_metadata_api_with_valid_and_malformed())
 }
 
 #[allow(dead_code)]
 pub fn scripted_gateway_with_all_malformed_metadata() -> PolymarketGateway {
-    PolymarketGateway::from_metadata_api(Arc::new(ScriptedMetadataApi {
+    PolymarketGateway::from_metadata_api(scripted_metadata_api_with_all_malformed())
+}
+
+#[allow(dead_code)]
+pub fn scripted_metadata_api_with_valid_and_malformed() -> Arc<dyn PolymarketMetadataApi> {
+    Arc::new(ScriptedMetadataApi {
+        pages: vec![
+            vec![malformed_neg_risk_event(), valid_neg_risk_event()],
+            Vec::new(),
+        ],
+    })
+}
+
+#[allow(dead_code)]
+pub fn scripted_metadata_api_with_all_malformed() -> Arc<dyn PolymarketMetadataApi> {
+    Arc::new(ScriptedMetadataApi {
         pages: vec![vec![malformed_neg_risk_event()], Vec::new()],
-    }))
+    })
+}
+
+#[allow(dead_code)]
+pub fn scripted_metadata_api_valid_then_all_malformed() -> Arc<dyn PolymarketMetadataApi> {
+    Arc::new(SequencedMetadataApi {
+        refreshes: vec![
+            vec![
+                vec![malformed_neg_risk_event(), valid_neg_risk_event()],
+                Vec::new(),
+            ],
+            vec![vec![malformed_neg_risk_event()], Vec::new()],
+        ],
+        current_refresh: Mutex::new(None),
+    })
 }
 
 fn malformed_neg_risk_event() -> GammaEvent {
@@ -366,6 +433,27 @@ pub fn sample_client_for(base_url: Url) -> PolymarketRestClient {
         base_url,
         None,
     )
+}
+
+#[allow(dead_code)]
+pub fn sample_client_with_injected_metadata_api_and_instrumentation(
+    metadata_api: Arc<dyn PolymarketMetadataApi>,
+    recorder: RuntimeMetricsRecorder,
+) -> PolymarketRestClient {
+    let base_url = Url::parse("http://127.0.0.1:1/").expect("dummy metadata url");
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("test client");
+
+    PolymarketRestClient::with_http_client(
+        client,
+        base_url.clone(),
+        base_url.clone(),
+        base_url,
+        Some(VenueProducerInstrumentation::enabled(recorder)),
+    )
+    .with_metadata_api(metadata_api)
 }
 
 #[allow(dead_code)]

@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::errors::PolymarketGatewayError;
+use crate::instrumentation::VenueProducerInstrumentation;
 use crate::rest::{PolymarketRestClient, RestError};
 use crate::sdk_backend::PolymarketMetadataApi;
 
@@ -117,6 +118,31 @@ struct NegRiskDiscoverySnapshot {
     #[allow(dead_code)]
     metadata_snapshot_hash: String,
     rows: Vec<NegRiskMarketMetadata>,
+}
+
+#[derive(Debug)]
+struct MetadataRefreshOutcome {
+    rows: Vec<NegRiskMarketMetadata>,
+    discovery_revision: i64,
+    metadata_snapshot_hash: String,
+}
+
+#[derive(Debug)]
+enum MetadataApiRefreshError {
+    Gateway(PolymarketGatewayError),
+    Metadata(NegRiskMetadataError),
+}
+
+impl From<PolymarketGatewayError> for MetadataApiRefreshError {
+    fn from(value: PolymarketGatewayError) -> Self {
+        Self::Gateway(value)
+    }
+}
+
+impl From<NegRiskMetadataError> for MetadataApiRefreshError {
+    fn from(value: NegRiskMetadataError) -> Self {
+        Self::Metadata(value)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,9 +279,46 @@ pub(crate) async fn refresh_neg_risk_metadata_from_api(
     state: &Arc<Mutex<NegRiskMetadataCache>>,
     lock: &Arc<AsyncMutex<()>>,
 ) -> Result<Vec<NegRiskMarketMetadata>, PolymarketGatewayError> {
+    refresh_neg_risk_metadata_from_api_inner(api, state, lock)
+        .await
+        .map(|outcome| outcome.rows)
+        .map_err(map_gateway_metadata_refresh_error)
+}
+
+async fn refresh_neg_risk_metadata_from_api_for_legacy_shell(
+    api: &dyn PolymarketMetadataApi,
+    state: &Arc<Mutex<NegRiskMetadataCache>>,
+    lock: &Arc<AsyncMutex<()>>,
+    instrumentation: &VenueProducerInstrumentation,
+) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
+    instrumentation.record_metadata_refresh_started();
+    let refresh_started_at = Instant::now();
+
+    match refresh_neg_risk_metadata_from_api_inner(api, state, lock).await {
+        Ok(outcome) => {
+            instrumentation.record_metadata_refresh_success(
+                outcome.discovery_revision,
+                &outcome.metadata_snapshot_hash,
+                count_distinct_families(&outcome.rows),
+                elapsed_millis(refresh_started_at),
+            );
+            Ok(outcome.rows)
+        }
+        Err(error) => {
+            instrumentation.record_metadata_refresh_failure(elapsed_millis(refresh_started_at));
+            Err(map_legacy_metadata_refresh_error(error))
+        }
+    }
+}
+
+async fn refresh_neg_risk_metadata_from_api_inner(
+    api: &dyn PolymarketMetadataApi,
+    state: &Arc<Mutex<NegRiskMetadataCache>>,
+    lock: &Arc<AsyncMutex<()>>,
+) -> Result<MetadataRefreshOutcome, MetadataApiRefreshError> {
     let _refresh_guard = lock.lock().await;
-    let mut cache = state.lock().expect("neg-risk metadata cache poisoned");
     let discovery = discover_neg_risk_metadata_rows_from_api(api).await?;
+    let mut cache = state.lock().expect("neg-risk metadata cache poisoned");
 
     let NegRiskDiscovery {
         rows,
@@ -271,7 +334,7 @@ pub(crate) async fn refresh_neg_risk_metadata_from_api(
         .collect::<Vec<_>>();
     let snapshot = NegRiskDiscoverySnapshot {
         discovery_revision,
-        metadata_snapshot_hash,
+        metadata_snapshot_hash: metadata_snapshot_hash.clone(),
         rows: rows.clone(),
     };
 
@@ -279,12 +342,16 @@ pub(crate) async fn refresh_neg_risk_metadata_from_api(
         cache.history.push(previous);
     }
 
-    Ok(rows)
+    Ok(MetadataRefreshOutcome {
+        rows,
+        discovery_revision,
+        metadata_snapshot_hash,
+    })
 }
 
 async fn discover_neg_risk_metadata_rows_from_api(
     api: &dyn PolymarketMetadataApi,
-) -> Result<NegRiskDiscovery, PolymarketGatewayError> {
+) -> Result<NegRiskDiscovery, MetadataApiRefreshError> {
     let fetcher = GatewayMetadataFetcher { api };
     let mut rows = Vec::<CanonicalNegRiskRow>::new();
     let mut seen = HashMap::<NegRiskMemberKey, usize>::new();
@@ -373,16 +440,14 @@ async fn discover_neg_risk_metadata_rows_from_api(
                 if let Some(existing_index) = seen.get(&key).copied() {
                     let existing = &rows[existing_index];
                     if existing != &row {
-                        return Err(PolymarketGatewayError::policy(
-                            NegRiskMetadataError::ConflictingDuplicateRow {
-                                event_family_id: row.event_family_id,
-                                condition_id: row.condition_id,
-                                token_id: row.token_id,
-                                existing_outcome_label: existing.outcome_label.clone(),
-                                incoming_outcome_label: row.outcome_label,
-                            }
-                            .to_string(),
-                        ));
+                        return Err(NegRiskMetadataError::ConflictingDuplicateRow {
+                            event_family_id: row.event_family_id,
+                            condition_id: row.condition_id,
+                            token_id: row.token_id,
+                            existing_outcome_label: existing.outcome_label.clone(),
+                            incoming_outcome_label: row.outcome_label,
+                        }
+                        .into());
                     }
                     continue;
                 }
@@ -400,12 +465,10 @@ async fn discover_neg_risk_metadata_rows_from_api(
     }
 
     if rows.is_empty() && skipped_malformed_rows > 0 {
-        return Err(PolymarketGatewayError::policy(
-            NegRiskMetadataError::NoValidRowsAfterFiltering {
-                skipped_rows: skipped_malformed_rows,
-            }
-            .to_string(),
-        ));
+        return Err(NegRiskMetadataError::NoValidRowsAfterFiltering {
+            skipped_rows: skipped_malformed_rows,
+        }
+        .into());
     }
 
     canonicalize_rows(&mut rows);
@@ -416,12 +479,50 @@ async fn discover_neg_risk_metadata_rows_from_api(
     })
 }
 
+fn map_gateway_metadata_refresh_error(error: MetadataApiRefreshError) -> PolymarketGatewayError {
+    match error {
+        MetadataApiRefreshError::Gateway(error) => error,
+        MetadataApiRefreshError::Metadata(error) => error.into(),
+    }
+}
+
+fn map_legacy_metadata_refresh_error(error: MetadataApiRefreshError) -> RestError {
+    match error {
+        MetadataApiRefreshError::Gateway(error) => RestError::Gateway(error),
+        MetadataApiRefreshError::Metadata(error) => RestError::Metadata(error),
+    }
+}
+
 impl PolymarketRestClient {
     /// Attempts a refresh and falls back to the last successful snapshot on failure.
     /// Call `try_fetch_neg_risk_metadata_rows` when callers need the hard error instead.
     pub async fn fetch_neg_risk_metadata_rows(
         &self,
     ) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
+        if let Some(metadata_api) = &self.metadata_api {
+            return match refresh_neg_risk_metadata_from_api_for_legacy_shell(
+                metadata_api.as_ref(),
+                &self.metadata_state,
+                &self.metadata_refresh_lock,
+                &self.instrumentation,
+            )
+            .await
+            {
+                Ok(rows) => Ok(rows),
+                Err(err) => {
+                    let cache = self
+                        .metadata_state
+                        .lock()
+                        .expect("neg-risk metadata cache poisoned");
+
+                    if let Some(snapshot) = &cache.current {
+                        Ok(snapshot.rows.clone())
+                    } else {
+                        Err(err)
+                    }
+                }
+            };
+        }
         match self.try_fetch_neg_risk_metadata_rows().await {
             Ok(rows) => Ok(rows),
             Err(err) => {
@@ -442,6 +543,15 @@ impl PolymarketRestClient {
     pub async fn try_fetch_neg_risk_metadata_rows(
         &self,
     ) -> Result<Vec<NegRiskMarketMetadata>, RestError> {
+        if let Some(metadata_api) = &self.metadata_api {
+            return refresh_neg_risk_metadata_from_api_for_legacy_shell(
+                metadata_api.as_ref(),
+                &self.metadata_state,
+                &self.metadata_refresh_lock,
+                &self.instrumentation,
+            )
+            .await;
+        }
         let _refresh_guard = self.metadata_refresh_lock.lock().await;
         self.instrumentation.record_metadata_refresh_started();
         let refresh_started_at = Instant::now();
@@ -819,6 +929,7 @@ fn is_retryable_metadata_error(error: &RestError) -> bool {
         }
         RestError::Metadata(_)
         | RestError::Auth(_)
+        | RestError::Gateway(_)
         | RestError::Url(_)
         | RestError::MissingField(_) => false,
     }
