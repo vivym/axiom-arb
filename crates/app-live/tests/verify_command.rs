@@ -27,8 +27,8 @@ fn verify_subcommand_is_exposed() {
 }
 
 #[test]
-fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_no_live_attempts_exist(
-) {
+fn verify_paper_passes_with_warnings_when_basic_run_evidence_is_incomplete_but_no_live_attempts_exist()
+ {
     let verify_db = verify_db::TestDatabase::new();
 
     let output = Command::new(cli::app_live_binary())
@@ -192,33 +192,18 @@ fn verify_live_passes_when_local_results_match_current_config_and_control_plane(
 }
 
 #[test]
-fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
+fn verify_fails_if_any_active_route_fails() {
     let verify_db = verify_db::TestDatabase::new();
     let config_path = verify_db::temp_config_path(
-        "app-live-verify-live-neg-risk-only",
+        "app-live-verify-live-multi-route",
         &verify_db::live_ready_config(),
     );
     verify_db.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-9"));
-    let session = verify_db.sample_run_session(
-        "rs-live-2",
-        "run",
-        "live",
-        &config_path,
-        "adopted",
-        "targets-rev-9",
-        Some("targets-rev-9"),
-        Some("targets-rev-9"),
-        Some("ready"),
-        false,
-        RunSessionState::Running,
-        Utc::now() - Duration::minutes(2),
-        Utc::now() - Duration::minutes(1),
-    );
-    verify_db.seed_run_session(session);
+    verify_db.seed_live_attempt_with_artifacts("attempt-live-neg-risk");
     verify_db.seed_attempt(verify_db::sample_attempt_for_route(
-        "attempt-live-other-route",
-        ExecutionMode::Live,
-        "other-route",
+        "attempt-shadow-full-set",
+        ExecutionMode::Shadow,
+        "full-set",
     ));
 
     let output = Command::new(cli::app_live_binary())
@@ -232,7 +217,8 @@ fn verify_live_latest_window_ignores_non_neg_risk_live_attempts() {
     let text = cli::combined(&output);
     assert!(text.contains("Scenario: live"), "{text}");
     assert!(text.contains("Verdict: FAIL"), "{text}");
-    assert!(text.contains("no live results were observed"), "{text}");
+    assert!(text.contains("Route neg-risk: PASS"), "{text}");
+    assert!(text.contains("Route full-set: FAIL"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -668,7 +654,7 @@ fn verify_smoke_fails_when_a_durable_live_attempt_is_present_outside_the_shadow_
 
     let text = cli::combined(&output);
     assert!(text.contains("Verdict: FAIL"), "{text}");
-    assert!(text.contains("forbidden live side effects"), "{text}");
+    assert!(text.contains("credible live strategy attempts"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -705,21 +691,21 @@ fn verify_smoke_default_window_reflects_the_latest_smoke_rerun_only() {
 }
 
 #[test]
-fn verify_smoke_latest_window_ignores_newer_non_neg_risk_shadow_snapshots() {
+fn verify_smoke_rejects_live_attempts_from_any_risk_expanding_route() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_shadow_attempt_with_artifacts_in_snapshot(
         "attempt-shadow-neg-risk",
-        "snapshot-smoke-neg-risk",
+        "snapshot-smoke-shared",
     );
     verify_db.seed_attempt(verify_db::sample_attempt_in_snapshot_for_route(
-        "attempt-shadow-other-route",
-        ExecutionMode::Shadow,
-        "snapshot-smoke-other-route",
-        "other-route",
+        "attempt-live-full-set",
+        ExecutionMode::Live,
+        "snapshot-smoke-shared",
+        "full-set",
     ));
     verify_db.seed_smoke_runtime_progress("targets-rev-9");
     let config_path = verify_db::temp_config_path(
-        "app-live-verify-smoke-neg-risk-anchor",
+        "app-live-verify-smoke-multi-route",
         &verify_db::config_shapes::smoke_ready_config(),
     );
 
@@ -733,8 +719,9 @@ fn verify_smoke_latest_window_ignores_newer_non_neg_risk_shadow_snapshots() {
 
     let text = cli::combined(&output);
     assert!(text.contains("Scenario: real-user shadow smoke"), "{text}");
-    assert!(text.contains("Verdict: PASS"), "{text}");
-    assert!(text.contains("shadow attempts: 1"), "{text}");
+    assert!(text.contains("Verdict: FAIL"), "{text}");
+    assert!(text.contains("credible live strategy attempts"), "{text}");
+    assert!(text.contains("Route full-set: FAIL"), "{text}");
 
     verify_db.cleanup();
     let _ = fs::remove_file(config_path);
@@ -850,7 +837,7 @@ fn verify_live_rollout_required_uses_concrete_rollout_enablement_guidance() {
     assert!(text.contains("Verdict: PASS WITH WARNINGS"), "{text}");
     assert!(
         text.contains(&format!(
-            "Next: edit {} and set [negrisk.rollout].approved_families and ready_families for adopted families",
+            "Next: edit {} and set [strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes",
             cli::shell_quote_path(&config_path)
         )),
         "{text}"
