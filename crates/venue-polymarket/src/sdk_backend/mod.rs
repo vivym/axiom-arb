@@ -4,5 +4,7 @@
 //! remain available for existing callers.
 
 pub mod clob;
+pub mod ws;
 
 pub use clob::{LiveClobSdkApi, PolymarketClobApi};
+pub use ws::{LiveWsSdkApi, PolymarketStreamApi};

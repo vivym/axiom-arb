@@ -27,7 +27,7 @@ pub use domain::{MarketRoute, NegRiskVariant};
 pub use errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
 pub use gateway::{
     PolymarketGateway, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary, PolymarketOrderQuery,
-    PolymarketSignedOrder, PolymarketSubmitResponse,
+    PolymarketSignedOrder, PolymarketSubmitResponse, PolymarketUserStreamAuth,
 };
 pub use heartbeat::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
@@ -46,7 +46,7 @@ pub use rest::{
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
 #[doc(hidden)]
-pub use sdk_backend::{LiveClobSdkApi, PolymarketClobApi};
+pub use sdk_backend::{LiveClobSdkApi, LiveWsSdkApi, PolymarketClobApi, PolymarketStreamApi};
 pub use url::Url as PolymarketUrl;
 pub use ws_client::{
     PolymarketWsClient, WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp,

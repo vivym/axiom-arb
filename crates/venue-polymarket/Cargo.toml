@@ -10,7 +10,7 @@ domain = { path = "../domain" }
 futures-util = "0.3.31"
 observability = { path = "../observability" }
 execution = { path = "../execution" }
-polymarket-client-sdk = { version = "0.4.4", features = ["clob"] }
+polymarket-client-sdk = { version = "0.4.4", features = ["clob", "ws"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }

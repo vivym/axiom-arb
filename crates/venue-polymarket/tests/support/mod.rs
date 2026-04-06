@@ -22,9 +22,10 @@ use tracing::{
     Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
-    L2AuthHeaders, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
-    PolymarketHeartbeatStatus, PolymarketOpenOrderSummary, PolymarketRestClient,
-    PolymarketSignedOrder, PolymarketSubmitResponse, RelayerAuth, SignerContext,
+    L2AuthHeaders, MarketTradePriceUpdate, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
+    PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
+    PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
+    PolymarketUserStreamAuth, RelayerAuth, SignerContext, UserTradeUpdate, UserWsEvent,
     VenueProducerInstrumentation,
 };
 
@@ -56,6 +57,30 @@ impl PolymarketClobApi for ScriptedClobApi {
         _previous_heartbeat_id: Option<&str>,
     ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
         Ok(self.heartbeat.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScriptedStreamApi {
+    market_events: Vec<MarketWsEvent>,
+    user_events: Vec<UserWsEvent>,
+}
+
+#[async_trait]
+impl PolymarketStreamApi for ScriptedStreamApi {
+    async fn market_events(
+        &self,
+        _token_ids: &[String],
+    ) -> Result<Vec<MarketWsEvent>, PolymarketGatewayError> {
+        Ok(self.market_events.clone())
+    }
+
+    async fn user_events(
+        &self,
+        _auth: &PolymarketUserStreamAuth,
+        _condition_ids: &[String],
+    ) -> Result<Vec<UserWsEvent>, PolymarketGatewayError> {
+        Ok(self.user_events.clone())
     }
 }
 
@@ -139,6 +164,57 @@ pub fn scripted_gateway_with_submit_rejection(status: u16, body: &str) -> Polyma
         submit_result: Err(PolymarketGatewayError::upstream_response(format!(
             "{status}: {body}"
         ))),
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_market_trade_event() -> MarketWsEvent {
+    MarketWsEvent::LastTradePrice(MarketTradePriceUpdate {
+        asset_id: "token-1".to_owned(),
+        price: "0.41".to_owned(),
+        size: Some("100".to_owned()),
+        event_ts: None,
+    })
+}
+
+#[allow(dead_code)]
+pub fn scripted_user_trade_event() -> UserWsEvent {
+    UserWsEvent::Trade(UserTradeUpdate {
+        trade_id: "trade-1".to_owned(),
+        order_id: "order-1".to_owned(),
+        status: "MATCHED".to_owned(),
+        condition_id: "condition-1".to_owned(),
+        price: Some("0.41".to_owned()),
+        size: Some("100".to_owned()),
+        fee_rate_bps: Some("15".to_owned()),
+        transaction_hash: Some("0xtrade".to_owned()),
+        event_ts: None,
+    })
+}
+
+#[allow(dead_code)]
+pub fn sample_user_stream_auth() -> PolymarketUserStreamAuth {
+    PolymarketUserStreamAuth {
+        address: "0x1111111111111111111111111111111111111111".to_owned(),
+        api_key: "550e8400-e29b-41d4-a716-446655440000".to_owned(),
+        secret: "secret-1".to_owned(),
+        passphrase: "passphrase-1".to_owned(),
+    }
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_market_events(events: Vec<MarketWsEvent>) -> PolymarketGateway {
+    PolymarketGateway::from_stream_api(Arc::new(ScriptedStreamApi {
+        market_events: events,
+        user_events: Vec::new(),
+    }))
+}
+
+#[allow(dead_code)]
+pub fn scripted_gateway_with_user_events(events: Vec<UserWsEvent>) -> PolymarketGateway {
+    PolymarketGateway::from_stream_api(Arc::new(ScriptedStreamApi {
+        market_events: Vec::new(),
+        user_events: events,
     }))
 }
 
