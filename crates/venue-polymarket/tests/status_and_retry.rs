@@ -139,7 +139,7 @@ fn open_orders_request_uses_authenticated_signer_context() {
         .expect("request should build");
 
     assert_eq!(request.method().as_str(), "GET");
-    assert_eq!(request.url().path(), "/orders");
+    assert_eq!(request.url().path(), "/data/orders");
     assert_eq!(header_value(request.headers(), "poly-address"), "0xowner");
     assert!(request
         .url()
@@ -228,7 +228,7 @@ async fn fetch_open_orders_preserves_authenticated_error_body() {
         .expect_err("non-2xx should preserve authenticated error details");
     let request = server.finish();
 
-    assert!(request.starts_with("GET /orders?"));
+    assert!(request.starts_with("GET /data/orders?"));
     assert!(request.contains("poly-address: 0xowner"));
     match err {
         RestError::HttpResponse { status, body } => {

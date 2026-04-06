@@ -1080,20 +1080,26 @@ fn content_length_from_headers(headers: &str) -> usize {
 fn http_probe_response<'a>(
     request_line: &str,
     behavior: &'a ProbeHttpBehavior,
-) -> (&'a str, &'a str) {
+) -> (&'a str, String) {
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
     let path = target.split('?').next().unwrap_or_default();
 
     match (method, path) {
-        ("GET", "/orders") => (&behavior.orders_status_line, &behavior.orders_body),
-        ("POST", "/heartbeat") => (&behavior.heartbeat_status_line, &behavior.heartbeat_body),
+        ("GET", "/data/orders") => (&behavior.orders_status_line, behavior.orders_body.clone()),
+        ("POST", "/v1/heartbeats") => (
+            &behavior.heartbeat_status_line,
+            behavior.heartbeat_body.clone(),
+        ),
         ("GET", "/transactions") => (
             &behavior.transactions_status_line,
-            &behavior.transactions_body,
+            behavior.transactions_body.clone(),
         ),
-        _ => ("404 Not Found", r#"{"error":"not found"}"#),
+        _ => (
+            "404 Not Found",
+            format!(r#"{{"error":"not found","request_line":"{request_line}"}}"#),
+        ),
     }
 }
 

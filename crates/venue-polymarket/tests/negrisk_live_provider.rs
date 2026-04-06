@@ -225,7 +225,7 @@ async fn polymarket_reconcile_provider_confirms_matching_open_order_for_order_pe
     }
 
     let request = server.finish();
-    assert!(request.starts_with("GET /orders?"));
+    assert!(request.starts_with("GET /data/orders?"));
     assert!(request.contains("poly-address: 0xowner"));
 }
 

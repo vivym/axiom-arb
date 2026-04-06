@@ -148,7 +148,7 @@ async fn heartbeat_fetch_maps_success_payload_into_monitor_input() {
         }
     );
     let request = server.finish();
-    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.starts_with("POST /v1/heartbeats HTTP/1.1"));
     assert!(request.contains("poly-api-key: key-1"));
     assert!(request.contains(r#""heartbeat_id":"hb-41""#));
 }
@@ -174,7 +174,7 @@ async fn heartbeat_invalid_response_returns_replacement_id_without_generic_http_
         }
     );
     let request = server.finish();
-    assert!(request.starts_with("POST /heartbeat HTTP/1.1"));
+    assert!(request.starts_with("POST /v1/heartbeats HTTP/1.1"));
     assert!(request.contains(r#""heartbeat_id":"hb-42""#));
 }
 

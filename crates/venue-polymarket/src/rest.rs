@@ -202,7 +202,7 @@ impl PolymarketRestClient {
         previous_heartbeat_id: &str,
     ) -> Result<reqwest::Request, RestError> {
         let headers = build_l2_auth_headers(auth)?;
-        let url = join_url(&self.clob_host, "heartbeat", &[])?;
+        let url = join_url(&self.clob_host, "v1/heartbeats", &[])?;
 
         Ok(self
             .http
@@ -242,7 +242,7 @@ impl PolymarketRestClient {
         &self,
         auth: &L2AuthHeaders<'_>,
     ) -> Result<reqwest::Request, RestError> {
-        self.build_authenticated_get_request(&self.clob_host, "orders", &[], auth)
+        self.build_authenticated_get_request(&self.clob_host, "data/orders", &[], auth)
     }
 
     pub async fn fetch_open_orders(
