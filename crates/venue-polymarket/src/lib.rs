@@ -1,4 +1,6 @@
 mod auth;
+mod errors;
+mod gateway;
 mod heartbeat;
 mod instrumentation;
 mod metadata;
@@ -8,6 +10,7 @@ mod proxy;
 mod relayer;
 mod rest;
 mod retry;
+mod sdk_backend;
 mod ws_client;
 mod ws_market;
 mod ws_session;
@@ -21,6 +24,11 @@ pub use auth::{
     SignerContext,
 };
 pub use domain::{MarketRoute, NegRiskVariant};
+pub use errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
+pub use gateway::{
+    PolymarketGateway, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
+    PolymarketOrderQuery, PolymarketSignedOrder,
+};
 pub use heartbeat::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
 };
