@@ -39,14 +39,18 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
         "non_adoptable_summary = {}",
         summary.non_adoptable_summary()
     );
+    println!(
+        "compatibility_mode = {}",
+        state.compatibility_mode.as_deref().unwrap_or("none")
+    );
 
     if catalog.advisory_candidates.is_empty() {
         println!("advisory = none");
     } else {
         for candidate in &catalog.advisory_candidates {
             println!(
-                "advisory candidate_revision = {} snapshot_id = {}",
-                candidate.candidate_revision, candidate.snapshot_id
+                "advisory strategy_candidate_revision = {} snapshot_id = {}",
+                candidate.strategy_candidate_revision, candidate.snapshot_id
             );
         }
     }
@@ -59,21 +63,23 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
         }
     }
 
-    if let Some(operator_target_revision) = state.configured_operator_target_revision.as_deref() {
+    if let Some(operator_strategy_revision) = state.configured_operator_strategy_revision.as_deref() {
         let adoptable_revision = state
             .provenance
             .as_ref()
-            .map(|row| row.adoptable_revision.as_str())
+            .map(|row| row.adoptable_strategy_revision.as_str())
             .unwrap_or("unavailable");
-        let candidate_revision = state
+        let strategy_candidate_revision = state
             .provenance
             .as_ref()
-            .map(|row| row.candidate_revision.as_str())
+            .map(|row| row.strategy_candidate_revision.as_str())
             .unwrap_or("unavailable");
         println!(
-            "adopted operator_target_revision = {} adoptable_revision = {} candidate_revision = {}",
-            operator_target_revision, adoptable_revision, candidate_revision
+            "adopted operator_strategy_revision = {} adoptable_revision = {} strategy_candidate_revision = {}",
+            operator_strategy_revision, adoptable_revision, strategy_candidate_revision
         );
+    } else if let Some(mode) = state.compatibility_mode.as_deref() {
+        println!("adopted = compatibility:{mode}");
     } else {
         println!("adopted = none");
     }
@@ -85,10 +91,10 @@ pub(crate) fn adoptable_revision_lines(catalog: &TargetCandidatesCatalog) -> Vec
         .iter()
         .map(|adoptable| {
             format!(
-                "adoptable adoptable_revision = {} candidate_revision = {} operator_target_revision = {}",
-                adoptable.adoptable_revision,
-                adoptable.candidate_revision,
-                adoptable.rendered_operator_target_revision
+                "adoptable adoptable_revision = {} strategy_candidate_revision = {} operator_strategy_revision = {}",
+                adoptable.adoptable_strategy_revision,
+                adoptable.strategy_candidate_revision,
+                adoptable.rendered_operator_strategy_revision
             )
         })
         .collect()

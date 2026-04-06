@@ -9,13 +9,13 @@ use std::{
 use persistence::{
     models::{
         AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        OperatorTargetAdoptionHistoryRow, RuntimeProgressRow,
+        OperatorStrategyAdoptionHistoryRow, RuntimeProgressRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
-    OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo,
+    RuntimeProgressRepo,
 };
 use serde_json::json;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 use super::cli::default_test_database_url;
 
@@ -201,12 +201,35 @@ impl TestDatabase {
         });
     }
 
-    pub fn latest_history(&self) -> Option<OperatorTargetAdoptionHistoryRow> {
+    pub fn latest_history(&self) -> Option<OperatorStrategyAdoptionHistoryRow> {
         self.runtime.block_on(async {
-            OperatorTargetAdoptionHistoryRepo
-                .latest(&self.pool)
-                .await
-                .expect("history lookup should succeed")
+            sqlx::query(
+                r#"
+                SELECT
+                    adoption_id,
+                    action_kind,
+                    operator_strategy_revision,
+                    previous_operator_strategy_revision,
+                    adoptable_strategy_revision,
+                    strategy_candidate_revision,
+                    adopted_at
+                FROM operator_strategy_adoption_history
+                ORDER BY history_seq DESC
+                LIMIT 1
+                "#,
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .expect("history lookup should succeed")
+            .map(|row| OperatorStrategyAdoptionHistoryRow {
+                adoption_id: row.get("adoption_id"),
+                action_kind: row.get("action_kind"),
+                operator_strategy_revision: row.get("operator_strategy_revision"),
+                previous_operator_strategy_revision: row.get("previous_operator_strategy_revision"),
+                adoptable_strategy_revision: row.get("adoptable_strategy_revision"),
+                strategy_candidate_revision: row.get("strategy_candidate_revision"),
+                adopted_at: row.get("adopted_at"),
+            })
         })
     }
 

@@ -2,17 +2,19 @@ use std::error::Error;
 
 use chrono::Utc;
 use persistence::{
-    connect_pool_from_env, models::OperatorTargetAdoptionHistoryRow,
-    OperatorTargetAdoptionHistoryRepo,
+    connect_pool_from_env, models::OperatorStrategyAdoptionHistoryRow,
+    OperatorStrategyAdoptionHistoryRepo,
 };
 
 use crate::{
     cli::TargetRollbackArgs,
     commands::targets::{
-        config_file::rewrite_operator_target_revision,
+        config_file::rewrite_operator_strategy_revision,
         state::{
-            configured_operator_target_revision, load_active_operator_target_revision,
-            resolve_rollback_selection, ResolvedAdoptionSelection,
+            compatibility_mode, configured_operator_strategy_revision,
+            load_active_operator_strategy_revision, resolve_rollback_selection,
+            synthetic_strategy_revision_for_legacy_explicit_config,
+            ResolvedStrategyAdoptionSelection,
         },
     },
 };
@@ -33,33 +35,47 @@ fn execute_inner(args: TargetRollbackArgs) -> Result<(), Box<dyn Error>> {
 
     let summary = runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        let previous_operator_target_revision = configured_operator_target_revision(&args.config)?;
-        let active_operator_target_revision = load_active_operator_target_revision(&pool).await?;
+        let compatibility_mode = compatibility_mode(&args.config)?;
+        let previous_operator_strategy_revision = configured_operator_strategy_revision(&args.config)?
+            .or_else(|| {
+                compatibility_mode
+                    .as_deref()
+                    .map(|_| synthetic_strategy_revision_for_legacy_explicit_config(&args.config))
+                    .transpose()
+                    .ok()
+                    .flatten()
+            });
         let selection = resolve_rollback_selection(
             &pool,
-            previous_operator_target_revision.as_deref(),
-            args.to_operator_target_revision.as_deref(),
+            compatibility_mode.as_deref(),
+            previous_operator_strategy_revision.as_deref(),
+            args.to_operator_strategy_revision.as_deref(),
         )
         .await?;
-        let changed = previous_operator_target_revision.as_deref()
-            != Some(selection.operator_target_revision.as_str());
-        let restart_required = active_operator_target_revision
+        let active_operator_strategy_revision = load_active_operator_strategy_revision(
+            &pool,
+            Some(selection.operator_strategy_revision.as_str()),
+        )
+        .await?;
+        let changed = previous_operator_strategy_revision.as_deref()
+            != Some(selection.operator_strategy_revision.as_str());
+        let restart_required = active_operator_strategy_revision
             .as_deref()
-            .map(|active| active != selection.operator_target_revision);
+            .map(|active| active != selection.operator_strategy_revision);
 
         if changed {
             let history_row =
-                build_rollback_history_row(previous_operator_target_revision.clone(), &selection);
-            OperatorTargetAdoptionHistoryRepo
+                build_rollback_history_row(previous_operator_strategy_revision.clone(), &selection);
+            OperatorStrategyAdoptionHistoryRepo
                 .append(&pool, &history_row)
                 .await?;
-            rewrite_operator_target_revision(&args.config, &selection.operator_target_revision)?;
+            rewrite_operator_strategy_revision(&args.config, &selection.operator_strategy_revision)?;
         }
 
         Ok::<_, Box<dyn Error>>(RollbackSummary {
             selection,
-            previous_operator_target_revision: if changed {
-                previous_operator_target_revision
+            previous_operator_strategy_revision: if changed {
+                previous_operator_strategy_revision
             } else {
                 None
             },
@@ -72,42 +88,41 @@ fn execute_inner(args: TargetRollbackArgs) -> Result<(), Box<dyn Error>> {
 }
 
 fn build_rollback_history_row(
-    previous_operator_target_revision: Option<String>,
-    selection: &ResolvedAdoptionSelection,
-) -> OperatorTargetAdoptionHistoryRow {
-    OperatorTargetAdoptionHistoryRow {
+    previous_operator_strategy_revision: Option<String>,
+    selection: &ResolvedStrategyAdoptionSelection,
+) -> OperatorStrategyAdoptionHistoryRow {
+    OperatorStrategyAdoptionHistoryRow {
         adoption_id: format!(
             "rollback-{}-{}",
             Utc::now()
                 .timestamp_nanos_opt()
                 .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000),
-            selection.operator_target_revision
+            selection.operator_strategy_revision
         ),
         action_kind: "rollback".to_owned(),
-        operator_target_revision: selection.operator_target_revision.clone(),
-        previous_operator_target_revision,
-        // Rollback rows deliberately carry no lineage; adopt rows remain the durable source.
-        adoptable_revision: None,
-        candidate_revision: None,
+        operator_strategy_revision: selection.operator_strategy_revision.clone(),
+        previous_operator_strategy_revision,
+        adoptable_strategy_revision: None,
+        strategy_candidate_revision: None,
         adopted_at: Utc::now(),
     }
 }
 
 struct RollbackSummary {
-    selection: ResolvedAdoptionSelection,
-    previous_operator_target_revision: Option<String>,
+    selection: ResolvedStrategyAdoptionSelection,
+    previous_operator_strategy_revision: Option<String>,
     restart_required: Option<bool>,
 }
 
 fn print_summary(summary: &RollbackSummary) {
     println!(
-        "operator_target_revision = {}",
-        summary.selection.operator_target_revision
+        "operator_strategy_revision = {}",
+        summary.selection.operator_strategy_revision
     );
     println!(
-        "previous_operator_target_revision = {}",
+        "previous_operator_strategy_revision = {}",
         summary
-            .previous_operator_target_revision
+            .previous_operator_strategy_revision
             .as_deref()
             .unwrap_or("unavailable")
     );
@@ -120,10 +135,10 @@ fn print_summary(summary: &RollbackSummary) {
             .unwrap_or("unavailable")
     );
     println!(
-        "candidate_revision = {}",
+        "migration_source = {}",
         summary
             .selection
-            .candidate_revision
+            .migration_source
             .as_deref()
             .unwrap_or("unavailable")
     );
@@ -144,21 +159,21 @@ mod tests {
     #[test]
     fn rollback_history_rows_do_not_persist_candidate_lineage() {
         let row = build_rollback_history_row(
-            Some("targets-rev-9".to_owned()),
-            &ResolvedAdoptionSelection {
-                operator_target_revision: "targets-rev-8".to_owned(),
+            Some("strategy-rev-9".to_owned()),
+            &ResolvedStrategyAdoptionSelection {
+                operator_strategy_revision: "strategy-rev-8".to_owned(),
                 adoptable_revision: Some("adoptable-8".to_owned()),
-                candidate_revision: Some("candidate-8".to_owned()),
+                migration_source: None,
             },
         );
 
         assert_eq!(row.action_kind, "rollback");
         assert_eq!(
-            row.previous_operator_target_revision.as_deref(),
-            Some("targets-rev-9")
+            row.previous_operator_strategy_revision.as_deref(),
+            Some("strategy-rev-9")
         );
-        assert_eq!(row.operator_target_revision, "targets-rev-8");
-        assert_eq!(row.adoptable_revision, None);
-        assert_eq!(row.candidate_revision, None);
+        assert_eq!(row.operator_strategy_revision, "strategy-rev-8");
+        assert_eq!(row.adoptable_strategy_revision, None);
+        assert_eq!(row.strategy_candidate_revision, None);
     }
 }

@@ -23,12 +23,16 @@ pub fn execute(args: TargetStatusArgs) -> Result<(), Box<dyn Error>> {
 
 fn print_status(state: &TargetControlPlaneState) {
     println!(
-        "configured_operator_target_revision = {}",
-        optional_revision(state.configured_operator_target_revision.as_deref())
+        "configured_operator_strategy_revision = {}",
+        optional_revision(state.configured_operator_strategy_revision.as_deref())
     );
     println!(
-        "active_operator_target_revision = {}",
-        optional_revision(state.active_operator_target_revision.as_deref())
+        "active_operator_strategy_revision = {}",
+        optional_revision(state.active_operator_strategy_revision.as_deref())
+    );
+    println!(
+        "compatibility_mode = {}",
+        state.compatibility_mode.as_deref().unwrap_or("none")
     );
     println!(
         "restart_needed = {}",
@@ -47,7 +51,7 @@ fn print_status(state: &TargetControlPlaneState) {
         state
             .latest_action
             .as_ref()
-            .map(|row| format!("{}:{}", row.action_kind, row.operator_target_revision))
+            .map(|row| format!("{}:{}", row.action_kind, row.operator_strategy_revision))
             .unwrap_or_else(|| "unavailable".to_owned())
     );
 }

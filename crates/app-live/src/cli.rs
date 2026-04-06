@@ -98,11 +98,14 @@ pub struct TargetAdoptArgs {
     #[arg(long)]
     pub config: PathBuf,
 
-    #[arg(long)]
-    pub operator_target_revision: Option<String>,
+    #[arg(long = "operator-strategy-revision", alias = "operator-target-revision")]
+    pub operator_strategy_revision: Option<String>,
 
     #[arg(long)]
     pub adoptable_revision: Option<String>,
+
+    #[arg(long)]
+    pub adopt_compatibility: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -110,8 +113,8 @@ pub struct TargetRollbackArgs {
     #[arg(long)]
     pub config: PathBuf,
 
-    #[arg(long = "to-operator-target-revision")]
-    pub to_operator_target_revision: Option<String>,
+    #[arg(long = "to-operator-strategy-revision", alias = "to-operator-target-revision")]
+    pub to_operator_strategy_revision: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]

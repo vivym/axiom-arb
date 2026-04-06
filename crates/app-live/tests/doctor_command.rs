@@ -487,11 +487,11 @@ operator_target_revision = "targets-rev-9"
     assert_section_summary(&combined, "Target Source", "PASS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert!(
-        combined.contains("configured operator target revision"),
+        combined.contains("configured operator strategy revision"),
         "{combined}"
     );
     assert!(
-        combined.contains("active operator target revision"),
+        combined.contains("active operator strategy revision"),
         "{combined}"
     );
     assert!(combined.contains("restart not needed"), "{combined}");

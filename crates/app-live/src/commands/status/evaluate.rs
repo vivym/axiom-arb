@@ -13,7 +13,8 @@ use super::model::{
     StatusTargetSource,
 };
 use crate::commands::targets::state::{
-    load_target_candidates_catalog, load_target_control_plane_state, summarize_target_candidates,
+    load_target_candidates_catalog, load_target_control_plane_state,
+    normalize_active_operator_strategy_revision, summarize_target_candidates,
     TargetCandidatesSummary, TargetControlPlaneState,
 };
 use crate::startup::resolve_startup_targets;
@@ -151,14 +152,21 @@ fn adopted_summary(
                 .map_err(|error| error.to_string())?;
             let active_operator_target_revision = progress
                 .as_ref()
-                .and_then(|progress| progress.operator_target_revision.clone());
-            let active_operator_strategy_revision =
-                progress.and_then(|progress| progress.operator_strategy_revision);
+                .and_then(|progress| progress.operator_target_revision.as_deref());
+            let active_operator_strategy_revision = progress
+                .as_ref()
+                .and_then(|progress| progress.operator_strategy_revision.as_deref());
+            let active_operator_strategy_revision = normalize_active_operator_strategy_revision(
+                config.operator_strategy_revision(),
+                active_operator_target_revision,
+                active_operator_strategy_revision,
+            );
             (
                 TargetControlPlaneState {
-                    configured_operator_target_revision: None,
-                    active_operator_target_revision,
+                    configured_operator_strategy_revision: None,
+                    active_operator_strategy_revision: active_operator_strategy_revision.clone(),
                     restart_needed: None,
+                    compatibility_mode: None,
                     provenance: None,
                     latest_action: None,
                 },
@@ -173,7 +181,7 @@ fn adopted_summary(
     } else {
         StatusMode::Live
     };
-    let configured_revision = match state.configured_operator_target_revision.clone() {
+    let configured_revision = match state.configured_operator_strategy_revision.clone() {
         Some(revision) => revision,
         None if config.target_source().is_none() => match config.operator_strategy_revision() {
             Some(revision) => revision.to_owned(),
@@ -295,9 +303,9 @@ fn adopted_summary(
     let active_revision = if strategy_only_adopted {
         active_operator_strategy_revision
             .clone()
-            .or_else(|| state.active_operator_target_revision.clone())
+            .or_else(|| state.active_operator_strategy_revision.clone())
     } else {
-        state.active_operator_target_revision.clone()
+        state.active_operator_strategy_revision.clone()
     };
     let restart_needed = active_revision
         .as_deref()
@@ -502,7 +510,7 @@ fn pre_adoption_summary(
         readiness,
         details: StatusDetails {
             configured_target: None,
-            active_target: state.active_operator_target_revision.clone(),
+            active_target: state.active_operator_strategy_revision.clone(),
             target_source: Some(StatusTargetSource::AdoptedTargets),
             rollout_state: None,
             restart_needed: state.restart_needed,

@@ -42,7 +42,7 @@ fn bootstrap_empty_db_runs_discover_then_waits_for_explicit_adoption_confirmatio
     );
     assert!(text.contains("Starting discovery"), "{text}");
     assert!(text.contains("Fetching Polymarket metadata"), "{text}");
-    assert!(text.contains("Materializing discovery artifacts"), "{text}");
+    assert!(text.contains("Materializing strategy artifacts"), "{text}");
     assert!(text.contains("Discovery completed"), "{text}");
     assert!(text.contains("Adoptable revisions:"), "{text}");
     assert!(text.contains("Recommended:"), "{text}");
@@ -53,9 +53,9 @@ fn bootstrap_empty_db_runs_discover_then_waits_for_explicit_adoption_confirmatio
     assert!(!text.contains("targets candidates"), "{text}");
     assert!(!text.contains("targets adopt"), "{text}");
 
-    assert!(database.has_candidate_rows());
-    assert!(database.has_adoptable_rows());
-    assert!(!database.has_candidate_provenance_rows());
+    assert!(database.has_strategy_candidate_rows());
+    assert!(database.has_strategy_adoptable_rows());
+    assert!(!database.has_strategy_provenance_rows());
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -179,15 +179,29 @@ fn bootstrap_can_adopt_selected_revision_then_reach_smoke_rollout_boundary() {
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
     assert!(
-        rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        rewritten.contains("[strategy_control]"),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("operator_strategy_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("operator_target_revision ="),
         "{rewritten}"
     );
 
     let latest = database.latest_history().expect("history row should exist");
     assert_eq!(latest.action_kind, "adopt");
-    assert_eq!(latest.operator_target_revision, "targets-rev-9");
-    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
-    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+    assert_eq!(latest.operator_strategy_revision, "targets-rev-9");
+    assert_eq!(
+        latest.adoptable_strategy_revision.as_deref(),
+        Some("adoptable-9")
+    );
+    assert_eq!(
+        latest.strategy_candidate_revision.as_deref(),
+        Some("candidate-9")
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);

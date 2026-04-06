@@ -350,15 +350,29 @@ fn apply_can_inline_smoke_target_adoption() {
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
     assert!(
-        rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        rewritten.contains("[strategy_control]"),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("operator_strategy_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("operator_target_revision ="),
         "{rewritten}"
     );
 
     let latest = database.latest_history().expect("history row should exist");
     assert_eq!(latest.action_kind, "adopt");
-    assert_eq!(latest.operator_target_revision, "targets-rev-9");
-    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
-    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+    assert_eq!(latest.operator_strategy_revision, "targets-rev-9");
+    assert_eq!(
+        latest.adoptable_strategy_revision.as_deref(),
+        Some("adoptable-9")
+    );
+    assert_eq!(
+        latest.strategy_candidate_revision.as_deref(),
+        Some("candidate-9")
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -490,11 +504,11 @@ fn apply_can_inline_smoke_rollout_enablement() {
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
     assert!(
-        rewritten.contains("approved_families = [\"family-a\"]"),
+        rewritten.contains("approved_scopes = [\"family-a\"]"),
         "{rewritten}"
     );
     assert!(
-        rewritten.contains("ready_families = [\"family-a\"]"),
+        rewritten.contains("ready_scopes = [\"family-a\"]"),
         "{rewritten}"
     );
 

@@ -3,7 +3,9 @@ use std::path::Path;
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use persistence::{connect_pool_from_env, RuntimeProgressRepo};
 
-use crate::commands::targets::state::load_target_control_plane_state;
+use crate::commands::targets::state::{
+    load_target_control_plane_state, normalize_active_operator_strategy_revision,
+};
 use crate::startup::{resolve_startup_targets, ResolvedTargets};
 use crate::NegRiskLiveTargetSet;
 
@@ -132,9 +134,9 @@ fn evaluate_live(
             "Target Source",
             DoctorCheckStatus::Pass,
             format!(
-                "configured operator target revision: {}",
+                "configured operator strategy revision: {}",
                 target_state
-                    .configured_operator_target_revision
+                    .configured_operator_strategy_revision
                     .as_deref()
                     .unwrap_or("unavailable")
             ),
@@ -144,9 +146,9 @@ fn evaluate_live(
             "Target Source",
             DoctorCheckStatus::Pass,
             format!(
-                "active operator target revision: {}",
+                "active operator strategy revision: {}",
                 target_state
-                    .active_operator_target_revision
+                    .active_operator_strategy_revision
                     .as_deref()
                     .unwrap_or("unavailable")
             ),
@@ -188,22 +190,24 @@ fn evaluate_live(
             ),
             "",
         );
-        let active_operator_strategy_revision = active_operator_strategy_revision
-            .as_deref()
-            .or(active_operator_target_revision.as_deref());
+        let active_operator_strategy_revision = normalize_active_operator_strategy_revision(
+            config.operator_strategy_revision(),
+            active_operator_target_revision.as_deref(),
+            active_operator_strategy_revision.as_deref(),
+        );
         report.push_check(
             "Target Source",
             DoctorCheckStatus::Pass,
             format!(
                 "active operator strategy revision: {}",
-                active_operator_strategy_revision.unwrap_or("unavailable")
+                active_operator_strategy_revision.as_deref().unwrap_or("unavailable")
             ),
             "",
         );
 
         let restart_needed = match (
             config.operator_strategy_revision(),
-            active_operator_strategy_revision,
+            active_operator_strategy_revision.as_deref(),
         ) {
             (Some(configured), Some(active)) => {
                 if configured == active {

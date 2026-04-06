@@ -7,13 +7,17 @@ use std::{
 
 use persistence::{
     models::{
-        AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow,
-        OperatorTargetAdoptionHistoryRow,
+        AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow,
+        CandidateTargetSetRow, OperatorTargetAdoptionHistoryRow, StrategyAdoptionProvenanceRow,
+        StrategyCandidateSetRow,
     },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo,
-    OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo,
+    OperatorTargetAdoptionHistoryRepo, RuntimeProgressRepo, StrategyAdoptionRepo,
+    StrategyControlArtifactRepo,
 };
+use serde::Serialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
@@ -127,13 +131,36 @@ fn targets_status_reports_configured_revision_and_unavailable_active_state() {
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(
-        text.contains("configured_operator_target_revision = targets-rev-9"),
+        text.contains("configured_operator_strategy_revision = targets-rev-9"),
         "{text}"
     );
     assert!(
-        text.contains("active_operator_target_revision = unavailable"),
+        text.contains("active_operator_strategy_revision = unavailable"),
         "{text}"
     );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_status_reports_compatibility_mode_for_legacy_explicit_config() {
+    let database = TestDatabase::new();
+    let config = temp_config(EXPLICIT_TARGET_LIVE_CONFIG);
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets status should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("compatibility_mode = legacy-explicit"), "{text}");
+    assert!(text.contains("configured_operator_strategy_revision = unavailable"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -162,6 +189,48 @@ fn targets_candidates_labels_advisory_adoptable_and_adopted_rows() {
     assert!(text.contains("adoptable-9"), "{text}");
     assert!(text.contains("adopted"), "{text}");
     assert!(text.contains("targets-rev-9"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_candidates_deduplicate_adoptables_after_legacy_materialization() {
+    let database = TestDatabase::new();
+    database.seed_targets_catalog();
+    let config = temp_config(MINIMAL_LIVE_CONFIG);
+
+    let adopt_output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("adopt")
+        .arg("--config")
+        .arg(&config)
+        .arg("--adoptable-revision")
+        .arg("adoptable-9")
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets adopt should execute");
+    assert!(adopt_output.status.success(), "{}", combined(&adopt_output));
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("candidates")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets candidates should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert_eq!(
+        text.matches(
+            "adoptable adoptable_revision = adoptable-9 strategy_candidate_revision = candidate-9 operator_strategy_revision = targets-rev-9"
+        )
+        .count(),
+        1,
+        "{text}"
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -215,7 +284,7 @@ fn targets_status_fails_when_configured_revision_has_no_durable_provenance() {
 
     let text = combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(!text.contains("adopted operator_target_revision"), "{text}");
+    assert!(!text.contains("adopted operator_strategy_revision"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -239,7 +308,7 @@ fn targets_status_fails_when_runtime_progress_row_lacks_operator_target_revision
     let text = combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(
-        !text.contains("active_operator_target_revision = unavailable"),
+        !text.contains("active_operator_strategy_revision = unavailable"),
         "{text}"
     );
     assert!(!text.contains("restart_needed = unknown"), "{text}");
@@ -267,14 +336,46 @@ fn targets_status_reports_restart_required_when_active_runtime_progress_revision
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
     assert!(
-        text.contains("configured_operator_target_revision = targets-rev-9"),
+        text.contains("configured_operator_strategy_revision = targets-rev-9"),
         "{text}"
     );
     assert!(
-        text.contains("active_operator_target_revision = targets-rev-10"),
+        text.contains("active_operator_strategy_revision = targets-rev-10"),
         "{text}"
     );
     assert!(text.contains("restart_needed = true"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_status_treats_matching_legacy_digest_anchor_as_no_restart_after_strategy_rewrite() {
+    let database = TestDatabase::new();
+    let strategy_revision = legacy_explicit_strategy_revision();
+    database.seed_strategy_control_revision_with_legacy_digest_active_runtime(&strategy_revision);
+    let config = temp_config(&strategy_control_config_for(&strategy_revision));
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets status should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains(format!("configured_operator_strategy_revision = {strategy_revision}").as_str()),
+        "{text}"
+    );
+    assert!(
+        text.contains(format!("active_operator_strategy_revision = {strategy_revision}").as_str()),
+        "{text}"
+    );
+    assert!(text.contains("restart_needed = false"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -298,7 +399,7 @@ fn doctor_fails_when_runtime_progress_row_lacks_operator_target_revision_anchor(
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("TargetSourceError"), "{text}");
     assert!(
-        text.contains("runtime progress row exists without operator_target_revision anchor"),
+        text.contains("runtime progress row exists without operator_strategy_revision anchor"),
         "{text}"
     );
 
@@ -673,7 +774,78 @@ impl TestDatabase {
                     )
                     .await
                     .expect("runtime progress should seed with unprovenanced active revision");
-            });
+        });
+    }
+
+    fn seed_strategy_control_revision_with_legacy_digest_active_runtime(
+        &self,
+        strategy_revision: &str,
+    ) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+            let strategy_candidate_revision = format!(
+                "strategy-candidate-{}",
+                strategy_revision.trim_start_matches("strategy-rev-")
+            );
+            let adoptable_strategy_revision = format!(
+                "adoptable-strategy-{}",
+                strategy_revision.trim_start_matches("strategy-rev-")
+            );
+            let artifacts = StrategyControlArtifactRepo;
+            artifacts
+                .upsert_strategy_candidate_set(
+                    &self.pool,
+                    &StrategyCandidateSetRow {
+                        strategy_candidate_revision: strategy_candidate_revision.clone(),
+                        snapshot_id: "snapshot-strategy-compat".to_owned(),
+                        source_revision: "discovery-strategy-compat".to_owned(),
+                        payload: json!({
+                            "strategy_candidate_revision": strategy_candidate_revision,
+                        }),
+                    },
+                )
+                .await
+                .expect("strategy candidate should seed");
+            artifacts
+                .upsert_adoptable_strategy_revision(
+                    &self.pool,
+                    &AdoptableStrategyRevisionRow {
+                        adoptable_strategy_revision: adoptable_strategy_revision.clone(),
+                        strategy_candidate_revision: strategy_candidate_revision.clone(),
+                        rendered_operator_strategy_revision: strategy_revision.to_owned(),
+                        payload: json!({
+                            "rendered_live_targets": sample_rendered_live_targets_json(),
+                        }),
+                    },
+                )
+                .await
+                .expect("strategy adoptable should seed");
+            StrategyAdoptionRepo
+                .upsert_provenance(
+                    &self.pool,
+                    &StrategyAdoptionProvenanceRow {
+                        operator_strategy_revision: strategy_revision.to_owned(),
+                        adoptable_strategy_revision,
+                        strategy_candidate_revision,
+                    },
+                )
+                .await
+                .expect("strategy provenance should seed");
+            RuntimeProgressRepo
+                .record_progress(
+                    &self.pool,
+                    77,
+                    12,
+                    Some("snapshot-strategy-compat"),
+                    Some(&legacy_explicit_operator_target_revision()),
+                    None,
+                )
+                .await
+                .expect("runtime progress should seed");
+        });
     }
 
     fn cleanup(self) {
@@ -728,6 +900,63 @@ fn app_live_binary() -> PathBuf {
     }
 
     path
+}
+
+fn strategy_control_config_for(strategy_revision: &str) -> String {
+    format!(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "{strategy_revision}"
+"#
+    )
+}
+
+fn legacy_explicit_operator_target_revision() -> String {
+    let canonical = CanonicalNegRiskLiveTargetSet {
+        families: vec![CanonicalNegRiskFamily {
+            family_id: "family-a",
+            members: vec![CanonicalNegRiskMember {
+                condition_id: "condition-1",
+                token_id: "token-1",
+                price: "0.43",
+                quantity: "5",
+            }],
+        }],
+    };
+    let digest =
+        Sha256::digest(serde_json::to_vec(&canonical).expect("canonical payload should serialize"));
+    format!("sha256:{digest:x}")
+}
+
+fn legacy_explicit_strategy_revision() -> String {
+    format!(
+        "strategy-rev-{}",
+        legacy_explicit_operator_target_revision()
+            .trim_start_matches("sha256:")
+    )
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskLiveTargetSet {
+    families: Vec<CanonicalNegRiskFamily>,
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskFamily {
+    family_id: &'static str,
+    members: Vec<CanonicalNegRiskMember>,
+}
+
+#[derive(Serialize)]
+struct CanonicalNegRiskMember {
+    condition_id: &'static str,
+    token_id: &'static str,
+    price: &'static str,
+    quantity: &'static str,
 }
 
 fn default_test_database_url() -> &'static str {

@@ -235,7 +235,7 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
     let adoptable_revisions = catalog
         .adoptable_revisions
         .iter()
-        .map(|adoptable| adoptable.adoptable_revision.clone())
+        .map(|adoptable| adoptable.adoptable_strategy_revision.clone())
         .collect::<Vec<_>>();
     output::print_smoke_discovery_completed(
         artifacts_source,
@@ -272,6 +272,7 @@ fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, Boo
             config_path,
             None,
             Some(selected_adoptable_revision.as_str()),
+            false,
         ))
         .map_err(BootstrapError::Init)?;
 

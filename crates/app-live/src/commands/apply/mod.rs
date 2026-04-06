@@ -470,7 +470,7 @@ fn inline_target_adoption(
     let adoptable_revisions = catalog
         .adoptable_revisions
         .iter()
-        .map(|adoptable| adoptable.adoptable_revision.clone())
+        .map(|adoptable| adoptable.adoptable_strategy_revision.clone())
         .collect::<Vec<_>>();
     if adoptable_revisions.is_empty() {
         return Ok(InlineTargetAdoptionOutcome::Unavailable);
@@ -487,16 +487,17 @@ fn inline_target_adoption(
         config_path,
         None,
         Some(adoptable_revision.as_str()),
+        false,
     ))?;
 
     println!(
-        "adopted adoptable revision {} as operator_target_revision {}",
+        "adopted adoptable revision {} as operator_strategy_revision {}",
         summary
             .selection
             .adoptable_revision
             .as_deref()
             .unwrap_or(adoptable_revision.as_str()),
-        summary.selection.operator_target_revision
+        summary.selection.operator_strategy_revision
     );
 
     Ok(InlineTargetAdoptionOutcome::Adopted)
