@@ -226,6 +226,10 @@ The new design should remove the old primary abstractions, not preserve them:
 
 The new public API should be organized around venue capabilities, not transports.
 
+Until Phase B cutover, this capability surface may remain crate-internal or explicitly experimental.
+
+It does not need to become the only supported external API during Phase A.
+
 Recommended public capability surface:
 
 - `PolymarketGateway`
@@ -502,7 +506,11 @@ Integrate official SDK-backed support for:
 - balance and allowance
 - heartbeat
 
-This slice addresses the current live blocker first.
+This slice addresses the current live blocker first inside the new protocol core and its tests.
+
+It should not be read as a promise that the existing mainline `doctor` / `bootstrap` / `apply`
+path is fully unblocked before Phase B cutover, unless a separate narrow production fix is taken on
+explicitly.
 
 #### Slice A3: Replace Websocket Internals
 
