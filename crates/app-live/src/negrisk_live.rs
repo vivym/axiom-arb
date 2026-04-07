@@ -60,12 +60,40 @@ impl std::fmt::Display for NegRiskLiveError {
 
 impl std::error::Error for NegRiskLiveError {}
 
+pub(crate) trait NegRiskLiveExecutionBackend {
+    fn execute_live_family(
+        &self,
+        snapshot_id: &str,
+        target: &NegRiskFamilyLiveTarget,
+        matched_rule_id: &str,
+        instrumentation: ExecutionInstrumentation,
+    ) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError>;
+}
+
 pub fn eligible_live_records(
     snapshot_id: &str,
     targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
     approved_families: &std::collections::BTreeSet<String>,
     ready_families: &std::collections::BTreeSet<String>,
     recorder: Option<RuntimeMetricsRecorder>,
+) -> Result<Vec<NegRiskLiveExecutionRecord>, NegRiskLiveError> {
+    eligible_live_records_with_backend(
+        snapshot_id,
+        targets,
+        approved_families,
+        ready_families,
+        recorder,
+        &HookBackedNegRiskLiveExecutionBackend,
+    )
+}
+
+fn eligible_live_records_with_backend(
+    snapshot_id: &str,
+    targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
+    approved_families: &std::collections::BTreeSet<String>,
+    ready_families: &std::collections::BTreeSet<String>,
+    recorder: Option<RuntimeMetricsRecorder>,
+    backend: &dyn NegRiskLiveExecutionBackend,
 ) -> Result<Vec<NegRiskLiveExecutionRecord>, NegRiskLiveError> {
     let live_rules = approved_families
         .iter()
@@ -98,7 +126,7 @@ pub fn eligible_live_records(
             continue;
         }
 
-        records.push(execute_live_family(
+        records.push(backend.execute_live_family(
             snapshot_id,
             target,
             activation
@@ -115,52 +143,58 @@ pub fn eligible_live_records(
     Ok(records)
 }
 
-fn execute_live_family(
-    snapshot_id: &str,
-    target: &NegRiskFamilyLiveTarget,
-    matched_rule_id: &str,
-    instrumentation: ExecutionInstrumentation,
-) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError> {
-    let request = domain::ExecutionRequest {
-        request_id: format!("negrisk-live-request:{snapshot_id}:{}", target.family_id),
-        decision_input_id: format!("negrisk-live-intent:{snapshot_id}:{}", target.family_id),
-        snapshot_id: snapshot_id.to_owned(),
-        route: ROUTE.to_owned(),
-        scope: target.family_id.clone(),
-        activation_mode: ExecutionMode::Live,
-        matched_rule_id: Some(matched_rule_id.to_owned()),
-    };
-    let target = to_execution_target(target);
-    let plan = plan_family_submission(&request, &target).map_err(|err| {
-        NegRiskLiveError::Planning(format!("neg-risk live planning failed: {err:?}"))
-    })?;
+struct HookBackedNegRiskLiveExecutionBackend;
 
-    let hook = Arc::new(RecordingSignedFamilyHook::default());
-    let sink = LiveVenueSink::with_order_signer_and_hook(Arc::new(TestOrderSigner), hook.clone());
-    let execution_record = ExecutionOrchestrator::new_instrumented(sink, instrumentation)
-        .execute_with_attempt(&ExecutionPlanningInput::new(
-            request.clone(),
-            request.activation_mode,
-            plan.clone(),
-        ))
-        .map_err(|err| NegRiskLiveError::Sink(format!("neg-risk live sink failed: {err:?}")))?;
-    ensure_success(&execution_record.receipt)?;
+impl NegRiskLiveExecutionBackend for HookBackedNegRiskLiveExecutionBackend {
+    fn execute_live_family(
+        &self,
+        snapshot_id: &str,
+        target: &NegRiskFamilyLiveTarget,
+        matched_rule_id: &str,
+        instrumentation: ExecutionInstrumentation,
+    ) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError> {
+        let request = domain::ExecutionRequest {
+            request_id: format!("negrisk-live-request:{snapshot_id}:{}", target.family_id),
+            decision_input_id: format!("negrisk-live-intent:{snapshot_id}:{}", target.family_id),
+            snapshot_id: snapshot_id.to_owned(),
+            route: ROUTE.to_owned(),
+            scope: target.family_id.clone(),
+            activation_mode: ExecutionMode::Live,
+            matched_rule_id: Some(matched_rule_id.to_owned()),
+        };
+        let target = to_execution_target(target);
+        let plan = plan_family_submission(&request, &target).map_err(|err| {
+            NegRiskLiveError::Planning(format!("neg-risk live planning failed: {err:?}"))
+        })?;
 
-    Ok(NegRiskLiveExecutionRecord {
-        idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
-        attempt_id: execution_record.receipt.attempt_id,
-        plan_id: execution_record.attempt.plan_id,
-        snapshot_id: execution_record.attempt.snapshot_id,
-        execution_mode: execution_record.attempt_context.execution_mode,
-        attempt_no: execution_record.attempt.attempt_no,
-        route: execution_record.attempt_context.route,
-        scope: execution_record.attempt_context.scope,
-        matched_rule_id: execution_record.attempt_context.matched_rule_id,
-        submission_ref: execution_record.receipt.submission_ref,
-        pending_ref: execution_record.receipt.pending_ref,
-        artifacts: hook.artifacts(),
-        order_requests: hook.order_requests(),
-    })
+        let hook = Arc::new(RecordingSignedFamilyHook::default());
+        let sink =
+            LiveVenueSink::with_order_signer_and_hook(Arc::new(TestOrderSigner), hook.clone());
+        let execution_record = ExecutionOrchestrator::new_instrumented(sink, instrumentation)
+            .execute_with_attempt(&ExecutionPlanningInput::new(
+                request.clone(),
+                request.activation_mode,
+                plan.clone(),
+            ))
+            .map_err(|err| NegRiskLiveError::Sink(format!("neg-risk live sink failed: {err:?}")))?;
+        ensure_success(&execution_record.receipt)?;
+
+        Ok(NegRiskLiveExecutionRecord {
+            idempotency_key: format!("idem-{}", execution_record.attempt.attempt_id),
+            attempt_id: execution_record.receipt.attempt_id,
+            plan_id: execution_record.attempt.plan_id,
+            snapshot_id: execution_record.attempt.snapshot_id,
+            execution_mode: execution_record.attempt_context.execution_mode,
+            attempt_no: execution_record.attempt.attempt_no,
+            route: execution_record.attempt_context.route,
+            scope: execution_record.attempt_context.scope,
+            matched_rule_id: execution_record.attempt_context.matched_rule_id,
+            submission_ref: execution_record.receipt.submission_ref,
+            pending_ref: execution_record.receipt.pending_ref,
+            artifacts: hook.artifacts(),
+            order_requests: hook.order_requests(),
+        })
+    }
 }
 
 fn ensure_success(receipt: &ExecutionReceipt) -> Result<(), NegRiskLiveError> {
@@ -260,5 +294,83 @@ impl SignedFamilyHook for RecordingSignedFamilyHook {
             });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use rust_decimal::Decimal;
+    use serde_json::json;
+
+    use super::{
+        eligible_live_records_with_backend, NegRiskFamilyLiveTarget, NegRiskLiveArtifact,
+        NegRiskLiveError, NegRiskLiveExecutionBackend, NegRiskLiveExecutionRecord,
+        NegRiskMemberLiveTarget,
+    };
+
+    struct StubNegRiskLiveExecutionBackend;
+
+    impl NegRiskLiveExecutionBackend for StubNegRiskLiveExecutionBackend {
+        fn execute_live_family(
+            &self,
+            snapshot_id: &str,
+            target: &NegRiskFamilyLiveTarget,
+            matched_rule_id: &str,
+            _instrumentation: execution::ExecutionInstrumentation,
+        ) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError> {
+            Ok(NegRiskLiveExecutionRecord {
+                attempt_id: format!("attempt-{}", target.family_id),
+                plan_id: format!("plan-{}", target.family_id),
+                snapshot_id: snapshot_id.to_owned(),
+                execution_mode: domain::ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: format!("idem-{}", target.family_id),
+                route: "neg-risk".to_owned(),
+                scope: target.family_id.clone(),
+                matched_rule_id: Some(matched_rule_id.to_owned()),
+                submission_ref: Some(format!("submission-{}", target.family_id)),
+                pending_ref: Some(format!("tx:{}", target.family_id)),
+                artifacts: vec![NegRiskLiveArtifact {
+                    stream: "neg-risk-live-orders".to_owned(),
+                    payload: json!({"family_id": target.family_id}),
+                }],
+                order_requests: vec![json!({"family_id": target.family_id})],
+            })
+        }
+    }
+
+    #[test]
+    fn eligible_live_records_with_backend_uses_injected_backend_for_durable_refs() {
+        let targets = BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    price: Decimal::new(45, 2),
+                    quantity: Decimal::new(10, 0),
+                }],
+            },
+        )]);
+        let approved = BTreeSet::from(["family-a".to_owned()]);
+        let ready = BTreeSet::from(["family-a".to_owned()]);
+
+        let records = eligible_live_records_with_backend(
+            "snapshot-1",
+            &targets,
+            &approved,
+            &ready,
+            None,
+            &StubNegRiskLiveExecutionBackend,
+        )
+        .expect("backend-backed live records should build");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].submission_ref.as_deref(), Some("submission-family-a"));
+        assert_eq!(records[0].pending_ref.as_deref(), Some("tx:family-a"));
+        assert_eq!(records[0].artifacts[0].payload, json!({"family_id": "family-a"}));
     }
 }
