@@ -118,8 +118,8 @@ impl TestDatabase {
                                     "family_id": "family-a",
                                     "members": [
                                         {
-                                            "condition_id": "condition-1",
-                                            "token_id": "token-1",
+                                            "condition_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                                            "token_id": "29",
                                             "price": "0.43",
                                             "quantity": "5",
                                         }

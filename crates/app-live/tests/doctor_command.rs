@@ -164,7 +164,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key-1"
+api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
@@ -243,7 +243,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key-1"
+api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
@@ -298,7 +298,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -315,8 +315,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -372,7 +372,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -389,8 +389,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -449,7 +449,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -466,8 +466,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -531,7 +531,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -619,7 +619,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -700,7 +700,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -765,7 +765,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key-1"
+api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
@@ -782,8 +782,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -834,7 +834,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key"
+api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
@@ -851,8 +851,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -910,7 +910,7 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
-api_key = "poly-api-key-1"
+api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
@@ -929,8 +929,8 @@ ready_families = ["family-a"]
 family_id = "family-a"
 
 [[negrisk.targets.members]]
-condition_id = "condition-1"
-token_id = "token-1"
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
@@ -1085,8 +1085,8 @@ impl TestDatabase {
                                 "family_id": "family-a",
                                 "members": [
                                     {
-                                        "condition_id": "condition-1",
-                                        "token_id": "token-1",
+                                        "condition_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                                        "token_id": "29",
                                         "price": "0.43",
                                         "quantity": "5",
                                     }
@@ -1166,8 +1166,8 @@ impl TestDatabase {
                                 "family_id": "family-a",
                                 "members": [
                                     {
-                                        "condition_id": "condition-1",
-                                        "token_id": "token-1",
+                                        "condition_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                                        "token_id": "29",
                                         "price": "0.43",
                                         "quantity": "5",
                                     }
@@ -1223,24 +1223,21 @@ fn schema_scoped_database_url(database_url: &str, schema: &str) -> String {
 
 struct MockDoctorVenue {
     http: ProbeHttpServer,
-    market_ws: ProbeWsServer,
-    user_ws: ProbeWsServer,
+    ws: ProbeWsServer,
 }
 
 impl MockDoctorVenue {
     fn success() -> Self {
         Self {
             http: ProbeHttpServer::spawn(ProbeHttpBehavior::success()),
-            market_ws: ProbeWsServer::spawn(WsProbeKind::Market),
-            user_ws: ProbeWsServer::spawn(WsProbeKind::User),
+            ws: ProbeWsServer::spawn(),
         }
     }
 
     fn orders_fail(status_line: &str, body: &str) -> Self {
         Self {
             http: ProbeHttpServer::spawn(ProbeHttpBehavior::orders_fail(status_line, body)),
-            market_ws: ProbeWsServer::spawn(WsProbeKind::Market),
-            user_ws: ProbeWsServer::spawn(WsProbeKind::User),
+            ws: ProbeWsServer::spawn(),
         }
     }
 
@@ -1249,11 +1246,11 @@ impl MockDoctorVenue {
     }
 
     fn market_ws_url(&self) -> &str {
-        self.market_ws.url()
+        self.ws.url()
     }
 
     fn user_ws_url(&self) -> &str {
-        self.user_ws.url()
+        self.ws.url()
     }
 }
 
@@ -1437,7 +1434,7 @@ struct ProbeWsServer {
 }
 
 impl ProbeWsServer {
-    fn spawn(kind: WsProbeKind) -> Self {
+    fn spawn() -> Self {
         let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind ws probe server");
         let address = listener.local_addr().expect("ws probe server address");
         listener
@@ -1445,32 +1442,32 @@ impl ProbeWsServer {
             .expect("ws probe server should be nonblocking");
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let handle = thread::spawn(move || loop {
-            if shutdown_rx.try_recv().is_ok() {
-                break;
-            }
-
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("accepted ws stream should be blocking");
-                    let mut websocket =
-                        accept_websocket(stream).expect("accept ws probe websocket");
-                    let mut responded = false;
-                    loop {
-                        match websocket.read() {
-                            Ok(WsMessage::Text(_)) if !responded => {
-                                websocket
-                                    .send(WsMessage::Text(kind.response_payload().into()))
-                                    .expect("send ws probe response");
-                                responded = true;
-                            }
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
+                if shutdown_rx.try_recv().is_ok() {
                     break;
                 }
+
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream
+                            .set_nonblocking(false)
+                            .expect("accepted ws stream should be blocking");
+                        let mut websocket =
+                            accept_websocket(stream).expect("accept ws probe websocket");
+                        loop {
+                            match websocket.read() {
+                                Ok(WsMessage::Text(text)) => {
+                                    websocket
+                                        .send(WsMessage::Text(
+                                            response_payload_for_request(&text).into(),
+                                        ))
+                                        .expect("send ws probe response");
+                                    break;
+                                }
+                                Ok(_) => {}
+                                Err(_) => break,
+                            }
+                        }
+                    }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -1501,22 +1498,11 @@ impl Drop for ProbeWsServer {
     }
 }
 
-#[derive(Clone, Copy)]
-enum WsProbeKind {
-    Market,
-    User,
-}
-
-impl WsProbeKind {
-    fn response_payload(self) -> &'static str {
-        match self {
-            Self::Market => {
-                r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
-            }
-            Self::User => {
-                r#"{"event":"trade","trade_id":"trade-1","order_id":"order-1","status":"MATCHED","condition_id":"condition-1","price":"0.41","size":"100","fee_rate_bps":"15","transaction_hash":"0xtrade"}"#
-            }
-        }
+fn response_payload_for_request(request: &str) -> &'static str {
+    if request.contains(r#""type":"user""#) {
+        r#"{"event_type":"trade","id":"trade-1","market":"0x0000000000000000000000000000000000000000000000000000000000000001","asset_id":"29","side":"BUY","size":"100","price":"0.41","status":"MATCHED","timestamp":"1750428146322"}"#
+    } else {
+        r#"{"event_type":"last_trade_price","asset_id":"29","market":"0x0000000000000000000000000000000000000000000000000000000000000001","price":"0.40","side":"BUY","size":"100","fee_rate_bps":"15","timestamp":"1750428146322"}"#
     }
 }
 

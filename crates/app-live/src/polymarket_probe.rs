@@ -2,6 +2,7 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use domain::{SignatureType, WalletRoute};
+use polymarket_client_sdk::ws::config::Config as SdkWsConfig;
 use tokio::sync::Mutex as AsyncMutex;
 use venue_polymarket::{
     L2AuthHeaders, LiveRelayerApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
@@ -9,6 +10,7 @@ use venue_polymarket::{
     PolymarketOrderQuery, PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi,
     PolymarketSubmitResponse, PolymarketUserStreamAuth, PolymarketWsClient, RelayerAuth,
     RestClientBuildError, RestError, SignerContext, UserWsEvent, WsUserChannelAuth,
+    LiveWsSdkApi,
 };
 
 use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig};
@@ -63,13 +65,20 @@ pub(crate) trait PolymarketProbeFacade {
 
 pub(crate) struct LivePolymarketProbe {
     source_config: PolymarketSourceConfig,
-    stream_api: Arc<LegacyStreamProbeApi>,
+    stream_api: Arc<dyn PolymarketStreamApi>,
 }
 
 impl LivePolymarketProbe {
     pub(crate) fn new(source_config: PolymarketSourceConfig) -> Self {
+        let stream_api: Arc<dyn PolymarketStreamApi> = match stream_probe_backend(&source_config) {
+            StreamProbeBackend::LegacyShell => Arc::new(LegacyStreamProbeApi::new(source_config.clone())),
+            StreamProbeBackend::SdkGateway => Arc::new(LiveWsSdkApi::new(
+                sdk_ws_base_endpoint(source_config.market_ws_url.as_str()),
+                SdkWsConfig::default(),
+            )),
+        };
         Self {
-            stream_api: Arc::new(LegacyStreamProbeApi::new(source_config.clone())),
+            stream_api,
             source_config,
         }
     }
@@ -199,6 +208,33 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
             })
             .await
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamProbeBackend {
+    LegacyShell,
+    SdkGateway,
+}
+
+fn stream_probe_backend(source: &PolymarketSourceConfig) -> StreamProbeBackend {
+    if source.outbound_proxy_url.is_some() {
+        StreamProbeBackend::LegacyShell
+    } else {
+        StreamProbeBackend::SdkGateway
+    }
+}
+
+fn sdk_ws_base_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim_end_matches('/');
+    if let Some(stripped) = trimmed.strip_suffix("/ws/market") {
+        stripped.to_owned()
+    } else if let Some(stripped) = trimmed.strip_suffix("/ws/user") {
+        stripped.to_owned()
+    } else if let Some(stripped) = trimmed.strip_suffix("/ws") {
+        stripped.to_owned()
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -512,6 +548,49 @@ mod tests {
             .await
             .expect("user events should succeed");
         assert!(matches!(user_events[0], UserWsEvent::Trade(_)));
+    }
+
+    #[test]
+    fn stream_probe_backend_defaults_to_sdk_without_proxy() {
+        let source = sample_source_config(
+            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+        );
+
+        assert_eq!(
+            stream_probe_backend(&source),
+            StreamProbeBackend::SdkGateway
+        );
+    }
+
+    #[test]
+    fn stream_probe_backend_uses_legacy_with_explicit_proxy() {
+        let mut source = sample_source_config(
+            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
+        );
+        source.outbound_proxy_url = Some("http://127.0.0.1:8080".parse().expect("proxy url"));
+
+        assert_eq!(
+            stream_probe_backend(&source),
+            StreamProbeBackend::LegacyShell
+        );
+    }
+
+    #[test]
+    fn sdk_stream_base_endpoint_strips_channel_suffixes() {
+        assert_eq!(
+            sdk_ws_base_endpoint("wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+            "wss://ws-subscriptions-clob.polymarket.com"
+        );
+        assert_eq!(
+            sdk_ws_base_endpoint("wss://ws-subscriptions-clob.polymarket.com/ws/user/"),
+            "wss://ws-subscriptions-clob.polymarket.com"
+        );
+        assert_eq!(
+            sdk_ws_base_endpoint("wss://ws-subscriptions-clob.polymarket.com/ws"),
+            "wss://ws-subscriptions-clob.polymarket.com"
+        );
     }
 
     #[test]
