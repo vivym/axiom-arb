@@ -60,7 +60,7 @@ impl std::fmt::Display for NegRiskLiveError {
 
 impl std::error::Error for NegRiskLiveError {}
 
-pub(crate) trait NegRiskLiveExecutionBackend {
+pub(crate) trait NegRiskLiveExecutionBackend: Send + Sync {
     fn execute_live_family(
         &self,
         snapshot_id: &str,

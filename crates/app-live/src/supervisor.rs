@@ -1535,4 +1535,11 @@ mod tests {
             crate::supervisor::NegRiskLiveStateSource::SyntheticBootstrap
         );
     }
+
+    #[test]
+    fn app_supervisor_remains_send_and_sync_after_backend_injection_seam() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<AppSupervisor>();
+    }
 }
