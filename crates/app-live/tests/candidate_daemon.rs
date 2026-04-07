@@ -304,7 +304,7 @@ fn smoke_enabled_daemon_fails_closed_when_durable_live_rows_exist() {
 }
 
 #[test]
-fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() {
+fn non_smoke_startup_without_backend_fails_closed_when_live_work_is_ready() {
     let _guard = lock_env();
     let database = TestDatabase::new();
     env::set_var("DATABASE_URL", database.database_url());
@@ -348,18 +348,19 @@ fn non_smoke_startup_ignores_durable_shadow_rows_and_promotes_live_when_ready() 
         BTreeSet::from(["family-a".to_owned()]),
         None,
     )
-    .expect("non-smoke startup should ignore durable shadow rows and promote live");
+    .expect_err("non-smoke startup should fail closed without an injected live execution backend");
 
-    assert_eq!(
-        live_result.summary.negrisk_mode,
-        domain::ExecutionMode::Live
-    );
-    assert_eq!(live_result.summary.neg_risk_live_attempt_count, 1);
     assert!(
+        live_result
+            .to_string()
+            .contains("live neg-risk startup requires an explicit execution backend"),
+        "{live_result}"
+    );
+    assert_eq!(
         database
             .live_attempt_count()
-            .expect("live count query should succeed")
-            >= 1
+            .expect("live count query should succeed"),
+        0
     );
 
     database.cleanup();
@@ -819,6 +820,10 @@ fn live_config_view(real_user_shadow_smoke: bool) -> config_schema::AppLiveConfi
 mode = "live"
 real_user_shadow_smoke = {smoke_flag}
 
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -829,15 +834,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"

@@ -162,6 +162,20 @@ pub fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumente
 where
     S: BootstrapSource,
 {
+    if real_user_shadow_smoke.is_none()
+        && live_neg_risk_work_requested(
+            &neg_risk_live_targets,
+            &neg_risk_live_approved_families,
+            &neg_risk_live_ready_families,
+        )
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "live neg-risk startup requires an explicit execution backend; use the signer-gated run path",
+        )
+        .into());
+    }
+
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented(
         source,
         instrumentation,
@@ -280,6 +294,16 @@ fn validate_real_user_shadow_smoke_restore(
     }
 
     Ok(())
+}
+
+fn live_neg_risk_work_requested(
+    targets: &NegRiskLiveTargetSet,
+    approved_families: &BTreeSet<String>,
+    ready_families: &BTreeSet<String>,
+) -> bool {
+    targets.targets().keys().any(|family_id| {
+        approved_families.contains(family_id) && ready_families.contains(family_id)
+    })
 }
 
 fn seed_live_supervisor_from_durable_state(
