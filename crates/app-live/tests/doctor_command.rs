@@ -146,6 +146,9 @@ fn doctor_live_mode_reports_missing_operator_target_revision_from_wizard_shape()
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -277,6 +280,9 @@ async fn doctor_live_mode_fails_without_database_url_for_explicit_targets() {
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -287,15 +293,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key"
+secret = "poly-secret"
 passphrase = "poly-passphrase"
-timestamp = "1700000000"
-signature = "poly-signature"
 
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -349,6 +354,9 @@ async fn doctor_live_explicit_targets_with_database_url_pass() {
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "{clob_host}"
 data_api_host = "{data_api_host}"
@@ -359,15 +367,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key"
+secret = "poly-secret"
 passphrase = "poly-passphrase"
-timestamp = "1700000000"
-signature = "poly-signature"
 
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -405,7 +412,7 @@ quantity = "5"
     let combined = combined(&output);
     assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Connectivity", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Connectivity", "PASS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
     assert!(
         combined.contains("Next: app-live run --config"),
@@ -424,6 +431,9 @@ async fn doctor_live_explicit_targets_fail_when_database_is_unreachable() {
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "{clob_host}"
 data_api_host = "{data_api_host}"
@@ -434,15 +444,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key"
+secret = "poly-secret"
 passphrase = "poly-passphrase"
-timestamp = "1700000000"
-signature = "poly-signature"
 
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -503,6 +512,9 @@ async fn doctor_adopted_source_reports_control_plane_details_without_explicit_ta
 [runtime]
 mode = "live"
 real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
 
 [polymarket.source]
 clob_host = "{clob_host}"
@@ -735,6 +747,9 @@ async fn doctor_smoke_mode_reports_runtime_safety_as_pass() {
 mode = "live"
 real_user_shadow_smoke = true
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "{clob_host}"
 data_api_host = "{data_api_host}"
@@ -745,15 +760,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -802,6 +816,9 @@ async fn doctor_live_mode_reports_connectivity_failure_when_authenticated_rest_i
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "{clob_host}"
 data_api_host = "{data_api_host}"
@@ -812,15 +829,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key"
+secret = "poly-secret"
 passphrase = "poly-passphrase"
-timestamp = "1700000000"
-signature = "poly-signature"
 
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -876,6 +892,9 @@ async fn doctor_live_mode_reports_fail_summary_when_real_user_shadow_smoke_confi
 mode = "live"
 real_user_shadow_smoke = true
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "ftp://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -886,7 +905,7 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
@@ -894,8 +913,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"

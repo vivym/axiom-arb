@@ -1,24 +1,20 @@
-use std::{collections::BTreeSet, future::Future, pin::Pin, time::Duration};
+use std::collections::BTreeSet;
 
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
-use domain::{SignatureType, WalletRoute};
 use persistence::connect_pool_from_env;
-use venue_polymarket::{
-    L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, RelayerAuth, RestClientBuildError,
-    SignerContext, WsUserChannelAuth,
-};
 
-use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig, ResolvedTargets};
+use crate::{
+    config::PolymarketSourceConfig,
+    polymarket_probe::{
+        LivePolymarketProbe, PolymarketProbeError, PolymarketProbeFacade, UserWsProbeAuth,
+    },
+    LocalSignerConfig, ResolvedTargets,
+};
 
 use super::{
     report::{DoctorCheckStatus, DoctorReport},
     DoctorFailure, DoctorLiveContext,
 };
-
-const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
-const HEARTBEAT_PREVIOUS_ID: &str = "doctor-preflight-heartbeat";
-
-type ProbeFuture<'a> = Pin<Box<dyn Future<Output = Result<(), ProbeBackendError>> + Send + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConnectivityCheck {
@@ -40,47 +36,6 @@ impl ConnectivityCheck {
             label: label.into(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProbeBackendError {
-    category: &'static str,
-    message: String,
-}
-
-impl ProbeBackendError {
-    fn new(category: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            category,
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UserWsProbeAuth<'a> {
-    api_key: &'a str,
-    secret: &'a str,
-    passphrase: &'a str,
-}
-
-trait ConnectivityProbeBackend {
-    fn fetch_open_orders<'a>(&'a mut self, signer_config: &'a LocalSignerConfig)
-        -> ProbeFuture<'a>;
-    fn subscribe_market_assets<'a>(&'a mut self, token_ids: &'a [String]) -> ProbeFuture<'a>;
-    fn subscribe_user_markets<'a>(
-        &'a mut self,
-        auth: UserWsProbeAuth<'a>,
-        condition_ids: &'a [String],
-    ) -> ProbeFuture<'a>;
-    fn post_order_heartbeat<'a>(
-        &'a mut self,
-        signer_config: &'a LocalSignerConfig,
-    ) -> ProbeFuture<'a>;
-    fn fetch_recent_transactions<'a>(
-        &'a mut self,
-        signer_config: &'a LocalSignerConfig,
-    ) -> ProbeFuture<'a>;
 }
 
 pub(super) fn evaluate(
@@ -135,7 +90,7 @@ fn evaluate_live(
         DoctorFailure::new("ConnectivityError", error.to_string())
     })?;
     let user_ws_auth = user_ws_probe_auth_from_config(config);
-    let mut backend = RealConnectivityProbeBackend::new(source_config);
+    let mut backend = LivePolymarketProbe::new(source_config);
 
     let checks = live_context
         .runtime
@@ -216,18 +171,19 @@ fn user_ws_probe_auth_from_config<'a>(
     config: &'a AppLiveConfigView<'a>,
 ) -> Option<UserWsProbeAuth<'a>> {
     config.account().map(|account| UserWsProbeAuth {
+        address: account.address(),
         api_key: account.api_key(),
         secret: account.secret(),
         passphrase: account.passphrase(),
     })
 }
 
-async fn run_live_probes<B: ConnectivityProbeBackend>(
+async fn run_live_probes<B: PolymarketProbeFacade>(
     backend: &mut B,
     resolved_targets: &ResolvedTargets,
     signer_config: &LocalSignerConfig,
     user_ws_auth: Option<UserWsProbeAuth<'_>>,
-) -> Result<Vec<ConnectivityCheck>, ProbeBackendError> {
+) -> Result<Vec<ConnectivityCheck>, PolymarketProbeError> {
     let mut checks = Vec::new();
 
     backend.fetch_open_orders(signer_config).await?;
@@ -300,249 +256,13 @@ fn collect_condition_ids(resolved_targets: &ResolvedTargets) -> Vec<String> {
         .collect()
 }
 
-struct RealConnectivityProbeBackend {
-    source_config: PolymarketSourceConfig,
-    ws_client: Option<PolymarketWsClient>,
-}
-
-impl RealConnectivityProbeBackend {
-    fn new(source_config: PolymarketSourceConfig) -> Self {
-        Self {
-            source_config,
-            ws_client: None,
-        }
-    }
-
-    fn rest_client(&self) -> Result<PolymarketRestClient, RestClientBuildError> {
-        PolymarketRestClient::new(
-            self.source_config.clob_host.clone(),
-            self.source_config.data_api_host.clone(),
-            self.source_config.relayer_host.clone(),
-            self.source_config.outbound_proxy_url.clone(),
-            None,
-        )
-    }
-
-    async fn ws_client(&mut self) -> Result<&mut PolymarketWsClient, ProbeBackendError> {
-        if self.ws_client.is_none() {
-            let market_ws_url = self.source_config.market_ws_url.clone();
-            let user_ws_url = self.source_config.user_ws_url.clone();
-            let outbound_proxy_url = self.source_config.outbound_proxy_url.clone();
-            let client = timeout_probe("websocket connection", async move {
-                PolymarketWsClient::connect_with_proxy(
-                    market_ws_url,
-                    user_ws_url,
-                    outbound_proxy_url,
-                )
-                .await
-                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await?;
-            self.ws_client = Some(client);
-        }
-
-        Ok(self
-            .ws_client
-            .as_mut()
-            .expect("ws client should be initialized"))
-    }
-}
-
-impl ConnectivityProbeBackend for RealConnectivityProbeBackend {
-    fn fetch_open_orders<'a>(
-        &'a mut self,
-        signer_config: &'a LocalSignerConfig,
-    ) -> ProbeFuture<'a> {
-        Box::pin(async move {
-            let rest = self
-                .rest_client()
-                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
-            let auth = l2_auth_headers_from_signer_config(signer_config)?;
-            timeout_probe("authenticated REST", async move {
-                rest.fetch_open_orders(&auth)
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await
-        })
-    }
-
-    fn subscribe_market_assets<'a>(&'a mut self, token_ids: &'a [String]) -> ProbeFuture<'a> {
-        Box::pin(async move {
-            let client = self.ws_client().await?;
-            timeout_probe("market websocket", async {
-                client
-                    .subscribe_market_assets(token_ids, false)
-                    .await
-                    .map_err(|error| {
-                        ProbeBackendError::new("ConnectivityError", error.to_string())
-                    })?;
-                client
-                    .next_market_event()
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await
-        })
-    }
-
-    fn subscribe_user_markets<'a>(
-        &'a mut self,
-        auth: UserWsProbeAuth<'a>,
-        condition_ids: &'a [String],
-    ) -> ProbeFuture<'a> {
-        Box::pin(async move {
-            let client = self.ws_client().await?;
-            timeout_probe("user websocket", async {
-                client
-                    .subscribe_user_markets(
-                        &WsUserChannelAuth {
-                            api_key: auth.api_key,
-                            secret: auth.secret,
-                            passphrase: auth.passphrase,
-                        },
-                        condition_ids,
-                    )
-                    .await
-                    .map_err(|error| {
-                        ProbeBackendError::new("ConnectivityError", error.to_string())
-                    })?;
-                client
-                    .next_user_event()
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await
-        })
-    }
-
-    fn post_order_heartbeat<'a>(
-        &'a mut self,
-        signer_config: &'a LocalSignerConfig,
-    ) -> ProbeFuture<'a> {
-        Box::pin(async move {
-            let rest = self
-                .rest_client()
-                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
-            let auth = l2_auth_headers_from_signer_config(signer_config)?;
-            timeout_probe("heartbeat", async move {
-                rest.post_order_heartbeat(&auth, HEARTBEAT_PREVIOUS_ID)
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await
-        })
-    }
-
-    fn fetch_recent_transactions<'a>(
-        &'a mut self,
-        signer_config: &'a LocalSignerConfig,
-    ) -> ProbeFuture<'a> {
-        Box::pin(async move {
-            let rest = self
-                .rest_client()
-                .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))?;
-            let auth = relayer_auth_from_signer_config(signer_config)?;
-            timeout_probe("relayer reachability", async move {
-                rest.fetch_recent_transactions(&auth)
-                    .await
-                    .map(|_| ())
-                    .map_err(|error| ProbeBackendError::new("ConnectivityError", error.to_string()))
-            })
-            .await
-        })
-    }
-}
-
-async fn timeout_probe<F, T>(label: &str, future: F) -> Result<T, ProbeBackendError>
-where
-    F: Future<Output = Result<T, ProbeBackendError>>,
-{
-    tokio::time::timeout(CONNECTIVITY_TIMEOUT, future)
-        .await
-        .map_err(|_| {
-            ProbeBackendError::new(
-                "ConnectivityError",
-                format!(
-                    "{label} probe timed out after {}s",
-                    CONNECTIVITY_TIMEOUT.as_secs()
-                ),
-            )
-        })?
-}
-
-fn l2_auth_headers_from_signer_config<'a>(
-    signer_config: &'a LocalSignerConfig,
-) -> Result<L2AuthHeaders<'a>, ProbeBackendError> {
-    Ok(L2AuthHeaders {
-        signer: SignerContext {
-            address: &signer_config.signer.address,
-            funder_address: &signer_config.signer.funder_address,
-            signature_type: parse_signature_type(&signer_config.signer.signature_type)?,
-            wallet_route: parse_wallet_route(&signer_config.signer.wallet_route)?,
-        },
-        api_key: &signer_config.l2_auth.api_key,
-        passphrase: &signer_config.l2_auth.passphrase,
-        timestamp: &signer_config.l2_auth.timestamp,
-        signature: &signer_config.l2_auth.signature,
-    })
-}
-
-fn relayer_auth_from_signer_config<'a>(
-    signer_config: &'a LocalSignerConfig,
-) -> Result<RelayerAuth<'a>, ProbeBackendError> {
-    Ok(match &signer_config.relayer_auth {
-        LocalRelayerAuth::BuilderApiKey {
-            api_key,
-            timestamp,
-            passphrase,
-            signature,
-        } => RelayerAuth::BuilderApiKey {
-            api_key,
-            timestamp,
-            passphrase,
-            signature,
-        },
-        LocalRelayerAuth::RelayerApiKey { api_key, address } => {
-            RelayerAuth::RelayerApiKey { api_key, address }
-        }
-    })
-}
-
-fn parse_signature_type(label: &str) -> Result<SignatureType, ProbeBackendError> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(SignatureType::Eoa),
-        "proxy" | "poly_proxy" => Ok(SignatureType::Proxy),
-        "safe" | "gnosis_safe" => Ok(SignatureType::Safe),
-        other => Err(ProbeBackendError::new(
-            "ConnectivityError",
-            format!("unsupported signature type label {other}"),
-        )),
-    }
-}
-
-fn parse_wallet_route(label: &str) -> Result<WalletRoute, ProbeBackendError> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(WalletRoute::Eoa),
-        "proxy" => Ok(WalletRoute::Proxy),
-        "safe" => Ok(WalletRoute::Safe),
-        other => Err(ProbeBackendError::new(
-            "ConnectivityError",
-            format!("unsupported wallet route label {other}"),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use rust_decimal::Decimal;
 
+    use crate::polymarket_probe::ProbeFuture;
     use crate::{
         LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerIdentity, NegRiskFamilyLiveTarget,
         NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
@@ -678,6 +398,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn run_live_probes_passes_full_account_credentials_to_user_ws_probe() {
+        let mut backend = FakeBackend::default();
+
+        run_live_probes(
+            &mut backend,
+            &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_signer_config(),
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect("probe execution should succeed");
+
+        assert_eq!(
+            backend.user_ws_auth,
+            Some(RecordedUserWsAuth {
+                address: "0x1111111111111111111111111111111111111111".to_owned(),
+                api_key: "poly-api-key".to_owned(),
+                secret: "poly-secret".to_owned(),
+                passphrase: "poly-passphrase".to_owned(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn run_live_probes_propagates_facade_error_category_and_message() {
+        let mut backend = FailingBackend;
+
+        let error = run_live_probes(
+            &mut backend,
+            &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_signer_config(),
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect_err("probe execution should fail");
+
+        assert_eq!(error.category, "ConnectivityError");
+        assert!(error.message.contains("forced failure"));
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ProbeCall {
         FetchOpenOrders,
@@ -691,9 +452,18 @@ mod tests {
     #[derive(Default)]
     struct FakeBackend {
         calls: Vec<ProbeCall>,
+        user_ws_auth: Option<RecordedUserWsAuth>,
     }
 
-    impl ConnectivityProbeBackend for FakeBackend {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedUserWsAuth {
+        address: String,
+        api_key: String,
+        secret: String,
+        passphrase: String,
+    }
+
+    impl PolymarketProbeFacade for FakeBackend {
         fn fetch_open_orders<'a>(
             &'a mut self,
             _signer_config: &'a LocalSignerConfig,
@@ -710,9 +480,15 @@ mod tests {
 
         fn subscribe_user_markets<'a>(
             &'a mut self,
-            _auth: UserWsProbeAuth<'a>,
+            auth: UserWsProbeAuth<'a>,
             condition_ids: &'a [String],
         ) -> ProbeFuture<'a> {
+            self.user_ws_auth = Some(RecordedUserWsAuth {
+                address: auth.address.to_owned(),
+                api_key: auth.api_key.to_owned(),
+                secret: auth.secret.to_owned(),
+                passphrase: auth.passphrase.to_owned(),
+            });
             self.calls
                 .push(ProbeCall::SubscribeUserMarkets(condition_ids.to_vec()));
             Box::pin(async { Ok(()) })
@@ -731,6 +507,48 @@ mod tests {
             _signer_config: &'a LocalSignerConfig,
         ) -> ProbeFuture<'a> {
             self.calls.push(ProbeCall::FetchRecentTransactions);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct FailingBackend;
+
+    impl PolymarketProbeFacade for FailingBackend {
+        fn fetch_open_orders<'a>(
+            &'a mut self,
+            _signer_config: &'a LocalSignerConfig,
+        ) -> ProbeFuture<'a> {
+            Box::pin(async {
+                Err(PolymarketProbeError::new(
+                    "ConnectivityError",
+                    "forced failure",
+                ))
+            })
+        }
+
+        fn subscribe_market_assets<'a>(&'a mut self, _token_ids: &'a [String]) -> ProbeFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe_user_markets<'a>(
+            &'a mut self,
+            _auth: UserWsProbeAuth<'a>,
+            _condition_ids: &'a [String],
+        ) -> ProbeFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn post_order_heartbeat<'a>(
+            &'a mut self,
+            _signer_config: &'a LocalSignerConfig,
+        ) -> ProbeFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn fetch_recent_transactions<'a>(
+            &'a mut self,
+            _signer_config: &'a LocalSignerConfig,
+        ) -> ProbeFuture<'a> {
             Box::pin(async { Ok(()) })
         }
     }
@@ -782,6 +600,7 @@ mod tests {
 
     fn sample_user_ws_auth() -> UserWsProbeAuth<'static> {
         UserWsProbeAuth {
+            address: "0x1111111111111111111111111111111111111111",
             api_key: "poly-api-key",
             secret: "poly-secret",
             passphrase: "poly-passphrase",
