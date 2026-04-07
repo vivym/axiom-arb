@@ -126,18 +126,20 @@ pub(crate) fn eligible_live_records_with_backend(
             continue;
         }
 
-        records.push(backend.execute_live_family(
-            snapshot_id,
-            target,
-            activation
-                .matched_rule_id
-                .as_deref()
-                .unwrap_or("phase3b-negrisk-live"),
-            match recorder.as_ref() {
-                Some(recorder) => ExecutionInstrumentation::enabled(recorder.clone()),
-                None => ExecutionInstrumentation::disabled(),
-            },
-        )?);
+        records.push(
+            backend.execute_live_family(
+                snapshot_id,
+                target,
+                activation
+                    .matched_rule_id
+                    .as_deref()
+                    .unwrap_or("phase3b-negrisk-live"),
+                match recorder.as_ref() {
+                    Some(recorder) => ExecutionInstrumentation::enabled(recorder.clone()),
+                    None => ExecutionInstrumentation::disabled(),
+                },
+            )?,
+        );
     }
 
     Ok(records)
@@ -369,8 +371,14 @@ mod tests {
         .expect("backend-backed live records should build");
 
         assert_eq!(records.len(), 1);
-        assert_eq!(records[0].submission_ref.as_deref(), Some("submission-family-a"));
+        assert_eq!(
+            records[0].submission_ref.as_deref(),
+            Some("submission-family-a")
+        );
         assert_eq!(records[0].pending_ref.as_deref(), Some("tx:family-a"));
-        assert_eq!(records[0].artifacts[0].payload, json!({"family_id": "family-a"}));
+        assert_eq!(
+            records[0].artifacts[0].payload,
+            json!({"family_id": "family-a"})
+        );
     }
 }
