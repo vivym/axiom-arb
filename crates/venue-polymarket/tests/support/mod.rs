@@ -180,6 +180,7 @@ pub fn scripted_open_order(order_id: &str) -> PolymarketOpenOrderSummary {
 
 #[allow(dead_code)]
 pub fn sample_signed_order() -> PolymarketSignedOrder {
+    let signature = format!("0x{}00", "11".repeat(64));
     PolymarketSignedOrder {
         order: json!({
             "maker": "0x0000000000000000000000000000000000000001",
@@ -192,7 +193,7 @@ pub fn sample_signed_order() -> PolymarketSignedOrder {
             "expiration": "1700000000",
             "nonce": "1",
             "feeRateBps": "0",
-            "signature": "0x1111",
+            "signature": signature,
             "salt": 1,
             "signatureType": 0
         }),
