@@ -3,8 +3,10 @@ use std::{
     error::Error,
     io,
     path::Path,
+    sync::Arc,
 };
 
+use async_trait::async_trait;
 use chrono::Utc;
 use config_schema::{load_raw_config_from_path, RuntimeModeToml, ValidatedConfig};
 use persistence::{connect_pool_from_env, StrategyControlArtifactRepo};
@@ -22,6 +24,7 @@ use crate::{
     CandidateNotice, CandidateRestrictionTruth, DiscoverySupervisor, InputTaskEvent,
     LocalSignerConfig,
 };
+use venue_polymarket::{NegRiskMarketMetadata, PolymarketGateway};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiscoverSummary {
@@ -42,6 +45,29 @@ struct RouteArtifactKey {
 struct RouteArtifactSummary {
     key: RouteArtifactKey,
     semantic_digest: String,
+}
+
+#[async_trait]
+pub(crate) trait DiscoverMetadataFacade: Send + Sync {
+    async fn refresh_neg_risk_metadata(&self)
+        -> Result<Vec<NegRiskMarketMetadata>, Box<dyn Error>>;
+}
+
+pub(crate) async fn fetch_discover_metadata(
+    facade: &dyn DiscoverMetadataFacade,
+) -> Result<Vec<NegRiskMarketMetadata>, Box<dyn Error>> {
+    facade.refresh_neg_risk_metadata().await
+}
+
+#[async_trait]
+impl DiscoverMetadataFacade for PolymarketGateway {
+    async fn refresh_neg_risk_metadata(
+        &self,
+    ) -> Result<Vec<NegRiskMarketMetadata>, Box<dyn Error>> {
+        venue_polymarket::PolymarketGateway::refresh_neg_risk_metadata(self)
+            .await
+            .map_err(|error| Box::new(error) as Box<dyn Error>)
+    }
 }
 
 pub fn execute(args: DiscoverArgs) -> Result<(), Box<dyn Error>> {
@@ -75,8 +101,9 @@ pub(crate) async fn run_discover_from_config(
     );
 
     let rest = build_polymarket_rest_client(&source)?;
+    let metadata_facade = PolymarketGateway::from_metadata_api(Arc::new(rest));
     println!("Fetching Polymarket metadata");
-    let metadata_rows = rest.try_fetch_neg_risk_metadata_rows().await?;
+    let metadata_rows = fetch_discover_metadata(&metadata_facade).await?;
     tracing::debug!(
         metadata_row_count = metadata_rows.len(),
         "discover fetched metadata rows"
@@ -350,14 +377,65 @@ fn route_artifact_from_value(value: &serde_json::Value) -> Result<RouteArtifactS
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
-    use super::route_artifact_count;
+    use async_trait::async_trait;
+    use serde_json::json;
+    use venue_polymarket::NegRiskMarketMetadata;
+
+    use super::{fetch_discover_metadata, route_artifact_count, DiscoverMetadataFacade};
 
     #[test]
     fn route_artifact_count_rejects_missing_route_artifacts_array() {
         let err =
             route_artifact_count(&json!({})).expect_err("missing route_artifacts should fail");
         assert!(err.to_string().contains("route_artifacts array"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn discover_metadata_refresh_uses_injected_facade() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let facade = ScriptedDiscoverMetadataFacade {
+            call_count: call_count.clone(),
+        };
+
+        let rows = fetch_discover_metadata(&facade)
+            .await
+            .expect("scripted discover metadata should succeed");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_family_id, "family-a");
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+
+    struct ScriptedDiscoverMetadataFacade {
+        call_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl DiscoverMetadataFacade for ScriptedDiscoverMetadataFacade {
+        async fn refresh_neg_risk_metadata(
+            &self,
+        ) -> Result<Vec<NegRiskMarketMetadata>, Box<dyn std::error::Error>> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![NegRiskMarketMetadata {
+                event_family_id: "family-a".to_owned(),
+                event_id: "event-a".to_owned(),
+                condition_id: "condition-a".to_owned(),
+                token_id: "token-a".to_owned(),
+                outcome_label: "Alpha".to_owned(),
+                route: domain::MarketRoute::NegRisk,
+                enable_neg_risk: Some(true),
+                neg_risk_augmented: Some(false),
+                neg_risk_variant: domain::NegRiskVariant::Standard,
+                is_placeholder: false,
+                is_other: false,
+                discovery_revision: 1,
+                metadata_snapshot_hash: "sha256:test".to_owned(),
+            }])
+        }
     }
 }
