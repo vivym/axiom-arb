@@ -613,7 +613,7 @@ fn page_two_empty() -> ScriptedResponse {
 
 fn page_one_changed() -> ScriptedResponse {
     ScriptedResponse {
-        expected_query_fragments: &["active=true", "closed=false", "limit=2", "offset=0"],
+        expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
         body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-3","parentEvent":"family-b","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
