@@ -10,6 +10,7 @@ pub mod instrumentation;
 pub mod negrisk_live;
 mod negrisk_shadow;
 pub(crate) mod polymarket_probe;
+pub(crate) mod polymarket_runtime_adapter;
 pub mod posture;
 pub mod queues;
 pub mod route_adapters;

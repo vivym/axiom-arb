@@ -465,6 +465,13 @@ impl AppSupervisor {
         self.neg_risk_live_execution_backend = Some(Box::new(backend));
     }
 
+    pub(crate) fn set_neg_risk_live_execution_backend_boxed(
+        &mut self,
+        backend: Box<dyn NegRiskLiveExecutionBackend>,
+    ) {
+        self.neg_risk_live_execution_backend = Some(backend);
+    }
+
     pub fn seed_neg_risk_live_execution_record(&mut self, record: NegRiskLiveExecutionRecord) {
         self.seed.neg_risk_live_execution_records.push(record);
     }
@@ -1523,11 +1530,15 @@ mod tests {
         assert_eq!(summary.negrisk_mode, ExecutionMode::Live);
         assert_eq!(summary.neg_risk_live_attempt_count, 1);
         assert_eq!(
-            supervisor.neg_risk_live_execution_records()[0].submission_ref.as_deref(),
+            supervisor.neg_risk_live_execution_records()[0]
+                .submission_ref
+                .as_deref(),
             Some("submission-family-a")
         );
         assert_eq!(
-            supervisor.neg_risk_live_execution_records()[0].pending_ref.as_deref(),
+            supervisor.neg_risk_live_execution_records()[0]
+                .pending_ref
+                .as_deref(),
             Some("tx:family-a")
         );
         assert_eq!(

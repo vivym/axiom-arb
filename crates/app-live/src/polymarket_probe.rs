@@ -485,14 +485,18 @@ fn parse_wallet_route(label: &str) -> Result<WalletRoute, PolymarketProbeError> 
 
 #[cfg(test)]
 mod tests {
-    use std::{net::TcpListener as StdTcpListener, thread, time::Duration};
+    use std::{net::TcpListener as StdTcpListener, sync::OnceLock, thread, time::Duration};
 
+    use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
 
     use super::*;
 
     #[tokio::test]
     async fn legacy_stream_probe_reuses_single_connection_pair_across_market_and_user_events() {
+        let _guard = env_lock().lock().await;
+        let _proxy_guard = ProxyEnvGuard::clear();
+
         let market_ws = ProbeWsServer::spawn(WsProbeKind::Market);
         let user_ws = ProbeWsServer::spawn(WsProbeKind::User);
         let api = LegacyStreamProbeApi::new(sample_source_config(market_ws.url(), user_ws.url()));
@@ -542,6 +546,42 @@ mod tests {
             api_key: "poly-api-key".to_owned(),
             secret: "poly-secret".to_owned(),
             passphrase: "poly-passphrase".to_owned(),
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct ProxyEnvGuard {
+        all_proxy: Option<String>,
+        all_proxy_lower: Option<String>,
+    }
+
+    impl ProxyEnvGuard {
+        fn clear() -> Self {
+            let guard = Self {
+                all_proxy: std::env::var("ALL_PROXY").ok(),
+                all_proxy_lower: std::env::var("all_proxy").ok(),
+            };
+            std::env::remove_var("ALL_PROXY");
+            std::env::remove_var("all_proxy");
+            guard
+        }
+    }
+
+    impl Drop for ProxyEnvGuard {
+        fn drop(&mut self) {
+            restore_env_var("ALL_PROXY", self.all_proxy.take());
+            restore_env_var("all_proxy", self.all_proxy_lower.take());
+        }
+    }
+
+    fn restore_env_var(key: &str, value: Option<String>) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
         }
     }
 

@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SigningError {
     UnsupportedPlan { plan_id: String },
+    SignerFailure { plan_id: String, reason: String },
 }
 
 /// Compatibility signer surface used by existing Phase 3b wiring and tests.

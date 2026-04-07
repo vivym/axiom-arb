@@ -5,6 +5,7 @@ use observability::{field_keys, span_names};
 use crate::{
     bootstrap::BootstrapSource,
     config::NegRiskLiveTargetSet,
+    negrisk_live::NegRiskLiveExecutionBackend,
     runtime::{
         load_durable_live_startup_state, load_durable_live_startup_state_for_strategy,
         operator_target_revision_for, persist_operator_target_revision_anchor_with_run_session_id,
@@ -194,6 +195,7 @@ where
         neg_risk_live_targets,
         neg_risk_live_approved_families,
         neg_risk_live_ready_families,
+        None,
         real_user_shadow_smoke,
         run_session_id,
     )
@@ -210,6 +212,7 @@ pub(crate) fn run_live_daemon_from_durable_store_with_strategy_revision_and_sess
     neg_risk_live_targets: NegRiskLiveTargetSet,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
+    neg_risk_live_execution_backend: Option<Box<dyn NegRiskLiveExecutionBackend>>,
     real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
     run_session_id: Option<&str>,
 ) -> Result<AppRunResult, Box<dyn Error>>
@@ -248,6 +251,9 @@ where
         real_user_shadow_smoke,
         true,
     );
+    if let Some(backend) = neg_risk_live_execution_backend {
+        supervisor.set_neg_risk_live_execution_backend_boxed(backend);
+    }
 
     let result = AppDaemon::new(supervisor)
         .run_startup()
@@ -387,6 +393,10 @@ mod tests {
 mode = "live"
 real_user_shadow_smoke = true
 
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -397,15 +407,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
