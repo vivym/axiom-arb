@@ -540,22 +540,30 @@ fn validate_app_live_requiredness(
     match raw.runtime.mode {
         RuntimeModeToml::Paper => Ok(AppLiveConfigView { raw }),
         RuntimeModeToml::Live => {
-            if has_operator_facing_live_inputs(raw) {
-                let account = require_account(raw)?;
-                validate_account_view(account)?;
+            if raw
+                .polymarket
+                .as_ref()
+                .and_then(|polymarket| polymarket.signer.as_ref())
+                .is_some()
+            {
+                return Err(validation_error(
+                    "polymarket.signer is no longer supported; use polymarket.account",
+                ));
+            }
 
-                let relayer_auth = require_relayer_auth_view(raw)?;
-                validate_relayer_auth_view(relayer_auth)?;
+            let account = require_account(raw)?;
+            validate_account_view(account)?;
 
-                require_strategy_control_or_legacy_target_source(raw)?;
-            } else {
-                require_source(raw)?;
-                require_signer(raw)?;
+            let relayer_auth = require_relayer_auth_view(raw)?;
+            validate_relayer_auth_view(relayer_auth)?;
 
-                let relayer_auth = require_relayer_auth_view(raw)?;
-                validate_relayer_auth_view(relayer_auth)?;
-
-                require_rollout_or_route_owned_rollout(raw)?;
+            require_strategy_control_or_legacy_target_source(raw)?;
+            if raw
+                .negrisk
+                .as_ref()
+                .and_then(|negrisk| negrisk.rollout.as_ref())
+                .is_some()
+            {
                 validate_negrisk_rollout_referential_integrity(raw)?;
             }
 
@@ -568,66 +576,6 @@ fn validate_app_replay_requiredness(
     raw: &RawAxiomConfig,
 ) -> Result<AppReplayConfigView<'_>, ConfigSchemaError> {
     Ok(AppReplayConfigView { raw })
-}
-
-fn require_source(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
-    if raw
-        .polymarket
-        .as_ref()
-        .and_then(|polymarket| polymarket.source.as_ref())
-        .is_none()
-    {
-        return Err(validation_error(
-            "missing required section: polymarket.source",
-        ));
-    }
-    Ok(())
-}
-
-fn require_signer(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
-    if raw
-        .polymarket
-        .as_ref()
-        .and_then(|polymarket| polymarket.signer.as_ref())
-        .is_none()
-    {
-        return Err(validation_error(
-            "missing required section: polymarket.signer",
-        ));
-    }
-    Ok(())
-}
-
-fn require_rollout_or_route_owned_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
-    if raw
-        .negrisk
-        .as_ref()
-        .and_then(|negrisk| negrisk.rollout.as_ref())
-        .is_none()
-        && raw
-            .strategies
-            .as_ref()
-            .and_then(|strategies| strategies.neg_risk.as_ref())
-            .and_then(|neg_risk| neg_risk.rollout.as_ref())
-            .is_none()
-    {
-        return Err(validation_error(
-            "missing required section: negrisk.rollout or strategies.neg_risk.rollout",
-        ));
-    }
-    Ok(())
-}
-
-fn has_operator_facing_live_inputs(raw: &RawAxiomConfig) -> bool {
-    raw.polymarket
-        .as_ref()
-        .and_then(|polymarket| polymarket.account.as_ref())
-        .is_some()
-        || raw
-            .negrisk
-            .as_ref()
-            .and_then(|negrisk| negrisk.target_source.as_ref())
-            .is_some()
 }
 
 fn require_account(
@@ -865,6 +813,9 @@ fn validate_negrisk_rollout_referential_integrity(
     let Some(rollout) = negrisk.rollout.as_ref() else {
         return Ok(());
     };
+    if negrisk.targets.is_empty() {
+        return Ok(());
+    }
 
     let family_ids = negrisk
         .targets

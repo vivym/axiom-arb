@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 use chrono::Utc;
 use config_schema::{
     AppLiveConfigView, AppLivePolymarketAccountView, AppLivePolymarketRelayerAuthKind,
-    AppLivePolymarketRelayerAuthView, AppLivePolymarketSignerView, AppLivePolymarketSourceView,
+    AppLivePolymarketRelayerAuthView, AppLivePolymarketSourceView,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -94,6 +94,17 @@ pub struct LocalSignerIdentity {
     pub wallet_route: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolymarketGatewayCredentials {
+    pub address: String,
+    pub funder_address: String,
+    pub signature_type: String,
+    pub wallet_route: String,
+    pub api_key: String,
+    pub secret: String,
+    pub passphrase: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LocalL2AuthHeaders {
     pub api_key: String,
@@ -134,6 +145,7 @@ pub struct PolymarketSourceConfig {
 pub enum ConfigError {
     InvalidJson { value: String, message: String },
     InvalidLocalSignerConfig { value: String, message: String },
+    MissingPolymarketGatewayCredentials,
     InvalidPolymarketSourceConfig { value: String, message: String },
     DuplicateFamilyId { family_id: String },
     MissingLocalSignerConfig,
@@ -148,6 +160,12 @@ impl fmt::Display for ConfigError {
             }
             Self::InvalidLocalSignerConfig { message, .. } => {
                 write!(f, "invalid local signer config: {message}")
+            }
+            Self::MissingPolymarketGatewayCredentials => {
+                write!(
+                    f,
+                    "missing polymarket gateway credentials for live daemon inputs"
+                )
             }
             Self::InvalidPolymarketSourceConfig { message, .. } => {
                 write!(f, "invalid polymarket source config: {message}")
@@ -217,38 +235,27 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
     type Error = ConfigError;
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        if config.polymarket_signer().is_some() {
+            return Err(ConfigError::InvalidLocalSignerConfig {
+                value: "app_live".to_owned(),
+                message: "polymarket.signer is no longer supported; use polymarket.account"
+                    .to_owned(),
+            });
+        }
         let relayer_auth = config
             .polymarket_relayer_auth()
             .ok_or(ConfigError::MissingLocalSignerConfig)?;
-
-        if let Some(signer) = config.polymarket_signer() {
-            validate_local_signer_view(signer)?;
-
-            return Ok(LocalSignerConfig {
-                signer: LocalSignerIdentity {
-                    address: signer.address().to_owned(),
-                    funder_address: signer.funder_address().to_owned(),
-                    signature_type: signer.signature_type_label().to_owned(),
-                    wallet_route: signer.wallet_route_label().to_owned(),
-                },
-                l2_auth: LocalL2AuthHeaders {
-                    api_key: signer.api_key().to_owned(),
-                    passphrase: signer.passphrase().to_owned(),
-                    timestamp: signer.timestamp().to_owned(),
-                    signature: signer.signature().to_owned(),
-                },
-                relayer_auth: map_relayer_auth(relayer_auth)?,
-            });
-        }
-
-        let account = config
-            .account()
-            .ok_or(ConfigError::MissingLocalSignerConfig)?;
-        validate_account_view(account)?;
+        let credentials = PolymarketGatewayCredentials::try_from(config).map_err(|error| {
+            if matches!(error, ConfigError::MissingPolymarketGatewayCredentials) {
+                ConfigError::MissingLocalSignerConfig
+            } else {
+                error
+            }
+        })?;
         let derived = derive_l2_auth_material(
-            account.api_key(),
-            account.secret(),
-            account.passphrase(),
+            &credentials.api_key,
+            &credentials.secret,
+            &credentials.passphrase,
             Utc::now(),
         )
         .map_err(|error| ConfigError::InvalidLocalSignerConfig {
@@ -257,7 +264,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
         })?;
 
         Ok(LocalSignerConfig {
-            signer: signer_identity_from_account(account),
+            signer: signer_identity_from_credentials(&credentials),
             l2_auth: LocalL2AuthHeaders {
                 api_key: derived.api_key,
                 passphrase: derived.passphrase,
@@ -266,6 +273,27 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
             },
             relayer_auth: map_relayer_auth(relayer_auth)?,
         })
+    }
+}
+
+impl TryFrom<&AppLiveConfigView<'_>> for PolymarketGatewayCredentials {
+    type Error = ConfigError;
+
+    fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        if config.polymarket_signer().is_some() {
+            return Err(ConfigError::InvalidLocalSignerConfig {
+                value: "app_live".to_owned(),
+                message: "polymarket.signer is no longer supported; use polymarket.account"
+                    .to_owned(),
+            });
+        }
+
+        let account = config
+            .account()
+            .ok_or(ConfigError::MissingPolymarketGatewayCredentials)?;
+        validate_account_view(account)?;
+
+        Ok(gateway_credentials_from_account(account))
     }
 }
 
@@ -583,8 +611,10 @@ fn map_relayer_auth(
     }
 }
 
-fn signer_identity_from_account(account: AppLivePolymarketAccountView<'_>) -> LocalSignerIdentity {
-    LocalSignerIdentity {
+fn gateway_credentials_from_account(
+    account: AppLivePolymarketAccountView<'_>,
+) -> PolymarketGatewayCredentials {
+    PolymarketGatewayCredentials {
         address: account.address().to_owned(),
         funder_address: account
             .funder_address()
@@ -592,6 +622,20 @@ fn signer_identity_from_account(account: AppLivePolymarketAccountView<'_>) -> Lo
             .to_owned(),
         signature_type: account.signature_type_label().to_owned(),
         wallet_route: account.wallet_route_label().to_owned(),
+        api_key: account.api_key().to_owned(),
+        secret: account.secret().to_owned(),
+        passphrase: account.passphrase().to_owned(),
+    }
+}
+
+fn signer_identity_from_credentials(
+    credentials: &PolymarketGatewayCredentials,
+) -> LocalSignerIdentity {
+    LocalSignerIdentity {
+        address: credentials.address.clone(),
+        funder_address: credentials.funder_address.clone(),
+        signature_type: credentials.signature_type.clone(),
+        wallet_route: credentials.wallet_route.clone(),
     }
 }
 
@@ -608,28 +652,6 @@ fn validate_account_view(account: AppLivePolymarketAccountView<'_>) -> Result<()
         return Err(ConfigError::InvalidLocalSignerConfig {
             value: "app_live".to_owned(),
             message: "polymarket.account.wallet_route must match polymarket.account.signature_type"
-                .to_owned(),
-        });
-    }
-
-    Ok(())
-}
-
-fn validate_local_signer_view(signer: AppLivePolymarketSignerView<'_>) -> Result<(), ConfigError> {
-    require_non_empty_local_signer_field(signer.address(), "polymarket.signer.address")?;
-    require_non_empty_local_signer_field(
-        signer.funder_address(),
-        "polymarket.signer.funder_address",
-    )?;
-    require_non_empty_local_signer_field(signer.api_key(), "polymarket.signer.api_key")?;
-    require_non_empty_local_signer_field(signer.passphrase(), "polymarket.signer.passphrase")?;
-    require_non_empty_local_signer_field(signer.timestamp(), "polymarket.signer.timestamp")?;
-    require_non_empty_local_signer_field(signer.signature(), "polymarket.signer.signature")?;
-
-    if signer.signature_type_label() != signer.wallet_route_label() {
-        return Err(ConfigError::InvalidLocalSignerConfig {
-            value: "app_live".to_owned(),
-            message: "polymarket.signer.wallet_route must match polymarket.signer.signature_type"
                 .to_owned(),
         });
     }

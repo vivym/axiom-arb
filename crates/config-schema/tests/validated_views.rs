@@ -72,15 +72,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -182,15 +181,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -242,15 +240,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -280,11 +277,15 @@ ready_families = []
 }
 
 #[test]
-fn signer_view_ignores_stale_legacy_rollout_when_route_owned_rollout_is_present() {
+fn account_view_ignores_stale_legacy_rollout_when_route_owned_rollout_is_present() {
     let raw = load_raw_config_from_str(
         r#"
 [runtime]
 mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
 
 [strategies.neg_risk]
 enabled = true
@@ -303,15 +304,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -539,6 +539,10 @@ fn live_view_rejects_invalid_rollout_references() {
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -549,15 +553,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -593,14 +596,14 @@ quantity = "5"
 }
 
 #[test]
-fn smoke_view_requires_live_signer() {
+fn smoke_view_requires_live_account() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-smoke.toml")).unwrap();
     let err = ValidatedConfig::new(raw)
         .unwrap()
         .for_app_live()
-        .expect_err("smoke fixture missing signer should fail");
+        .expect_err("smoke fixture missing account should fail");
 
-    assert!(err.to_string().contains("polymarket.signer"));
+    assert!(err.to_string().contains("polymarket.account"));
 }
 
 #[test]
@@ -711,22 +714,12 @@ operator_target_revision = "targets-rev-9"
 }
 
 #[test]
-fn signer_based_legacy_live_view_still_requires_explicit_source() {
+fn live_view_requires_polymarket_account_after_cutover() {
     let err = validated_view_err(
         r#"
 [runtime]
 mode = "live"
 real_user_shadow_smoke = false
-
-[polymarket.signer]
-address = "0x1111111111111111111111111111111111111111"
-funder_address = "0x2222222222222222222222222222222222222222"
-signature_type = "eoa"
-wallet_route = "eoa"
-api_key = "poly-api-key-1"
-passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -741,7 +734,7 @@ ready_families = []
 "#,
     );
 
-    assert!(err.contains("polymarket.source"));
+    assert!(err.contains("polymarket.account"));
 }
 
 #[test]
@@ -824,6 +817,54 @@ fn live_view_accepts_fully_populated_live_fixture() {
 }
 
 #[test]
+fn live_view_rejects_polymarket_signer_after_cutover() {
+    let err = validated_view_err(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    );
+
+    assert!(err.contains("polymarket.signer is no longer supported"));
+}
+
+#[test]
 fn live_view_exposes_consumer_scoped_wrappers() {
     let raw = load_raw_config_from_path(&fixture_path("app-live-live.toml")).unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
@@ -860,6 +901,10 @@ fn validated_err(extra: &str) -> String {
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -870,15 +915,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -908,8 +952,13 @@ quantity = "5"
         config + extra
     };
 
-    let raw = load_raw_config_from_str(&config).unwrap();
-    ValidatedConfig::new(raw).unwrap_err().to_string()
+    match load_raw_config_from_str(&config) {
+        Ok(raw) => match ValidatedConfig::new(raw) {
+            Ok(validated) => validated.for_app_live().unwrap_err().to_string(),
+            Err(error) => error.to_string(),
+        },
+        Err(error) => error.to_string(),
+    }
 }
 
 fn validated_view_err(config: &str) -> String {

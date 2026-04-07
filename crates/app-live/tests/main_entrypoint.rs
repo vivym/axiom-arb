@@ -129,7 +129,7 @@ fn smoke_config_surfaces_validated_config_error_before_database_bootstrap() {
     let output = app_live_output_with_config_and_database("fixtures/app-live-smoke.toml", None);
 
     assert!(!output.status.success());
-    assert!(combined(&output).contains("polymarket.signer"));
+    assert!(combined(&output).contains("polymarket.account"));
 }
 
 #[test]
