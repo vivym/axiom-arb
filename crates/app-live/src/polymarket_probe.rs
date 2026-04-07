@@ -71,7 +71,9 @@ pub(crate) struct LivePolymarketProbe {
 impl LivePolymarketProbe {
     pub(crate) fn new(source_config: PolymarketSourceConfig) -> Self {
         let stream_api: Arc<dyn PolymarketStreamApi> = match stream_probe_backend(&source_config) {
-            StreamProbeBackend::LegacyShell => Arc::new(LegacyStreamProbeApi::new(source_config.clone())),
+            StreamProbeBackend::LegacyShell => {
+                Arc::new(LegacyStreamProbeApi::new(source_config.clone()))
+            }
             StreamProbeBackend::SdkGateway => Arc::new(LiveWsSdkApi::new(
                 sdk_ws_base_endpoint(source_config.market_ws_url.as_str()),
                 SdkWsConfig::default(),
@@ -218,7 +220,9 @@ enum StreamProbeBackend {
 }
 
 fn stream_probe_backend(source: &PolymarketSourceConfig) -> StreamProbeBackend {
-    if source.outbound_proxy_url.is_some() {
+    let market_base = sdk_ws_base_endpoint(source.market_ws_url.as_str());
+    let user_base = sdk_ws_base_endpoint(source.user_ws_url.as_str());
+    if source.outbound_proxy_url.is_some() || market_base != user_base {
         StreamProbeBackend::LegacyShell
     } else {
         StreamProbeBackend::SdkGateway
@@ -570,6 +574,19 @@ mod tests {
             "wss://ws-subscriptions-clob.polymarket.com/ws/user",
         );
         source.outbound_proxy_url = Some("http://127.0.0.1:8080".parse().expect("proxy url"));
+
+        assert_eq!(
+            stream_probe_backend(&source),
+            StreamProbeBackend::LegacyShell
+        );
+    }
+
+    #[test]
+    fn stream_probe_backend_uses_legacy_when_market_and_user_bases_differ() {
+        let source = sample_source_config(
+            "wss://market-ws.polymarket.test/ws/market",
+            "wss://user-ws.polymarket.test/ws/user",
+        );
 
         assert_eq!(
             stream_probe_backend(&source),

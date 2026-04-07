@@ -15,7 +15,11 @@ use std::{
 };
 
 use support::{apply_db, cli, discover_db};
-use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
+use tokio_tungstenite::tungstenite::{
+    accept_hdr as accept_websocket,
+    handshake::server::{Request as WsRequest, Response as WsResponse},
+    Message as WsMessage,
+};
 use toml_edit::{table, value, DocumentMut};
 
 static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
@@ -442,11 +446,11 @@ impl MockDoctorVenue {
     }
 
     fn market_ws_url(&self) -> &str {
-        self.ws.url()
+        self.ws.market_url()
     }
 
     fn user_ws_url(&self) -> &str {
-        self.ws.url()
+        self.ws.user_url()
     }
 }
 
@@ -639,7 +643,9 @@ fn http_probe_response<'a>(
 }
 
 struct ProbeWsServer {
-    url: String,
+    base_url: String,
+    market_url: String,
+    user_url: String,
     shutdown_tx: Option<mpsc::Sender<()>>,
     handle: Option<thread::JoinHandle<()>>,
 }
@@ -662,14 +668,25 @@ impl ProbeWsServer {
                         stream
                             .set_nonblocking(false)
                             .expect("accepted ws stream should be blocking");
+                        let mut requested_path = None::<String>;
                         let mut websocket =
-                            accept_websocket(stream).expect("accept websocket connection");
+                            accept_websocket(stream, |request: &WsRequest, response: WsResponse| {
+                                requested_path = Some(request.uri().path().to_owned());
+                                Ok(response)
+                            })
+                            .expect("accept websocket connection");
                         loop {
                             match websocket.read() {
                                 Ok(WsMessage::Text(text)) => {
                                     websocket
                                         .send(WsMessage::Text(
-                                            response_payload_for_request(&text).into(),
+                                            response_payload_for_request(
+                                                requested_path
+                                                    .as_deref()
+                                                    .expect("ws request path should be captured"),
+                                                &text,
+                                            )
+                                            .into(),
                                         ))
                                         .expect("send ws probe response");
                                     break;
@@ -687,14 +704,25 @@ impl ProbeWsServer {
         });
 
         Self {
-            url: format!("ws://{address}"),
+            base_url: format!("ws://{address}"),
+            market_url: format!("ws://{address}/ws/market"),
+            user_url: format!("ws://{address}/ws/user"),
             shutdown_tx: Some(shutdown_tx),
             handle: Some(handle),
         }
     }
 
-    fn url(&self) -> &str {
-        &self.url
+    fn market_url(&self) -> &str {
+        &self.market_url
+    }
+
+    fn user_url(&self) -> &str {
+        &self.user_url
+    }
+
+    #[allow(dead_code)]
+    fn base_url(&self) -> &str {
+        &self.base_url
     }
 }
 
@@ -709,11 +737,13 @@ impl Drop for ProbeWsServer {
     }
 }
 
-fn response_payload_for_request(request: &str) -> &'static str {
-    if request.contains(r#""type":"user""#) {
+fn response_payload_for_request(path: &str, _request: &str) -> &'static str {
+    if path == "/ws/user" {
         r#"{"event_type":"trade","id":"trade-1","market":"0x0000000000000000000000000000000000000000000000000000000000000001","asset_id":"29","side":"BUY","size":"100","price":"0.41","status":"MATCHED","timestamp":"1750428146322"}"#
-    } else {
+    } else if path == "/ws/market" {
         r#"{"event_type":"last_trade_price","asset_id":"29","market":"0x0000000000000000000000000000000000000000000000000000000000000001","price":"0.40","side":"BUY","size":"100","fee_rate_bps":"15","timestamp":"1750428146322"}"#
+    } else {
+        panic!("unexpected websocket path: {path}");
     }
 }
 
