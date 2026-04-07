@@ -3,7 +3,6 @@ use std::{
     error::Error,
     io,
     path::Path,
-    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -19,7 +18,7 @@ use state::{
 use crate::{
     cli::DiscoverArgs,
     config::PolymarketSourceConfig,
-    source_tasks::build_polymarket_rest_client,
+    polymarket_runtime_adapter::build_polymarket_metadata_gateway,
     task_groups::{MetadataDiscoveryBatch, MetadataTaskGroup},
     CandidateNotice, CandidateRestrictionTruth, DiscoverySupervisor, InputTaskEvent,
     LocalSignerConfig,
@@ -100,8 +99,7 @@ pub(crate) async fn run_discover_from_config(
         "discover loaded live config"
     );
 
-    let rest = build_polymarket_rest_client(&source)?;
-    let metadata_facade = PolymarketGateway::from_metadata_api(Arc::new(rest));
+    let metadata_facade = build_polymarket_metadata_gateway(&source)?;
     println!("Fetching Polymarket metadata");
     let metadata_rows = fetch_discover_metadata(&metadata_facade).await?;
     tracing::debug!(

@@ -21,12 +21,13 @@ use polymarket_client_sdk::clob::types::{
     OrderType as SdkOrderType, Side as SdkSide, SignatureType as SdkSignatureType,
 };
 use polymarket_client_sdk::clob::{Client as SdkClobClient, Config as SdkClobConfig};
+use polymarket_client_sdk::gamma::Client as SdkGammaClient;
 use polymarket_client_sdk::types::{Address as SdkAddress, U256};
 use polymarket_client_sdk::{contract_config, POLYGON, PRIVATE_KEY_VAR};
 use tokio::runtime::Runtime;
 use venue_polymarket::{
-    build_post_order_request_from_signed_member, L2AuthHeaders, LiveClobSdkApi, PolymarketGateway,
-    PolymarketNegRiskSubmitProvider, PostOrderTransport, SignerContext,
+    build_post_order_request_from_signed_member, L2AuthHeaders, LiveClobSdkApi, LiveMetadataSdkApi,
+    PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport, SignerContext,
 };
 
 use crate::{
@@ -74,6 +75,47 @@ impl std::fmt::Display for PolymarketRuntimeAdapterError {
 }
 
 impl std::error::Error for PolymarketRuntimeAdapterError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolymarketMetadataGatewayBackend {
+    Sdk,
+    LegacyRest,
+}
+
+pub(crate) fn polymarket_metadata_gateway_backend(
+    source: &PolymarketSourceConfig,
+) -> PolymarketMetadataGatewayBackend {
+    if source.outbound_proxy_url.is_some() {
+        PolymarketMetadataGatewayBackend::LegacyRest
+    } else {
+        PolymarketMetadataGatewayBackend::Sdk
+    }
+}
+
+pub(crate) fn build_polymarket_metadata_gateway(
+    source: &PolymarketSourceConfig,
+) -> Result<PolymarketGateway, PolymarketRuntimeAdapterError> {
+    match polymarket_metadata_gateway_backend(source) {
+        PolymarketMetadataGatewayBackend::LegacyRest => {
+            let rest = build_polymarket_rest_client(source).map_err(|error| {
+                PolymarketRuntimeAdapterError::Sdk(format!(
+                    "polymarket metadata rest client build failed: {error}"
+                ))
+            })?;
+            Ok(PolymarketGateway::from_metadata_api(Arc::new(rest)))
+        }
+        PolymarketMetadataGatewayBackend::Sdk => {
+            let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
+                PolymarketRuntimeAdapterError::Sdk(format!(
+                    "polymarket metadata sdk client build failed: {error}"
+                ))
+            })?;
+            Ok(PolymarketGateway::from_metadata_api(Arc::new(
+                LiveMetadataSdkApi::new(client),
+            )))
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PolymarketOrderSigner {
@@ -570,7 +612,10 @@ mod tests {
     use rust_decimal::Decimal;
     use serde_json::json;
 
-    use super::PolymarketOrderSigner;
+    use super::{
+        polymarket_metadata_gateway_backend, PolymarketMetadataGatewayBackend,
+        PolymarketOrderSigner,
+    };
     use crate::{config::PolymarketSourceConfig, PolymarketGatewayCredentials};
 
     const TEST_PRIVATE_KEY: &str =
@@ -643,6 +688,31 @@ mod tests {
             .signed_order_hash
             .starts_with("0x"));
         assert_ne!(signed.members[0].identity.signature, "test-sig:plan-1:0");
+    }
+
+    #[test]
+    fn metadata_gateway_backend_defaults_to_sdk_without_proxy() {
+        let source = sample_source_config();
+
+        assert_eq!(
+            polymarket_metadata_gateway_backend(&source),
+            PolymarketMetadataGatewayBackend::Sdk
+        );
+    }
+
+    #[test]
+    fn metadata_gateway_backend_uses_legacy_rest_with_proxy() {
+        let mut source = sample_source_config();
+        source.outbound_proxy_url = Some(
+            "http://127.0.0.1:8080"
+                .parse()
+                .expect("proxy url should parse"),
+        );
+
+        assert_eq!(
+            polymarket_metadata_gateway_backend(&source),
+            PolymarketMetadataGatewayBackend::LegacyRest
+        );
     }
 
     fn env_lock() -> &'static Mutex<()> {

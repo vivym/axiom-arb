@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use httpmock::{Method::GET, MockServer};
 use support::{cli, discover_db};
 use toml_edit::{value, DocumentMut};
 
@@ -62,6 +63,73 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_smoke_config() {
     assert!(database.has_strategy_adoptable_rows());
     assert!(!database.has_strategy_provenance_rows());
 
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
+fn discover_uses_sdk_metadata_client_without_outbound_proxy() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockServer::start();
+    let first_page = venue.mock(|when, then| {
+        when.method(GET)
+            .path("/events")
+            .query_param("active", "true")
+            .query_param("closed", "false")
+            .query_param("limit", "100")
+            .query_param("offset", "0")
+            .header("user-agent", "rs_clob_client");
+        then.status(200).json_body(serde_json::json!([
+            {
+                "id": "event-1",
+                "parentEvent": "family-a",
+                "negRisk": true,
+                "enableNegRisk": true,
+                "negRiskAugmented": false,
+                "markets": [
+                    {
+                        "id": "market-1",
+                        "conditionId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                        "clobTokenIds": "[\"0x0000000000000000000000000000000000000000000000000000000000000001\"]",
+                        "outcomes": "[\"Alpha\"]",
+                        "shortOutcomes": "[\"Alpha\"]",
+                        "negRisk": true,
+                        "negRiskOther": false
+                    }
+                ]
+            }
+        ]));
+    });
+    let second_page = venue.mock(|when, then| {
+        when.method(GET)
+            .path("/events")
+            .query_param("active", "true")
+            .query_param("closed", "false")
+            .query_param("limit", "100")
+            .query_param("offset", "100")
+            .header("user-agent", "rs_clob_client");
+        then.status(200).json_body(serde_json::json!([]));
+    });
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        with_discover_venue_hosts(config, venue.base_url().as_str(), None)
+    });
+
+    let output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live discover should execute");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("candidate_count = 2"), "{text}");
+    assert!(text.contains("adoptable_count = 2"), "{text}");
+
+    first_page.assert();
+    second_page.assert();
     database.cleanup();
     let _ = fs::remove_file(config_path);
 }
@@ -444,6 +512,14 @@ fn app_live_command() -> Command {
 }
 
 fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String {
+    with_discover_venue_hosts(config, venue.base_url(), None)
+}
+
+fn with_discover_venue_hosts(
+    config: String,
+    venue_base_url: &str,
+    outbound_proxy_url: Option<&str>,
+) -> String {
     let mut document = config
         .parse::<DocumentMut>()
         .expect("smoke config fixture should parse as TOML");
@@ -462,7 +538,10 @@ fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String
     .expect("config fixture should contain [polymarket.source] or [polymarket.source_overrides]");
 
     for key in ["clob_host", "data_api_host", "relayer_host"] {
-        source.insert(key, value(venue.base_url()));
+        source.insert(key, value(venue_base_url));
+    }
+    if let Some(proxy_url) = outbound_proxy_url {
+        source.insert("outbound_proxy_url", value(proxy_url));
     }
 
     document.to_string()
@@ -600,7 +679,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
 fn page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
-        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]}]"#,
+        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-1","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000001","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000001\"]","outcomes":"[\"Alpha\"]","shortOutcomes":"[\"Alpha\"]","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-2","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000002","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000002\"]","outcomes":"[\"Beta\"]","shortOutcomes":"[\"Beta\"]","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
 
@@ -614,6 +693,6 @@ fn page_two_empty() -> ScriptedResponse {
 fn page_one_changed() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
-        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-3","parentEvent":"family-b","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-3","clobTokenIds":"token-3","outcomes":"Gamma","shortOutcomes":"Gamma","negRisk":true,"negRiskOther":false}]}]"#,
+        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-1","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000001","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000001\"]","outcomes":"[\"Alpha\"]","shortOutcomes":"[\"Alpha\"]","negRisk":true,"negRiskOther":false}]},{"id":"event-3","parentEvent":"family-b","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-3","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000003","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000003\"]","outcomes":"[\"Gamma\"]","shortOutcomes":"[\"Gamma\"]","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
