@@ -199,6 +199,7 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         let response = run_on_shared_runtime(runtime_handle, async move {
             gateway.submit_order(gateway_order).await
         })
+        .map_err(|err| SubmitProviderError::new(format!("submit shared runtime error: {err}")))?
         .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
 
         let response = submit_order_response_from_gateway(response);
@@ -247,7 +248,12 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
         if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
-            return self.submit_family_via_gateway_runtime(gateway, runtime_handle, signed, attempt);
+            return self.submit_family_via_gateway_runtime(
+                gateway,
+                runtime_handle,
+                signed,
+                attempt,
+            );
         }
 
         run_blocking(self.submit_family_async(signed, attempt))
@@ -416,8 +422,10 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
                     };
                     gateway.recent_transactions(&auth).await
                 })
-                .map_err(RestError::from)
-                .map_err(map_relayer_error)?
+                .map_err(|err| ReconcileProviderError::new(format!("relayer status error: {err}")))?
+                .map_err(|err| {
+                    ReconcileProviderError::new(format!("relayer status error: {err}"))
+                })?
             }
             RelayerAuth::RelayerApiKey { api_key, address } => {
                 let api_key = (*api_key).to_owned();
@@ -429,8 +437,10 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
                     };
                     gateway.recent_transactions(&auth).await
                 })
-                .map_err(RestError::from)
-                .map_err(map_relayer_error)?
+                .map_err(|err| ReconcileProviderError::new(format!("relayer status error: {err}")))?
+                .map_err(|err| {
+                    ReconcileProviderError::new(format!("relayer status error: {err}"))
+                })?
             }
         };
 
@@ -477,10 +487,12 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
         let gateway = gateway.clone();
         let open_orders = run_on_shared_runtime(runtime_handle, async move {
-            gateway.open_orders(PolymarketOrderQuery::open_orders()).await
+            gateway
+                .open_orders(PolymarketOrderQuery::open_orders())
+                .await
         })
-        .map_err(RestError::from)
-        .map_err(map_open_orders_error)?;
+        .map_err(|err| ReconcileProviderError::new(format!("open orders status error: {err}")))?
+        .map_err(|err| ReconcileProviderError::new(format!("open orders status error: {err}")))?;
 
         if open_orders.iter().any(|order| order.order_id == order_id) {
             return Ok(ReconcileOutcome::ConfirmedAuthoritative {
@@ -544,14 +556,17 @@ impl<'a> ReconcileProvider for PolymarketNegRiskReconcileProvider<'a> {
 fn run_on_shared_runtime<T: Send + 'static>(
     handle: &Handle,
     future: impl Future<Output = T> + Send + 'static,
-) -> T {
-    let (tx, rx) = mpsc::channel();
-    let _ = handle.spawn(async move {
-        let _ = tx.send(future.await);
-    });
+) -> Result<T, String> {
+    ensure_runtime_handle_is_off_thread(handle)?;
 
-    rx.recv()
-        .expect("shared runtime task should complete before provider returns")
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::mem::drop(handle.spawn(async move {
+        let _ = tx.send(future.await);
+    }));
+
+    rx.recv().map_err(|_| {
+        "shared runtime is unavailable or shut down before the gateway task completed".to_owned()
+    })
 }
 
 fn run_blocking<T: Send>(future: impl Future<Output = T> + Send) -> T {
@@ -565,6 +580,19 @@ fn run_blocking<T: Send>(future: impl Future<Output = T> + Send) -> T {
             .join()
             .expect("provider future should complete")
     })
+}
+
+fn ensure_runtime_handle_is_off_thread(handle: &Handle) -> Result<(), String> {
+    if let Ok(current) = Handle::try_current() {
+        if current.id() == handle.id() {
+            return Err(
+                "shared runtime handle must not be the current runtime; use a dedicated off-thread runtime"
+                    .to_owned(),
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_pending_ref(pending_ref: &str) -> Result<PendingRefTarget<'_>, ReconcileProviderError> {
@@ -661,5 +689,18 @@ fn submit_order_response_from_gateway(response: PolymarketSubmitResponse) -> Sub
         status: response.status,
         transaction_hashes: response.transaction_hashes,
         error_msg: response.error_message.unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_runtime_handle_is_off_thread;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_runtime_handle_rejects_current_runtime() {
+        let error = ensure_runtime_handle_is_off_thread(&tokio::runtime::Handle::current())
+            .expect_err("current runtime handle should be rejected");
+
+        assert!(error.contains("current runtime"));
     }
 }

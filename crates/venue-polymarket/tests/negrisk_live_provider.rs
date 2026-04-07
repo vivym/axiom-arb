@@ -3,10 +3,12 @@ mod support;
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use domain::{ExecutionAttemptContext, ExecutionMode, SignatureType, WalletRoute};
 use execution::providers::{ReconcileProvider, VenueExecutionProvider};
 use execution::{
@@ -18,9 +20,10 @@ use support::{
 };
 use url::Url;
 use venue_polymarket::{
-    L2AuthHeaders, OrderType, PolymarketGateway, PolymarketNegRiskReconcileProvider,
-    PolymarketNegRiskSubmitProvider, PolymarketRestClient, PostOrderTransport, RelayerAuth,
-    RelayerTransaction, RelayerTransactionType, SignerContext,
+    L2AuthHeaders, OrderType, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
+    PolymarketHeartbeatStatus, PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider,
+    PolymarketRelayerApi, PolymarketRestClient, PolymarketSignedOrder, PolymarketSubmitResponse,
+    PostOrderTransport, RelayerAuth, RelayerTransaction, RelayerTransactionType, SignerContext,
 };
 
 #[tokio::test]
@@ -339,6 +342,143 @@ async fn polymarket_reconcile_provider_surfaces_transport_failures_as_provider_e
     let _ = server.finish();
 }
 
+#[test]
+fn polymarket_submit_provider_with_gateway_runtime_executes_on_supplied_runtime() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let recorder = Arc::new(Mutex::new(Vec::new()));
+    let runtime = SharedRuntimeHarness::spawn("shared-gateway-submit");
+    let provider = sample_submit_provider_with_gateway_runtime(
+        server.base_url(),
+        PolymarketGateway::from_clob_api(Arc::new(ThreadRecordingClobApi {
+            submit_threads: recorder.clone(),
+        })),
+        runtime.handle(),
+    );
+
+    let outcome = provider
+        .submit_family(&sample_signed_submission(), &sample_attempt())
+        .expect("shared-runtime gateway submit should succeed");
+
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record } => {
+            assert_eq!(submission_record.submission_ref, "order-threaded");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    let recorded = recorder.lock().expect("submit thread recorder").clone();
+    assert_eq!(recorded, vec!["shared-gateway-submit".to_owned()]);
+    server.finish_without_request();
+}
+
+#[test]
+fn polymarket_reconcile_provider_with_gateway_runtime_executes_on_supplied_runtime() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let recorder = Arc::new(Mutex::new(Vec::new()));
+    let runtime = SharedRuntimeHarness::spawn("shared-gateway-reconcile");
+    let provider = sample_reconcile_provider_with_gateway_runtime(
+        server.base_url(),
+        PolymarketGateway::from_relayer_api(Arc::new(ThreadRecordingRelayerApi {
+            recent_transactions: vec![confirmed_transaction("0xtx-shared-runtime")],
+            recent_threads: recorder.clone(),
+        })),
+        runtime.handle(),
+    );
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("tx:0xtx-shared-runtime"))
+        .expect("shared-runtime gateway reconcile should succeed");
+
+    match outcome {
+        ReconcileOutcome::ConfirmedAuthoritative { submission_ref } => {
+            assert_eq!(submission_ref, "0xtx-shared-runtime");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    let recorded = recorder.lock().expect("reconcile thread recorder").clone();
+    assert_eq!(recorded, vec!["shared-gateway-reconcile".to_owned()]);
+    server.finish_without_request();
+}
+
+#[test]
+fn polymarket_reconcile_open_orders_with_gateway_runtime_executes_on_supplied_runtime() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let recorder = Arc::new(Mutex::new(Vec::new()));
+    let runtime = SharedRuntimeHarness::spawn("shared-gateway-open-orders");
+    let provider = sample_reconcile_provider_with_gateway_runtime(
+        server.base_url(),
+        PolymarketGateway::from_clob_api(Arc::new(ThreadRecordingOpenOrdersClobApi {
+            open_orders: vec![scripted_open_order("order-shared-open")],
+            open_order_threads: recorder.clone(),
+        })),
+        runtime.handle(),
+    );
+
+    let outcome = provider
+        .reconcile_live(&sample_pending_work("order:order-shared-open"))
+        .expect("shared-runtime open orders reconcile should succeed");
+
+    match outcome {
+        ReconcileOutcome::ConfirmedAuthoritative { submission_ref } => {
+            assert_eq!(submission_ref, "order-shared-open");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    let recorded = recorder.lock().expect("open-order thread recorder").clone();
+    assert_eq!(recorded, vec!["shared-gateway-open-orders".to_owned()]);
+    server.finish_without_request();
+}
+
+#[test]
+fn polymarket_submit_provider_with_shutdown_runtime_surfaces_provider_error() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let runtime_handle = runtime.handle().clone();
+    drop(runtime);
+    let provider = sample_submit_provider_with_gateway_runtime(
+        server.base_url(),
+        scripted_gateway_with_open_orders(Vec::new()),
+        runtime_handle,
+    );
+
+    let err = provider
+        .submit_family(&sample_signed_submission(), &sample_attempt())
+        .expect_err("shutdown runtime should surface as a provider error");
+
+    assert!(err.reason.contains("runtime"));
+    server.finish_without_request();
+}
+
+#[test]
+fn polymarket_reconcile_provider_with_shutdown_runtime_surfaces_provider_error() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let runtime_handle = runtime.handle().clone();
+    drop(runtime);
+    let provider = sample_reconcile_provider_with_gateway_runtime(
+        server.base_url(),
+        scripted_gateway_with_open_orders(vec![scripted_open_order("order-unused")]),
+        runtime_handle,
+    );
+
+    let err = provider
+        .reconcile_live(&sample_pending_work("order:order-unused"))
+        .expect_err("shutdown runtime should surface as a reconcile error");
+
+    assert!(err.reason.contains("runtime"));
+    server.finish_without_request();
+}
+
 fn sample_submit_provider(base_url: Url) -> PolymarketNegRiskSubmitProvider<'static> {
     PolymarketNegRiskSubmitProvider::new(
         sample_rest_client(base_url),
@@ -359,6 +499,20 @@ fn sample_submit_provider_with_gateway(
     )
 }
 
+fn sample_submit_provider_with_gateway_runtime(
+    base_url: Url,
+    gateway: PolymarketGateway,
+    runtime_handle: tokio::runtime::Handle,
+) -> PolymarketNegRiskSubmitProvider<'static> {
+    PolymarketNegRiskSubmitProvider::with_gateway_runtime(
+        sample_rest_client(base_url),
+        sample_l2_auth(),
+        sample_post_order_transport(),
+        gateway,
+        runtime_handle,
+    )
+}
+
 fn sample_reconcile_provider(base_url: Url) -> PolymarketNegRiskReconcileProvider<'static> {
     PolymarketNegRiskReconcileProvider::new(
         sample_rest_client(base_url),
@@ -376,6 +530,20 @@ fn sample_reconcile_provider_with_gateway(
         sample_l2_auth(),
         sample_relayer_auth(),
         gateway,
+    )
+}
+
+fn sample_reconcile_provider_with_gateway_runtime(
+    base_url: Url,
+    gateway: PolymarketGateway,
+    runtime_handle: tokio::runtime::Handle,
+) -> PolymarketNegRiskReconcileProvider<'static> {
+    PolymarketNegRiskReconcileProvider::with_gateway_runtime(
+        sample_rest_client(base_url),
+        sample_l2_auth(),
+        sample_relayer_auth(),
+        gateway,
+        runtime_handle,
     )
 }
 
@@ -522,6 +690,176 @@ struct MockServer {
     request: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     join: thread::JoinHandle<()>,
     addr: std::net::SocketAddr,
+}
+
+#[derive(Debug)]
+struct SharedRuntimeHarness {
+    handle: tokio::runtime::Handle,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl SharedRuntimeHarness {
+    fn spawn(thread_name: &str) -> Self {
+        let (handle_tx, handle_rx) = mpsc::sync_channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let worker_name = thread_name.to_owned();
+        let join = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name(worker_name)
+                .enable_all()
+                .build()
+                .expect("shared runtime should build");
+            handle_tx
+                .send(runtime.handle().clone())
+                .expect("shared runtime handle should send");
+            runtime.block_on(async move {
+                let _ = shutdown_rx.await;
+            });
+        });
+        let handle = handle_rx
+            .recv()
+            .expect("shared runtime handle should be received");
+
+        Self {
+            handle,
+            shutdown: Some(shutdown_tx),
+            join: Some(join),
+        }
+    }
+
+    fn handle(&self) -> tokio::runtime::Handle {
+        self.handle.clone()
+    }
+}
+
+impl Drop for SharedRuntimeHarness {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(join) = self.join.take() {
+            join.join().expect("shared runtime thread should join");
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ThreadRecordingClobApi {
+    submit_threads: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl PolymarketClobApi for ThreadRecordingClobApi {
+    async fn open_orders(
+        &self,
+        _query: &venue_polymarket::PolymarketOrderQuery,
+    ) -> Result<Vec<venue_polymarket::PolymarketOpenOrderSummary>, PolymarketGatewayError> {
+        Ok(Vec::new())
+    }
+
+    async fn submit_order(
+        &self,
+        _order: &PolymarketSignedOrder,
+    ) -> Result<PolymarketSubmitResponse, PolymarketGatewayError> {
+        self.submit_threads
+            .lock()
+            .expect("submit thread recorder")
+            .push(current_thread_name());
+        Ok(PolymarketSubmitResponse {
+            order_id: "order-threaded".to_owned(),
+            status: "LIVE".to_owned(),
+            success: true,
+            error_message: None,
+            transaction_hashes: Vec::new(),
+        })
+    }
+
+    async fn post_heartbeat(
+        &self,
+        _previous_heartbeat_id: Option<&str>,
+    ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
+        Ok(PolymarketHeartbeatStatus {
+            heartbeat_id: "hb-threaded".to_owned(),
+            valid: true,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ThreadRecordingOpenOrdersClobApi {
+    open_orders: Vec<venue_polymarket::PolymarketOpenOrderSummary>,
+    open_order_threads: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl PolymarketClobApi for ThreadRecordingOpenOrdersClobApi {
+    async fn open_orders(
+        &self,
+        _query: &venue_polymarket::PolymarketOrderQuery,
+    ) -> Result<Vec<venue_polymarket::PolymarketOpenOrderSummary>, PolymarketGatewayError> {
+        self.open_order_threads
+            .lock()
+            .expect("open-order thread recorder")
+            .push(current_thread_name());
+        Ok(self.open_orders.clone())
+    }
+
+    async fn submit_order(
+        &self,
+        _order: &PolymarketSignedOrder,
+    ) -> Result<PolymarketSubmitResponse, PolymarketGatewayError> {
+        Err(PolymarketGatewayError::protocol(
+            "submit_order should not be called in open-order reconcile tests",
+        ))
+    }
+
+    async fn post_heartbeat(
+        &self,
+        _previous_heartbeat_id: Option<&str>,
+    ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
+        Ok(PolymarketHeartbeatStatus {
+            heartbeat_id: "hb-open-order-threaded".to_owned(),
+            valid: true,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ThreadRecordingRelayerApi {
+    recent_transactions: Vec<RelayerTransaction>,
+    recent_threads: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl PolymarketRelayerApi for ThreadRecordingRelayerApi {
+    async fn recent_transactions(
+        &self,
+        _auth: &RelayerAuth<'_>,
+    ) -> Result<Vec<RelayerTransaction>, PolymarketGatewayError> {
+        self.recent_threads
+            .lock()
+            .expect("reconcile thread recorder")
+            .push(current_thread_name());
+        Ok(self.recent_transactions.clone())
+    }
+
+    async fn current_nonce(
+        &self,
+        _auth: &RelayerAuth<'_>,
+        _address: &str,
+        _wallet_type: RelayerTransactionType,
+    ) -> Result<String, PolymarketGatewayError> {
+        Ok("60".to_owned())
+    }
+}
+
+fn current_thread_name() -> String {
+    thread::current()
+        .name()
+        .unwrap_or("unnamed-thread")
+        .to_owned()
 }
 
 impl MockServer {
