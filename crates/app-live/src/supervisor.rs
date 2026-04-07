@@ -14,7 +14,10 @@ use crate::{
     dispatch::{DispatchLoop, DispatchSummary},
     input_tasks::InputTaskEvent,
     instrumentation::AppInstrumentation,
-    negrisk_live::{eligible_live_records, NegRiskLiveExecutionRecord},
+    negrisk_live::{
+        eligible_live_records, eligible_live_records_with_backend, NegRiskLiveExecutionBackend,
+        NegRiskLiveExecutionRecord,
+    },
     negrisk_shadow::eligible_shadow_records_with_run_session_id,
     posture::SupervisorPosture,
     queues::{CandidateNotice, CandidateRestrictionTruth, IngressQueue},
@@ -176,6 +179,7 @@ pub struct AppSupervisor {
     neg_risk_live_target_revision: Option<String>,
     neg_risk_live_approved_families: BTreeSet<String>,
     neg_risk_live_ready_families: BTreeSet<String>,
+    neg_risk_live_execution_backend: Option<Box<dyn NegRiskLiveExecutionBackend>>,
     neg_risk_rollout_evidence: Option<NegRiskRolloutEvidence>,
     neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource,
     last_emitted_rollout_evidence: Option<NegRiskRolloutEvidence>,
@@ -224,6 +228,7 @@ impl AppSupervisor {
             neg_risk_live_target_revision: None,
             neg_risk_live_approved_families: BTreeSet::new(),
             neg_risk_live_ready_families: BTreeSet::new(),
+            neg_risk_live_execution_backend: None,
             neg_risk_rollout_evidence: None,
             neg_risk_rollout_evidence_source: NegRiskRolloutEvidenceSource::None,
             last_emitted_rollout_evidence: None,
@@ -450,6 +455,14 @@ impl AppSupervisor {
     pub fn seed_neg_risk_live_ready_family(&mut self, family_id: &str) {
         self.neg_risk_live_ready_families
             .insert(family_id.to_owned());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_neg_risk_live_execution_backend(
+        &mut self,
+        backend: impl NegRiskLiveExecutionBackend + 'static,
+    ) {
+        self.neg_risk_live_execution_backend = Some(Box::new(backend));
     }
 
     pub fn seed_neg_risk_live_execution_record(&mut self, record: NegRiskLiveExecutionRecord) {
@@ -923,13 +936,23 @@ impl AppSupervisor {
             return Ok(());
         }
 
-        let records = eligible_live_records(
-            snapshot_id,
-            &self.neg_risk_live_targets,
-            &self.neg_risk_live_approved_families,
-            &self.neg_risk_live_ready_families,
-            self.metrics_recorder.clone(),
-        )
+        let records = match self.neg_risk_live_execution_backend.as_deref() {
+            Some(backend) => eligible_live_records_with_backend(
+                snapshot_id,
+                &self.neg_risk_live_targets,
+                &self.neg_risk_live_approved_families,
+                &self.neg_risk_live_ready_families,
+                self.metrics_recorder.clone(),
+                backend,
+            ),
+            None => eligible_live_records(
+                snapshot_id,
+                &self.neg_risk_live_targets,
+                &self.neg_risk_live_approved_families,
+                &self.neg_risk_live_ready_families,
+                self.metrics_recorder.clone(),
+            ),
+        }
         .map_err(|err| SupervisorError::new(err.to_string()))?;
         let applied_record_count = self.apply_live_submit_facts(&records)?;
         let applied_records = records
@@ -1416,7 +1439,38 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::AppSupervisor;
-    use crate::{NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget};
+    use crate::{
+        negrisk_live::{NegRiskLiveError, NegRiskLiveExecutionBackend},
+        NegRiskFamilyLiveTarget, NegRiskLiveExecutionRecord, NegRiskMemberLiveTarget,
+    };
+
+    struct StubNegRiskLiveExecutionBackend;
+
+    impl NegRiskLiveExecutionBackend for StubNegRiskLiveExecutionBackend {
+        fn execute_live_family(
+            &self,
+            snapshot_id: &str,
+            target: &NegRiskFamilyLiveTarget,
+            matched_rule_id: &str,
+            _instrumentation: execution::ExecutionInstrumentation,
+        ) -> Result<NegRiskLiveExecutionRecord, NegRiskLiveError> {
+            Ok(NegRiskLiveExecutionRecord {
+                attempt_id: format!("attempt-{}", target.family_id),
+                plan_id: format!("plan-{}", target.family_id),
+                snapshot_id: snapshot_id.to_owned(),
+                execution_mode: domain::ExecutionMode::Live,
+                attempt_no: 1,
+                idempotency_key: format!("idem-{}", target.family_id),
+                route: "neg-risk".to_owned(),
+                scope: target.family_id.clone(),
+                matched_rule_id: Some(matched_rule_id.to_owned()),
+                submission_ref: Some(format!("submission-{}", target.family_id)),
+                pending_ref: Some(format!("tx:{}", target.family_id)),
+                artifacts: Vec::new(),
+                order_requests: Vec::new(),
+            })
+        }
+    }
 
     #[test]
     fn smoke_supervisor_without_durable_persistence_capability_ignores_ambient_database_url() {
@@ -1443,5 +1497,42 @@ mod tests {
         assert_eq!(summary.neg_risk_live_attempt_count, 0);
         assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
         assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
+    }
+
+    #[test]
+    fn supervisor_uses_injected_neg_risk_backend_for_synthetic_live_bootstrap() {
+        let mut supervisor = AppSupervisor::for_tests();
+        supervisor.set_neg_risk_live_execution_backend(StubNegRiskLiveExecutionBackend);
+        supervisor.seed_neg_risk_live_targets(BTreeMap::from([(
+            "family-a".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-a".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-1".to_owned(),
+                    token_id: "token-1".to_owned(),
+                    price: Decimal::new(45, 2),
+                    quantity: Decimal::new(10, 0),
+                }],
+            },
+        )]));
+        supervisor.seed_neg_risk_live_approval("family-a");
+        supervisor.seed_neg_risk_live_ready_family("family-a");
+
+        let summary = supervisor.run_once().expect("supervisor should run");
+
+        assert_eq!(summary.negrisk_mode, ExecutionMode::Live);
+        assert_eq!(summary.neg_risk_live_attempt_count, 1);
+        assert_eq!(
+            supervisor.neg_risk_live_execution_records()[0].submission_ref.as_deref(),
+            Some("submission-family-a")
+        );
+        assert_eq!(
+            supervisor.neg_risk_live_execution_records()[0].pending_ref.as_deref(),
+            Some("tx:family-a")
+        );
+        assert_eq!(
+            summary.neg_risk_live_state_source,
+            crate::supervisor::NegRiskLiveStateSource::SyntheticBootstrap
+        );
     }
 }

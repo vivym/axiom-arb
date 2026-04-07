@@ -87,7 +87,7 @@ pub fn eligible_live_records(
     )
 }
 
-fn eligible_live_records_with_backend(
+pub(crate) fn eligible_live_records_with_backend(
     snapshot_id: &str,
     targets: &std::collections::BTreeMap<String, NegRiskFamilyLiveTarget>,
     approved_families: &std::collections::BTreeSet<String>,
