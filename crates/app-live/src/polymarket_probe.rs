@@ -2,6 +2,7 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use domain::{SignatureType, WalletRoute};
+use tokio::sync::Mutex as AsyncMutex;
 use venue_polymarket::{
     L2AuthHeaders, LiveRelayerApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
     PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
@@ -62,11 +63,15 @@ pub(crate) trait PolymarketProbeFacade {
 
 pub(crate) struct LivePolymarketProbe {
     source_config: PolymarketSourceConfig,
+    stream_api: Arc<LegacyStreamProbeApi>,
 }
 
 impl LivePolymarketProbe {
     pub(crate) fn new(source_config: PolymarketSourceConfig) -> Self {
-        Self { source_config }
+        Self {
+            stream_api: Arc::new(LegacyStreamProbeApi::new(source_config.clone())),
+            source_config,
+        }
     }
 
     fn rest_client(&self) -> Result<PolymarketRestClient, RestClientBuildError> {
@@ -92,9 +97,7 @@ impl LivePolymarketProbe {
     }
 
     fn stream_gateway(&self) -> PolymarketGateway {
-        PolymarketGateway::from_stream_api(Arc::new(LegacyStreamProbeApi::new(
-            self.source_config.clone(),
-        )))
+        PolymarketGateway::from_stream_api(self.stream_api.clone())
     }
 
     fn relayer_gateway(&self) -> Result<PolymarketGateway, PolymarketProbeError> {
@@ -119,7 +122,7 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
                     .open_orders(PolymarketOrderQuery::open_orders())
                     .await
                     .map(|_| ())
-                    .map_err(map_gateway_error)
+                    .map_err(|error| map_gateway_error("authenticated REST", error))
             })
             .await
         })
@@ -133,7 +136,7 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
                     .collect_market_events(token_ids.to_vec())
                     .await
                     .map(|_| ())
-                    .map_err(map_gateway_error)
+                    .map_err(|error| map_gateway_error("market websocket", error))
             })
             .await
         })
@@ -157,7 +160,7 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
                     .collect_user_events(auth, condition_ids.to_vec())
                     .await
                     .map(|_| ())
-                    .map_err(map_gateway_error)
+                    .map_err(|error| map_gateway_error("user websocket", error))
             })
             .await
         })
@@ -174,7 +177,7 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
                     .post_heartbeat(Some(HEARTBEAT_PREVIOUS_ID))
                     .await
                     .map(|_| ())
-                    .map_err(map_gateway_error)
+                    .map_err(|error| map_gateway_error("heartbeat", error))
             })
             .await
         })
@@ -192,7 +195,7 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
                     .recent_transactions(&auth)
                     .await
                     .map(|_| ())
-                    .map_err(map_gateway_error)
+                    .map_err(|error| map_gateway_error("relayer reachability", error))
             })
             .await
         })
@@ -268,21 +271,36 @@ impl PolymarketClobApi for LegacyClobProbeApi {
 
 struct LegacyStreamProbeApi {
     source_config: PolymarketSourceConfig,
+    ws_client: AsyncMutex<Option<PolymarketWsClient>>,
 }
 
 impl LegacyStreamProbeApi {
     fn new(source_config: PolymarketSourceConfig) -> Self {
-        Self { source_config }
+        Self {
+            source_config,
+            ws_client: AsyncMutex::new(None),
+        }
     }
 
-    async fn connect(&self) -> Result<PolymarketWsClient, PolymarketGatewayError> {
-        PolymarketWsClient::connect_with_proxy(
-            self.source_config.market_ws_url.clone(),
-            self.source_config.user_ws_url.clone(),
-            self.source_config.outbound_proxy_url.clone(),
-        )
-        .await
-        .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))
+    async fn ensure_ws_client(&self) -> Result<(), PolymarketGatewayError> {
+        let mut guard = self.ws_client.lock().await;
+        if guard.is_none() {
+            let market_ws_url = self.source_config.market_ws_url.clone();
+            let user_ws_url = self.source_config.user_ws_url.clone();
+            let outbound_proxy_url = self.source_config.outbound_proxy_url.clone();
+            let client = timeout_gateway_probe("websocket connection", async move {
+                PolymarketWsClient::connect_with_proxy(
+                    market_ws_url,
+                    user_ws_url,
+                    outbound_proxy_url,
+                )
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))
+            })
+            .await?;
+            *guard = Some(client);
+        }
+        Ok(())
     }
 }
 
@@ -292,16 +310,24 @@ impl PolymarketStreamApi for LegacyStreamProbeApi {
         &self,
         token_ids: &[String],
     ) -> Result<Vec<MarketWsEvent>, PolymarketGatewayError> {
-        let mut client = self.connect().await?;
-        client
-            .subscribe_market_assets(token_ids, false)
-            .await
-            .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
-        let event = client
-            .next_market_event()
-            .await
-            .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
-        Ok(vec![event])
+        self.ensure_ws_client().await?;
+        let mut guard = self.ws_client.lock().await;
+        let client = guard
+            .as_mut()
+            .expect("websocket client should be initialized");
+
+        timeout_gateway_probe("market websocket", async {
+            client
+                .subscribe_market_assets(token_ids, false)
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
+            let event = client
+                .next_market_event()
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
+            Ok(vec![event])
+        })
+        .await
     }
 
     async fn user_events(
@@ -309,23 +335,31 @@ impl PolymarketStreamApi for LegacyStreamProbeApi {
         auth: &PolymarketUserStreamAuth,
         condition_ids: &[String],
     ) -> Result<Vec<UserWsEvent>, PolymarketGatewayError> {
-        let mut client = self.connect().await?;
-        client
-            .subscribe_user_markets(
-                &WsUserChannelAuth {
-                    api_key: &auth.api_key,
-                    secret: &auth.secret,
-                    passphrase: &auth.passphrase,
-                },
-                condition_ids,
-            )
-            .await
-            .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
-        let event = client
-            .next_user_event()
-            .await
-            .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
-        Ok(vec![event])
+        self.ensure_ws_client().await?;
+        let mut guard = self.ws_client.lock().await;
+        let client = guard
+            .as_mut()
+            .expect("websocket client should be initialized");
+
+        timeout_gateway_probe("user websocket", async {
+            client
+                .subscribe_user_markets(
+                    &WsUserChannelAuth {
+                        api_key: &auth.api_key,
+                        secret: &auth.secret,
+                        passphrase: &auth.passphrase,
+                    },
+                    condition_ids,
+                )
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
+            let event = client
+                .next_user_event()
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
+            Ok(vec![event])
+        })
+        .await
     }
 }
 
@@ -346,8 +380,25 @@ where
         })?
 }
 
-fn map_gateway_error(error: PolymarketGatewayError) -> PolymarketProbeError {
-    PolymarketProbeError::new("ConnectivityError", error.to_string())
+async fn timeout_gateway_probe<F, T>(label: &str, future: F) -> Result<T, PolymarketGatewayError>
+where
+    F: Future<Output = Result<T, PolymarketGatewayError>>,
+{
+    tokio::time::timeout(CONNECTIVITY_TIMEOUT, future)
+        .await
+        .map_err(|_| {
+            PolymarketGatewayError::connectivity(format!(
+                "{label} probe timed out after {}s",
+                CONNECTIVITY_TIMEOUT.as_secs()
+            ))
+        })?
+}
+
+fn map_gateway_error(label: &str, error: PolymarketGatewayError) -> PolymarketProbeError {
+    PolymarketProbeError::new(
+        "ConnectivityError",
+        format!("{label} probe failed: {error}"),
+    )
 }
 
 fn map_probe_protocol_error(error: PolymarketProbeError) -> PolymarketGatewayError {
@@ -429,5 +480,158 @@ fn parse_wallet_route(label: &str) -> Result<WalletRoute, PolymarketProbeError> 
             "ConnectivityError",
             format!("unsupported wallet route label {other}"),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{net::TcpListener as StdTcpListener, thread, time::Duration};
+
+    use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn legacy_stream_probe_reuses_single_connection_pair_across_market_and_user_events() {
+        let market_ws = ProbeWsServer::spawn(WsProbeKind::Market);
+        let user_ws = ProbeWsServer::spawn(WsProbeKind::User);
+        let api = LegacyStreamProbeApi::new(sample_source_config(market_ws.url(), user_ws.url()));
+
+        let market_events = api
+            .market_events(&["token-1".to_owned()])
+            .await
+            .expect("market events should succeed");
+        assert_eq!(market_events.len(), 1);
+
+        let user_events = api
+            .user_events(&sample_user_stream_auth(), &["condition-1".to_owned()])
+            .await
+            .expect("user events should succeed");
+        assert!(matches!(user_events[0], UserWsEvent::Trade(_)));
+    }
+
+    #[test]
+    fn gateway_failures_keep_the_probe_label_in_the_error_message() {
+        let error = map_gateway_error(
+            "authenticated REST",
+            PolymarketGatewayError::upstream_response("401 Unauthorized"),
+        );
+
+        assert_eq!(error.category, "ConnectivityError");
+        assert!(error.message.contains("authenticated REST probe failed"));
+        assert!(error.message.contains("401 Unauthorized"));
+    }
+
+    fn sample_source_config(market_ws_url: &str, user_ws_url: &str) -> PolymarketSourceConfig {
+        PolymarketSourceConfig {
+            clob_host: "http://127.0.0.1:1".parse().expect("clob host"),
+            data_api_host: "http://127.0.0.1:1".parse().expect("data api host"),
+            relayer_host: "http://127.0.0.1:1".parse().expect("relayer host"),
+            market_ws_url: market_ws_url.parse().expect("market ws url"),
+            user_ws_url: user_ws_url.parse().expect("user ws url"),
+            outbound_proxy_url: None,
+            heartbeat_interval_seconds: 15,
+            relayer_poll_interval_seconds: 5,
+            metadata_refresh_interval_seconds: 60,
+        }
+    }
+
+    fn sample_user_stream_auth() -> PolymarketUserStreamAuth {
+        PolymarketUserStreamAuth {
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+            api_key: "poly-api-key".to_owned(),
+            secret: "poly-secret".to_owned(),
+            passphrase: "poly-passphrase".to_owned(),
+        }
+    }
+
+    struct ProbeWsServer {
+        url: String,
+        shutdown_tx: Option<std::sync::mpsc::Sender<()>>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl ProbeWsServer {
+        fn spawn(kind: WsProbeKind) -> Self {
+            let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind ws probe server");
+            let address = listener.local_addr().expect("ws probe server address");
+            listener
+                .set_nonblocking(true)
+                .expect("ws probe server should be nonblocking");
+            let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+            let handle = thread::spawn(move || loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream
+                            .set_nonblocking(false)
+                            .expect("accepted ws stream should be blocking");
+                        let mut websocket =
+                            accept_websocket(stream).expect("accept ws probe websocket");
+                        let mut responded = false;
+                        loop {
+                            match websocket.read() {
+                                Ok(WsMessage::Text(_)) if !responded => {
+                                    websocket
+                                        .send(WsMessage::Text(kind.response_payload().into()))
+                                        .expect("send ws probe response");
+                                    responded = true;
+                                }
+                                Ok(_) => {}
+                                Err(_) => break,
+                            }
+                        }
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("ws probe server accept failed: {error}"),
+                }
+            });
+
+            Self {
+                url: format!("ws://{address}"),
+                shutdown_tx: Some(shutdown_tx),
+                handle: Some(handle),
+            }
+        }
+
+        fn url(&self) -> &str {
+            &self.url
+        }
+    }
+
+    impl Drop for ProbeWsServer {
+        fn drop(&mut self) {
+            if let Some(shutdown_tx) = self.shutdown_tx.take() {
+                let _ = shutdown_tx.send(());
+            }
+            if let Some(handle) = self.handle.take() {
+                handle.join().expect("ws probe server should join");
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum WsProbeKind {
+        Market,
+        User,
+    }
+
+    impl WsProbeKind {
+        fn response_payload(self) -> &'static str {
+            match self {
+                Self::Market => {
+                    r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
+                }
+                Self::User => {
+                    r#"{"event":"trade","trade_id":"trade-1","order_id":"order-1","status":"MATCHED","condition_id":"condition-1","price":"0.41","size":"100","fee_rate_bps":"15","transaction_hash":"0xtrade"}"#
+                }
+            }
+        }
     }
 }

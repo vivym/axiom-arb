@@ -21,7 +21,7 @@ sha2 = "0.10.9"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls"] }
 state = { path = "../state" }
 tempfile = "3.23.0"
-tokio = { version = "1.50.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "sync", "time"] }
 toml_edit = "0.22.27"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["fmt", "std", "env-filter"] }
