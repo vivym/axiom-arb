@@ -820,7 +820,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> String {
 fn page_one_ok() -> ScriptedResponse {
     ScriptedResponse {
         expected_query_fragments: &["active=true", "closed=false", "limit=100", "offset=0"],
-        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-1","clobTokenIds":"token-1","outcomes":"Alpha","shortOutcomes":"Alpha","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"conditionId":"condition-2","clobTokenIds":"token-2","outcomes":"Beta","shortOutcomes":"Beta","negRisk":true,"negRiskOther":false}]}]"#,
+        body: r#"[{"id":"event-1","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-1","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000001","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000001\"]","outcomes":"[\"Alpha\"]","shortOutcomes":"[\"Alpha\"]","negRisk":true,"negRiskOther":false}]},{"id":"event-2","parentEvent":"family-a","negRisk":true,"enableNegRisk":true,"negRiskAugmented":false,"markets":[{"id":"market-2","conditionId":"0x0000000000000000000000000000000000000000000000000000000000000002","clobTokenIds":"[\"0x0000000000000000000000000000000000000000000000000000000000000002\"]","outcomes":"[\"Beta\"]","shortOutcomes":"[\"Beta\"]","negRisk":true,"negRiskOther":false}]}]"#,
     }
 }
 
