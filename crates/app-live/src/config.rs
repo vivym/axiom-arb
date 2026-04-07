@@ -71,6 +71,14 @@ pub struct NegRiskFamilyLiveTarget {
     pub members: Vec<NegRiskMemberLiveTarget>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RouteRuntimeArtifact {
+    pub scope: String,
+    pub route_policy_version: String,
+    pub semantic_digest: String,
+    pub content: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LocalSignerConfig {
     pub signer: LocalSignerIdentity,
@@ -259,6 +267,37 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
             relayer_auth: map_relayer_auth(relayer_auth)?,
         })
     }
+}
+
+pub fn neg_risk_live_targets_from_route_artifacts(
+    route_artifacts: &BTreeMap<String, Vec<RouteRuntimeArtifact>>,
+    operator_strategy_revision: Option<&str>,
+) -> Result<NegRiskLiveTargetSet, ConfigError> {
+    let mut targets = BTreeMap::new();
+
+    for artifact in route_artifacts.get("neg-risk").into_iter().flatten() {
+        let Some(rendered_live_target) = artifact.content.get("rendered_live_target") else {
+            continue;
+        };
+        if rendered_live_target.is_null() {
+            continue;
+        }
+        let target =
+            serde_json::from_value::<NegRiskFamilyLiveTarget>(rendered_live_target.clone())
+                .map_err(|error| ConfigError::InvalidJson {
+                    value: artifact.scope.clone(),
+                    message: error.to_string(),
+                })?;
+        let family_id = target.family_id.clone();
+        if targets.insert(family_id.clone(), target).is_some() {
+            return Err(ConfigError::DuplicateFamilyId { family_id });
+        }
+    }
+
+    Ok(match operator_strategy_revision {
+        Some(revision) => NegRiskLiveTargetSet::from_targets_with_revision(revision, targets),
+        None => NegRiskLiveTargetSet::new(targets),
+    })
 }
 
 pub(crate) fn neg_risk_live_target_revision_from_targets(

@@ -42,6 +42,419 @@ operator_target_revision = "targets-rev-9"
 }
 
 #[test]
+fn validated_config_accepts_strategy_control_and_route_sections() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(!live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
+fn validated_config_accepts_pure_neutral_strategy_control_without_legacy_target_source() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert!(live.has_adopted_strategy_source());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(!live.has_target_source());
+    assert!(!live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
+fn validated_config_accepts_pure_neutral_neg_risk_rollout_without_legacy_rollout() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should bridge into negrisk rollout view");
+    assert_eq!(rollout.approved_families(), &["family-a".to_owned()]);
+    assert_eq!(rollout.ready_families(), &["family-a".to_owned()]);
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+}
+
+#[test]
+fn route_owned_neg_risk_rollout_overrides_legacy_rollout_when_both_are_present() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-route-owned"]
+ready_scopes = ["family-route-owned"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should take precedence over legacy rollout");
+    assert_eq!(
+        rollout.approved_families(),
+        &["family-route-owned".to_owned()]
+    );
+    assert_eq!(rollout.ready_families(), &["family-route-owned".to_owned()]);
+}
+
+#[test]
+fn signer_view_ignores_stale_legacy_rollout_when_route_owned_rollout_is_present() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-route-owned"]
+ready_scopes = ["family-route-owned"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-stale"]
+ready_families = ["family-stale"]
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated
+        .for_app_live()
+        .expect("route-owned rollout should override stale legacy rollout during requiredness");
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should remain visible through the validated view");
+    assert_eq!(
+        rollout.approved_families(),
+        &["family-route-owned".to_owned()]
+    );
+    assert_eq!(rollout.ready_families(), &["family-route-owned".to_owned()]);
+}
+
+#[test]
+fn legacy_explicit_strategy_config_detection_distinguishes_missing_targets_from_explicit_targets() {
+    let missing_targets = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+    let explicit_targets = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk]
+targets = []
+"#,
+    )
+    .unwrap();
+
+    let missing_targets_validated = ValidatedConfig::new(missing_targets).unwrap();
+    let missing_targets_live = missing_targets_validated.for_app_live().unwrap();
+    let explicit_targets_validated = ValidatedConfig::new(explicit_targets).unwrap();
+    let explicit_targets_live = explicit_targets_validated.for_app_live().unwrap();
+
+    assert!(!missing_targets_live.is_legacy_explicit_strategy_config());
+    assert!(explicit_targets_live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
+fn validated_config_marks_legacy_explicit_targets_as_compatibility_mode() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    assert!(live.is_legacy_explicit_strategy_config());
+    assert_eq!(live.operator_strategy_revision(), None);
+}
+
+#[test]
 fn paper_view_does_not_require_live_sections() {
     let raw = load_raw_config_from_str("[runtime]\nmode = \"paper\"\n").unwrap();
     let validated = ValidatedConfig::new(raw).unwrap();
@@ -385,12 +798,8 @@ fn smoke_view_accepts_operator_facing_live_fixture() {
     assert!(live.real_user_shadow_smoke());
     assert!(live.has_polymarket_account());
     assert!(live.has_polymarket_source());
-    assert_eq!(
-        live.target_source()
-            .expect("operator smoke fixture should include target source")
-            .operator_target_revision(),
-        Some("targets-rev-9")
-    );
+    assert!(!live.has_target_source());
+    assert_eq!(live.operator_strategy_revision(), Some("targets-rev-9"));
     assert_eq!(
         live.polymarket_source()
             .expect("operator smoke fixture should include source settings")
@@ -407,8 +816,11 @@ fn live_view_accepts_fully_populated_live_fixture() {
     let live = validated.for_app_live().expect("live view should validate");
     assert_eq!(live.mode(), RuntimeModeToml::Live);
     assert!(!live.real_user_shadow_smoke());
+    assert!(live.has_polymarket_account());
     assert!(live.has_polymarket_source());
-    assert!(live.has_polymarket_signer());
+    assert!(!live.has_polymarket_signer());
+    assert!(!live.has_target_source());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
 }
 
 #[test]
@@ -423,30 +835,23 @@ fn live_view_exposes_consumer_scoped_wrappers() {
     assert_eq!(source.clob_host(), "https://clob.polymarket.com");
     assert_eq!(source.heartbeat_interval_seconds(), 15);
 
-    let signer = live
-        .polymarket_signer()
-        .expect("live fixture should include signer");
-    assert_eq!(signer.signature_type_label(), "Eoa");
-    assert_eq!(signer.wallet_route_label(), "Eoa");
+    let account = live
+        .account()
+        .expect("live fixture should include account credentials");
+    assert_eq!(account.signature_type_label(), "Eoa");
+    assert_eq!(account.wallet_route_label(), "Eoa");
 
     let relayer_auth = live
         .polymarket_relayer_auth()
         .expect("live fixture should include relayer auth");
-    assert!(relayer_auth.is_builder_api_key());
-    assert_eq!(relayer_auth.api_key(), "builder-api-key-1");
+    assert_eq!(
+        relayer_auth.kind(),
+        config_schema::AppLivePolymarketRelayerAuthKind::RelayerApiKey
+    );
+    assert_eq!(relayer_auth.api_key(), "relay-key");
 
-    let targets = live.negrisk_targets();
-    let family = targets
-        .iter()
-        .next()
-        .expect("live fixture should include targets");
-    assert_eq!(family.family_id(), "family-a");
-    let member = family
-        .members()
-        .iter()
-        .next()
-        .expect("family should include members");
-    assert_eq!(member.token_id(), "token-1");
+    assert!(live.negrisk_targets().iter().next().is_none());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
 }
 
 fn validated_err(extra: &str) -> String {

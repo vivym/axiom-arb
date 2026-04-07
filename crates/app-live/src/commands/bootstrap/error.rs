@@ -14,6 +14,9 @@ pub enum BootstrapError {
         config_path: PathBuf,
         follow_up: SmokeFollowUp,
     },
+    MissingOperatorStrategyRevision {
+        config_path: PathBuf,
+    },
     SmokeStartRequiresRolloutReadiness {
         config_path: PathBuf,
     },
@@ -67,6 +70,11 @@ impl fmt::Display for BootstrapError {
                     ),
                 }
             }
+            Self::MissingOperatorStrategyRevision { config_path } => write!(
+                f,
+                "{} is configured for adopted strategy control but missing strategy_control.operator_strategy_revision",
+                config_path.display()
+            ),
             Self::SmokeStartRequiresRolloutReadiness { config_path } => write!(
                 f,
                 "bootstrap smoke --start requires rollout readiness; {} is still preflight-only, so rerun without --start or enable rollout readiness first",

@@ -138,6 +138,71 @@ quantity = "5"
 }
 
 #[test]
+fn pure_neutral_adopted_strategy_control_shape_loads_in_app_live_view() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("pure neutral rollout should bridge into live view");
+    assert_eq!(rollout.approved_families(), &["family-a".to_owned()]);
+    assert_eq!(rollout.ready_families(), &["family-a".to_owned()]);
+    assert!(live.has_adopted_strategy_source());
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(!live.is_legacy_explicit_strategy_config());
+}
+
+#[test]
 fn parses_local_signer_config_from_validated_view() {
     let config = LocalSignerConfig::try_from(&live_view("")).unwrap();
 

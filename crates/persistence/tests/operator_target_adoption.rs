@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
 use persistence::{
-    models::OperatorTargetAdoptionHistoryRow, run_migrations, OperatorTargetAdoptionHistoryRepo,
+    models::{OperatorStrategyAdoptionHistoryRow, OperatorTargetAdoptionHistoryRow},
+    run_migrations, OperatorStrategyAdoptionHistoryRepo, OperatorTargetAdoptionHistoryRepo,
 };
 use sqlx::{postgres::PgPoolOptions, PgPool};
 
@@ -127,6 +128,28 @@ fn sample_adoption_with_id_at(
         previous_operator_target_revision: previous_operator_target_revision.map(str::to_owned),
         adoptable_revision: adoptable_revision.map(str::to_owned),
         candidate_revision: candidate_revision.map(str::to_owned),
+        adopted_at: chrono::DateTime::parse_from_rfc3339(adopted_at)
+            .unwrap()
+            .with_timezone(&Utc),
+    }
+}
+
+fn sample_strategy_adoption_with_id_at(
+    adoption_id: &str,
+    action_kind: &str,
+    operator_strategy_revision: &str,
+    previous_operator_strategy_revision: Option<&str>,
+    adoptable_strategy_revision: Option<&str>,
+    strategy_candidate_revision: Option<&str>,
+    adopted_at: &str,
+) -> OperatorStrategyAdoptionHistoryRow {
+    OperatorStrategyAdoptionHistoryRow {
+        adoption_id: adoption_id.to_owned(),
+        action_kind: action_kind.to_owned(),
+        operator_strategy_revision: operator_strategy_revision.to_owned(),
+        previous_operator_strategy_revision: previous_operator_strategy_revision.map(str::to_owned),
+        adoptable_strategy_revision: adoptable_strategy_revision.map(str::to_owned),
+        strategy_candidate_revision: strategy_candidate_revision.map(str::to_owned),
         adopted_at: chrono::DateTime::parse_from_rfc3339(adopted_at)
             .unwrap()
             .with_timezone(&Utc),
@@ -308,6 +331,94 @@ async fn adoption_history_previous_distinct_revision_uses_append_order_when_time
         .await
         .unwrap();
     assert_eq!(previous.as_deref(), Some("targets-rev-11"));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn strategy_adoption_history_latest_prefers_newer_neutral_rows_over_legacy_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let legacy_repo = OperatorTargetAdoptionHistoryRepo;
+    legacy_repo
+        .append(
+            &db.pool,
+            &sample_adoption_with_id_at(
+                "legacy-adopt",
+                "adopt",
+                "targets-rev-30",
+                Some("targets-rev-29"),
+                Some("adoptable-30"),
+                Some("candidate-30"),
+                "2026-03-30T10:00:00Z",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let strategy_repo = OperatorStrategyAdoptionHistoryRepo;
+    let newer = sample_strategy_adoption_with_id_at(
+        "strategy-rollback",
+        "rollback",
+        "targets-rev-29",
+        Some("targets-rev-30"),
+        None,
+        None,
+        "2026-03-30T10:05:00Z",
+    );
+    strategy_repo.append(&db.pool, &newer).await.unwrap();
+
+    let latest = strategy_repo.latest(&db.pool).await.unwrap();
+    assert_eq!(latest, Some(newer));
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
+async fn strategy_adoption_history_previous_distinct_revision_prefers_newer_neutral_rows() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let legacy_repo = OperatorTargetAdoptionHistoryRepo;
+    legacy_repo
+        .append(
+            &db.pool,
+            &sample_adoption_with_id_at(
+                "legacy-adopt",
+                "adopt",
+                "targets-rev-31",
+                Some("targets-rev-29"),
+                Some("adoptable-31"),
+                Some("candidate-31"),
+                "2026-03-30T10:00:00Z",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let strategy_repo = OperatorStrategyAdoptionHistoryRepo;
+    strategy_repo
+        .append(
+            &db.pool,
+            &sample_strategy_adoption_with_id_at(
+                "strategy-adopt",
+                "adopt",
+                "targets-rev-31",
+                Some("targets-rev-30"),
+                Some("adoptable-31-b"),
+                Some("candidate-31-b"),
+                "2026-03-30T10:05:00Z",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let previous = strategy_repo
+        .previous_distinct_revision(&db.pool, "targets-rev-31")
+        .await
+        .unwrap();
+    assert_eq!(previous.as_deref(), Some("targets-rev-30"));
 
     db.cleanup().await;
 }

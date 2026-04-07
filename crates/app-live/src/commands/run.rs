@@ -5,11 +5,12 @@ use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
 use crate::cli::RunArgs;
-use crate::daemon::run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented;
+use crate::config::neg_risk_live_targets_from_route_artifacts;
+use crate::daemon::run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented;
 use crate::{
     build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
     load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
-    startup::resolve_startup_targets, AppInstrumentation, ConfigError, LocalSignerConfig,
+    startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError, LocalSignerConfig,
     NegRiskLiveTargetSet, SmokeSafeStartupSource, StaticSnapshotSource,
 };
 
@@ -49,8 +50,15 @@ fn run_from_config_path_for_source(
                 Ok(run_paper_instrumented(&source, instrumentation.clone()))
             }
             RuntimeModeToml::Live => {
-                let resolved_targets = load_resolved_targets_from_config(&config)?;
-                let neg_risk_live_targets = resolved_targets.targets;
+                let resolved_strategy = load_resolved_strategy_revision_from_config(&config)?;
+                let allow_legacy_target_source_resume = config
+                    .target_source()
+                    .map(|source| source.is_adopted())
+                    .unwrap_or(false);
+                let neg_risk_live_targets = neg_risk_live_targets_from_route_artifacts(
+                    &resolved_strategy.route_artifacts,
+                    resolved_strategy.operator_strategy_revision.as_deref(),
+                )?;
                 let neg_risk_live_approved_families = rollout_approved_families(&config);
                 let neg_risk_live_ready_families = rollout_ready_families(&config);
                 let signer_config = if real_user_shadow_smoke.is_some()
@@ -90,9 +98,11 @@ fn run_from_config_path_for_source(
                     let _ = signer_config;
                 }
 
-                run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_session_instrumented(
+                run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented(
                     &source,
                     instrumentation,
+                    resolved_strategy.operator_strategy_revision.as_deref(),
+                    allow_legacy_target_source_resume,
                     neg_risk_live_targets,
                     neg_risk_live_approved_families,
                     neg_risk_live_ready_families,
@@ -154,15 +164,15 @@ fn require_database_url_env() -> Result<(), Box<dyn Error>> {
         .map_err(|_| persistence::PersistenceError::MissingDatabaseUrl.into())
 }
 
-fn load_resolved_targets_from_config(
+fn load_resolved_strategy_revision_from_config(
     config: &config_schema::AppLiveConfigView<'_>,
-) -> Result<crate::ResolvedTargets, Box<dyn Error>> {
+) -> Result<crate::startup::ResolvedStrategyRevision, Box<dyn Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     Ok(runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
-        resolve_startup_targets(&pool, config).await
+        resolve_startup_strategy_revision(&pool, config).await
     })?)
 }
 

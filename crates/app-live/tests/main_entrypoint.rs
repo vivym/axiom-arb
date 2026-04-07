@@ -1,10 +1,14 @@
 use config_schema::{load_raw_config_from_path, ValidatedConfig};
 use observability::span_names;
-use persistence::{models::RuntimeProgressRow, run_migrations, RuntimeProgressRepo};
 use persistence::{
-    models::{ExecutionAttemptRow, LiveSubmissionRecordRow},
-    ExecutionAttemptRepo, LiveSubmissionRepo,
+    models::{
+        AdoptableStrategyRevisionRow, ExecutionAttemptRow, LiveSubmissionRecordRow,
+        RuntimeProgressRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
+    run_migrations, ExecutionAttemptRepo, LiveSubmissionRepo, RuntimeProgressRepo,
+    StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
+use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{
     fs,
@@ -21,6 +25,21 @@ fn binary_entrypoint_reads_paper_mode_from_config_file() {
 
     assert!(output.status.success());
     assert!(combined(&output).contains("app_mode=paper"));
+}
+
+#[test]
+fn example_config_mentions_strategy_control_anchor() {
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("config")
+            .join("axiom-arb.example.toml"),
+    )
+    .expect("example config should load");
+
+    assert!(text.contains("[strategy_control]"), "{text}");
+    assert!(text.contains("operator_strategy_revision"), "{text}");
 }
 
 #[test]
@@ -99,7 +118,7 @@ fn live_config_rejects_mismatched_signature_fields_through_binary() {
     let config_path = temp_config_fixture_path("fixtures/app-live-live.toml", |config| {
         config.replace("wallet_route = \"eoa\"", "wallet_route = \"safe\"")
     });
-    let output = app_live_output_with_config_path(&config_path, Some(default_test_database_url()));
+    let output = app_live_output_with_config_path(&config_path, None);
 
     assert!(!output.status.success());
     assert!(combined(&output).contains("wallet_route"));
@@ -114,20 +133,19 @@ fn smoke_config_surfaces_validated_config_error_before_database_bootstrap() {
 }
 
 #[test]
-fn live_config_persists_operator_target_revision_anchor_during_startup() {
+fn live_config_persists_operator_strategy_revision_anchor_during_startup() {
     let database = TestDatabase::new();
-    let revision = app_live::NegRiskLiveTargetSet::try_from(
-        &ValidatedConfig::new(
-            load_raw_config_from_path(&config_fixture_path("fixtures/app-live-live.toml"))
-                .expect("config should parse"),
-        )
-        .expect("config should validate")
-        .for_app_live()
-        .expect("live view should validate"),
+    let revision = ValidatedConfig::new(
+        load_raw_config_from_path(&config_fixture_path("fixtures/app-live-live.toml"))
+            .expect("config should parse"),
     )
-    .expect("targets should parse")
-    .revision()
+    .expect("config should validate")
+    .for_app_live()
+    .expect("live view should validate")
+    .operator_strategy_revision()
+    .expect("live config should define operator_strategy_revision")
     .to_owned();
+    database.seed_adopted_strategy_revision_with_routes(&revision);
 
     let output = app_live_output_with_config_and_database(
         "fixtures/app-live-live.toml",
@@ -146,6 +164,10 @@ fn live_config_persists_operator_target_revision_anchor_during_startup() {
         .runtime_progress()
         .expect("startup should persist runtime progress");
     assert_eq!(
+        progress.operator_strategy_revision.as_deref(),
+        Some(revision.as_str())
+    );
+    assert_eq!(
         progress.operator_target_revision.as_deref(),
         Some(revision.as_str())
     );
@@ -155,9 +177,10 @@ fn live_config_persists_operator_target_revision_anchor_during_startup() {
 }
 
 #[test]
-fn live_config_fails_when_restored_operator_target_revision_anchor_is_stale() {
+fn live_config_fails_when_restored_operator_strategy_revision_anchor_is_stale() {
     let database = TestDatabase::new();
-    database.seed_live_execution_state("targets-rev-stale");
+    database.seed_adopted_strategy_revision_with_routes("strategy-rev-12");
+    database.seed_live_execution_state("strategy-rev-stale");
 
     let output = app_live_output_with_config_and_database(
         "fixtures/app-live-live.toml",
@@ -165,13 +188,17 @@ fn live_config_fails_when_restored_operator_target_revision_anchor_is_stale() {
     );
 
     assert!(!output.status.success(), "{}", combined(&output));
-    assert!(combined(&output).contains("operator target revision anchor mismatch"));
+    assert!(combined(&output).contains("operator strategy revision anchor mismatch"));
 
     database.cleanup();
 }
 
 fn app_live_output_with_config(config_fixture: &str) -> std::process::Output {
-    app_live_output_with_config_and_database(config_fixture, Some(default_test_database_url()))
+    let database = TestDatabase::new();
+    let output =
+        app_live_output_with_config_and_database(config_fixture, Some(database.database_url()));
+    database.cleanup();
+    output
 }
 
 fn app_live_output_with_config_and_database(
@@ -218,7 +245,7 @@ impl TestDatabase {
                 let admin_database_url = std::env::var("DATABASE_URL")
                     .unwrap_or_else(|_| default_test_database_url().to_owned());
                 let admin_pool = PgPoolOptions::new()
-                    .max_connections(2)
+                    .max_connections(8)
                     .connect(&admin_database_url)
                     .await
                     .expect("test database should connect");
@@ -235,7 +262,7 @@ impl TestDatabase {
 
                 let database_url = schema_scoped_database_url(&admin_database_url, &schema);
                 let pool = PgPoolOptions::new()
-                    .max_connections(2)
+                    .max_connections(8)
                     .connect(&database_url)
                     .await
                     .expect("schema-scoped test pool should connect");
@@ -262,26 +289,39 @@ impl TestDatabase {
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                RuntimeProgressRepo
-                    .current(&self.pool)
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect(&self.database_url)
                     .await
-                    .expect("runtime progress lookup should succeed")
+                    .expect("schema-scoped test pool should connect");
+                let progress = RuntimeProgressRepo
+                    .current(&pool)
+                    .await
+                    .expect("runtime progress lookup should succeed");
+                pool.close().await;
+                progress
             })
     }
 
-    fn seed_live_execution_state(&self, operator_target_revision: &str) {
+    fn seed_live_execution_state(&self, operator_strategy_revision: &str) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("test runtime should build")
             .block_on(async {
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect(&self.database_url)
+                    .await
+                    .expect("schema-scoped test pool should connect");
                 RuntimeProgressRepo
-                    .record_progress(
-                        &self.pool,
+                    .record_progress_with_strategy_revision(
+                        &pool,
                         41,
                         7,
                         Some("snapshot-7"),
-                        Some(operator_target_revision),
+                        None,
+                        Some(operator_strategy_revision),
                         None,
                     )
                     .await
@@ -300,7 +340,7 @@ impl TestDatabase {
                     run_session_id: None,
                 };
                 ExecutionAttemptRepo
-                    .append(&self.pool, &attempt)
+                    .append(&pool, &attempt)
                     .await
                     .expect("live attempt should seed");
 
@@ -319,9 +359,127 @@ impl TestDatabase {
                     }),
                 };
                 LiveSubmissionRepo
-                    .append(&self.pool, submission)
+                    .append(&pool, submission)
                     .await
                     .expect("live submission should seed");
+                pool.close().await;
+            });
+    }
+
+    fn seed_adopted_strategy_revision_with_routes(&self, operator_strategy_revision: &str) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect(&self.database_url)
+                    .await
+                    .expect("schema-scoped test pool should connect");
+                let strategy_candidate_revision =
+                    format!("strategy-candidate-{operator_strategy_revision}");
+                let adoptable_strategy_revision = format!("adoptable-{operator_strategy_revision}");
+
+                StrategyControlArtifactRepo
+                    .upsert_strategy_candidate_set(
+                        &pool,
+                        &StrategyCandidateSetRow {
+                            strategy_candidate_revision: strategy_candidate_revision.clone(),
+                            snapshot_id: format!("snapshot-{operator_strategy_revision}"),
+                            source_revision: format!("discovery-{operator_strategy_revision}"),
+                            payload: json!({
+                                "strategy_candidate_revision": strategy_candidate_revision,
+                                "snapshot_id": format!("snapshot-{operator_strategy_revision}"),
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("strategy candidate row should seed");
+
+                StrategyControlArtifactRepo
+                    .upsert_adoptable_strategy_revision(
+                        &pool,
+                        &AdoptableStrategyRevisionRow {
+                            adoptable_strategy_revision: adoptable_strategy_revision.clone(),
+                            strategy_candidate_revision: strategy_candidate_revision.clone(),
+                            rendered_operator_strategy_revision: operator_strategy_revision
+                                .to_owned(),
+                            payload: json!({
+                                "adoptable_strategy_revision": adoptable_strategy_revision,
+                                "strategy_candidate_revision": strategy_candidate_revision,
+                                "rendered_operator_strategy_revision": operator_strategy_revision,
+                                "route_artifacts": [
+                                    {
+                                        "key": {
+                                            "route": "full-set",
+                                            "scope": "default",
+                                        },
+                                        "route_policy_version": "full-set-route-policy-v1",
+                                        "semantic_digest": "full-set-basis-default",
+                                        "content": {
+                                            "config_basis_digest": "full-set-basis-default",
+                                            "mode": "static-default",
+                                        },
+                                    },
+                                    {
+                                        "key": {
+                                            "route": "neg-risk",
+                                            "scope": "family-a",
+                                        },
+                                        "route_policy_version": "neg-risk-route-policy-v1",
+                                        "semantic_digest": "family-a",
+                                        "content": {
+                                            "family_id": "family-a",
+                                            "rendered_live_target": {
+                                                "family_id": "family-a",
+                                                "members": [
+                                                    {
+                                                        "condition_id": "condition-1",
+                                                        "token_id": "token-1",
+                                                        "price": "0.43",
+                                                        "quantity": "5",
+                                                    }
+                                                ]
+                                            },
+                                            "target_id": "candidate-target-family-a",
+                                            "validation": {
+                                                "status": "adoptable",
+                                            },
+                                        },
+                                    }
+                                ],
+                                "rendered_live_targets": {
+                                    "family-a": {
+                                        "family_id": "family-a",
+                                        "members": [
+                                            {
+                                                "condition_id": "condition-1",
+                                                "token_id": "token-1",
+                                                "price": "0.43",
+                                                "quantity": "5",
+                                            }
+                                        ]
+                                    }
+                                }
+                            }),
+                        },
+                    )
+                    .await
+                    .expect("adoptable strategy row should seed");
+
+                StrategyAdoptionRepo
+                    .upsert_provenance(
+                        &pool,
+                        &StrategyAdoptionProvenanceRow {
+                            operator_strategy_revision: operator_strategy_revision.to_owned(),
+                            adoptable_strategy_revision,
+                            strategy_candidate_revision,
+                        },
+                    )
+                    .await
+                    .expect("strategy provenance should seed");
+                pool.close().await;
             });
     }
 

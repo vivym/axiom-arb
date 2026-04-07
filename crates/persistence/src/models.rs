@@ -273,6 +273,7 @@ pub struct RuntimeProgressRow {
     pub last_state_version: i64,
     pub last_snapshot_id: Option<String>,
     pub operator_target_revision: Option<String>,
+    pub operator_strategy_revision: Option<String>,
     pub active_run_session_id: Option<String>,
 }
 
@@ -312,8 +313,44 @@ pub struct RunSessionRow {
     pub startup_target_revision_at_start: String,
     pub configured_operator_target_revision: Option<String>,
     pub active_operator_target_revision_at_start: Option<String>,
+    pub configured_operator_strategy_revision: Option<String>,
+    pub active_operator_strategy_revision_at_start: Option<String>,
     pub rollout_state_at_start: Option<String>,
     pub real_user_shadow_smoke: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategyCandidateSetRow {
+    pub strategy_candidate_revision: String,
+    pub snapshot_id: String,
+    pub source_revision: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AdoptableStrategyRevisionRow {
+    pub adoptable_strategy_revision: String,
+    pub strategy_candidate_revision: String,
+    pub rendered_operator_strategy_revision: String,
+    pub payload: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StrategyAdoptionProvenanceRow {
+    pub operator_strategy_revision: String,
+    pub adoptable_strategy_revision: String,
+    pub strategy_candidate_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorStrategyAdoptionHistoryRow {
+    pub adoption_id: String,
+    pub action_kind: String,
+    pub operator_strategy_revision: String,
+    pub previous_operator_strategy_revision: Option<String>,
+    pub adoptable_strategy_revision: Option<String>,
+    pub strategy_candidate_revision: Option<String>,
+    pub adopted_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

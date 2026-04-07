@@ -7,9 +7,17 @@ use std::{
 };
 
 use chrono::{Duration, Utc};
-use persistence::{RunSessionRow, RunSessionState};
+use persistence::{
+    models::{
+        AdoptableStrategyRevisionRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
+    RunSessionRow, RunSessionState, RuntimeProgressRepo, StrategyAdoptionRepo,
+    StrategyControlArtifactRepo,
+};
 use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use support::{cli, status_db::TestDatabase};
+use toml_edit::{table, value, DocumentMut};
 
 #[test]
 fn status_subcommand_is_exposed() {
@@ -130,7 +138,7 @@ fn status_adopted_source_without_operator_target_revision_is_discovery_required(
 fn status_smoke_without_discovery_artifacts_is_discovery_required() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -172,7 +180,7 @@ fn status_smoke_with_advisory_only_candidate_is_discovery_ready_not_adoptable() 
         "candidate generation deferred until discovery backfill completes",
     );
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -211,7 +219,7 @@ fn status_smoke_with_adoptable_artifacts_and_no_anchor_is_adoptable_ready() {
     let database = TestDatabase::new();
     database.seed_adopted_target_without_provenance("targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -332,9 +340,9 @@ fn status_smoke_restart_required_with_ready_rollout_keeps_restart_guidance() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
-        )
+        config
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -374,14 +382,14 @@ fn status_restart_required_shows_relevant_and_conflicting_active_sessions() {
     let database = TestDatabase::new();
     let config = cli::config_fixture("app-live-ux-smoke.toml");
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-new",
         &config,
         "targets-rev-9",
         RunSessionState::Exited,
         Utc::now() - Duration::minutes(1),
     ));
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-old",
         &config,
         "targets-rev-8",
@@ -448,6 +456,8 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
         startup_target_revision_at_start: "targets-rev-9".to_owned(),
         configured_operator_target_revision: Some("targets-rev-9".to_owned()),
         active_operator_target_revision_at_start: Some("targets-rev-8".to_owned()),
+        configured_operator_strategy_revision: None,
+        active_operator_strategy_revision_at_start: None,
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: false,
     });
@@ -476,11 +486,208 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
 }
 
 #[test]
+fn status_pure_neutral_adopted_config_matches_strategy_only_relevant_run_session() {
+    let database = TestDatabase::new();
+    let config = cli::config_fixture("app-live-ux-smoke.toml");
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    database.seed_run_session(strategy_only_smoke_run_session(
+        "rs-strategy-only",
+        &config,
+        "targets-rev-9",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(1),
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-strategy-only"),
+        "{combined}"
+    );
+
+    database.cleanup();
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_with_distinct_strategy_revision_matches_relevant_session() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace(
+            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"strategy-rev-12\"",
+        )
+    });
+    seed_strategy_adoption_lineage(
+        database.database_url(),
+        "strategy-candidate-12",
+        "adoptable-strategy-12",
+        "strategy-rev-12",
+        "targets-rev-9",
+    );
+    database.seed_run_session(strategy_only_smoke_run_session(
+        "rs-strategy-distinct",
+        &config,
+        "strategy-rev-12",
+        RunSessionState::Running,
+        Utc::now() - Duration::minutes(1),
+    ));
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Relevant run session: rs-strategy-distinct"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("resolved adopted target set did not contain any families"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_with_missing_strategy_provenance_reports_specific_reason() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace(
+            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"strategy-rev-missing\"",
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(combined.contains("strategy-rev-missing"), "{combined}");
+    assert!(combined.contains("provenance"), "{combined}");
+    assert!(
+        !combined.contains("resolved adopted target set did not contain any families"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_without_operator_strategy_revision_is_blocked() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(
+        combined.contains("missing strategy_control.operator_strategy_revision"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Readiness: adoptable-ready"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Readiness: discovery-required"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_pure_neutral_adopted_config_prefers_active_strategy_anchor_for_restart_detection() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config
+            .replace(
+                "operator_target_revision = \"targets-rev-9\"",
+                "operator_strategy_revision = \"strategy-rev-12\"",
+            )
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
+    });
+    seed_strategy_adoption_lineage(
+        database.database_url(),
+        "strategy-candidate-12",
+        "adoptable-strategy-12",
+        "strategy-rev-12",
+        "targets-rev-9",
+    );
+    seed_runtime_progress_with_strategy_anchor(
+        database.database_url(),
+        Some("targets-rev-active"),
+        Some("strategy-rev-12"),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        !combined.contains("Readiness: restart-required"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Readiness: smoke-config-ready"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("configured and active operator_target_revision differ"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn status_projects_overdue_running_session_as_stale() {
     let database = TestDatabase::new();
     let config = cli::config_fixture("app-live-ux-smoke.toml");
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
-    database.seed_run_session(smoke_run_session(
+    database.seed_run_session(strategy_only_smoke_run_session(
         "rs-stale",
         &config,
         "targets-rev-9",
@@ -531,7 +738,7 @@ fn status_adopted_source_with_unavailable_active_revision_is_live_rollout_requir
     assert!(combined.contains("Next: edit "), "{combined}");
     assert!(
         combined.contains(
-            "[negrisk.rollout].approved_families and ready_families for adopted families"
+            "[strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes"
         ),
         "{combined}"
     );
@@ -574,6 +781,39 @@ fn status_adopted_source_with_live_rollout_enabled_is_live_config_ready() {
     );
     assert!(
         !combined.contains("Next: app-live doctor --config"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_route_owned_rollout_overrides_legacy_rollout_when_both_are_present() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{config}\n[negrisk.rollout]\napproved_families = []\nready_families = []\n\n[strategies.neg_risk]\nenabled = true\n\n[strategies.neg_risk.rollout]\napproved_scopes = [\"family-a\"]\nready_scopes = [\"family-a\"]\n"
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Readiness: live-config-ready"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Reason: adopted families are covered by rollout: family-a"),
         "{combined}"
     );
 
@@ -658,9 +898,9 @@ fn status_adopted_smoke_source_with_rollout_enabled_is_smoke_config_ready() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
-        )
+        config
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -694,6 +934,34 @@ fn status_adopted_smoke_source_with_rollout_enabled_is_smoke_config_ready() {
     let _ = fs::remove_file(config);
 }
 
+fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("config fixture should contain [negrisk]");
+    if negrisk.get("target_source").is_none() {
+        negrisk.insert("target_source", table());
+    }
+    let target_source = negrisk
+        .get_mut("target_source")
+        .expect("config fixture should contain [negrisk.target_source]")
+        .as_table_like_mut()
+        .expect("[negrisk.target_source] should be a table");
+    target_source.insert("source", value("adopted"));
+    target_source.remove("operator_target_revision");
+
+    document.to_string()
+}
+
 #[test]
 fn status_adopted_source_with_broken_durable_provenance_is_blocked() {
     let database = TestDatabase::new();
@@ -722,8 +990,8 @@ fn status_adopted_source_with_broken_durable_provenance_is_blocked() {
 }
 
 #[test]
-fn status_explicit_target_flow_is_reported_as_legacy_high_level_unsupported() {
-    let config = cli::config_fixture("app-live-live.toml");
+fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
+    let config = compatibility_mode_live_config_path();
 
     let output = Command::new(cli::app_live_binary())
         .arg("status")
@@ -737,15 +1005,20 @@ fn status_explicit_target_flow_is_reported_as_legacy_high_level_unsupported() {
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
     assert!(
-        combined.contains(
-            "Reason: legacy explicit targets are not supported in the high-level status flow"
-        ),
+        combined.contains("Target source: compatibility"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: migrate to adopted target source or use lower-level commands"),
+        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
     );
+    assert!(
+        combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
+
+    let _ = fs::remove_file(config);
 }
 
 #[test]
@@ -801,16 +1074,8 @@ fn status_output_uses_summary_key_details_next_actions_order() {
 }
 
 #[test]
-fn status_operator_shaped_explicit_targets_still_get_legacy_guidance() {
-    let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        let without_target_source = config.replace(
-            "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
-            "",
-        );
-        format!(
-            "{without_target_source}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n"
-        )
-    });
+fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
+    let config = compatibility_mode_live_config_path();
 
     let output = Command::new(cli::app_live_binary())
         .arg("status")
@@ -824,15 +1089,18 @@ fn status_operator_shaped_explicit_targets_still_get_legacy_guidance() {
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
     assert!(
-        combined.contains(
-            "Reason: legacy explicit targets are not supported in the high-level status flow"
-        ),
+        combined.contains("Target source: compatibility"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: migrate to adopted target source or use lower-level commands"),
+        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
         "{combined}"
     );
+    assert!(
+        combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 
     let _ = fs::remove_file(config);
 }
@@ -912,7 +1180,7 @@ fn status_actions_are_concrete_operator_actions() {
         (StatusAction::EnableLiveRollout, "enable live rollout"),
         (
             StatusAction::MigrateLegacyExplicitTargets,
-            "migrate legacy explicit targets",
+            "migrate compatibility targets",
         ),
     ];
 
@@ -951,10 +1219,7 @@ fn status_details_use_structured_key_fields() {
         details.target_source,
         Some(StatusTargetSource::LegacyExplicitTargets)
     );
-    assert_eq!(
-        details.target_source.unwrap().label(),
-        "legacy explicit targets"
-    );
+    assert_eq!(details.target_source.unwrap().label(), "compatibility");
     assert_eq!(details.rollout_state, Some(StatusRolloutState::Ready));
     assert_eq!(details.rollout_state.unwrap().label(), "ready");
     assert_eq!(details.restart_needed, Some(true));
@@ -1003,10 +1268,7 @@ fn status_target_source_labels_are_structured() {
     use app_live::commands::status::model::StatusTargetSource;
 
     let cases = [
-        (
-            StatusTargetSource::LegacyExplicitTargets,
-            "legacy explicit targets",
-        ),
+        (StatusTargetSource::LegacyExplicitTargets, "compatibility"),
         (StatusTargetSource::AdoptedTargets, "adopted targets"),
     ];
 
@@ -1030,6 +1292,18 @@ fn status_rollout_state_labels_are_structured() {
 }
 static NEXT_TEMP_CONFIG_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+fn compatibility_mode_live_config_path() -> PathBuf {
+    temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        let without_target_source = config.replace(
+            "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
+            "",
+        );
+        format!(
+            "{without_target_source}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n"
+        )
+    })
+}
+
 fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture(relative);
     let text = fs::read_to_string(&source).expect("fixture should be readable");
@@ -1044,10 +1318,10 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     path
 }
 
-fn smoke_run_session(
+fn strategy_only_smoke_run_session(
     run_session_id: &str,
     config_path: &Path,
-    startup_target_revision_at_start: &str,
+    startup_strategy_revision_at_start: &str,
     state: RunSessionState,
     started_at: chrono::DateTime<Utc>,
 ) -> RunSessionRow {
@@ -1065,12 +1339,130 @@ fn smoke_run_session(
         config_path: config_path.display().to_string(),
         config_fingerprint: config_fingerprint(config_path),
         target_source_kind: "adopted".to_owned(),
-        startup_target_revision_at_start: startup_target_revision_at_start.to_owned(),
-        configured_operator_target_revision: Some(startup_target_revision_at_start.to_owned()),
-        active_operator_target_revision_at_start: Some(startup_target_revision_at_start.to_owned()),
+        startup_target_revision_at_start: startup_strategy_revision_at_start.to_owned(),
+        configured_operator_target_revision: None,
+        active_operator_target_revision_at_start: Some(
+            startup_strategy_revision_at_start.to_owned(),
+        ),
+        configured_operator_strategy_revision: Some(startup_strategy_revision_at_start.to_owned()),
+        active_operator_strategy_revision_at_start: Some(
+            startup_strategy_revision_at_start.to_owned(),
+        ),
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: true,
     }
+}
+
+fn seed_strategy_adoption_lineage(
+    database_url: &str,
+    strategy_candidate_revision: &str,
+    adoptable_strategy_revision: &str,
+    operator_strategy_revision: &str,
+    rendered_operator_target_revision: &str,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("test pool should connect");
+
+        StrategyControlArtifactRepo
+            .upsert_strategy_candidate_set(
+                &pool,
+                &StrategyCandidateSetRow {
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    snapshot_id: "snapshot-strategy-12".to_owned(),
+                    source_revision: "discovery-strategy-12".to_owned(),
+                    payload: serde_json::json!({
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "snapshot_id": "snapshot-strategy-12",
+                    }),
+                },
+            )
+            .await
+            .expect("strategy candidate row should persist");
+
+        StrategyControlArtifactRepo
+            .upsert_adoptable_strategy_revision(
+                &pool,
+                &AdoptableStrategyRevisionRow {
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    rendered_operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    payload: serde_json::json!({
+                        "adoptable_strategy_revision": adoptable_strategy_revision,
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "rendered_operator_strategy_revision": operator_strategy_revision,
+                        "rendered_operator_target_revision": rendered_operator_target_revision,
+                        "rendered_live_targets": {
+                            "family-a": {
+                                "family_id": "family-a",
+                                "members": [
+                                    {
+                                        "condition_id": "condition-1",
+                                        "token_id": "token-1",
+                                        "price": "0.43",
+                                        "quantity": "5"
+                                    }
+                                ]
+                            }
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("adoptable strategy row should persist");
+
+        StrategyAdoptionRepo
+            .upsert_provenance(
+                &pool,
+                &StrategyAdoptionProvenanceRow {
+                    operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                },
+            )
+            .await
+            .expect("strategy provenance should persist");
+
+        pool.close().await;
+    });
+}
+
+fn seed_runtime_progress_with_strategy_anchor(
+    database_url: &str,
+    operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should build");
+    runtime.block_on(async {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(database_url)
+            .await
+            .expect("test pool should connect");
+        RuntimeProgressRepo
+            .record_progress_with_strategy_revision(
+                &pool,
+                41,
+                7,
+                Some("snapshot-7"),
+                operator_target_revision,
+                operator_strategy_revision,
+                None,
+            )
+            .await
+            .expect("runtime progress should persist with strategy anchor");
+        pool.close().await;
+    });
 }
 
 fn config_fingerprint(config_path: &Path) -> String {

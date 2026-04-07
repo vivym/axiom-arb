@@ -1,4 +1,4 @@
-use std::collections::{btree_map::Entry, BTreeMap};
+use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 
 use app_replay::NegRiskShadowAttemptArtifacts;
 use chrono::{DateTime, Utc};
@@ -16,7 +16,6 @@ use sqlx::PgPool;
 use super::{session::ResolvedVerifySession, window::VerifyWindowSelection};
 
 const DEFAULT_RECENT_ATTEMPTS_LIMIT: i64 = 20;
-const VERIFY_ROUTE: &str = "neg-risk";
 
 #[derive(Debug, Clone, Default)]
 pub struct VerifyEvidenceWindow {
@@ -34,13 +33,16 @@ pub async fn load(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
     resolved_session: &ResolvedVerifySession,
+    active_routes: &[String],
 ) -> Result<VerifyEvidenceWindow> {
     let session_id = resolved_session.selected_session_id(selection);
-    let attempts = select_attempts(pool, selection, session_id).await?;
+    let attempts = select_attempts(pool, selection, session_id, active_routes).await?;
     let observed_live_attempts =
-        select_observed_live_attempts(pool, selection, session_id, &attempts).await?;
+        select_observed_live_attempts(pool, selection, session_id, &attempts, active_routes)
+            .await?;
     let observed_shadow_attempts =
-        select_observed_shadow_attempts(pool, selection, session_id, &attempts).await?;
+        select_observed_shadow_attempts(pool, selection, session_id, &attempts, active_routes)
+            .await?;
     let replay_shadow_attempt_artifacts =
         load_replay_shadow_attempt_artifacts(pool, selection, &attempts).await;
     let journal = select_journal(pool, selection).await?;
@@ -110,31 +112,35 @@ async fn select_observed_live_attempts(
     selection: &VerifyWindowSelection,
     session_id: Option<&str>,
     attempts: &[ExecutionAttemptWithCreatedAtRow],
+    active_routes: &[String],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     if session_id.is_some() {
-        return Ok(attempts
-            .iter()
-            .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Live))
-            .cloned()
-            .collect());
+        return Ok(filter_attempts_by_active_routes(
+            attempts
+                .iter()
+                .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Live))
+                .cloned()
+                .collect(),
+            active_routes,
+        ));
     }
 
     match selection {
         VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Paper) => {
-            ExecutionAttemptRepo
-                .list_recent_by_mode(
-                    pool,
-                    Some(ExecutionMode::Live),
-                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
-                )
-                .await
+            list_recent_by_mode_for_active_routes(
+                pool,
+                ExecutionMode::Live,
+                active_routes,
+                DEFAULT_RECENT_ATTEMPTS_LIMIT,
+            )
+            .await
         }
         VerifyWindowSelection::LatestForScenario(
             super::model::VerifyScenario::RealUserShadowSmoke,
         ) => {
-            ExecutionAttemptRepo
-                .list_by_mode_with_created_at_and_route(pool, ExecutionMode::Live, VERIFY_ROUTE)
+            list_by_mode_with_created_at_for_active_routes(pool, ExecutionMode::Live, active_routes)
                 .await
+                .map(|rows| filter_attempts_by_active_routes(rows, active_routes))
         }
         _ => Ok(Vec::new()),
     }
@@ -145,25 +151,29 @@ async fn select_observed_shadow_attempts(
     selection: &VerifyWindowSelection,
     session_id: Option<&str>,
     attempts: &[ExecutionAttemptWithCreatedAtRow],
+    active_routes: &[String],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     if session_id.is_some() {
-        return Ok(attempts
-            .iter()
-            .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Shadow))
-            .cloned()
-            .collect());
+        return Ok(filter_attempts_by_active_routes(
+            attempts
+                .iter()
+                .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Shadow))
+                .cloned()
+                .collect(),
+            active_routes,
+        ));
     }
 
     match selection {
         VerifyWindowSelection::LatestForScenario(super::model::VerifyScenario::Live) => {
-            ExecutionAttemptRepo
-                .list_recent_by_mode_and_route(
-                    pool,
-                    ExecutionMode::Shadow,
-                    VERIFY_ROUTE,
-                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
-                )
-                .await
+            list_recent_by_mode_for_active_routes(
+                pool,
+                ExecutionMode::Shadow,
+                active_routes,
+                DEFAULT_RECENT_ATTEMPTS_LIMIT,
+            )
+            .await
+            .map(|rows| filter_attempts_by_active_routes(rows, active_routes))
         }
         _ => Ok(Vec::new()),
     }
@@ -173,24 +183,27 @@ async fn select_attempts(
     pool: &PgPool,
     selection: &VerifyWindowSelection,
     session_id: Option<&str>,
+    active_routes: &[String],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     if let Some(session_id) = session_id {
         return ExecutionAttemptRepo
             .list_by_run_session_id(pool, session_id)
-            .await;
+            .await
+            .map(|rows| filter_attempts_by_active_routes(rows, active_routes));
     }
 
     match selection {
         VerifyWindowSelection::LatestForScenario(scenario) => {
-            select_latest_attempts_for_scenario(pool, *scenario).await
+            select_latest_attempts_for_scenario(pool, *scenario, active_routes).await
         }
         VerifyWindowSelection::ExplicitAttemptId(attempt_id) => ExecutionAttemptRepo
             .get_by_attempt_id(pool, attempt_id)
             .await
-            .map(|row| row.into_iter().collect()),
-        VerifyWindowSelection::ExplicitSince(since) => {
-            ExecutionAttemptRepo.list_created_since(pool, *since).await
-        }
+            .map(|row| filter_attempts_by_active_routes(row.into_iter().collect(), active_routes)),
+        VerifyWindowSelection::ExplicitSince(since) => ExecutionAttemptRepo
+            .list_created_since(pool, *since)
+            .await
+            .map(|rows| filter_attempts_by_active_routes(rows, active_routes)),
         VerifyWindowSelection::ExplicitSeqRange { .. } => Ok(Vec::new()),
     }
 }
@@ -215,21 +228,20 @@ async fn list_journal_since(pool: &PgPool, since: DateTime<Utc>) -> Result<Vec<J
 async fn select_latest_attempts_for_scenario(
     pool: &PgPool,
     scenario: super::model::VerifyScenario,
+    active_routes: &[String],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
     match scenario {
         super::model::VerifyScenario::Paper => Ok(Vec::new()),
-        super::model::VerifyScenario::Live => {
-            ExecutionAttemptRepo
-                .list_recent_by_mode_and_route(
-                    pool,
-                    ExecutionMode::Live,
-                    VERIFY_ROUTE,
-                    DEFAULT_RECENT_ATTEMPTS_LIMIT,
-                )
-                .await
-        }
+        super::model::VerifyScenario::Live => list_recent_by_mode_for_active_routes(
+            pool,
+            ExecutionMode::Live,
+            active_routes,
+            DEFAULT_RECENT_ATTEMPTS_LIMIT,
+        )
+        .await
+        .map(|rows| filter_attempts_by_active_routes(rows, active_routes)),
         super::model::VerifyScenario::RealUserShadowSmoke => {
-            Ok(select_latest_smoke_run_attempts(pool)
+            Ok(select_latest_smoke_run_attempts(pool, active_routes)
                 .await?
                 .into_iter()
                 .filter(|row| matches!(row.attempt.execution_mode, ExecutionMode::Shadow))
@@ -261,22 +273,206 @@ async fn select_latest_attempts_for_scenario(
 
 async fn select_latest_smoke_run_attempts(
     pool: &PgPool,
+    active_routes: &[String],
 ) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
-    let latest_shadow_attempt = ExecutionAttemptRepo
-        .list_recent_by_mode_and_route(pool, ExecutionMode::Shadow, VERIFY_ROUTE, 1)
-        .await?
-        .into_iter()
-        .next();
+    let latest_shadow_attempt =
+        list_recent_by_mode_for_active_routes(pool, ExecutionMode::Shadow, active_routes, 1)
+            .await?
+            .into_iter()
+            .next();
 
     let Some(latest_shadow_attempt) = latest_shadow_attempt else {
         return Ok(Vec::new());
     };
 
     ExecutionAttemptRepo
-        .list_by_snapshot_id_and_route(
-            pool,
-            &latest_shadow_attempt.attempt.snapshot_id,
-            VERIFY_ROUTE,
-        )
+        .list_by_snapshot_id(pool, &latest_shadow_attempt.attempt.snapshot_id)
         .await
+        .map(|rows| filter_attempts_by_active_routes(rows, active_routes))
+}
+
+async fn list_by_mode_with_created_at_for_active_routes(
+    pool: &PgPool,
+    mode: ExecutionMode,
+    active_routes: &[String],
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    if active_routes.is_empty() {
+        return ExecutionAttemptRepo
+            .list_by_mode_with_created_at(pool, mode)
+            .await;
+    }
+
+    let mut rows = Vec::new();
+    for route in active_routes {
+        rows.extend(
+            ExecutionAttemptRepo
+                .list_by_mode_with_created_at_and_route(pool, mode, route)
+                .await?,
+        );
+    }
+
+    Ok(sort_and_dedup_attempts(rows))
+}
+
+async fn list_recent_by_mode_for_active_routes(
+    pool: &PgPool,
+    mode: ExecutionMode,
+    active_routes: &[String],
+    limit_per_route: i64,
+) -> Result<Vec<ExecutionAttemptWithCreatedAtRow>> {
+    if active_routes.is_empty() {
+        return ExecutionAttemptRepo
+            .list_recent_by_mode(pool, Some(mode), limit_per_route)
+            .await;
+    }
+
+    let mut rows = Vec::new();
+    for route in active_routes {
+        rows.extend(
+            ExecutionAttemptRepo
+                .list_recent_by_mode_and_route(pool, mode, route, limit_per_route)
+                .await?,
+        );
+    }
+
+    Ok(sort_and_dedup_attempts(rows))
+}
+
+fn sort_and_dedup_attempts(
+    mut rows: Vec<ExecutionAttemptWithCreatedAtRow>,
+) -> Vec<ExecutionAttemptWithCreatedAtRow> {
+    rows.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| right.attempt.attempt_id.cmp(&left.attempt.attempt_id))
+    });
+
+    let mut seen = BTreeSet::new();
+    rows.into_iter()
+        .filter(|row| seen.insert(row.attempt.attempt_id.clone()))
+        .collect()
+}
+
+pub fn route_has_local_evidence(evidence: &VerifyEvidenceWindow) -> bool {
+    !evidence.attempts.is_empty()
+        || !evidence.observed_live_attempts.is_empty()
+        || !evidence.observed_shadow_attempts.is_empty()
+        || !evidence.replay_shadow_attempt_artifacts.is_empty()
+        || !evidence.shadow_artifacts.is_empty()
+        || !evidence.live_artifacts.is_empty()
+        || !evidence.live_submissions.is_empty()
+}
+
+pub fn routes_to_evaluate(
+    evidence: &VerifyEvidenceWindow,
+    active_routes: &[String],
+) -> BTreeSet<String> {
+    if active_routes.is_empty() {
+        return routes_with_evidence(evidence, active_routes);
+    }
+
+    active_routes.iter().cloned().collect()
+}
+
+pub fn routes_with_evidence(
+    evidence: &VerifyEvidenceWindow,
+    active_routes: &[String],
+) -> BTreeSet<String> {
+    let mut routes = BTreeSet::new();
+    for row in &evidence.attempts {
+        routes.insert(row.attempt.route.clone());
+    }
+    for row in &evidence.observed_live_attempts {
+        routes.insert(row.attempt.route.clone());
+    }
+    for row in &evidence.observed_shadow_attempts {
+        routes.insert(row.attempt.route.clone());
+    }
+    for row in &evidence.replay_shadow_attempt_artifacts {
+        routes.insert(row.attempt.route.clone());
+    }
+
+    routes
+        .into_iter()
+        .filter(|route| route_is_active(route, active_routes))
+        .collect()
+}
+
+pub fn window_for_route(evidence: &VerifyEvidenceWindow, route: &str) -> VerifyEvidenceWindow {
+    let attempt_ids = evidence
+        .attempts
+        .iter()
+        .chain(evidence.observed_live_attempts.iter())
+        .chain(evidence.observed_shadow_attempts.iter())
+        .filter(|row| row.attempt.route == route)
+        .map(|row| row.attempt.attempt_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    VerifyEvidenceWindow {
+        attempts: evidence
+            .attempts
+            .iter()
+            .filter(|row| row.attempt.route == route)
+            .cloned()
+            .collect(),
+        observed_live_attempts: evidence
+            .observed_live_attempts
+            .iter()
+            .filter(|row| row.attempt.route == route)
+            .cloned()
+            .collect(),
+        observed_shadow_attempts: evidence
+            .observed_shadow_attempts
+            .iter()
+            .filter(|row| row.attempt.route == route)
+            .cloned()
+            .collect(),
+        replay_shadow_attempt_artifacts: evidence
+            .replay_shadow_attempt_artifacts
+            .iter()
+            .filter(|row| row.attempt.route == route)
+            .cloned()
+            .collect(),
+        journal: evidence.journal.clone(),
+        shadow_artifacts: evidence
+            .shadow_artifacts
+            .iter()
+            .filter(|row| attempt_ids.contains(&row.attempt_id))
+            .cloned()
+            .collect(),
+        live_artifacts: evidence
+            .live_artifacts
+            .iter()
+            .filter(|(attempt_id, _)| attempt_ids.contains(*attempt_id))
+            .map(|(attempt_id, rows)| (attempt_id.clone(), rows.clone()))
+            .collect(),
+        live_submissions: evidence
+            .live_submissions
+            .iter()
+            .filter(|(_, rows)| rows.iter().any(|row| row.route == route))
+            .map(|(attempt_id, rows)| {
+                (
+                    attempt_id.clone(),
+                    rows.iter()
+                        .filter(|row| row.route == route)
+                        .cloned()
+                        .collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn filter_attempts_by_active_routes(
+    rows: Vec<ExecutionAttemptWithCreatedAtRow>,
+    active_routes: &[String],
+) -> Vec<ExecutionAttemptWithCreatedAtRow> {
+    rows.into_iter()
+        .filter(|row| route_is_active(&row.attempt.route, active_routes))
+        .collect()
+}
+
+fn route_is_active(route: &str, active_routes: &[String]) -> bool {
+    active_routes.is_empty() || active_routes.iter().any(|active| active == route)
 }

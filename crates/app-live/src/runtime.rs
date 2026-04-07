@@ -418,11 +418,43 @@ pub fn run_live_from_durable_store_with_neg_risk_live_targets_instrumented<S>(
 where
     S: BootstrapSource,
 {
+    run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented(
+        source,
+        instrumentation,
+        None,
+        false,
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+        real_user_shadow_smoke,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_live_from_durable_store_with_strategy_revision_and_neg_risk_live_targets_instrumented<
+    S,
+>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    operator_strategy_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+) -> Result<AppRunResult, Box<dyn std::error::Error>>
+where
+    S: BootstrapSource,
+{
     let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
-    let durable_state =
-        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?;
+    let durable_state = load_durable_live_startup_state_for_strategy(
+        operator_strategy_revision,
+        operator_target_revision.as_deref(),
+        allow_legacy_target_source_resume,
+        load_shadow_state,
+    )?;
     validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
@@ -482,7 +514,11 @@ where
     }
 
     let result = supervisor.run_startup()?;
-    persist_operator_target_revision_anchor(&result.summary, operator_target_revision.as_deref())?;
+    persist_operator_startup_anchor(
+        &result.summary,
+        operator_target_revision.as_deref(),
+        operator_strategy_revision,
+    )?;
     Ok(result)
 }
 
@@ -520,6 +556,20 @@ fn apply_result_label(result: &ApplyResult) -> &'static str {
 
 pub(crate) fn load_durable_live_startup_state(
     operator_target_revision: Option<&str>,
+    load_shadow_state: bool,
+) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
+    load_durable_live_startup_state_for_strategy(
+        None,
+        operator_target_revision,
+        false,
+        load_shadow_state,
+    )
+}
+
+pub(crate) fn load_durable_live_startup_state_for_strategy(
+    operator_strategy_revision: Option<&str>,
+    operator_target_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
     load_shadow_state: bool,
 ) -> Result<DurableLiveStartupState, Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -623,9 +673,11 @@ pub(crate) fn load_durable_live_startup_state(
         } else {
             CandidateRestoreStatus::default()
         };
-        validate_operator_target_revision(
+        validate_operator_revision(
             progress.as_ref(),
+            operator_strategy_revision,
             operator_target_revision,
+            allow_legacy_target_source_resume,
             has_durable_follow_up_work,
         )?;
         let (last_journal_seq, last_state_version, published_snapshot_id) =
@@ -661,12 +713,59 @@ fn validate_real_user_shadow_smoke_restore(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_operator_target_revision(
     progress: Option<&RuntimeProgressRow>,
     expected_revision: Option<&str>,
     has_durable_follow_up_work: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(expected_revision) = expected_revision else {
+    validate_operator_revision(
+        progress,
+        None,
+        expected_revision,
+        false,
+        has_durable_follow_up_work,
+    )
+}
+
+fn validate_operator_revision(
+    progress: Option<&RuntimeProgressRow>,
+    expected_strategy_revision: Option<&str>,
+    expected_target_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
+    has_durable_follow_up_work: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(expected_strategy_revision) = expected_strategy_revision {
+        if !has_durable_follow_up_work {
+            return Ok(());
+        }
+
+        let Some(progress) = progress else {
+            return Err(boxed_error(
+                "operator strategy revision anchor is required when a startup strategy bundle is supplied",
+            ));
+        };
+
+        return match progress.operator_strategy_revision.as_deref() {
+            Some(actual_revision) if actual_revision == expected_strategy_revision => Ok(()),
+            Some(actual_revision) => Err(boxed_error(format!(
+                "operator strategy revision anchor mismatch: persisted={actual_revision} configured={expected_strategy_revision}"
+            ))),
+            None => {
+                if allow_legacy_target_source_resume
+                    && progress.operator_target_revision.as_deref()
+                        == Some(expected_strategy_revision)
+                {
+                    return Ok(());
+                }
+                Err(boxed_error(
+                    "operator strategy revision anchor is required when a startup strategy bundle is supplied",
+                ))
+            }
+        };
+    }
+
+    let Some(expected_target_revision) = expected_target_revision else {
         return Ok(());
     };
 
@@ -681,9 +780,9 @@ fn validate_operator_target_revision(
     };
 
     match progress.operator_target_revision.as_deref() {
-        Some(actual_revision) if actual_revision == expected_revision => Ok(()),
+        Some(actual_revision) if actual_revision == expected_target_revision => Ok(()),
         Some(actual_revision) => Err(boxed_error(format!(
-            "operator target revision anchor mismatch: persisted={actual_revision} configured={expected_revision}"
+            "operator target revision anchor mismatch: persisted={actual_revision} configured={expected_target_revision}"
         ))),
         None => Err(boxed_error(
             "operator target revision anchor is required when live operator targets are supplied",
@@ -691,13 +790,15 @@ fn validate_operator_target_revision(
     }
 }
 
-pub(crate) fn persist_operator_target_revision_anchor(
+pub(crate) fn persist_operator_startup_anchor(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     persist_operator_target_revision_anchor_with_run_session_id(
         summary,
         operator_target_revision,
+        operator_strategy_revision,
         None,
     )
 }
@@ -705,11 +806,12 @@ pub(crate) fn persist_operator_target_revision_anchor(
 pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     summary: &SupervisorSummary,
     operator_target_revision: Option<&str>,
+    operator_strategy_revision: Option<&str>,
     active_run_session_id: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(operator_target_revision) = operator_target_revision else {
+    if operator_target_revision.is_none() && operator_strategy_revision.is_none() {
         return Ok(());
-    };
+    }
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -717,7 +819,7 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
     runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         RuntimeProgressRepo
-            .record_progress(
+            .record_progress_with_strategy_revision(
                 &pool,
                 summary.last_journal_seq,
                 i64::try_from(summary.last_state_version).map_err(|_| {
@@ -727,7 +829,8 @@ pub(crate) fn persist_operator_target_revision_anchor_with_run_session_id(
                     ))
                 })?,
                 summary.published_snapshot_id.as_deref(),
-                Some(operator_target_revision),
+                operator_target_revision,
+                operator_strategy_revision,
                 active_run_session_id,
             )
             .await
@@ -1008,7 +1111,7 @@ mod tests {
     use super::{
         attempt_row_with_run_session_id, durable_live_execution_records, durable_progress_anchor,
         durable_shadow_execution_state, execution_attempt_row_for_live_record,
-        validate_operator_target_revision,
+        validate_operator_revision, validate_operator_target_revision,
     };
     use crate::negrisk_live::NegRiskLiveExecutionRecord;
 
@@ -1093,6 +1196,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: None,
+                operator_strategy_revision: None,
                 active_run_session_id: None,
             }),
             true,
@@ -1112,6 +1216,7 @@ mod tests {
                 last_state_version: 7,
                 last_snapshot_id: Some("snapshot-7".to_owned()),
                 operator_target_revision: Some("targets-rev-stale".to_owned()),
+                operator_strategy_revision: Some("targets-rev-stale".to_owned()),
                 active_run_session_id: None,
             }),
             Some("targets-rev-current"),
@@ -1128,6 +1233,52 @@ mod tests {
     #[test]
     fn operator_targets_allow_missing_revision_anchor_without_follow_up_work() {
         validate_operator_target_revision(None, Some("targets-rev-current"), false).unwrap();
+    }
+
+    #[test]
+    fn strategy_resume_accepts_legacy_target_only_anchor_for_adopted_target_source() {
+        validate_operator_revision(
+            Some(&RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-9".to_owned()),
+                operator_strategy_revision: None,
+                active_run_session_id: None,
+            }),
+            Some("targets-rev-9"),
+            Some("targets-rev-9"),
+            true,
+            true,
+        )
+        .expect("legacy adopted target-source resume should accept target-only anchor");
+    }
+
+    #[test]
+    fn strategy_resume_requires_strategy_anchor_when_legacy_fallback_is_disabled() {
+        let err = validate_operator_revision(
+            Some(&RuntimeProgressRow {
+                last_journal_seq: 41,
+                last_state_version: 7,
+                last_snapshot_id: Some("snapshot-7".to_owned()),
+                operator_target_revision: Some("targets-rev-9".to_owned()),
+                operator_strategy_revision: None,
+                active_run_session_id: None,
+            }),
+            Some("targets-rev-9"),
+            Some("targets-rev-9"),
+            false,
+            true,
+        )
+        .expect_err(
+            "strategy bundles should still require strategy anchor without legacy fallback",
+        );
+
+        assert!(
+            err.to_string()
+                .contains("operator strategy revision anchor is required"),
+            "{err}"
+        );
     }
 
     #[test]

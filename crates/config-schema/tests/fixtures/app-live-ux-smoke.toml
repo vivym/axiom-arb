@@ -2,6 +2,20 @@
 mode = "live"
 real_user_shadow_smoke = true
 
+[strategy_control]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
 [polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
@@ -15,10 +29,6 @@ passphrase = "poly-passphrase"
 kind = "relayer_api_key"
 api_key = "relay-key"
 address = "0x1111111111111111111111111111111111111111"
-
-[negrisk.target_source]
-source = "adopted"
-operator_target_revision = "targets-rev-9"
 
 [polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"

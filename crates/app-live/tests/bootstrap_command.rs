@@ -16,7 +16,7 @@ use std::{
 
 use support::{apply_db, cli, discover_db};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
-use toml_edit::{value, DocumentMut};
+use toml_edit::{table, value, DocumentMut};
 
 static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -42,7 +42,7 @@ fn bootstrap_empty_db_runs_discover_then_waits_for_explicit_adoption_confirmatio
     );
     assert!(text.contains("Starting discovery"), "{text}");
     assert!(text.contains("Fetching Polymarket metadata"), "{text}");
-    assert!(text.contains("Materializing discovery artifacts"), "{text}");
+    assert!(text.contains("Materializing strategy artifacts"), "{text}");
     assert!(text.contains("Discovery completed"), "{text}");
     assert!(text.contains("Adoptable revisions:"), "{text}");
     assert!(text.contains("Recommended:"), "{text}");
@@ -53,9 +53,9 @@ fn bootstrap_empty_db_runs_discover_then_waits_for_explicit_adoption_confirmatio
     assert!(!text.contains("targets candidates"), "{text}");
     assert!(!text.contains("targets adopt"), "{text}");
 
-    assert!(database.has_candidate_rows());
-    assert!(database.has_adoptable_rows());
-    assert!(!database.has_candidate_provenance_rows());
+    assert!(database.has_strategy_candidate_rows());
+    assert!(database.has_strategy_adoptable_rows());
+    assert!(!database.has_strategy_provenance_rows());
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -178,16 +178,27 @@ fn bootstrap_can_adopt_selected_revision_then_reach_smoke_rollout_boundary() {
     );
 
     let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(rewritten.contains("[strategy_control]"), "{rewritten}");
     assert!(
-        rewritten.contains("operator_target_revision = \"targets-rev-9\""),
+        rewritten.contains("operator_strategy_revision = \"targets-rev-9\""),
+        "{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("operator_target_revision ="),
         "{rewritten}"
     );
 
     let latest = database.latest_history().expect("history row should exist");
     assert_eq!(latest.action_kind, "adopt");
-    assert_eq!(latest.operator_target_revision, "targets-rev-9");
-    assert_eq!(latest.adoptable_revision.as_deref(), Some("adoptable-9"));
-    assert_eq!(latest.candidate_revision.as_deref(), Some("candidate-9"));
+    assert_eq!(latest.operator_strategy_revision, "targets-rev-9");
+    assert_eq!(
+        latest.adoptable_strategy_revision.as_deref(),
+        Some("adoptable-9")
+    );
+    assert_eq!(
+        latest.strategy_candidate_revision.as_deref(),
+        Some("candidate-9")
+    );
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -229,7 +240,7 @@ fn bootstrap_already_adopted_smoke_path_falls_through_to_doctor_and_rollout() {
 fn temp_smoke_config_path(edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture("app-live-ux-smoke.toml");
     let text = fs::read_to_string(&source).expect("fixture should be readable");
-    let edited = edit(text.replace("operator_target_revision = \"targets-rev-9\"\n", ""));
+    let edited = edit(with_legacy_smoke_target_source_without_revision(text));
     let mut path = std::env::temp_dir();
     path.push(format!(
         "app-live-bootstrap-{}-{}.toml",
@@ -317,6 +328,34 @@ fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String
     for key in ["clob_host", "data_api_host", "relayer_host"] {
         source.insert(key, value(venue.base_url()));
     }
+
+    document.to_string()
+}
+
+fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("smoke config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("[negrisk] should be a table");
+    if negrisk.get("target_source").is_none() {
+        negrisk.insert("target_source", table());
+    }
+    let target_source = negrisk
+        .get_mut("target_source")
+        .expect("config fixture should contain [negrisk.target_source]")
+        .as_table_like_mut()
+        .expect("[negrisk.target_source] should be a table");
+    target_source.insert("source", value("adopted"));
+    target_source.remove("operator_target_revision");
 
     document.to_string()
 }

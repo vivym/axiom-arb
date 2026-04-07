@@ -9,7 +9,7 @@ use execution::{
     attempt::ExecutionAttemptFactory,
     orchestrator::{ExecutionOrchestrator, ExecutionPlanningInput},
     plans::ExecutionPlan,
-    providers::{SubmitProviderError, VenueExecutionProvider},
+    providers::{RouteExecutionAdapter, SubmitProviderError, VenueExecutionProvider},
     sink::{LiveVenueSink, ShadowVenueSink, SignedFamilyHook, SignedFamilyHookError},
     ExecutionAttemptRecord, LiveSubmissionRecord, LiveSubmitOutcome, TestOrderSigner,
 };
@@ -42,6 +42,21 @@ fn live_sink_accepts_reduce_only_for_non_risk_expanding_plans() {
         .unwrap();
 
     assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+}
+
+#[test]
+fn live_sink_executes_full_set_plans_with_a_registered_route_execution_adapter() {
+    let orchestrator = ExecutionOrchestrator::new(full_set_live_sink());
+
+    let receipt = orchestrator
+        .execute(&sample_planning_input(ExecutionMode::Live))
+        .unwrap();
+
+    assert_eq!(receipt.outcome, domain::ExecutionAttemptOutcome::Succeeded);
+    assert_eq!(
+        receipt.submission_ref.as_deref(),
+        Some("submission-full-set")
+    );
 }
 
 #[test]
@@ -204,7 +219,7 @@ fn seeded_orchestrator_continues_attempt_numbering_after_resume() {
     let attempt_factory =
         ExecutionAttemptFactory::with_seeded_attempt_numbers(HashMap::from([(plan_key, 7)]));
     let orchestrator =
-        ExecutionOrchestrator::with_attempt_factory(LiveVenueSink::noop(), attempt_factory);
+        ExecutionOrchestrator::with_attempt_factory(full_set_live_sink(), attempt_factory);
 
     let receipt = orchestrator
         .execute(&ExecutionPlanningInput::new(
@@ -271,7 +286,7 @@ fn execute_result_exposes_attempt_metadata_without_reconstructing_from_receipt()
     };
     let plan = execution_plan();
     let expected_plan_id = ExecutionAttemptFactory::request_bound_plan_id(&plan, &request);
-    let orchestrator = ExecutionOrchestrator::new(LiveVenueSink::noop());
+    let orchestrator = ExecutionOrchestrator::new(full_set_live_sink());
 
     let result = orchestrator
         .execute_with_attempt(&ExecutionPlanningInput::new(
@@ -305,7 +320,7 @@ fn execute_result_exposes_attempt_metadata_without_reconstructing_from_receipt()
                     "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1"
                         .to_owned(),
                 outcome: domain::ExecutionAttemptOutcome::Succeeded,
-                submission_ref: None,
+                submission_ref: Some("submission-full-set".to_owned()),
                 pending_ref: None,
             },
         }
@@ -425,4 +440,39 @@ impl VenueExecutionProvider for RecordingSubmitProvider {
             },
         })
     }
+}
+
+#[derive(Debug, Clone)]
+struct AcceptedRouteExecutionAdapter {
+    route: &'static str,
+    submission_ref: &'static str,
+}
+
+impl RouteExecutionAdapter for AcceptedRouteExecutionAdapter {
+    fn route(&self) -> &'static str {
+        self.route
+    }
+
+    fn submit_live(
+        &self,
+        _plan: &ExecutionPlan,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        Ok(LiveSubmitOutcome::Accepted {
+            submission_record: LiveSubmissionRecord {
+                submission_ref: self.submission_ref.to_owned(),
+                attempt_id: attempt.attempt_id.clone(),
+                route: attempt.route.clone(),
+                scope: attempt.scope.clone(),
+                provider: format!("{}-adapter", self.route),
+            },
+        })
+    }
+}
+
+fn full_set_live_sink() -> LiveVenueSink {
+    LiveVenueSink::with_route_execution_adapter(Arc::new(AcceptedRouteExecutionAdapter {
+        route: "full-set",
+        submission_ref: "submission-full-set",
+    }))
 }

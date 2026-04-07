@@ -6,9 +6,11 @@ use std::sync::{
 use domain::{ConditionId, EventFamilyId, TokenId};
 use domain::{ExecutionAttemptContext, ExecutionMode};
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
-use execution::providers::SignerProvider;
+use execution::providers::{RouteExecutionAdapter, SignerProvider, SubmitProviderError};
 use execution::signing::{OrderSigner, TestOrderSigner};
-use execution::sink::{LiveVenueSink, SignedFamilyHook, SignedFamilyHookError, VenueSink};
+use execution::sink::{
+    LiveVenueSink, NegRiskRouteExecutionAdapter, SignedFamilyHook, SignedFamilyHookError, VenueSink,
+};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -120,6 +122,68 @@ fn live_sink_rejects_negrisk_family_submit_plans_when_signer_is_missing_in_recov
         .execute(&sample_family_plan(), &recovery_attempt())
         .unwrap_err();
     assert!(matches!(err, execution::VenueSinkError::Rejected { .. }));
+}
+
+#[test]
+fn live_sink_rejects_missing_route_execution_adapter() {
+    let sink = LiveVenueSink::noop();
+    let attempt = attempt_for("full-set", "default", ExecutionMode::Live);
+    let err = sink
+        .execute(
+            &ExecutionPlan::FullSetBuyThenMerge {
+                condition_id: ConditionId::from("condition-1"),
+            },
+            &attempt,
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        execution::VenueSinkError::Rejected { reason }
+            if reason.contains("execution adapter")
+    ));
+}
+
+#[test]
+fn live_sink_supports_additive_public_registration_for_multiple_routes() {
+    let full_set_calls = Arc::new(AtomicUsize::new(0));
+    let sink = LiveVenueSink::noop()
+        .register_route_execution_adapter(Arc::new(FakeAcceptedRouteExecutionAdapter {
+            route: "full-set",
+            submission_ref: "submission-full-set",
+            called: full_set_calls.clone(),
+        }))
+        .register_route_execution_adapter(Arc::new(
+            NegRiskRouteExecutionAdapter::with_order_signer_and_hook(
+                Arc::new(TestOrderSigner),
+                Arc::new(NoopSignedFamilyHook),
+            ),
+        ));
+
+    let full_set_receipt = sink
+        .execute(
+            &ExecutionPlan::FullSetBuyThenMerge {
+                condition_id: ConditionId::from("condition-1"),
+            },
+            &attempt_for("full-set", "default", ExecutionMode::Live),
+        )
+        .unwrap();
+    let neg_risk_receipt = sink
+        .execute(
+            &sample_family_plan(),
+            &attempt_for("neg-risk", "family-a", ExecutionMode::Live),
+        )
+        .unwrap();
+
+    assert_eq!(
+        full_set_receipt.submission_ref.as_deref(),
+        Some("submission-full-set")
+    );
+    assert_eq!(full_set_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        neg_risk_receipt.pending_ref.as_deref(),
+        Some("pending-hook:attempt-1")
+    );
 }
 
 #[test]
@@ -250,23 +314,20 @@ fn sample_family_plan() -> ExecutionPlan {
 }
 
 fn live_attempt() -> ExecutionAttemptContext {
-    ExecutionAttemptContext {
-        attempt_id: "attempt-1".to_string(),
-        snapshot_id: "snapshot-1".to_string(),
-        execution_mode: ExecutionMode::Live,
-        route: "route".to_string(),
-        scope: "scope".to_string(),
-        matched_rule_id: None,
-    }
+    attempt_for("route", "scope", ExecutionMode::Live)
 }
 
 fn recovery_attempt() -> ExecutionAttemptContext {
+    attempt_for("route", "scope", ExecutionMode::RecoveryOnly)
+}
+
+fn attempt_for(route: &str, scope: &str, execution_mode: ExecutionMode) -> ExecutionAttemptContext {
     ExecutionAttemptContext {
         attempt_id: "attempt-1".to_string(),
         snapshot_id: "snapshot-1".to_string(),
-        execution_mode: ExecutionMode::RecoveryOnly,
-        route: "route".to_string(),
-        scope: "scope".to_string(),
+        execution_mode,
+        route: route.to_string(),
+        scope: scope.to_string(),
         matched_rule_id: None,
     }
 }
@@ -340,6 +401,36 @@ impl SignedFamilyHook for NoopSignedFamilyHook {
 #[derive(Debug)]
 struct RejectingSignedFamilyHook {
     called: Arc<AtomicUsize>,
+}
+
+#[derive(Debug)]
+struct FakeAcceptedRouteExecutionAdapter {
+    route: &'static str,
+    submission_ref: &'static str,
+    called: Arc<AtomicUsize>,
+}
+
+impl RouteExecutionAdapter for FakeAcceptedRouteExecutionAdapter {
+    fn route(&self) -> &'static str {
+        self.route
+    }
+
+    fn submit_live(
+        &self,
+        _plan: &ExecutionPlan,
+        attempt: &ExecutionAttemptContext,
+    ) -> Result<execution::LiveSubmitOutcome, SubmitProviderError> {
+        self.called.fetch_add(1, Ordering::SeqCst);
+        Ok(execution::LiveSubmitOutcome::Accepted {
+            submission_record: execution::LiveSubmissionRecord {
+                submission_ref: self.submission_ref.to_owned(),
+                attempt_id: attempt.attempt_id.clone(),
+                route: attempt.route.clone(),
+                scope: attempt.scope.clone(),
+                provider: format!("{}-fake", self.route),
+            },
+        })
+    }
 }
 
 impl SignedFamilyHook for RejectingSignedFamilyHook {

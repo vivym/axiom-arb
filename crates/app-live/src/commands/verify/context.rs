@@ -1,5 +1,8 @@
 use std::path::Path;
 
+use config_schema::{load_raw_config_from_path, ValidatedConfig};
+use sqlx::PgPool;
+
 use super::{
     model::{
         VerifyControlPlaneContext, VerifyControlPlaneMode, VerifyControlPlaneRolloutState,
@@ -15,12 +18,14 @@ use crate::commands::status::{
         StatusSummary, StatusTargetSource,
     },
 };
+use crate::startup;
 
 #[derive(Debug, Clone)]
 pub struct VerifyContext {
     pub scenario: VerifyScenario,
     pub expectation: VerifyExpectation,
     pub config_path: String,
+    pub active_routes: Vec<String>,
     pub control_plane: VerifyControlPlaneContext,
     pub readiness: Option<StatusReadiness>,
     pub actions: Vec<StatusAction>,
@@ -33,11 +38,94 @@ pub struct ConfigAnchorComparison {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveRouteResolution {
+    pub active_routes: Vec<String>,
+    pub historical_noncomparable_reason: Option<String>,
+}
+
 pub fn load(config_path: &Path) -> VerifyContext {
     match evaluate::evaluate(config_path) {
         StatusOutcome::Summary(summary) => from_summary(config_path, *summary),
         StatusOutcome::Deferred(deferred) => from_deferred(config_path, deferred),
     }
+}
+
+pub async fn load_active_routes(
+    pool: &PgPool,
+    config_path: &Path,
+    selection: &VerifyWindowSelection,
+    resolved_session: &ResolvedVerifySession,
+) -> Result<ActiveRouteResolution, String> {
+    if selection.is_historical_explicit() && resolved_session.historical_window_unique {
+        if let Some(session) = resolved_session.historical_window_session.as_ref() {
+            if let Some(operator_strategy_revision) =
+                session.configured_operator_strategy_revision.as_deref()
+            {
+                return match startup::resolve_route_artifacts_for_operator_strategy_revision(
+                    pool,
+                    operator_strategy_revision,
+                )
+                .await
+                {
+                    Ok(route_artifacts) => Ok(ActiveRouteResolution {
+                        active_routes: route_artifacts.into_keys().collect(),
+                        historical_noncomparable_reason: None,
+                    }),
+                    Err(_) => Ok(ActiveRouteResolution {
+                        active_routes: Vec::new(),
+                        historical_noncomparable_reason: Some(format!(
+                            "historical window uses operator_strategy_revision {operator_strategy_revision}, but local adoption lineage is no longer available; config/lifecycle consistency was not evaluated"
+                        )),
+                    }),
+                };
+            }
+
+            if let Some(operator_target_revision) =
+                session.configured_operator_target_revision.as_deref()
+            {
+                return match startup::resolve_route_artifacts_for_operator_target_revision(
+                    pool,
+                    operator_target_revision,
+                )
+                .await
+                {
+                    Ok(route_artifacts) => Ok(ActiveRouteResolution {
+                        active_routes: route_artifacts.into_keys().collect(),
+                        historical_noncomparable_reason: None,
+                    }),
+                    Err(_) => Ok(ActiveRouteResolution {
+                        active_routes: Vec::new(),
+                        historical_noncomparable_reason: Some(format!(
+                            "historical window uses operator_target_revision {operator_target_revision}, but local adoption lineage is no longer available; config/lifecycle consistency was not evaluated"
+                        )),
+                    }),
+                };
+            }
+
+            return Ok(ActiveRouteResolution {
+                active_routes: Vec::new(),
+                historical_noncomparable_reason: Some(
+                    "historical window is uniquely mapped to a run session, but that session has no persisted startup revision anchor; config/lifecycle consistency was not evaluated"
+                        .to_owned(),
+                ),
+            });
+        }
+    }
+
+    let raw = load_raw_config_from_path(config_path).map_err(|error| error.to_string())?;
+    let validated = ValidatedConfig::new(raw).map_err(|error| error.to_string())?;
+    let config = validated
+        .for_app_live()
+        .map_err(|error| error.to_string())?;
+    let resolved = startup::resolve_startup_strategy_revision(pool, &config)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(ActiveRouteResolution {
+        active_routes: resolved.route_artifacts.into_keys().collect(),
+        historical_noncomparable_reason: None,
+    })
 }
 
 pub fn parse_expectation_override(value: &str) -> Result<Option<VerifyExpectation>, String> {
@@ -56,11 +144,19 @@ pub fn compare_window_to_current_config_anchor(
     _context: &VerifyContext,
     window: &VerifyWindowSelection,
     resolved_session: &ResolvedVerifySession,
+    route_resolution: &ActiveRouteResolution,
 ) -> ConfigAnchorComparison {
     if !window.is_historical_explicit() {
         return ConfigAnchorComparison {
             comparable: true,
             reason: None,
+        };
+    }
+
+    if let Some(reason) = route_resolution.historical_noncomparable_reason.clone() {
+        return ConfigAnchorComparison {
+            comparable: false,
+            reason: Some(reason),
         };
     }
 
@@ -101,6 +197,7 @@ fn from_summary(config_path: &Path, summary: StatusSummary) -> VerifyContext {
         scenario,
         expectation,
         config_path: config_path.display().to_string(),
+        active_routes: Vec::new(),
         control_plane: VerifyControlPlaneContext {
             mode: summary.mode.map(map_mode),
             target_source: target_source.map(map_target_source),
@@ -122,6 +219,7 @@ fn from_deferred(config_path: &Path, deferred: StatusDeferred) -> VerifyContext 
         scenario: map_scenario(Some(deferred.mode)),
         expectation: derive_auto_expectation(Some(deferred.mode), StatusReadiness::Blocked),
         config_path: config_path.display().to_string(),
+        active_routes: Vec::new(),
         control_plane: VerifyControlPlaneContext {
             mode: Some(map_mode(deferred.mode)),
             run_session_id: None,
@@ -180,7 +278,8 @@ fn map_rollout_state(state: StatusRolloutState) -> VerifyControlPlaneRolloutStat
 #[cfg(test)]
 mod tests {
     use super::{
-        compare_window_to_current_config_anchor, parse_expectation_override, VerifyContext,
+        compare_window_to_current_config_anchor, parse_expectation_override, ActiveRouteResolution,
+        VerifyContext,
     };
     use crate::commands::verify::{
         model::{
@@ -213,6 +312,7 @@ mod tests {
             scenario: crate::commands::verify::model::VerifyScenario::Live,
             expectation: VerifyExpectation::LiveConfigConsistent,
             config_path: "config/live.toml".to_owned(),
+            active_routes: Vec::new(),
             control_plane: VerifyControlPlaneContext {
                 mode: Some(VerifyControlPlaneMode::Live),
                 target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),
@@ -234,14 +334,57 @@ mod tests {
         };
         let window = VerifyWindowSelection::ExplicitAttemptId("attempt-old".to_owned());
 
-        let comparison =
-            compare_window_to_current_config_anchor(&context, &window, &resolved_session);
+        let comparison = compare_window_to_current_config_anchor(
+            &context,
+            &window,
+            &resolved_session,
+            &ActiveRouteResolution {
+                active_routes: Vec::new(),
+                historical_noncomparable_reason: None,
+            },
+        );
         assert!(!comparison.comparable);
         assert_eq!(
             comparison.reason.as_deref(),
             Some(
                 "historical window is not uniquely mapped to a run session; config/lifecycle consistency was not evaluated"
             )
+        );
+    }
+
+    #[test]
+    fn historical_route_resolution_failure_forces_noncomparable_verdict() {
+        let context = VerifyContext {
+            scenario: crate::commands::verify::model::VerifyScenario::Live,
+            expectation: VerifyExpectation::LiveConfigConsistent,
+            config_path: "config/live.toml".to_owned(),
+            active_routes: Vec::new(),
+            control_plane: VerifyControlPlaneContext::default(),
+            readiness: Some(crate::commands::status::model::StatusReadiness::LiveConfigReady),
+            actions: vec![],
+            reason: None,
+        };
+        let resolved_session = crate::commands::verify::session::ResolvedVerifySession {
+            relevant_session: None,
+            historical_window_session: None,
+            historical_window_unique: false,
+        };
+        let window = VerifyWindowSelection::ExplicitAttemptId("attempt-old".to_owned());
+
+        let comparison = compare_window_to_current_config_anchor(
+            &context,
+            &window,
+            &resolved_session,
+            &ActiveRouteResolution {
+                active_routes: Vec::new(),
+                historical_noncomparable_reason: Some("historical lineage missing".to_owned()),
+            },
+        );
+
+        assert!(!comparison.comparable);
+        assert_eq!(
+            comparison.reason.as_deref(),
+            Some("historical lineage missing")
         );
     }
 }

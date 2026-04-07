@@ -13,8 +13,12 @@ use std::{
 };
 
 use persistence::{
-    models::{AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow, CandidateTargetSetRow},
+    models::{
+        AdoptableStrategyRevisionRow, AdoptableTargetRevisionRow, CandidateAdoptionProvenanceRow,
+        CandidateTargetSetRow, StrategyAdoptionProvenanceRow, StrategyCandidateSetRow,
+    },
     run_migrations, CandidateAdoptionRepo, CandidateArtifactRepo, RuntimeProgressRepo,
+    StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
@@ -201,6 +205,70 @@ ready_families = []
     );
 }
 
+#[test]
+fn doctor_live_mode_reports_missing_operator_strategy_revision_from_neutral_adopted_shape() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x3333333333333333333333333333333333333333"
+"#,
+    )
+    .expect("seed neutral adopted config");
+
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(combined.contains("TargetSourceError"), "{combined}");
+    assert!(
+        combined.contains("missing strategy_control.operator_strategy_revision"),
+        "{combined}"
+    );
+}
+
 #[tokio::test]
 async fn doctor_live_mode_fails_without_database_url_for_explicit_targets() {
     let config = temp_live_config(
@@ -267,10 +335,8 @@ quantity = "5"
         combined.contains("[OK] startup target resolution succeeded"),
         "{combined}"
     );
-    assert!(
-        combined.contains("[SKIP] control-plane checks not required for explicit targets"),
-        "{combined}"
-    );
+    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]
@@ -345,6 +411,8 @@ quantity = "5"
         combined.contains("Next: app-live run --config"),
         "{combined}"
     );
+    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
+    assert!(combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]
@@ -483,11 +551,11 @@ operator_target_revision = "targets-rev-9"
     assert_section_summary(&combined, "Target Source", "PASS");
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert!(
-        combined.contains("configured operator target revision"),
+        combined.contains("configured operator strategy revision"),
         "{combined}"
     );
     assert!(
-        combined.contains("active operator target revision"),
+        combined.contains("active operator strategy revision"),
         "{combined}"
     );
     assert!(combined.contains("restart not needed"), "{combined}");
@@ -495,6 +563,166 @@ operator_target_revision = "targets-rev-9"
         !combined.contains("[SKIP] control-plane checks not required for explicit targets"),
         "{combined}"
     );
+}
+
+#[tokio::test]
+async fn doctor_pure_neutral_adopted_config_does_not_take_explicit_targets_shortcut() {
+    let database = TestDatabase::new().await;
+    let venue = MockDoctorVenue::success();
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Target Source", "PASS");
+    assert!(
+        !combined.contains("[SKIP] control-plane checks not required for explicit targets"),
+        "{combined}"
+    );
+}
+
+#[tokio::test]
+async fn doctor_pure_neutral_adopted_config_uses_strategy_anchor_when_distinct_from_target() {
+    let database = TestDatabase::new().await;
+    let venue = MockDoctorVenue::success();
+    database
+        .seed_distinct_strategy_adoption_with_runtime_progress(
+            "strategy-candidate-12",
+            "adoptable-strategy-12",
+            "strategy-rev-12",
+            "targets-rev-9",
+            "targets-rev-active",
+            "strategy-rev-12",
+        )
+        .await;
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Target Source", "PASS");
+    assert!(
+        combined.contains("configured operator strategy revision: strategy-rev-12"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("active operator strategy revision: strategy-rev-12"),
+        "{combined}"
+    );
+    assert!(!combined.contains("restart needed"), "{combined}");
 }
 
 #[tokio::test]
@@ -877,6 +1105,88 @@ impl TestDatabase {
             )
             .await
             .expect("runtime progress should seed with anchor");
+    }
+
+    async fn seed_distinct_strategy_adoption_with_runtime_progress(
+        &self,
+        strategy_candidate_revision: &str,
+        adoptable_strategy_revision: &str,
+        operator_strategy_revision: &str,
+        rendered_operator_target_revision: &str,
+        active_operator_target_revision: &str,
+        active_operator_strategy_revision: &str,
+    ) {
+        StrategyControlArtifactRepo
+            .upsert_strategy_candidate_set(
+                &self.pool,
+                &StrategyCandidateSetRow {
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    snapshot_id: "snapshot-strategy-12".to_owned(),
+                    source_revision: "discovery-strategy-12".to_owned(),
+                    payload: json!({
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "snapshot_id": "snapshot-strategy-12",
+                    }),
+                },
+            )
+            .await
+            .expect("strategy candidate row should persist");
+
+        StrategyControlArtifactRepo
+            .upsert_adoptable_strategy_revision(
+                &self.pool,
+                &AdoptableStrategyRevisionRow {
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                    rendered_operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    payload: json!({
+                        "adoptable_strategy_revision": adoptable_strategy_revision,
+                        "strategy_candidate_revision": strategy_candidate_revision,
+                        "rendered_operator_strategy_revision": operator_strategy_revision,
+                        "rendered_operator_target_revision": rendered_operator_target_revision,
+                        "rendered_live_targets": {
+                            "family-a": {
+                                "family_id": "family-a",
+                                "members": [
+                                    {
+                                        "condition_id": "condition-1",
+                                        "token_id": "token-1",
+                                        "price": "0.43",
+                                        "quantity": "5",
+                                    }
+                                ]
+                            }
+                        }
+                    }),
+                },
+            )
+            .await
+            .expect("adoptable strategy row should persist");
+
+        StrategyAdoptionRepo
+            .upsert_provenance(
+                &self.pool,
+                &StrategyAdoptionProvenanceRow {
+                    operator_strategy_revision: operator_strategy_revision.to_owned(),
+                    adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
+                    strategy_candidate_revision: strategy_candidate_revision.to_owned(),
+                },
+            )
+            .await
+            .expect("strategy provenance should persist");
+
+        RuntimeProgressRepo
+            .record_progress_with_strategy_revision(
+                &self.pool,
+                41,
+                7,
+                Some("snapshot-7"),
+                Some(active_operator_target_revision),
+                Some(active_operator_strategy_revision),
+                None,
+            )
+            .await
+            .expect("runtime progress should seed with strategy and target anchors");
     }
 }
 

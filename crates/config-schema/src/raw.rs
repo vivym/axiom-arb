@@ -1,8 +1,14 @@
+use std::ops::Deref;
+
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RawAxiomConfig {
     pub runtime: RuntimeToml,
+    #[serde(default)]
+    pub strategy_control: Option<StrategyControlToml>,
+    #[serde(default)]
+    pub strategies: Option<StrategiesToml>,
     #[serde(default)]
     pub polymarket: Option<PolymarketToml>,
     #[serde(default)]
@@ -64,6 +70,43 @@ pub struct PolymarketToml {
     pub source: Option<PolymarketSourceToml>,
     #[serde(default)]
     pub signer: Option<PolymarketSignerToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyControlToml {
+    pub source: StrategyControlSourceToml,
+    #[serde(default, alias = "operator_target_revision")]
+    pub operator_strategy_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyControlSourceToml {
+    Adopted,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategiesToml {
+    #[serde(default)]
+    pub full_set: Option<StrategyRouteToml>,
+    #[serde(default)]
+    pub neg_risk: Option<StrategyRouteToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyRouteToml {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rollout: Option<StrategyRouteRolloutToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StrategyRouteRolloutToml {
+    #[serde(default)]
+    pub approved_scopes: Vec<String>,
+    #[serde(default)]
+    pub ready_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -153,8 +196,8 @@ pub struct NegRiskToml {
     pub target_source: Option<NegRiskTargetSourceToml>,
     #[serde(default)]
     pub rollout: Option<NegRiskRolloutToml>,
-    #[serde(default)]
-    pub targets: Vec<NegRiskTargetToml>,
+    #[serde(default, skip_serializing_if = "NegRiskTargetsToml::is_implicit_empty")]
+    pub targets: NegRiskTargetsToml,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -191,4 +234,54 @@ pub struct NegRiskTargetMemberToml {
     pub token_id: String,
     pub price: String,
     pub quantity: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NegRiskTargetsToml {
+    present: bool,
+    items: Vec<NegRiskTargetToml>,
+}
+
+impl NegRiskTargetsToml {
+    pub fn is_present(&self) -> bool {
+        self.present
+    }
+
+    pub fn as_slice(&self) -> &[NegRiskTargetToml] {
+        self.items.as_slice()
+    }
+
+    fn is_implicit_empty(&self) -> bool {
+        !self.present && self.items.is_empty()
+    }
+}
+
+impl Deref for NegRiskTargetsToml {
+    type Target = [NegRiskTargetToml];
+
+    fn deref(&self) -> &Self::Target {
+        self.items.as_slice()
+    }
+}
+
+impl Serialize for NegRiskTargetsToml {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.items.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NegRiskTargetsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let items = Vec::<NegRiskTargetToml>::deserialize(deserializer)?;
+        Ok(Self {
+            present: true,
+            items,
+        })
+    }
 }

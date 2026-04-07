@@ -6,8 +6,9 @@ use crate::{
     bootstrap::BootstrapSource,
     config::NegRiskLiveTargetSet,
     runtime::{
-        load_durable_live_startup_state, operator_target_revision_for,
-        persist_operator_target_revision_anchor_with_run_session_id, AppRunResult, AppRuntimeMode,
+        load_durable_live_startup_state, load_durable_live_startup_state_for_strategy,
+        operator_target_revision_for, persist_operator_target_revision_anchor_with_run_session_id,
+        AppRunResult, AppRuntimeMode,
     },
     smoke::RealUserShadowSmokeConfig,
     AppInstrumentation, AppSupervisor, SupervisorError, SupervisorSummary,
@@ -185,11 +186,49 @@ pub(crate) fn run_live_daemon_from_durable_store_with_neg_risk_live_targets_and_
 where
     S: BootstrapSource,
 {
+    run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented(
+        source,
+        instrumentation,
+        None,
+        false,
+        neg_risk_live_targets,
+        neg_risk_live_approved_families,
+        neg_risk_live_ready_families,
+        real_user_shadow_smoke,
+        run_session_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented<
+    S,
+>(
+    source: &S,
+    instrumentation: AppInstrumentation,
+    operator_strategy_revision: Option<&str>,
+    allow_legacy_target_source_resume: bool,
+    neg_risk_live_targets: NegRiskLiveTargetSet,
+    neg_risk_live_approved_families: BTreeSet<String>,
+    neg_risk_live_ready_families: BTreeSet<String>,
+    real_user_shadow_smoke: Option<RealUserShadowSmokeConfig>,
+    run_session_id: Option<&str>,
+) -> Result<AppRunResult, Box<dyn Error>>
+where
+    S: BootstrapSource,
+{
     let load_shadow_state = real_user_shadow_smoke.is_some();
     let operator_target_revision =
         operator_target_revision_for(&neg_risk_live_targets).map(str::to_owned);
-    let durable_state =
-        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?;
+    let durable_state = if operator_strategy_revision.is_some() {
+        load_durable_live_startup_state_for_strategy(
+            operator_strategy_revision,
+            operator_target_revision.as_deref(),
+            allow_legacy_target_source_resume,
+            load_shadow_state,
+        )?
+    } else {
+        load_durable_live_startup_state(operator_target_revision.as_deref(), load_shadow_state)?
+    };
     validate_real_user_shadow_smoke_restore(&durable_state, real_user_shadow_smoke.as_ref())?;
     let mut supervisor = match instrumentation.recorder() {
         Some(recorder) => {
@@ -216,6 +255,7 @@ where
     persist_operator_target_revision_anchor_with_run_session_id(
         &result.summary,
         operator_target_revision.as_deref(),
+        operator_strategy_revision,
         run_session_id,
     )?;
     Ok(result)

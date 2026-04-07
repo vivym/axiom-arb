@@ -11,12 +11,14 @@ pub mod negrisk_live;
 mod negrisk_shadow;
 pub mod posture;
 pub mod queues;
+pub mod route_adapters;
 pub mod run_session;
 pub mod runtime;
 pub mod smoke;
 mod snapshot_meta;
 pub mod source_tasks;
 pub mod startup;
+pub mod strategy_control;
 pub mod supervisor;
 pub mod task_groups;
 
@@ -56,6 +58,7 @@ pub use source_tasks::{
     build_real_user_shadow_smoke_sources, RealUserShadowSmokeSources, SmokeSafeStartupSource,
 };
 pub use startup::{resolve_startup_targets, ResolvedTargets, StartupBundle, StartupError};
+pub use strategy_control::live_route_registry;
 pub use supervisor::{
     AppSupervisor, NegRiskLiveStateSource, NegRiskRolloutEvidence, SupervisorError,
     SupervisorSummary,

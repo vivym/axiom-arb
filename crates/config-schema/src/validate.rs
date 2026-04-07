@@ -3,10 +3,10 @@ use std::sync::OnceLock;
 
 use crate::error::ConfigSchemaError;
 use crate::raw::{
-    NegRiskRolloutToml, NegRiskTargetMemberToml, NegRiskTargetSourceKindToml,
-    NegRiskTargetSourceToml, NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml,
-    PolymarketRelayerAuthToml, PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig,
-    RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml, WalletRouteToml,
+    NegRiskTargetMemberToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml,
+    NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml, PolymarketRelayerAuthToml,
+    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
+    RuntimeModeToml, SignatureTypeToml, StrategyControlSourceToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -83,7 +83,8 @@ pub struct AppLiveNegRiskTargetsView<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppLiveNegRiskRolloutView<'a> {
-    raw: &'a NegRiskRolloutToml,
+    approved_families: &'a [String],
+    ready_families: &'a [String],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -216,11 +217,72 @@ impl<'a> AppLiveConfigView<'a> {
     }
 
     pub fn negrisk_rollout(&self) -> Option<AppLiveNegRiskRolloutView<'a>> {
+        if let Some(rollout) = self
+            .raw
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        {
+            return Some(AppLiveNegRiskRolloutView {
+                approved_families: &rollout.approved_scopes,
+                ready_families: &rollout.ready_scopes,
+            });
+        }
+
         self.raw
             .negrisk
             .as_ref()
             .and_then(|negrisk| negrisk.rollout.as_ref())
-            .map(|raw| AppLiveNegRiskRolloutView { raw })
+            .map(|rollout| AppLiveNegRiskRolloutView {
+                approved_families: &rollout.approved_families,
+                ready_families: &rollout.ready_families,
+            })
+    }
+
+    pub fn has_adopted_strategy_source(&self) -> bool {
+        if let Some(target_source) = self
+            .raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.target_source.as_ref())
+        {
+            return matches!(target_source.source, NegRiskTargetSourceKindToml::Adopted);
+        }
+
+        self.raw
+            .strategy_control
+            .as_ref()
+            .map(|strategy_control| {
+                matches!(strategy_control.source, StrategyControlSourceToml::Adopted)
+            })
+            .unwrap_or(false)
+    }
+
+    pub fn operator_strategy_revision(&self) -> Option<&'a str> {
+        if self.is_legacy_explicit_strategy_config() {
+            return None;
+        }
+
+        self.raw
+            .strategy_control
+            .as_ref()
+            .and_then(|strategy_control| strategy_control.operator_strategy_revision.as_deref())
+            .or_else(|| {
+                self.raw
+                    .negrisk
+                    .as_ref()
+                    .and_then(|negrisk| negrisk.target_source.as_ref())
+                    .and_then(|target_source| target_source.operator_target_revision.as_deref())
+            })
+    }
+
+    pub fn is_legacy_explicit_strategy_config(&self) -> bool {
+        self.raw
+            .negrisk
+            .as_ref()
+            .map(|negrisk| negrisk.targets.is_present())
+            .unwrap_or(false)
     }
 }
 
@@ -399,11 +461,11 @@ impl<'a> AppLiveNegRiskTargetsView<'a> {
 
 impl<'a> AppLiveNegRiskRolloutView<'a> {
     pub fn approved_families(&self) -> &'a [String] {
-        &self.raw.approved_families
+        self.approved_families
     }
 
     pub fn ready_families(&self) -> &'a [String] {
-        &self.raw.ready_families
+        self.ready_families
     }
 }
 
@@ -466,6 +528,7 @@ pub(crate) fn validate_global_invariants(raw: &RawAxiomConfig) -> Result<(), Con
         ));
     }
 
+    validate_strategy_control(raw)?;
     validate_negrisk(raw)?;
 
     Ok(())
@@ -484,8 +547,7 @@ fn validate_app_live_requiredness(
                 let relayer_auth = require_relayer_auth_view(raw)?;
                 validate_relayer_auth_view(relayer_auth)?;
 
-                let target_source = require_target_source(raw)?;
-                validate_target_source_view(target_source)?;
+                require_strategy_control_or_legacy_target_source(raw)?;
             } else {
                 require_source(raw)?;
                 require_signer(raw)?;
@@ -493,7 +555,7 @@ fn validate_app_live_requiredness(
                 let relayer_auth = require_relayer_auth_view(raw)?;
                 validate_relayer_auth_view(relayer_auth)?;
 
-                require_rollout(raw)?;
+                require_rollout_or_route_owned_rollout(raw)?;
                 validate_negrisk_rollout_referential_integrity(raw)?;
             }
 
@@ -536,15 +598,21 @@ fn require_signer(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     Ok(())
 }
 
-fn require_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+fn require_rollout_or_route_owned_rollout(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     if raw
         .negrisk
         .as_ref()
         .and_then(|negrisk| negrisk.rollout.as_ref())
         .is_none()
+        && raw
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .and_then(|neg_risk| neg_risk.rollout.as_ref())
+            .is_none()
     {
         return Err(validation_error(
-            "missing required section: negrisk.rollout",
+            "missing required section: negrisk.rollout or strategies.neg_risk.rollout",
         ));
     }
     Ok(())
@@ -580,6 +648,28 @@ fn require_target_source(
         .and_then(|negrisk| negrisk.target_source.as_ref())
         .map(|raw| AppLiveNegRiskTargetSourceView { raw })
         .ok_or_else(|| validation_error("missing required section: negrisk.target_source"))
+}
+
+fn require_strategy_control_or_legacy_target_source(
+    raw: &RawAxiomConfig,
+) -> Result<(), ConfigSchemaError> {
+    if let Some(target_source) = raw
+        .negrisk
+        .as_ref()
+        .and_then(|negrisk| negrisk.target_source.as_ref())
+        .map(|raw| AppLiveNegRiskTargetSourceView { raw })
+    {
+        validate_target_source_view(target_source)?;
+        return Ok(());
+    }
+
+    if raw.strategy_control.is_some() {
+        return Ok(());
+    }
+
+    Err(validation_error(
+        "missing required section: strategy_control or negrisk.target_source",
+    ))
 }
 
 fn explicit_polymarket_source(raw: &RawAxiomConfig) -> Option<&PolymarketSourceToml> {
@@ -621,7 +711,7 @@ fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
     };
 
     let mut family_ids = BTreeSet::new();
-    for target in &negrisk.targets {
+    for target in negrisk.targets.iter() {
         require_non_empty("negrisk.targets.family_id", &target.family_id)?;
         if !family_ids.insert(target.family_id.as_str()) {
             return Err(validation_error(format!(
@@ -716,6 +806,22 @@ fn validate_target_source_view(
     Ok(())
 }
 
+fn validate_strategy_control(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+    let Some(strategy_control) = raw.strategy_control.as_ref() else {
+        return Ok(());
+    };
+
+    if let Some(operator_strategy_revision) = strategy_control.operator_strategy_revision.as_deref()
+    {
+        require_non_empty_local_signer_field(
+            operator_strategy_revision,
+            "strategy_control.operator_strategy_revision",
+        )?;
+    }
+
+    Ok(())
+}
+
 fn require_non_empty_local_signer_field(
     value: &str,
     field: &'static str,
@@ -743,6 +849,16 @@ fn require_non_empty_optional_local_signer_field(
 fn validate_negrisk_rollout_referential_integrity(
     raw: &RawAxiomConfig,
 ) -> Result<(), ConfigSchemaError> {
+    if raw
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.neg_risk.as_ref())
+        .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        .is_some()
+    {
+        return Ok(());
+    }
+
     let Some(negrisk) = raw.negrisk.as_ref() else {
         return Ok(());
     };

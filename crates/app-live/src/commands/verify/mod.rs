@@ -13,6 +13,13 @@ pub mod model;
 pub mod session;
 pub mod window;
 
+#[derive(Debug, Clone)]
+struct RouteVerdictReport {
+    route: String,
+    verdict: model::VerifyVerdict,
+    reason: Option<String>,
+}
+
 pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     let mut verify_context = context::load(&args.config);
     if let Some(expectation) = args
@@ -33,12 +40,22 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
     )?;
 
     let runtime = Builder::new_current_thread().enable_all().build()?;
-    let (resolved_session, evidence_result) = match runtime.block_on(async {
+    let (resolved_session, evidence_result, route_resolution) = match runtime.block_on(async {
         let pool = connect_pool_from_env().await?;
         let resolved_session =
             session::resolve_session_window(&pool, &verify_context, &selection).await?;
-        let evidence = evidence::load(&pool, &selection, &resolved_session).await;
-        Ok::<_, Box<dyn Error>>((resolved_session, evidence))
+        let route_resolution =
+            context::load_active_routes(&pool, &args.config, &selection, &resolved_session)
+                .await
+                .map_err(io::Error::other)?;
+        let evidence = evidence::load(
+            &pool,
+            &selection,
+            &resolved_session,
+            &route_resolution.active_routes,
+        )
+        .await;
+        Ok::<_, Box<dyn Error>>((resolved_session, evidence, route_resolution))
     }) {
         Ok(value) => value,
         Err(error) => {
@@ -53,17 +70,21 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
                 Some(&reason),
                 &next_actions,
                 &evidence::VerifyEvidenceWindow::default(),
+                &[],
                 &args.config,
             );
             return Err(io::Error::other(reason).into());
         }
     };
 
+    verify_context.active_routes = route_resolution.active_routes.clone();
+
     apply_session_resolution(&mut verify_context, &selection, &resolved_session);
     let anchor_comparison = context::compare_window_to_current_config_anchor(
         &verify_context,
         &selection,
         &resolved_session,
+        &route_resolution,
     );
 
     let evidence = match evidence_result {
@@ -92,19 +113,21 @@ pub fn execute(args: VerifyArgs) -> Result<(), Box<dyn Error>> {
                 Some(&reason),
                 &next_actions,
                 &evidence::VerifyEvidenceWindow::default(),
+                &[],
                 &args.config,
             );
             return Err(io::Error::other(reason).into());
         }
     };
-    let (verdict, reason, next_actions) =
-        evaluate_foundation_outcome(&verify_context, &anchor_comparison, &evidence);
+    let (verdict, reason, next_actions, route_reports) =
+        evaluate_outcome_with_route_reports(&verify_context, &anchor_comparison, &evidence);
     render_foundation_report(
         &verify_context,
         verdict,
         reason.as_deref(),
         &next_actions,
         &evidence,
+        &route_reports,
         &args.config,
     );
 
@@ -197,6 +220,173 @@ fn evaluate_foundation_outcome(
     )
 }
 
+fn evaluate_outcome_with_route_reports(
+    verify_context: &context::VerifyContext,
+    anchor_comparison: &context::ConfigAnchorComparison,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> (
+    model::VerifyVerdict,
+    Option<String>,
+    Vec<String>,
+    Vec<RouteVerdictReport>,
+) {
+    let (foundation_verdict, foundation_reason, foundation_next_actions) =
+        evaluate_foundation_outcome(verify_context, anchor_comparison, evidence);
+    let route_reports = route_verdict_reports(verify_context, anchor_comparison, evidence);
+    if route_reports.is_empty() {
+        return (
+            foundation_verdict,
+            foundation_reason,
+            foundation_next_actions,
+            Vec::new(),
+        );
+    }
+
+    let route_verdict = aggregate_route_verdict(&route_reports);
+    let route_reason = route_summary_reason(&route_reports);
+    let verdict = aggregate_verdicts(&[foundation_verdict, route_verdict]);
+    let route_next_actions =
+        next_actions_from_context(verify_context, &["run app-live status --config {config}"]);
+
+    let (reason, next_actions) = if verdict_rank(route_verdict) > verdict_rank(foundation_verdict) {
+        (route_reason.or(foundation_reason), route_next_actions)
+    } else {
+        (foundation_reason.or(route_reason), foundation_next_actions)
+    };
+
+    (verdict, reason, next_actions, route_reports)
+}
+
+fn route_verdict_reports(
+    verify_context: &context::VerifyContext,
+    anchor_comparison: &context::ConfigAnchorComparison,
+    evidence: &evidence::VerifyEvidenceWindow,
+) -> Vec<RouteVerdictReport> {
+    if verify_context.control_plane.target_source
+        == Some(model::VerifyControlPlaneTargetSource::LegacyExplicitTargets)
+    {
+        return Vec::new();
+    }
+
+    if incompatible_expectation_outcome(verify_context).is_some() {
+        return Vec::new();
+    }
+
+    if !anchor_comparison.comparable {
+        return Vec::new();
+    }
+
+    let Some(mode) = verify_context.control_plane.mode else {
+        return Vec::new();
+    };
+
+    if matches!(mode, model::VerifyControlPlaneMode::Paper) {
+        return Vec::new();
+    }
+
+    evidence::routes_to_evaluate(evidence, &verify_context.active_routes)
+        .into_iter()
+        .map(|route| {
+            let route_evidence = evidence::window_for_route(evidence, &route);
+            let (verdict, reason, _next_actions) =
+                if evidence::route_has_local_evidence(&route_evidence) {
+                    match mode {
+                        model::VerifyControlPlaneMode::Live => {
+                            evaluate_live_outcome(verify_context, &route_evidence)
+                        }
+                        model::VerifyControlPlaneMode::RealUserShadowSmoke => {
+                            evaluate_smoke_outcome(verify_context, &route_evidence)
+                        }
+                        model::VerifyControlPlaneMode::Paper => {
+                            evaluate_paper_outcome(verify_context, &route_evidence)
+                        }
+                    }
+                } else {
+                    (
+                        model::VerifyVerdict::PassWithWarnings,
+                        Some(format!(
+                            "no local evidence observed for active route {route}"
+                        )),
+                        next_actions_from_context(
+                            verify_context,
+                            &["run app-live status --config {config}"],
+                        ),
+                    )
+                };
+
+            RouteVerdictReport {
+                route,
+                verdict,
+                reason,
+            }
+        })
+        .collect()
+}
+
+fn aggregate_route_verdict(route_reports: &[RouteVerdictReport]) -> model::VerifyVerdict {
+    if route_reports
+        .iter()
+        .any(|report| matches!(report.verdict, model::VerifyVerdict::Fail))
+    {
+        model::VerifyVerdict::Fail
+    } else if route_reports
+        .iter()
+        .any(|report| matches!(report.verdict, model::VerifyVerdict::PassWithWarnings))
+    {
+        model::VerifyVerdict::PassWithWarnings
+    } else {
+        model::VerifyVerdict::Pass
+    }
+}
+
+fn aggregate_verdicts(verdicts: &[model::VerifyVerdict]) -> model::VerifyVerdict {
+    if verdicts
+        .iter()
+        .any(|verdict| matches!(verdict, model::VerifyVerdict::Fail))
+    {
+        model::VerifyVerdict::Fail
+    } else if verdicts
+        .iter()
+        .any(|verdict| matches!(verdict, model::VerifyVerdict::PassWithWarnings))
+    {
+        model::VerifyVerdict::PassWithWarnings
+    } else {
+        model::VerifyVerdict::Pass
+    }
+}
+
+fn route_summary_reason(route_reports: &[RouteVerdictReport]) -> Option<String> {
+    let primary_reason = route_reports
+        .iter()
+        .find(|report| matches!(report.verdict, model::VerifyVerdict::Fail))
+        .or_else(|| {
+            route_reports
+                .iter()
+                .find(|report| matches!(report.verdict, model::VerifyVerdict::PassWithWarnings))
+        })
+        .and_then(|report| report.reason.clone());
+
+    Some(format!(
+        "route verdicts: {}{}",
+        route_reports
+            .iter()
+            .map(|report| format!("{}={}", report.route, report.verdict.label()))
+            .collect::<Vec<_>>()
+            .join(", "),
+        primary_reason
+            .map(|reason| format!("; {reason}"))
+            .unwrap_or_default()
+    ))
+}
+
+fn verdict_rank(verdict: model::VerifyVerdict) -> u8 {
+    match verdict {
+        model::VerifyVerdict::Pass => 0,
+        model::VerifyVerdict::PassWithWarnings => 1,
+        model::VerifyVerdict::Fail => 2,
+    }
+}
+
 fn evaluate_live_outcome(
     verify_context: &context::VerifyContext,
     evidence: &evidence::VerifyEvidenceWindow,
@@ -247,10 +437,7 @@ fn evaluate_live_outcome(
             Some(format!(
                 "live results are locally consistent but readiness remains incomplete; live attempts: {live_attempt_count}"
             )),
-            next_actions_from_context(
-                verify_context,
-                &["run app-live status --config {config}"],
-            ),
+            next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         )
     }
 }
@@ -283,7 +470,7 @@ fn evaluate_smoke_outcome(
         return (
             model::VerifyVerdict::Fail,
             Some(format!(
-                "forbidden live side effects: observed {live_side_effect_count} live side effect(s)"
+                "credible live strategy attempts: observed {live_side_effect_count} live side effect(s)"
             )),
             vec!["stop live activity and inspect recent local execution state".to_owned()],
         );
@@ -387,7 +574,7 @@ fn evaluate_noncomparable_historical_outcome(
                 return (
                     model::VerifyVerdict::Fail,
                     Some(format!(
-                        "forbidden live side effects: observed {live_side_effect_count} live side effect(s)"
+                        "credible live strategy attempts: observed {live_side_effect_count} live side effect(s)"
                     )),
                     vec!["stop live activity and inspect recent local execution state".to_owned()],
                 );
@@ -436,7 +623,10 @@ fn evaluate_noncomparable_historical_outcome(
                     Some(format!(
                         "contradictory local outcomes: observed {shadow_attempt_count} shadow attempt(s) in live verification"
                     )),
-                    vec!["inspect the latest local execution attempts before rerunning verify".to_owned()],
+                    vec![
+                        "inspect the latest local execution attempts before rerunning verify"
+                            .to_owned(),
+                    ],
                 );
             }
 
@@ -475,6 +665,7 @@ fn render_foundation_report(
     reason: Option<&str>,
     next_actions: &[String],
     evidence: &evidence::VerifyEvidenceWindow,
+    route_reports: &[RouteVerdictReport],
     config_path: &Path,
 ) {
     let live_artifact_count: usize = evidence.live_artifacts.values().map(Vec::len).sum();
@@ -508,6 +699,16 @@ fn render_foundation_report(
         "Side Effects: {}",
         forbidden_live_attempt_count + live_artifact_count + live_submission_count
     );
+    if !route_reports.is_empty() {
+        println!("Route Results");
+        for report in route_reports {
+            println!(
+                "Route {}: {}",
+                report.route,
+                verdict_label_upper(report.verdict)
+            );
+        }
+    }
     println!("Control-Plane Context");
     println!("Expectation: {}", verify_context.expectation.label());
     render_context_line(
@@ -1126,7 +1327,7 @@ mod tests {
             .iter()
             .any(|action| action.contains("app-live apply --config")));
         assert!(live_actions.iter().any(|action| {
-            action.contains("approved_families") && action.contains("ready_families")
+            action.contains("approved_scopes") && action.contains("ready_scopes")
         }));
     }
 
@@ -1199,6 +1400,7 @@ mod tests {
             scenario,
             expectation,
             config_path: "config/live.toml".to_owned(),
+            active_routes: vec!["neg-risk".to_owned()],
             control_plane: VerifyControlPlaneContext {
                 mode: Some(mode),
                 target_source: Some(VerifyControlPlaneTargetSource::AdoptedTargets),

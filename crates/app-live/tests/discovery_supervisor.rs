@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use app_live::{
-    CandidateArtifactRender, CandidateBridge, CandidateNotice, CandidateNoticeQueue,
-    CandidateRestrictionTruth, DiscoveryReport, DiscoverySupervisor, InputTaskEvent,
-    NegRiskFamilyLiveTarget, NegRiskMemberLiveTarget, SnapshotDispatchQueue, SnapshotNotice,
+    CandidateBridge, CandidateNotice, CandidateNoticeQueue, CandidateRestrictionTruth,
+    DiscoveryReport, DiscoverySupervisor, InputTaskEvent, NegRiskFamilyLiveTarget,
+    NegRiskMemberLiveTarget, SnapshotDispatchQueue, SnapshotNotice,
 };
 use chrono::{TimeZone, Utc};
 use domain::{
@@ -44,20 +44,15 @@ fn discovery_supervisor_publishes_candidate_target_set_without_waking_live_dispa
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-7".to_owned()),
-            adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
-            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
-            target_count: 1,
-            adoptable_target_count: 1,
-            deferred_target_count: 0,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "adoptable".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert!(report.adoptable_revision.is_some());
+    assert!(report.operator_target_revision.is_some());
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 1);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "adoptable");
     assert!(live_dispatch.coalesced().is_empty());
 }
 
@@ -86,66 +81,27 @@ fn candidate_bridge_derives_future_operator_target_revision_from_rendered_live_t
         .render(&candidate_set, None, &sample_rendered_live_targets())
         .expect("candidate render");
 
+    assert!(render
+        .candidate
+        .strategy_candidate_revision
+        .starts_with("strategy-candidate-"));
+    assert!(render
+        .adoptable
+        .adoptable_strategy_revision
+        .starts_with("adoptable-strategy-"));
+    assert!(render
+        .adoptable
+        .rendered_operator_strategy_revision
+        .starts_with("operator-strategy-"));
+    assert_eq!(render.candidate.payload["route_artifact_count"], json!(1));
+    assert_eq!(render.candidate.payload["targets"], json!([]));
     assert_eq!(
-        render,
-        CandidateArtifactRender {
-            candidate: persistence::models::CandidateTargetSetRow {
-                candidate_revision: "candidate-bridge-9".to_owned(),
-                snapshot_id: "snapshot-9".to_owned(),
-                source_revision: "evt-9".to_owned(),
-                payload: json!({
-                    "candidate_revision": "candidate-bridge-9",
-                    "snapshot_id": "snapshot-9",
-                    "source_anchor": {
-                        "source_kind": "metadata_refresh",
-                        "source_session_id": "session-9",
-                        "source_event_id": "evt-9",
-                        "normalizer_version": "v1-refresh",
-                    },
-                    "policy_name": "candidate-generation",
-                    "candidate_policy_version": "policy-v1",
-                    "bridge_policy_version": "bridge-policy-v1",
-                    "source_revision": "evt-9",
-                    "target_count": 0,
-                    "targets": [],
-                    "advisory_pricing": {
-                        "price_band_bps": 25,
-                        "size_cap_contracts": 1,
-                        "mode": "advisory_only",
-                        "candidate_count": 0,
-                    },
-                    "warnings": [],
-                    "execution_requests": [],
-                }),
-            },
-            adoptable: persistence::models::AdoptableTargetRevisionRow {
-                adoptable_revision: "adoptable-candidate-bridge-9".to_owned(),
-                candidate_revision: "candidate-bridge-9".to_owned(),
-                rendered_operator_target_revision: sample_rendered_live_target_revision()
-                    .to_owned(),
-                payload: json!({
-                    "adoptable_revision": "adoptable-candidate-bridge-9",
-                    "candidate_revision": "candidate-bridge-9",
-                    "rendered_operator_target_revision": sample_rendered_live_target_revision(),
-                    "snapshot_id": "snapshot-9",
-                    "source_anchor": {
-                        "source_kind": "metadata_refresh",
-                        "source_session_id": "session-9",
-                        "source_event_id": "evt-9",
-                        "normalizer_version": "v1-refresh",
-                    },
-                    "bridge_policy_version": "bridge-policy-v1",
-                    "candidate_policy_version": "policy-v1",
-                    "compatibility": {
-                        "operator_target_revision_supplied": false,
-                        "advisory_only": true,
-                    },
-                    "rendered_live_targets": sample_rendered_live_targets(),
-                    "warnings": [],
-                    "execution_requests": [],
-                }),
-            },
-        }
+        route_digest(&render.candidate.payload, "full-set", "default"),
+        route_digest(&render.adoptable.payload, "full-set", "default"),
+    );
+    assert_eq!(
+        render.adoptable.payload["rendered_live_targets"],
+        json!(sample_rendered_live_targets())
     );
 }
 
@@ -265,20 +221,15 @@ fn discovery_supervisor_materializes_adoptable_output_without_prior_operator_rev
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-7".to_owned()),
-            adoptable_revision: Some("adoptable-candidate-pub-7".to_owned()),
-            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
-            target_count: 1,
-            adoptable_target_count: 1,
-            deferred_target_count: 0,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "adoptable".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert!(report.adoptable_revision.is_some());
+    assert!(report.operator_target_revision.is_some());
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 1);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "adoptable");
 }
 
 #[test]
@@ -310,20 +261,15 @@ fn discovery_supervisor_defers_non_authoritative_notice_when_backfill_is_missing
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
-            adoptable_revision: None,
-            operator_target_revision: None,
-            target_count: 1,
-            adoptable_target_count: 0,
-            deferred_target_count: 1,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "deferred".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert_eq!(report.adoptable_revision, None);
+    assert_eq!(report.operator_target_revision, None);
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 0);
+    assert_eq!(report.deferred_target_count, 1);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "deferred");
 }
 
 #[test]
@@ -355,24 +301,19 @@ fn discovery_supervisor_authoritative_notice_materializes_adoptable_without_back
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-discovery-only".to_owned()),
-            adoptable_revision: Some("adoptable-candidate-pub-discovery-only".to_owned()),
-            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
-            target_count: 1,
-            adoptable_target_count: 1,
-            deferred_target_count: 0,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "adoptable".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert!(report.adoptable_revision.is_some());
+    assert!(report.operator_target_revision.is_some());
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 1);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "adoptable");
 }
 
 #[test]
-fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_outputs() {
+fn discovery_supervisor_reports_restricted_candidate_as_hard_gate() {
     let publication = ready_candidate_publication();
     let candidate_notice = CandidateNotice::from_publication(
         &publication,
@@ -400,19 +341,18 @@ fn discovery_supervisor_defers_restricted_candidate_without_rendering_adoption_o
             .expect("candidate generation report")
     });
 
+    assert!(report.candidate_revision.is_some());
+    assert_eq!(report.adoptable_revision, None);
+    assert_eq!(report.operator_target_revision, None);
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 0);
+    assert_eq!(report.deferred_target_count, 1);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "deferred");
     assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-7".to_owned()),
-            adoptable_revision: None,
-            operator_target_revision: None,
-            target_count: 1,
-            adoptable_target_count: 0,
-            deferred_target_count: 1,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "deferred".to_owned(),
-        }
+        report.warnings,
+        vec!["candidate generation halted by validation truth".to_owned()]
     );
     assert!(live_dispatch.coalesced().is_empty());
 }
@@ -446,20 +386,15 @@ fn discovery_supervisor_excludes_weak_candidate_without_rendering_adoption_outpu
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-weak".to_owned()),
-            adoptable_revision: None,
-            operator_target_revision: None,
-            target_count: 1,
-            adoptable_target_count: 0,
-            deferred_target_count: 0,
-            excluded_target_count: 1,
-            live_dispatch_woken: false,
-            disposition: "excluded".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert_eq!(report.adoptable_revision, None);
+    assert_eq!(report.operator_target_revision, None);
+    assert_eq!(report.target_count, 1);
+    assert_eq!(report.adoptable_target_count, 0);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 1);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "excluded");
     assert!(live_dispatch.coalesced().is_empty());
 }
 
@@ -485,20 +420,15 @@ fn discovery_supervisor_keeps_all_discovery_records_in_candidate_targets() {
             .expect("candidate generation report")
     });
 
-    assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-multi".to_owned()),
-            adoptable_revision: Some("adoptable-candidate-pub-multi".to_owned()),
-            operator_target_revision: Some(sample_rendered_live_target_revision().to_owned()),
-            target_count: 2,
-            adoptable_target_count: 2,
-            deferred_target_count: 0,
-            excluded_target_count: 0,
-            live_dispatch_woken: false,
-            disposition: "adoptable".to_owned(),
-        }
-    );
+    assert!(report.candidate_revision.is_some());
+    assert!(report.adoptable_revision.is_some());
+    assert!(report.operator_target_revision.is_some());
+    assert_eq!(report.target_count, 2);
+    assert_eq!(report.adoptable_target_count, 2);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 0);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "adoptable");
 }
 
 #[test]
@@ -523,19 +453,177 @@ fn discovery_supervisor_preserves_per_family_validation_for_mixed_publication() 
             .expect("candidate generation report")
     });
 
+    assert!(report.candidate_revision.is_some());
+    assert_eq!(report.adoptable_revision, None);
+    assert_eq!(report.operator_target_revision, None);
+    assert_eq!(report.target_count, 2);
+    assert_eq!(report.adoptable_target_count, 1);
+    assert_eq!(report.deferred_target_count, 0);
+    assert_eq!(report.excluded_target_count, 1);
+    assert!(!report.live_dispatch_woken);
+    assert_eq!(report.disposition, "excluded");
+}
+
+#[test]
+fn discovery_supervisor_reuses_bundle_identity_when_only_publication_provenance_changes() {
+    let first_publication = ready_candidate_publication_fixture("candidate-pub-7", &["family-a"]);
+    let second_publication =
+        ready_candidate_publication_fixture("candidate-pub-rediscovered", &["family-a"]);
+
+    let first_report = discovery_report_for(first_publication);
+    let second_report = discovery_report_for(second_publication);
+
     assert_eq!(
-        report,
-        DiscoveryReport {
-            candidate_revision: Some("candidate-pub-mixed".to_owned()),
-            adoptable_revision: None,
-            operator_target_revision: None,
-            target_count: 2,
-            adoptable_target_count: 1,
-            deferred_target_count: 0,
-            excluded_target_count: 1,
-            live_dispatch_woken: false,
-            disposition: "excluded".to_owned(),
-        }
+        first_report.candidate_revision, second_report.candidate_revision,
+        "publication-only churn should not alter the strategy candidate identity"
+    );
+    assert_eq!(
+        first_report.adoptable_revision, second_report.adoptable_revision,
+        "publication-only churn should not alter the adoptable strategy identity"
+    );
+    assert_eq!(
+        first_report.operator_target_revision, second_report.operator_target_revision,
+        "publication-only churn should not alter the rendered operator strategy identity"
+    );
+}
+
+#[test]
+fn discovery_supervisor_ignores_readiness_only_advisories_for_bundle_identity() {
+    let publication = ready_candidate_publication_fixture("candidate-pub-readiness", &["family-a"]);
+    let eligible_report =
+        discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            None,
+            sample_rendered_live_targets(),
+            CandidateRestrictionTruth::eligible(),
+        ));
+    let restricted_report =
+        discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
+            &publication,
+            [DirtyDomain::Candidates],
+            None,
+            sample_rendered_live_targets(),
+            CandidateRestrictionTruth::advisory("connectivity degraded"),
+        ));
+
+    assert_eq!(
+        eligible_report.candidate_revision, restricted_report.candidate_revision,
+        "readiness-only restriction should not alter the strategy candidate identity"
+    );
+    assert_eq!(
+        eligible_report.adoptable_revision, restricted_report.adoptable_revision,
+        "readiness-only restriction should not alter the adoptable strategy identity"
+    );
+    assert_eq!(
+        eligible_report.operator_target_revision, restricted_report.operator_target_revision,
+        "readiness-only restriction should not alter the rendered operator strategy identity"
+    );
+    assert_eq!(restricted_report.disposition, "adoptable");
+    assert_eq!(restricted_report.deferred_target_count, 0);
+    assert_eq!(eligible_report.warnings, Vec::<String>::new());
+    assert_eq!(
+        restricted_report.warnings,
+        vec!["connectivity degraded".to_owned()]
+    );
+}
+
+#[test]
+fn candidate_bridge_carries_forward_full_set_route_digest_when_neg_risk_changes() {
+    let bridge = CandidateBridge::for_tests();
+    let first_candidate =
+        ready_candidate_publication_fixture("candidate-pub-route-a", &["family-a"])
+            .view
+            .expect("first candidate view")
+            .discovery_records;
+    let second_candidate =
+        ready_candidate_publication_fixture("candidate-pub-route-b", &["family-a", "family-b"])
+            .view
+            .expect("second candidate view")
+            .discovery_records;
+    let second_rendered_live_targets = BTreeMap::from([
+        (
+            "family-a".to_owned(),
+            sample_rendered_live_targets()
+                .get("family-a")
+                .expect("family-a target")
+                .clone(),
+        ),
+        (
+            "family-b".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-b".to_owned(),
+                members: vec![NegRiskMemberLiveTarget {
+                    condition_id: "condition-2".to_owned(),
+                    token_id: "token-2".to_owned(),
+                    price: rust_decimal::Decimal::new(44, 2),
+                    quantity: rust_decimal::Decimal::new(6, 0),
+                }],
+            },
+        ),
+    ]);
+
+    let first_render = bridge
+        .render(
+            &CandidateTargetSet::new(
+                "candidate-pub-route-a",
+                "candidate-pub-route-a",
+                first_candidate[0].clone(),
+                CandidatePolicyAnchor::new("candidate-generation", "policy-v1"),
+                vec![CandidateTarget::new(
+                    "candidate-target-family-a",
+                    EventFamilyId::from("family-a"),
+                    CandidateValidationResult::Adoptable,
+                )],
+            )
+            .with_adoptable_revision(AdoptableTargetRevision::new(
+                "adoptable-candidate-pub-route-a",
+                "candidate-pub-route-a",
+                "policy-v1",
+            )),
+            None,
+            &sample_rendered_live_targets(),
+        )
+        .expect("first candidate render");
+    let second_render = bridge
+        .render(
+            &CandidateTargetSet::new(
+                "candidate-pub-route-b",
+                "candidate-pub-route-b",
+                second_candidate[0].clone(),
+                CandidatePolicyAnchor::new("candidate-generation", "policy-v1"),
+                vec![
+                    CandidateTarget::new(
+                        "candidate-target-family-a",
+                        EventFamilyId::from("family-a"),
+                        CandidateValidationResult::Adoptable,
+                    ),
+                    CandidateTarget::new(
+                        "candidate-target-family-b",
+                        EventFamilyId::from("family-b"),
+                        CandidateValidationResult::Adoptable,
+                    ),
+                ],
+            )
+            .with_adoptable_revision(AdoptableTargetRevision::new(
+                "adoptable-candidate-pub-route-b",
+                "candidate-pub-route-b",
+                "policy-v1",
+            )),
+            None,
+            &second_rendered_live_targets,
+        )
+        .expect("second candidate render");
+
+    assert_eq!(
+        route_digest(&first_render.candidate.payload, "full-set", "default"),
+        route_digest(&second_render.candidate.payload, "full-set", "default"),
+        "full-set route digest should remain reusable when neg-risk routes change"
+    );
+    assert_ne!(
+        first_render.candidate.strategy_candidate_revision,
+        second_render.candidate.strategy_candidate_revision,
+        "bundle identity should change when neg-risk route content changes"
     );
 }
 
@@ -712,6 +800,39 @@ where
         .block_on(future)
 }
 
+fn discovery_report_for(publication: CandidatePublication) -> DiscoveryReport {
+    discovery_report_for_notice(CandidateNotice::authoritative_from_publication(
+        &publication,
+        [DirtyDomain::Candidates],
+        None,
+        sample_rendered_live_targets(),
+        CandidateRestrictionTruth::eligible(),
+    ))
+}
+
+fn discovery_report_for_notice(candidate_notice: CandidateNotice) -> DiscoveryReport {
+    let mut queue = CandidateNoticeQueue::default();
+    queue.push(candidate_notice);
+
+    let mut supervisor = DiscoverySupervisor::for_tests(queue);
+    run_async(async {
+        supervisor
+            .tick_candidate_generation_for_tests()
+            .await
+            .expect("candidate generation report")
+    })
+}
+
+fn route_digest<'a>(payload: &'a serde_json::Value, route: &str, scope: &str) -> &'a str {
+    payload["route_artifacts"]
+        .as_array()
+        .expect("route_artifacts should be present")
+        .iter()
+        .find(|artifact| artifact["key"]["route"] == route && artifact["key"]["scope"] == scope)
+        .and_then(|artifact| artifact["semantic_digest"].as_str())
+        .expect("route artifact digest should be present")
+}
+
 fn sample_rendered_live_targets() -> BTreeMap<String, NegRiskFamilyLiveTarget> {
     BTreeMap::from([(
         "family-a".to_owned(),
@@ -725,8 +846,4 @@ fn sample_rendered_live_targets() -> BTreeMap<String, NegRiskFamilyLiveTarget> {
             }],
         },
     )])
-}
-
-fn sample_rendered_live_target_revision() -> &'static str {
-    "sha256:50ec69009b6695d74391623b20a7fc8e9902fcb99bcd9be15a3defbda864110c"
 }

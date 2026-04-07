@@ -5,6 +5,12 @@ use state::{CandidatePublication, DirtyDomain};
 use crate::config::NegRiskFamilyLiveTarget;
 use crate::input_tasks::InputTaskEvent;
 
+const DEFAULT_FULL_SET_BASIS_DIGEST: &str = "full-set-basis-default";
+
+pub fn default_full_set_basis_digest() -> String {
+    DEFAULT_FULL_SET_BASIS_DIGEST.to_owned()
+}
+
 #[derive(Debug, Default)]
 pub struct IngressQueue {
     backlog: VecDeque<InputTaskEvent>,
@@ -119,12 +125,19 @@ impl SnapshotDispatchQueue {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateRestrictionTruth {
     Eligible,
+    Advisory { reason: String },
     Restricted { reason: String },
 }
 
 impl CandidateRestrictionTruth {
     pub fn eligible() -> Self {
         Self::Eligible
+    }
+
+    pub fn advisory(reason: impl Into<String>) -> Self {
+        Self::Advisory {
+            reason: reason.into(),
+        }
     }
 
     pub fn restricted(reason: impl Into<String>) -> Self {
@@ -136,7 +149,14 @@ impl CandidateRestrictionTruth {
     pub fn restriction_reason(&self) -> Option<&str> {
         match self {
             Self::Eligible => None,
+            Self::Advisory { reason } | Self::Restricted { reason } => Some(reason.as_str()),
+        }
+    }
+
+    pub fn hard_gate_reason(&self) -> Option<&str> {
+        match self {
             Self::Restricted { reason } => Some(reason.as_str()),
+            Self::Eligible | Self::Advisory { .. } => None,
         }
     }
 }
@@ -150,6 +170,7 @@ pub struct CandidateNotice {
     pub restriction: CandidateRestrictionTruth,
     // Authoritative discovery may render adoptable output without observed backfill completion.
     pub authoritative: bool,
+    pub full_set_basis_digest: String,
 }
 
 impl CandidateNotice {
@@ -202,7 +223,13 @@ impl CandidateNotice {
             rendered_live_targets,
             restriction,
             authoritative,
+            full_set_basis_digest: default_full_set_basis_digest(),
         }
+    }
+
+    pub fn with_full_set_basis_digest(mut self, full_set_basis_digest: impl Into<String>) -> Self {
+        self.full_set_basis_digest = full_set_basis_digest.into();
+        self
     }
 }
 
@@ -234,6 +261,7 @@ impl CandidateNoticeQueue {
                     notice.operator_target_revision.clone(),
                     notice.restriction.clone(),
                     notice.authoritative,
+                    notice.full_set_basis_digest.clone(),
                 ),
                 notice.clone(),
             );

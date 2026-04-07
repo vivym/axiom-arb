@@ -44,3 +44,7 @@ pub fn resolve_rule<'a>(
         .get(&(route.to_owned(), scope.to_owned()))
         .or_else(|| rules.get(&(route.to_owned(), "default".to_owned())))
 }
+
+pub fn is_risk_expanding_route(route: &str) -> bool {
+    matches!(route, "full-set" | "neg-risk")
+}

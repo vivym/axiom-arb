@@ -19,6 +19,39 @@ operator_target_revision = "targets-rev-9"
 }
 
 #[test]
+fn raw_config_round_trips_strategy_control_and_route_sections() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a", "family-b"]
+ready_scopes = ["family-a"]
+"#,
+    )
+    .unwrap();
+
+    let text = render_raw_config_to_string(&raw).unwrap();
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-12\""));
+    assert!(text.contains("approved_scopes = ["));
+    assert!(text.contains("\"family-a\""));
+    assert!(text.contains("\"family-b\""));
+    assert!(text.contains("ready_scopes = ["));
+}
+
+#[test]
 fn raw_config_round_trips_safe_empty_rollout_and_adopted_target_source() {
     let raw = load_raw_config_from_str(
         r#"
