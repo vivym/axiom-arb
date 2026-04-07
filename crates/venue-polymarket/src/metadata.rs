@@ -765,6 +765,35 @@ impl PolymarketRestClient {
     }
 }
 
+#[async_trait]
+impl PolymarketMetadataApi for PolymarketRestClient {
+    async fn fetch_neg_risk_metadata_page(
+        &self,
+        offset: usize,
+        _limit: usize,
+    ) -> Result<Vec<GammaEvent>, PolymarketGatewayError> {
+        self.fetch_neg_risk_metadata_page(offset)
+            .await
+            .map_err(map_metadata_rest_error)
+    }
+}
+
+fn map_metadata_rest_error(error: RestError) -> PolymarketGatewayError {
+    match error {
+        RestError::Auth(error) => PolymarketGatewayError::auth(error.to_string()),
+        RestError::Http(error) => PolymarketGatewayError::connectivity(error.to_string()),
+        RestError::HttpResponse { status, body } => {
+            PolymarketGatewayError::upstream_response(format!("{status}: {body}"))
+        }
+        RestError::Gateway(error) => error,
+        RestError::Metadata(error) => error.into(),
+        RestError::Url(error) => PolymarketGatewayError::protocol(error.to_string()),
+        RestError::MissingField(field) => {
+            PolymarketGatewayError::protocol(format!("missing response field: {field}"))
+        }
+    }
+}
+
 #[derive(Debug)]
 struct NegRiskDiscovery {
     rows: Vec<CanonicalNegRiskRow>,

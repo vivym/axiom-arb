@@ -1,11 +1,14 @@
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::Arc,
     thread,
 };
 
 use url::Url;
-use venue_polymarket::{NegRiskMetadataError, NegRiskVariant, PolymarketRestClient, RestError};
+use venue_polymarket::{
+    NegRiskMetadataError, NegRiskVariant, PolymarketGateway, PolymarketRestClient, RestError,
+};
 
 #[tokio::test]
 async fn fetch_neg_risk_metadata_rows_discovers_all_pages_and_classifies_members() {
@@ -13,6 +16,18 @@ async fn fetch_neg_risk_metadata_rows_discovers_all_pages_and_classifies_members
     let client = test_client(server.base_url());
 
     let rows = client.fetch_neg_risk_metadata_rows().await.unwrap();
+
+    assert_eq!(rows.len(), 4);
+    assert!(rows.iter().any(|row| row.is_other));
+}
+
+#[tokio::test]
+async fn gateway_metadata_refresh_preserves_retryable_rest_metadata_retries() {
+    let server = spawn_local_listener(sample_paginated_neg_risk_payloads());
+    let client = test_client(server.base_url());
+    let gateway = PolymarketGateway::from_metadata_api(Arc::new(client));
+
+    let rows = gateway.refresh_neg_risk_metadata().await.unwrap();
 
     assert_eq!(rows.len(), 4);
     assert!(rows.iter().any(|row| row.is_other));

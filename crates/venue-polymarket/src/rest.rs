@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, Proxy, Request, Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -428,47 +427,6 @@ impl PolymarketRestClient {
 
         let body = response.text().await?;
         Err(RestError::HttpResponse { status, body })
-    }
-}
-
-#[async_trait]
-impl PolymarketMetadataApi for PolymarketRestClient {
-    async fn fetch_neg_risk_metadata_page(
-        &self,
-        offset: usize,
-        limit: usize,
-    ) -> Result<Vec<crate::metadata::GammaEvent>, PolymarketGatewayError> {
-        let limit = limit.to_string();
-        let offset = offset.to_string();
-        let query = [
-            ("active", "true"),
-            ("closed", "false"),
-            ("limit", limit.as_str()),
-            ("offset", offset.as_str()),
-        ];
-        let request = self
-            .build_get_request(&self.data_api_host, "events", &query, None)
-            .map_err(map_metadata_rest_error)?;
-
-        self.execute_json(request)
-            .await
-            .map_err(map_metadata_rest_error)
-    }
-}
-
-fn map_metadata_rest_error(error: RestError) -> PolymarketGatewayError {
-    match error {
-        RestError::Auth(error) => PolymarketGatewayError::auth(error.to_string()),
-        RestError::Http(error) => PolymarketGatewayError::connectivity(error.to_string()),
-        RestError::HttpResponse { status, body } => {
-            PolymarketGatewayError::upstream_response(format!("{status}: {body}"))
-        }
-        RestError::Gateway(error) => error,
-        RestError::Metadata(error) => error.into(),
-        RestError::Url(error) => PolymarketGatewayError::protocol(error.to_string()),
-        RestError::MissingField(field) => {
-            PolymarketGatewayError::protocol(format!("missing response field: {field}"))
-        }
     }
 }
 
