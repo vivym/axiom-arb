@@ -1,6 +1,8 @@
 use std::future::Future;
+use std::sync::mpsc;
 
 use serde::Deserialize;
+use tokio::runtime::Handle;
 
 use execution::providers::{
     ReconcileProvider, ReconcileProviderError, SubmitProviderError, VenueExecutionProvider,
@@ -22,6 +24,7 @@ const PROVIDER_NAME: &str = "polymarket";
 pub struct PolymarketNegRiskSubmitProvider<'a> {
     rest: PolymarketRestClient,
     gateway: Option<PolymarketGateway>,
+    runtime_handle: Option<Handle>,
     auth: L2AuthHeaders<'a>,
     transport: PostOrderTransport,
 }
@@ -30,6 +33,7 @@ pub struct PolymarketNegRiskSubmitProvider<'a> {
 pub struct PolymarketNegRiskReconcileProvider<'a> {
     rest: PolymarketRestClient,
     gateway: Option<PolymarketGateway>,
+    runtime_handle: Option<Handle>,
     l2_auth: L2AuthHeaders<'a>,
     relayer_auth: RelayerAuth<'a>,
 }
@@ -60,6 +64,7 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         Self {
             rest,
             gateway: None,
+            runtime_handle: None,
             auth,
             transport,
         }
@@ -74,6 +79,23 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         Self {
             rest,
             gateway: Some(gateway),
+            runtime_handle: None,
+            auth,
+            transport,
+        }
+    }
+
+    pub fn with_gateway_runtime(
+        rest: PolymarketRestClient,
+        auth: L2AuthHeaders<'a>,
+        transport: PostOrderTransport,
+        gateway: PolymarketGateway,
+        runtime_handle: Handle,
+    ) -> Self {
+        Self {
+            rest,
+            gateway: Some(gateway),
+            runtime_handle: Some(runtime_handle),
             auth,
             transport,
         }
@@ -151,6 +173,71 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
             }),
         }
     }
+
+    fn submit_family_via_gateway_runtime(
+        &self,
+        gateway: &PolymarketGateway,
+        runtime_handle: &Handle,
+        signed: &SignedFamilySubmission,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        if signed.members.len() != 1 {
+            return Err(SubmitProviderError::new(
+                "polymarket live submit currently supports exactly one signed family member",
+            ));
+        }
+
+        let member = signed
+            .members
+            .first()
+            .expect("validated single-member family submission");
+        let submission = build_post_order_request_from_signed_member(member, &self.transport)
+            .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
+        let gateway = gateway.clone();
+        let gateway_order = polymarket_signed_order_from_submission(&submission)
+            .map_err(SubmitProviderError::new)?;
+        let response = run_on_shared_runtime(runtime_handle, async move {
+            gateway.submit_order(gateway_order).await
+        })
+        .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
+
+        let response = submit_order_response_from_gateway(response);
+        if !response.success {
+            return Ok(LiveSubmitOutcome::RejectedDefinitive {
+                reason: submit_rejection_reason(&response),
+            });
+        }
+
+        match response.status.trim().to_ascii_lowercase().as_str() {
+            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted {
+                submission_record: submission_record(&response.order_id, attempt),
+            }),
+            "delayed" => Ok(LiveSubmitOutcome::Accepted {
+                submission_record: submission_record(&response.order_id, attempt),
+            }),
+            "matched" => {
+                let pending_tx = response
+                    .transaction_hashes
+                    .iter()
+                    .map(|hash| hash.trim())
+                    .find(|hash| !hash.is_empty())
+                    .ok_or_else(|| {
+                        SubmitProviderError::new(
+                            "matched polymarket response missing transactionsHashes",
+                        )
+                    })?;
+
+                Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                    submission_record: Some(submission_record(pending_tx, attempt)),
+                    pending_ref: tx_pending_ref(pending_tx),
+                })
+            }
+            _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                submission_record: Some(submission_record(&response.order_id, attempt)),
+                pending_ref: order_pending_ref(&response.order_id),
+            }),
+        }
+    }
 }
 
 impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
@@ -159,6 +246,10 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
+            return self.submit_family_via_gateway_runtime(gateway, runtime_handle, signed, attempt);
+        }
+
         run_blocking(self.submit_family_async(signed, attempt))
     }
 }
@@ -172,6 +263,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         Self {
             rest,
             gateway: None,
+            runtime_handle: None,
             l2_auth,
             relayer_auth,
         }
@@ -186,6 +278,23 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         Self {
             rest,
             gateway: Some(gateway),
+            runtime_handle: None,
+            l2_auth,
+            relayer_auth,
+        }
+    }
+
+    pub fn with_gateway_runtime(
+        rest: PolymarketRestClient,
+        l2_auth: L2AuthHeaders<'a>,
+        relayer_auth: RelayerAuth<'a>,
+        gateway: PolymarketGateway,
+        runtime_handle: Handle,
+    ) -> Self {
+        Self {
+            rest,
+            gateway: Some(gateway),
+            runtime_handle: Some(runtime_handle),
             l2_auth,
             relayer_auth,
         }
@@ -262,6 +371,125 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
 
         Ok(ReconcileOutcome::StillPending)
     }
+
+    fn reconcile_live_via_gateway_runtime(
+        &self,
+        gateway: &PolymarketGateway,
+        runtime_handle: &Handle,
+        work: &PendingReconcileWork,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        match parse_pending_ref(&work.pending_ref)? {
+            PendingRefTarget::Tx(tx_ref) => {
+                self.reconcile_tx_ref_via_gateway_runtime(gateway, runtime_handle, work, tx_ref)
+            }
+            PendingRefTarget::Order(order_id) => {
+                self.reconcile_order_ref_via_gateway_runtime(gateway, runtime_handle, order_id)
+            }
+        }
+    }
+
+    fn reconcile_tx_ref_via_gateway_runtime(
+        &self,
+        gateway: &PolymarketGateway,
+        runtime_handle: &Handle,
+        work: &PendingReconcileWork,
+        tx_ref: &str,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        let gateway = gateway.clone();
+        let transactions = match &self.relayer_auth {
+            RelayerAuth::BuilderApiKey {
+                api_key,
+                timestamp,
+                passphrase,
+                signature,
+            } => {
+                let api_key = (*api_key).to_owned();
+                let timestamp = (*timestamp).to_owned();
+                let passphrase = (*passphrase).to_owned();
+                let signature = (*signature).to_owned();
+                run_on_shared_runtime(runtime_handle, async move {
+                    let auth = RelayerAuth::BuilderApiKey {
+                        api_key: api_key.as_str(),
+                        timestamp: timestamp.as_str(),
+                        passphrase: passphrase.as_str(),
+                        signature: signature.as_str(),
+                    };
+                    gateway.recent_transactions(&auth).await
+                })
+                .map_err(RestError::from)
+                .map_err(map_relayer_error)?
+            }
+            RelayerAuth::RelayerApiKey { api_key, address } => {
+                let api_key = (*api_key).to_owned();
+                let address = (*address).to_owned();
+                run_on_shared_runtime(runtime_handle, async move {
+                    let auth = RelayerAuth::RelayerApiKey {
+                        api_key: api_key.as_str(),
+                        address: address.as_str(),
+                    };
+                    gateway.recent_transactions(&auth).await
+                })
+                .map_err(RestError::from)
+                .map_err(map_relayer_error)?
+            }
+        };
+
+        let matching_transactions: Vec<_> = transactions
+            .iter()
+            .filter(|transaction| transaction.matches_pending_ref(tx_ref))
+            .collect();
+
+        if matching_transactions.is_empty()
+            || matching_transactions
+                .iter()
+                .any(|transaction| transaction.state_is_pending_or_unknown())
+        {
+            return Ok(ReconcileOutcome::StillPending);
+        }
+
+        if matching_transactions
+            .iter()
+            .any(|transaction| transaction.state_is_confirmed())
+        {
+            return Ok(ReconcileOutcome::ConfirmedAuthoritative {
+                submission_ref: tx_ref.to_owned(),
+            });
+        }
+
+        if matching_transactions
+            .iter()
+            .any(|transaction| transaction.state_is_terminal())
+        {
+            return Ok(ReconcileOutcome::NeedsRecovery {
+                pending_ref: work.pending_ref.clone(),
+                reason: "relayer transaction reached a terminal state".to_owned(),
+            });
+        }
+
+        Ok(ReconcileOutcome::StillPending)
+    }
+
+    fn reconcile_order_ref_via_gateway_runtime(
+        &self,
+        gateway: &PolymarketGateway,
+        runtime_handle: &Handle,
+        order_id: &str,
+    ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        let gateway = gateway.clone();
+        let open_orders = run_on_shared_runtime(runtime_handle, async move {
+            gateway.open_orders(PolymarketOrderQuery::open_orders()).await
+        })
+        .map_err(RestError::from)
+        .map_err(map_open_orders_error)?;
+
+        if open_orders.iter().any(|order| order.order_id == order_id) {
+            return Ok(ReconcileOutcome::ConfirmedAuthoritative {
+                submission_ref: order_id.to_owned(),
+            });
+        }
+
+        Ok(ReconcileOutcome::StillPending)
+    }
 }
 
 impl PolymarketNegRiskReconcileProvider<'_> {
@@ -305,8 +533,25 @@ impl<'a> ReconcileProvider for PolymarketNegRiskReconcileProvider<'a> {
         &self,
         work: &PendingReconcileWork,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
+        if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
+            return self.reconcile_live_via_gateway_runtime(gateway, runtime_handle, work);
+        }
+
         run_blocking(self.reconcile_live_async(work))
     }
+}
+
+fn run_on_shared_runtime<T: Send + 'static>(
+    handle: &Handle,
+    future: impl Future<Output = T> + Send + 'static,
+) -> T {
+    let (tx, rx) = mpsc::channel();
+    let _ = handle.spawn(async move {
+        let _ = tx.send(future.await);
+    });
+
+    rx.recv()
+        .expect("shared runtime task should complete before provider returns")
 }
 
 fn run_blocking<T: Send>(future: impl Future<Output = T> + Send) -> T {
