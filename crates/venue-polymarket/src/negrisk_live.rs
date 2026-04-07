@@ -55,6 +55,101 @@ enum PendingRefTarget<'a> {
     Order(&'a str),
 }
 
+#[derive(Debug)]
+enum FamilySubmitFailure {
+    Outcome(String),
+    Error(String),
+}
+
+#[derive(Debug)]
+struct FamilySubmitAggregation {
+    total_members: usize,
+    success_count: usize,
+    first_success: Option<LiveSubmitOutcome>,
+    first_failure: Option<FamilySubmitFailure>,
+}
+
+impl FamilySubmitAggregation {
+    fn new(total_members: usize) -> Self {
+        Self {
+            total_members,
+            success_count: 0,
+            first_success: None,
+            first_failure: None,
+        }
+    }
+
+    fn record(&mut self, result: Result<LiveSubmitOutcome, SubmitProviderError>) {
+        match result {
+            Ok(outcome) if outcome.is_accepted() => {
+                self.success_count += 1;
+                if self.first_success.is_none() {
+                    self.first_success = Some(outcome);
+                }
+            }
+            Ok(outcome) => {
+                if self.first_failure.is_none() {
+                    self.first_failure =
+                        Some(FamilySubmitFailure::Outcome(outcome_reason(&outcome)));
+                }
+            }
+            Err(error) => {
+                if self.first_failure.is_none() {
+                    self.first_failure = Some(FamilySubmitFailure::Error(error.reason));
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        let FamilySubmitAggregation {
+            total_members,
+            success_count,
+            first_success,
+            first_failure,
+        } = self;
+
+        if total_members == 0 {
+            return Err(SubmitProviderError::new(
+                "polymarket live submit requires at least one signed family member",
+            ));
+        }
+
+        if success_count == total_members {
+            return Ok(first_success.expect("at least one successful outcome is present"));
+        }
+
+        if success_count > 0 {
+            let first_success = first_success.expect("partial success requires an anchor");
+            let pending_ref = outcome_anchor_ref(&first_success)
+                .expect("accepted family submission should have an anchor ref")
+                .to_owned();
+            let reason = match first_failure {
+                Some(FamilySubmitFailure::Outcome(reason)) => reason,
+                Some(FamilySubmitFailure::Error(reason)) => reason,
+                None => "family submit failed after partial success".to_owned(),
+            };
+
+            return Ok(LiveSubmitOutcome::Ambiguous {
+                pending_ref,
+                reason: format!(
+                    "submitted {success_count}/{total_members} polymarket family members before failure: {reason}"
+                ),
+            });
+        }
+
+        match first_failure {
+            Some(FamilySubmitFailure::Outcome(reason)) => {
+                Ok(LiveSubmitOutcome::RejectedDefinitive { reason })
+            }
+            Some(FamilySubmitFailure::Error(reason)) => Err(SubmitProviderError::new(reason)),
+            None => Err(SubmitProviderError::new(
+                "polymarket live submit failed without capturing a member result",
+            )),
+        }
+    }
+}
+
 impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     pub fn new(
         rest: PolymarketRestClient,
@@ -106,16 +201,41 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
-        if signed.members.len() != 1 {
-            return Err(SubmitProviderError::new(
-                "polymarket live submit currently supports exactly one signed family member",
+        let mut aggregate = FamilySubmitAggregation::new(signed.members.len());
+
+        for member in &signed.members {
+            aggregate.record(self.submit_member_async(member, attempt).await);
+        }
+
+        aggregate.finish()
+    }
+
+    fn submit_family_via_gateway_runtime(
+        &self,
+        gateway: &PolymarketGateway,
+        runtime_handle: &Handle,
+        signed: &SignedFamilySubmission,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        let mut aggregate = FamilySubmitAggregation::new(signed.members.len());
+
+        for member in &signed.members {
+            aggregate.record(self.submit_member_via_gateway_runtime(
+                gateway,
+                runtime_handle,
+                member,
+                attempt,
             ));
         }
 
-        let member = signed
-            .members
-            .first()
-            .expect("validated single-member family submission");
+        aggregate.finish()
+    }
+
+    async fn submit_member_async(
+        &self,
+        member: &execution::signing::SignedFamilyMember,
+        attempt: &domain::ExecutionAttemptContext,
+    ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
         let submission = build_post_order_request_from_signed_member(member, &self.transport)
             .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
         let response = if let Some(gateway) = &self.gateway {
@@ -137,60 +257,16 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
                 .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?
         };
 
-        if !response.success {
-            return Ok(LiveSubmitOutcome::RejectedDefinitive {
-                reason: submit_rejection_reason(&response),
-            });
-        }
-
-        match response.status.trim().to_ascii_lowercase().as_str() {
-            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted {
-                submission_record: submission_record(&response.order_id, attempt),
-            }),
-            "delayed" => Ok(LiveSubmitOutcome::Accepted {
-                submission_record: submission_record(&response.order_id, attempt),
-            }),
-            "matched" => {
-                let pending_tx = response
-                    .transaction_hashes
-                    .iter()
-                    .map(|hash| hash.trim())
-                    .find(|hash| !hash.is_empty())
-                    .ok_or_else(|| {
-                        SubmitProviderError::new(
-                            "matched polymarket response missing transactionsHashes",
-                        )
-                    })?;
-
-                Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                    submission_record: Some(submission_record(pending_tx, attempt)),
-                    pending_ref: tx_pending_ref(pending_tx),
-                })
-            }
-            _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: Some(submission_record(&response.order_id, attempt)),
-                pending_ref: order_pending_ref(&response.order_id),
-            }),
-        }
+        submit_order_response_to_outcome(response, attempt)
     }
 
-    fn submit_family_via_gateway_runtime(
+    fn submit_member_via_gateway_runtime(
         &self,
         gateway: &PolymarketGateway,
         runtime_handle: &Handle,
-        signed: &SignedFamilySubmission,
+        member: &execution::signing::SignedFamilyMember,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
-        if signed.members.len() != 1 {
-            return Err(SubmitProviderError::new(
-                "polymarket live submit currently supports exactly one signed family member",
-            ));
-        }
-
-        let member = signed
-            .members
-            .first()
-            .expect("validated single-member family submission");
         let submission = build_post_order_request_from_signed_member(member, &self.transport)
             .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
         let gateway = gateway.clone();
@@ -202,42 +278,7 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         .map_err(|err| SubmitProviderError::new(format!("submit shared runtime error: {err}")))?
         .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
 
-        let response = submit_order_response_from_gateway(response);
-        if !response.success {
-            return Ok(LiveSubmitOutcome::RejectedDefinitive {
-                reason: submit_rejection_reason(&response),
-            });
-        }
-
-        match response.status.trim().to_ascii_lowercase().as_str() {
-            "live" | "unmatched" => Ok(LiveSubmitOutcome::Accepted {
-                submission_record: submission_record(&response.order_id, attempt),
-            }),
-            "delayed" => Ok(LiveSubmitOutcome::Accepted {
-                submission_record: submission_record(&response.order_id, attempt),
-            }),
-            "matched" => {
-                let pending_tx = response
-                    .transaction_hashes
-                    .iter()
-                    .map(|hash| hash.trim())
-                    .find(|hash| !hash.is_empty())
-                    .ok_or_else(|| {
-                        SubmitProviderError::new(
-                            "matched polymarket response missing transactionsHashes",
-                        )
-                    })?;
-
-                Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                    submission_record: Some(submission_record(pending_tx, attempt)),
-                    pending_ref: tx_pending_ref(pending_tx),
-                })
-            }
-            _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
-                submission_record: Some(submission_record(&response.order_id, attempt)),
-                pending_ref: order_pending_ref(&response.order_id),
-            }),
-        }
+        submit_order_response_to_outcome(submit_order_response_from_gateway(response), attempt)
     }
 }
 
@@ -689,6 +730,88 @@ fn submit_order_response_from_gateway(response: PolymarketSubmitResponse) -> Sub
         status: response.status,
         transaction_hashes: response.transaction_hashes,
         error_msg: response.error_message.unwrap_or_default(),
+    }
+}
+
+fn submit_order_response_to_outcome(
+    response: SubmitOrderResponse,
+    attempt: &domain::ExecutionAttemptContext,
+) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+    if !response.success {
+        return Ok(LiveSubmitOutcome::RejectedDefinitive {
+            reason: submit_rejection_reason(&response),
+        });
+    }
+
+    match response.status.trim().to_ascii_lowercase().as_str() {
+        "live" | "unmatched" | "delayed" => Ok(LiveSubmitOutcome::Accepted {
+            submission_record: submission_record(&response.order_id, attempt),
+        }),
+        "matched" => {
+            let pending_tx = response
+                .transaction_hashes
+                .iter()
+                .map(|hash| hash.trim())
+                .find(|hash| !hash.is_empty())
+                .ok_or_else(|| {
+                    SubmitProviderError::new(
+                        "matched polymarket response missing transactionsHashes",
+                    )
+                })?;
+
+            Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+                submission_record: Some(submission_record(pending_tx, attempt)),
+                pending_ref: tx_pending_ref(pending_tx),
+            })
+        }
+        _ => Ok(LiveSubmitOutcome::AcceptedButUnconfirmed {
+            submission_record: Some(submission_record(&response.order_id, attempt)),
+            pending_ref: order_pending_ref(&response.order_id),
+        }),
+    }
+}
+
+fn outcome_reason(outcome: &LiveSubmitOutcome) -> String {
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record } => {
+            format!(
+                "member accepted with submission ref {}",
+                submission_record.submission_ref
+            )
+        }
+        LiveSubmitOutcome::AcceptedButUnconfirmed {
+            submission_record,
+            pending_ref,
+        } => match submission_record {
+            Some(record) => format!(
+                "member accepted but unconfirmed with submission ref {} and pending ref {}",
+                record.submission_ref, pending_ref
+            ),
+            None => format!("member accepted but unconfirmed with pending ref {pending_ref}"),
+        },
+        LiveSubmitOutcome::RejectedDefinitive { reason } => reason.clone(),
+        LiveSubmitOutcome::Ambiguous {
+            pending_ref,
+            reason,
+        } => {
+            format!("{reason} (pending ref {pending_ref})")
+        }
+    }
+}
+
+fn outcome_anchor_ref(outcome: &LiveSubmitOutcome) -> Option<&str> {
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record } => {
+            Some(submission_record.submission_ref.as_str())
+        }
+        LiveSubmitOutcome::AcceptedButUnconfirmed {
+            submission_record,
+            pending_ref,
+        } => submission_record
+            .as_ref()
+            .map(|record| record.submission_ref.as_str())
+            .or(Some(pending_ref.as_str())),
+        LiveSubmitOutcome::RejectedDefinitive { .. } | LiveSubmitOutcome::Ambiguous { .. } => None,
     }
 }
 

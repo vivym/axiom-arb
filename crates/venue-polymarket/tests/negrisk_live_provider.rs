@@ -1,6 +1,7 @@
 mod support;
 
 use std::{
+    collections::VecDeque,
     io::{Read, Write},
     net::TcpListener,
     sync::{mpsc, Arc, Mutex},
@@ -128,16 +129,37 @@ async fn polymarket_submit_provider_maps_delayed_response_into_plain_acceptance(
 }
 
 #[tokio::test]
-async fn polymarket_submit_provider_rejects_multi_member_submission_before_side_effects() {
-    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+async fn polymarket_submit_provider_sequentially_submits_multi_member_family_over_rest() {
+    let server = MultiRequestServer::spawn(vec![
+        (
+            "200 OK",
+            r#"{"success":true,"orderID":"0xorder-1","status":"live","makingAmount":"10","takingAmount":"5","errorMsg":""}"#,
+        ),
+        (
+            "200 OK",
+            r#"{"success":true,"orderID":"0xorder-2","status":"live","makingAmount":"8","takingAmount":"4.4","errorMsg":""}"#,
+        ),
+    ]);
     let provider = sample_submit_provider(server.base_url());
 
-    let err = provider
+    let outcome = provider
         .submit_family(&sample_multi_member_submission(), &sample_attempt())
-        .expect_err("multi-member family should fail closed");
+        .expect("multi-member family should submit sequentially");
 
-    assert!(err.reason.contains("exactly one signed family member"));
-    server.finish_without_request();
+    match outcome {
+        LiveSubmitOutcome::Accepted { submission_record } => {
+            assert_eq!(submission_record.provider, "polymarket");
+            assert_eq!(submission_record.submission_ref, "0xorder-1");
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    let requests = server.finish();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST /order HTTP/1.1"));
+    assert!(requests[1].starts_with("POST /order HTTP/1.1"));
+    assert!(requests[0].contains(r#""tokenId":"token-1""#));
+    assert!(requests[1].contains(r#""tokenId":"token-2""#));
 }
 
 #[tokio::test]
@@ -160,6 +182,48 @@ async fn polymarket_submit_provider_can_use_gateway_without_http_side_effects() 
         other => panic!("unexpected outcome: {other:?}"),
     }
 
+    server.finish_without_request();
+}
+
+#[tokio::test]
+async fn polymarket_submit_provider_aggregates_partial_gateway_failure_after_first_success() {
+    let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
+    let submitted_tokens = Arc::new(Mutex::new(Vec::new()));
+    let gateway = PolymarketGateway::from_clob_api(Arc::new(SequencedSubmitClobApi::new(
+        submitted_tokens.clone(),
+        vec![
+            Ok(PolymarketSubmitResponse {
+                order_id: "0xorder-gw-1".to_owned(),
+                status: "LIVE".to_owned(),
+                success: true,
+                error_message: None,
+                transaction_hashes: Vec::new(),
+            }),
+            Err(PolymarketGatewayError::protocol("gateway submit failed")),
+        ],
+    )));
+    let provider = sample_submit_provider_with_gateway(server.base_url(), gateway);
+
+    let outcome = provider
+        .submit_family(&sample_multi_member_submission(), &sample_attempt())
+        .expect("partial gateway failure should still aggregate into an outcome");
+
+    match outcome {
+        LiveSubmitOutcome::Ambiguous {
+            pending_ref,
+            reason,
+        } => {
+            assert_eq!(pending_ref, "0xorder-gw-1");
+            assert!(reason.contains("1/2"));
+            assert!(reason.contains("gateway submit failed"));
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    assert_eq!(
+        submitted_tokens.lock().expect("submitted tokens").clone(),
+        vec!["token-1".to_owned(), "token-2".to_owned()]
+    );
     server.finish_without_request();
 }
 
@@ -693,6 +757,13 @@ struct MockServer {
 }
 
 #[derive(Debug)]
+struct MultiRequestServer {
+    requests: Arc<Mutex<Vec<String>>>,
+    join: thread::JoinHandle<()>,
+    addr: std::net::SocketAddr,
+}
+
+#[derive(Debug)]
 struct SharedRuntimeHarness {
     handle: tokio::runtime::Handle,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
@@ -750,6 +821,24 @@ struct ThreadRecordingClobApi {
     submit_threads: Arc<Mutex<Vec<String>>>,
 }
 
+#[derive(Debug)]
+struct SequencedSubmitClobApi {
+    submitted_tokens: Arc<Mutex<Vec<String>>>,
+    submit_results: Mutex<VecDeque<Result<PolymarketSubmitResponse, PolymarketGatewayError>>>,
+}
+
+impl SequencedSubmitClobApi {
+    fn new(
+        submitted_tokens: Arc<Mutex<Vec<String>>>,
+        submit_results: Vec<Result<PolymarketSubmitResponse, PolymarketGatewayError>>,
+    ) -> Self {
+        Self {
+            submitted_tokens,
+            submit_results: Mutex::new(VecDeque::from(submit_results)),
+        }
+    }
+}
+
 #[async_trait]
 impl PolymarketClobApi for ThreadRecordingClobApi {
     async fn open_orders(
@@ -782,6 +871,48 @@ impl PolymarketClobApi for ThreadRecordingClobApi {
     ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
         Ok(PolymarketHeartbeatStatus {
             heartbeat_id: "hb-threaded".to_owned(),
+            valid: true,
+        })
+    }
+}
+
+#[async_trait]
+impl PolymarketClobApi for SequencedSubmitClobApi {
+    async fn open_orders(
+        &self,
+        _query: &venue_polymarket::PolymarketOrderQuery,
+    ) -> Result<Vec<venue_polymarket::PolymarketOpenOrderSummary>, PolymarketGatewayError> {
+        Ok(Vec::new())
+    }
+
+    async fn submit_order(
+        &self,
+        order: &PolymarketSignedOrder,
+    ) -> Result<PolymarketSubmitResponse, PolymarketGatewayError> {
+        let token_id = order
+            .order
+            .get("tokenId")
+            .and_then(|value| value.as_str())
+            .unwrap_or("missing-token")
+            .to_owned();
+        self.submitted_tokens
+            .lock()
+            .expect("submitted token recorder")
+            .push(token_id);
+
+        self.submit_results
+            .lock()
+            .expect("sequenced submit results")
+            .pop_front()
+            .expect("test should provide enough submit results")
+    }
+
+    async fn post_heartbeat(
+        &self,
+        _previous_heartbeat_id: Option<&str>,
+    ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
+        Ok(PolymarketHeartbeatStatus {
+            heartbeat_id: "hb-sequenced".to_owned(),
             valid: true,
         })
     }
@@ -939,5 +1070,88 @@ impl MockServer {
     fn finish_without_request(self) {
         self.join.join().expect("server thread should finish");
         assert!(self.request.lock().unwrap().is_none());
+    }
+}
+
+impl MultiRequestServer {
+    fn spawn(responses: Vec<(&'static str, &'static str)>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let addr = listener.local_addr().expect("local addr");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let deadline = Instant::now() + Duration::from_millis(300);
+
+        let join = thread::spawn(move || {
+            let mut response_iter = responses.into_iter();
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0_u8; 8192];
+                        let mut request_text = Vec::new();
+                        loop {
+                            match stream.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    request_text.extend_from_slice(&buf[..n]);
+                                    if request_text.windows(4).any(|window| window == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                                    thread::sleep(Duration::from_millis(10));
+                                }
+                                Err(err) => panic!("request read failed: {err}"),
+                            }
+                        }
+
+                        captured
+                            .lock()
+                            .expect("captured request log")
+                            .push(String::from_utf8_lossy(&request_text).into_owned());
+
+                        let (status, body) = response_iter.next().unwrap_or((
+                            "200 OK",
+                            r#"{"success":true,"orderID":"unused","status":"live","makingAmount":"0","takingAmount":"0","errorMsg":""}"#,
+                        ));
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("write response");
+
+                        if response_iter.len() == 0 {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept failed: {err}"),
+                }
+            }
+        });
+
+        Self {
+            requests,
+            join,
+            addr,
+        }
+    }
+
+    fn base_url(&self) -> Url {
+        Url::parse(&format!("http://{}/", self.addr)).expect("base url")
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.join.join().expect("server thread should finish");
+        self.requests.lock().unwrap().clone()
     }
 }
