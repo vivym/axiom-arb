@@ -214,6 +214,135 @@ signature = "builder-signature-1"
 }
 
 #[test]
+fn route_owned_neg_risk_rollout_overrides_legacy_rollout_when_both_are_present() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-route-owned"]
+ready_scopes = ["family-route-owned"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = []
+ready_families = []
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated.for_app_live().unwrap();
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should take precedence over legacy rollout");
+    assert_eq!(
+        rollout.approved_families(),
+        &["family-route-owned".to_owned()]
+    );
+    assert_eq!(rollout.ready_families(), &["family-route-owned".to_owned()]);
+}
+
+#[test]
+fn signer_view_ignores_stale_legacy_rollout_when_route_owned_rollout_is_present() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-route-owned"]
+ready_scopes = ["family-route-owned"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.signer]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+passphrase = "poly-passphrase-1"
+timestamp = "1700000000"
+signature = "poly-signature-1"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key-1"
+timestamp = "1700000001"
+passphrase = "builder-passphrase-1"
+signature = "builder-signature-1"
+
+[negrisk.rollout]
+approved_families = ["family-stale"]
+ready_families = ["family-stale"]
+"#,
+    )
+    .unwrap();
+
+    let validated = ValidatedConfig::new(raw).unwrap();
+    let live = validated
+        .for_app_live()
+        .expect("route-owned rollout should override stale legacy rollout during requiredness");
+
+    let rollout = live
+        .negrisk_rollout()
+        .expect("route-owned rollout should remain visible through the validated view");
+    assert_eq!(
+        rollout.approved_families(),
+        &["family-route-owned".to_owned()]
+    );
+    assert_eq!(rollout.ready_families(), &["family-route-owned".to_owned()]);
+}
+
+#[test]
 fn legacy_explicit_strategy_config_detection_distinguishes_missing_targets_from_explicit_targets() {
     let missing_targets = load_raw_config_from_str(
         r#"

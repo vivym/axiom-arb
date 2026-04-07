@@ -219,24 +219,24 @@ impl<'a> AppLiveConfigView<'a> {
     pub fn negrisk_rollout(&self) -> Option<AppLiveNegRiskRolloutView<'a>> {
         if let Some(rollout) = self
             .raw
-            .negrisk
-            .as_ref()
-            .and_then(|negrisk| negrisk.rollout.as_ref())
-        {
-            return Some(AppLiveNegRiskRolloutView {
-                approved_families: &rollout.approved_families,
-                ready_families: &rollout.ready_families,
-            });
-        }
-
-        self.raw
             .strategies
             .as_ref()
             .and_then(|strategies| strategies.neg_risk.as_ref())
             .and_then(|neg_risk| neg_risk.rollout.as_ref())
-            .map(|rollout| AppLiveNegRiskRolloutView {
+        {
+            return Some(AppLiveNegRiskRolloutView {
                 approved_families: &rollout.approved_scopes,
                 ready_families: &rollout.ready_scopes,
+            });
+        }
+
+        self.raw
+            .negrisk
+            .as_ref()
+            .and_then(|negrisk| negrisk.rollout.as_ref())
+            .map(|rollout| AppLiveNegRiskRolloutView {
+                approved_families: &rollout.approved_families,
+                ready_families: &rollout.ready_families,
             })
     }
 
@@ -849,6 +849,16 @@ fn require_non_empty_optional_local_signer_field(
 fn validate_negrisk_rollout_referential_integrity(
     raw: &RawAxiomConfig,
 ) -> Result<(), ConfigSchemaError> {
+    if raw
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.neg_risk.as_ref())
+        .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        .is_some()
+    {
+        return Ok(());
+    }
+
     let Some(negrisk) = raw.negrisk.as_ref() else {
         return Ok(());
     };

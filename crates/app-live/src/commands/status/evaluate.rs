@@ -47,6 +47,12 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
                         RuntimeModeToml::Paper => StatusOutcome::Summary(Box::new(paper_summary())),
                         RuntimeModeToml::Live => {
                             let smoke_mode = config.real_user_shadow_smoke();
+                            if missing_neutral_adopted_strategy_revision(&config) {
+                                return StatusOutcome::Summary(Box::new(blocked_summary(
+                                    "missing strategy_control.operator_strategy_revision"
+                                        .to_owned(),
+                                )));
+                            }
                             if config.has_adopted_strategy_source() {
                                 match adopted_summary(config_path, &config, smoke_mode) {
                                     Ok(outcome) => outcome,
@@ -75,6 +81,14 @@ pub fn evaluate(config_path: &Path) -> StatusOutcome {
         }
         Err(error) => StatusOutcome::Summary(Box::new(blocked_summary(error.to_string()))),
     }
+}
+
+fn missing_neutral_adopted_strategy_revision(
+    config: &config_schema::AppLiveConfigView<'_>,
+) -> bool {
+    config.has_adopted_strategy_source()
+        && config.target_source().is_none()
+        && config.operator_strategy_revision().is_none()
 }
 
 fn paper_summary() -> StatusSummary {

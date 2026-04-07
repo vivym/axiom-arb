@@ -16,7 +16,7 @@ use std::{
 
 use support::{apply_db, cli, discover_db};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
-use toml_edit::{value, DocumentMut};
+use toml_edit::{table, value, DocumentMut};
 
 static NEXT_TEMP_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -240,7 +240,7 @@ fn bootstrap_already_adopted_smoke_path_falls_through_to_doctor_and_rollout() {
 fn temp_smoke_config_path(edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture("app-live-ux-smoke.toml");
     let text = fs::read_to_string(&source).expect("fixture should be readable");
-    let edited = edit(text.replace("operator_target_revision = \"targets-rev-9\"\n", ""));
+    let edited = edit(with_legacy_smoke_target_source_without_revision(text));
     let mut path = std::env::temp_dir();
     path.push(format!(
         "app-live-bootstrap-{}-{}.toml",
@@ -328,6 +328,34 @@ fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String
     for key in ["clob_host", "data_api_host", "relayer_host"] {
         source.insert(key, value(venue.base_url()));
     }
+
+    document.to_string()
+}
+
+fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("smoke config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("[negrisk] should be a table");
+    if negrisk.get("target_source").is_none() {
+        negrisk.insert("target_source", table());
+    }
+    let target_source = negrisk
+        .get_mut("target_source")
+        .expect("config fixture should contain [negrisk.target_source]")
+        .as_table_like_mut()
+        .expect("[negrisk.target_source] should be a table");
+    target_source.insert("source", value("adopted"));
+    target_source.remove("operator_target_revision");
 
     document.to_string()
 }

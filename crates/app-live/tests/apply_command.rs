@@ -16,7 +16,7 @@ use persistence::models::{RunSessionRow, RunSessionState};
 use support::cli;
 use support::{apply_db, status_db::TestDatabase};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
-use toml_edit::{value, DocumentMut};
+use toml_edit::{table, value, DocumentMut};
 
 #[test]
 fn apply_subcommand_is_exposed() {
@@ -255,7 +255,7 @@ fn apply_maps_smoke_blocked_readiness_to_concrete_reason() {
 fn apply_maps_discovery_required_to_truthful_next_action() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -281,7 +281,7 @@ fn apply_enters_inline_target_adoption_when_target_anchor_missing() {
     let database = apply_db::TestDatabase::new();
     database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
@@ -301,7 +301,7 @@ fn apply_cancelled_inline_target_adoption_stops_without_writes() {
     let database = apply_db::TestDatabase::new();
     database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
@@ -326,7 +326,7 @@ fn apply_can_inline_smoke_target_adoption() {
     let database = apply_db::TestDatabase::new();
     database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = run_apply_with_stdin(
@@ -383,7 +383,7 @@ fn apply_non_interactive_target_adoption_required_stays_fail_closed_at_stage() {
     let database = apply_db::TestDatabase::new();
     database.seed_adoptable_revision("adoptable-9", "candidate-9", "targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -419,7 +419,7 @@ fn apply_does_not_inline_discovery_when_only_advisory_candidates_exist() {
         "candidate generation deferred until discovery backfill completes",
     );
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = run_apply_with_stdin(&config_path, database.database_url(), "cancel\n", true);
@@ -545,10 +545,7 @@ fn apply_smoke_config_ready_without_start_stops_at_ready_summary() {
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = app_live_command()
@@ -732,10 +729,7 @@ fn apply_restart_required_without_start_stops_at_ready_with_restart_messaging() 
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = app_live_command()
@@ -813,10 +807,7 @@ fn apply_restart_required_with_start_requires_explicit_confirmation() {
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = run_apply_with_options(
@@ -860,10 +851,7 @@ fn apply_restart_required_with_start_fails_closed_when_not_interactive() {
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = app_live_command()
@@ -903,10 +891,7 @@ fn apply_declining_restart_confirmation_stops_without_invoking_run() {
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = run_apply_with_options(
@@ -940,10 +925,7 @@ fn apply_accepting_restart_confirmation_enters_run() {
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let venue = MockDoctorVenue::success();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
-            with_mock_doctor_venue(config, &venue)
-        )
+        with_ready_smoke_rollout(with_mock_doctor_venue(config, &venue))
     });
 
     let output = run_apply_with_options(
@@ -1414,6 +1396,50 @@ fn with_mock_doctor_venue(config: String, venue: &MockDoctorVenue) -> String {
     ] {
         source.insert(key, toml_edit::Item::Value(rewritten));
     }
+
+    document.to_string()
+}
+
+fn with_ready_smoke_rollout(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("config fixture should parse as TOML");
+    let rollout = document["strategies"]["neg_risk"]["rollout"]
+        .as_table_like_mut()
+        .expect("smoke fixture should contain [strategies.neg_risk.rollout]");
+    let mut approved = toml_edit::Array::new();
+    approved.push("family-a");
+    let mut ready = toml_edit::Array::new();
+    ready.push("family-a");
+    rollout.insert("approved_scopes", toml_edit::Item::Value(approved.into()));
+    rollout.insert("ready_scopes", toml_edit::Item::Value(ready.into()));
+    document.to_string()
+}
+
+fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("config fixture should contain [negrisk]");
+    if negrisk.get("target_source").is_none() {
+        negrisk.insert("target_source", table());
+    }
+    let target_source = negrisk
+        .get_mut("target_source")
+        .expect("config fixture should contain [negrisk.target_source]")
+        .as_table_like_mut()
+        .expect("[negrisk.target_source] should be a table");
+    target_source.insert("source", value("adopted"));
+    target_source.remove("operator_target_revision");
 
     document.to_string()
 }

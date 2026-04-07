@@ -17,6 +17,7 @@ use crate::config::{
     neg_risk_live_target_revision_from_targets, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet,
     NegRiskMemberLiveTarget,
 };
+use crate::strategy_control::validate_live_route_scope;
 
 const LEGACY_EXPLICIT_COMPATIBILITY_MODE: &str = "legacy-explicit";
 
@@ -760,6 +761,13 @@ fn validate_strategy_payload(
             ))
             .into());
         }
+        for artifact in &artifacts {
+            validate_live_route_scope(&artifact.key.route, &artifact.key.scope).map_err(|error| {
+                TargetStateError::new(format!(
+                    "invalid route_artifacts for operator_strategy_revision {operator_strategy_revision}: {error}"
+                ))
+            })?;
+        }
         return Ok(());
     }
 
@@ -977,5 +985,43 @@ mod tests {
         assert!(error
             .to_string()
             .contains("invalid route_artifacts for operator_strategy_revision strategy-rev-9"));
+    }
+
+    #[test]
+    fn validate_strategy_payload_rejects_invalid_route_scope_for_registered_route() {
+        let error = validate_strategy_payload(
+            &json!({
+                "route_artifacts": [
+                    {
+                        "key": {
+                            "route": "full-set",
+                            "scope": "family-a"
+                        },
+                        "route_policy_version": "full-set-policy-v1",
+                        "semantic_digest": "digest",
+                        "content": {}
+                    }
+                ],
+                "rendered_live_targets": {
+                    "family-a": {
+                        "family_id": "family-a",
+                        "members": [
+                            {
+                                "condition_id": "condition-1",
+                                "token_id": "token-1",
+                                "price": "0.43",
+                                "quantity": "5"
+                            }
+                        ]
+                    }
+                }
+            }),
+            "strategy-rev-9",
+        )
+        .unwrap_err();
+
+        let text = error.to_string();
+        assert!(text.contains("full-set"), "{text}");
+        assert!(text.contains("default scope"), "{text}");
     }
 }

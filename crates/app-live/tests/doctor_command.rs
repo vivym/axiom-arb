@@ -205,6 +205,70 @@ ready_families = []
     );
 }
 
+#[test]
+fn doctor_live_mode_reports_missing_operator_strategy_revision_from_neutral_adopted_shape() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key-1"
+address = "0x3333333333333333333333333333333333333333"
+"#,
+    )
+    .expect("seed neutral adopted config");
+
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(temp.path())
+        .env("DATABASE_URL", default_test_database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(!output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert!(combined.contains("TargetSourceError"), "{combined}");
+    assert!(
+        combined.contains("missing strategy_control.operator_strategy_revision"),
+        "{combined}"
+    );
+}
+
 #[tokio::test]
 async fn doctor_live_mode_fails_without_database_url_for_explicit_targets() {
     let config = temp_live_config(

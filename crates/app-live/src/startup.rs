@@ -11,6 +11,7 @@ use crate::config::{
     neg_risk_live_targets_from_route_artifacts, ConfigError, LocalSignerConfig,
     NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, PolymarketSourceConfig, RouteRuntimeArtifact,
 };
+use crate::strategy_control::validate_live_route_scope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupBundle {
@@ -38,6 +39,7 @@ pub enum StartupError {
     Config(ConfigError),
     Persistence(PersistenceError),
     MissingOperatorTargetRevision,
+    MissingOperatorStrategyRevision,
     MissingAdoptionProvenance {
         operator_target_revision: String,
     },
@@ -73,6 +75,9 @@ impl fmt::Display for StartupError {
             Self::Persistence(error) => write!(f, "{error}"),
             Self::MissingOperatorTargetRevision => {
                 write!(f, "missing negrisk.target_source.operator_target_revision")
+            }
+            Self::MissingOperatorStrategyRevision => {
+                write!(f, "missing strategy_control.operator_strategy_revision")
             }
             Self::MissingAdoptionProvenance {
                 operator_target_revision,
@@ -182,10 +187,14 @@ pub async fn resolve_startup_strategy_revision(
         });
     }
 
-    if config.has_adopted_strategy_source() {
-        if let Some(operator_strategy_revision) = config.operator_strategy_revision() {
-            return resolve_adopted_strategy_revision(pool, operator_strategy_revision).await;
-        }
+    if config.has_adopted_strategy_source()
+        && config.target_source().is_none()
+        && !config.is_legacy_explicit_strategy_config()
+    {
+        let operator_strategy_revision = config
+            .operator_strategy_revision()
+            .ok_or(StartupError::MissingOperatorStrategyRevision)?;
+        return resolve_adopted_strategy_revision(pool, operator_strategy_revision).await;
     }
 
     let targets = NegRiskLiveTargetSet::try_from(config)?;
@@ -321,6 +330,12 @@ fn parse_route_artifacts(
 
     let mut grouped = BTreeMap::new();
     for artifact in artifacts {
+        validate_live_route_scope(&artifact.key.route, &artifact.key.scope).map_err(|error| {
+            StartupError::InvalidRouteArtifacts {
+                operator_strategy_revision: operator_strategy_revision.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
         grouped
             .entry(artifact.key.route)
             .or_insert_with(Vec::new)
@@ -407,7 +422,7 @@ mod tests {
     use super::resolve_startup_targets;
 
     #[tokio::test]
-    async fn resolve_startup_targets_accepts_pure_neutral_strategy_control_without_legacy_target_source(
+    async fn resolve_startup_targets_rejects_pure_neutral_strategy_control_without_operator_strategy_revision(
     ) {
         let raw = load_raw_config_from_str(
             r#"
@@ -446,11 +461,13 @@ address = "0x1111111111111111111111111111111111111111"
             .connect_lazy("postgres://axiom:axiom@localhost:5432/axiom_arb")
             .expect("lazy pool should initialize");
 
-        let resolved = resolve_startup_targets(&pool, &config)
+        let error = resolve_startup_targets(&pool, &config)
             .await
-            .expect("pure neutral startup resolution should not require legacy target_source");
+            .expect_err("missing neutral adopted revision should fail closed");
 
-        assert!(resolved.targets.is_empty());
-        assert_eq!(resolved.operator_target_revision, None);
+        assert_eq!(
+            error.to_string(),
+            "missing strategy_control.operator_strategy_revision"
+        );
     }
 }

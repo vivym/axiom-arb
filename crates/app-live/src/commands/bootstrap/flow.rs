@@ -179,6 +179,12 @@ fn detect_existing_bootstrap_mode(
             let follow_up = if config.is_legacy_explicit_strategy_config() {
                 SmokeFollowUp::LegacyExplicitTargets
             } else if config.has_adopted_strategy_source() {
+                if config.target_source().is_none() && config.operator_strategy_revision().is_none()
+                {
+                    return Err(BootstrapError::MissingOperatorStrategyRevision {
+                        config_path: config_path.to_path_buf(),
+                    });
+                }
                 if config.operator_strategy_revision().is_some() {
                     SmokeFollowUp::AlreadyAdopted
                 } else {
@@ -427,6 +433,53 @@ address = "0x1111111111111111111111111111111111111111"
             mode,
             ExistingBootstrapMode::Smoke(SmokeFollowUp::AlreadyAdopted)
         ));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn detect_existing_bootstrap_mode_rejects_pure_neutral_smoke_without_operator_strategy_revision(
+    ) {
+        let path = write_temp_config(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = []
+ready_scopes = []
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        );
+
+        let error = detect_existing_bootstrap_mode(&path)
+            .err()
+            .expect("missing neutral adopted strategy revision should fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("missing strategy_control.operator_strategy_revision"),
+            "{error}"
+        );
 
         let _ = fs::remove_file(path);
     }

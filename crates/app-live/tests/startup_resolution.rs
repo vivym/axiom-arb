@@ -120,6 +120,59 @@ async fn startup_resolution_fails_closed_when_operator_strategy_revision_provena
     assert!(text.contains("provenance"), "{text}");
 }
 
+#[tokio::test]
+async fn adopted_strategy_source_without_operator_strategy_revision_fails_closed() {
+    let db = TestDatabase::new().await;
+
+    let err = resolve_startup_targets(&db.pool, &sample_neutral_live_view_without_revision())
+        .await
+        .expect_err("missing adopted strategy revision should fail closed");
+
+    let text = err.to_string();
+    assert!(
+        text.contains("strategy_control.operator_strategy_revision"),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn startup_resolution_rejects_invalid_route_scope_for_registered_adapter() {
+    let db = TestDatabase::new().await;
+    db.seed_adopted_strategy_revision(
+        "strategy-rev-invalid-fullset-scope",
+        sample_invalid_fullset_scope_revision(),
+    )
+    .await;
+
+    let err = app_live::startup::resolve_startup_strategy_revision(
+        &db.pool,
+        &sample_neutral_live_view("strategy-rev-invalid-fullset-scope"),
+    )
+    .await
+    .expect_err("invalid full-set scope should fail closed");
+
+    let text = err.to_string();
+    assert!(text.contains("full-set"), "{text}");
+    assert!(text.contains("default scope"), "{text}");
+}
+
+#[tokio::test]
+async fn compatibility_explicit_targets_still_resolve_without_operator_strategy_revision() {
+    let db = TestDatabase::new().await;
+
+    let resolved =
+        resolve_startup_targets(&db.pool, &sample_compatibility_live_view_without_revision())
+            .await
+            .expect("compatibility explicit targets should still resolve via config fallback");
+
+    assert!(!resolved.targets.is_empty());
+    assert_eq!(
+        resolved.operator_target_revision.as_deref(),
+        Some(resolved.targets.revision())
+    );
+    assert!(resolved.targets.targets().contains_key("family-a"));
+}
+
 struct TestDatabase {
     pool: PgPool,
 }
@@ -424,6 +477,113 @@ signature = "builder-signature"
     validated.for_app_live().expect("live view should validate")
 }
 
+fn sample_neutral_live_view_without_revision() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key"
+timestamp = "1700000001"
+passphrase = "builder-passphrase"
+signature = "builder-signature"
+"#,
+        )
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
+}
+
+fn sample_compatibility_live_view_without_revision() -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key"
+timestamp = "1700000001"
+passphrase = "builder-passphrase"
+signature = "builder-signature"
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+        )
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
+}
+
 fn sample_rendered_live_targets_json() -> Value {
     json!({
         "family-a": {
@@ -489,6 +649,48 @@ fn sample_multi_route_revision() -> Value {
         ],
         "warnings": [],
         "execution_requests": [],
+    })
+}
+
+fn sample_invalid_fullset_scope_revision() -> Value {
+    json!({
+        "route_artifacts": [
+            {
+                "key": {
+                    "route": "full-set",
+                    "scope": "family-a"
+                },
+                "route_policy_version": "full-set-policy-v1",
+                "semantic_digest": "digest-fullset-family-a",
+                "content": {
+                    "route": "full-set",
+                    "scope": "family-a",
+                    "mode": "default"
+                }
+            },
+            {
+                "key": {
+                    "route": "neg-risk",
+                    "scope": "family-a"
+                },
+                "route_policy_version": "neg-risk-policy-v1",
+                "semantic_digest": "digest-neg-risk-family-a",
+                "content": {
+                    "family_id": "family-a",
+                    "members": [
+                        {
+                            "condition_id": "condition-1",
+                            "token_id": "token-1",
+                            "price": "0.43",
+                            "quantity": "5"
+                        }
+                    ]
+                }
+            }
+        ],
+        "rendered_live_targets": sample_rendered_live_targets_json(),
+        "rendered_operator_strategy_revision": "strategy-rev-invalid-fullset-scope",
+        "rendered_operator_target_revision": "targets-rev-9"
     })
 }
 

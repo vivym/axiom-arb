@@ -17,6 +17,7 @@ use persistence::{
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use support::{cli, status_db::TestDatabase};
+use toml_edit::{table, value, DocumentMut};
 
 #[test]
 fn status_subcommand_is_exposed() {
@@ -137,7 +138,7 @@ fn status_adopted_source_without_operator_target_revision_is_discovery_required(
 fn status_smoke_without_discovery_artifacts_is_discovery_required() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -179,7 +180,7 @@ fn status_smoke_with_advisory_only_candidate_is_discovery_ready_not_adoptable() 
         "candidate generation deferred until discovery backfill completes",
     );
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -218,7 +219,7 @@ fn status_smoke_with_adoptable_artifacts_and_no_anchor_is_adoptable_ready() {
     let database = TestDatabase::new();
     database.seed_adopted_target_without_provenance("targets-rev-9");
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        with_legacy_smoke_target_source_without_revision(config)
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -339,9 +340,9 @@ fn status_smoke_restart_required_with_ready_rollout_keeps_restart_guidance() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-10"));
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
-        )
+        config
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -595,6 +596,41 @@ fn status_pure_neutral_adopted_config_with_missing_strategy_provenance_reports_s
 }
 
 #[test]
+fn status_pure_neutral_adopted_config_without_operator_strategy_revision_is_blocked() {
+    let database = TestDatabase::new();
+    let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
+    assert!(
+        combined.contains("missing strategy_control.operator_strategy_revision"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Readiness: adoptable-ready"),
+        "{combined}"
+    );
+    assert!(
+        !combined.contains("Readiness: discovery-required"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn status_pure_neutral_adopted_config_prefers_active_strategy_anchor_for_restart_detection() {
     let database = TestDatabase::new();
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
@@ -753,6 +789,39 @@ fn status_adopted_source_with_live_rollout_enabled_is_live_config_ready() {
 }
 
 #[test]
+fn status_route_owned_rollout_overrides_legacy_rollout_when_both_are_present() {
+    let database = TestDatabase::new();
+    database.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        format!(
+            "{config}\n[negrisk.rollout]\napproved_families = []\nready_families = []\n\n[strategies.neg_risk]\nenabled = true\n\n[strategies.neg_risk.rollout]\napproved_scopes = [\"family-a\"]\nready_scopes = [\"family-a\"]\n"
+        )
+    });
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(
+        combined.contains("Readiness: live-config-ready"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Reason: adopted families are covered by rollout: family-a"),
+        "{combined}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
 fn status_adopted_smoke_source_with_unavailable_active_revision_is_smoke_rollout_required() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
@@ -829,9 +898,9 @@ fn status_adopted_smoke_source_with_rollout_enabled_is_smoke_config_ready() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        format!(
-            "{config}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n"
-        )
+        config
+            .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
+            .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -863,6 +932,34 @@ fn status_adopted_smoke_source_with_rollout_enabled_is_smoke_config_ready() {
 
     database.cleanup();
     let _ = fs::remove_file(config);
+}
+
+fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("config fixture should contain [negrisk]");
+    if negrisk.get("target_source").is_none() {
+        negrisk.insert("target_source", table());
+    }
+    let target_source = negrisk
+        .get_mut("target_source")
+        .expect("config fixture should contain [negrisk.target_source]")
+        .as_table_like_mut()
+        .expect("[negrisk.target_source] should be a table");
+    target_source.insert("source", value("adopted"));
+    target_source.remove("operator_target_revision");
+
+    document.to_string()
 }
 
 #[test]
