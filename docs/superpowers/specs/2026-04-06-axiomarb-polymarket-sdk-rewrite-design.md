@@ -387,6 +387,40 @@ Required rules:
 
 This preserves the current repo-owned signing boundary while keeping the gateway route-agnostic.
 
+### 10.0.2 Live Signer Material
+
+The official Rust SDK's authenticated order flow requires wallet signing material in addition to
+API credentials.
+
+That means:
+
+- `api_key`, `secret`, and `passphrase` are sufficient for authenticated CLOB session behavior
+- they are not sufficient, by themselves, to produce production order signatures
+- Phase B must not cut the mainline live submit path over to the gateway while `TestOrderSigner`
+  remains the only production wiring
+
+Required rule:
+
+- Phase B must introduce a real repo-owned Polymarket `OrderSigner` before mainline live submit
+  cutover
+
+Implementation boundary:
+
+- the stable signing contract remains `execution::signing::OrderSigner`
+- Phase B should add a concrete Polymarket implementation above the gateway boundary, in the
+  app-side runtime/provider adapter layer rather than inside the gateway itself
+- the gateway remains transport/auth/session owner, not signing owner
+
+The recommended source for live signer material is an operator-provided secret channel such as an
+environment variable, for example `POLYMARKET_PRIVATE_KEY`.
+
+Hard rules:
+
+- live private key material must not be persisted in TOML config
+- missing live signer material must fail closed with an explicit startup/configuration error
+- tests may use injected in-memory signers, but the production path must not silently fall back to
+  `TestOrderSigner`
+
 ### 10.1 `doctor`
 
 `doctor` should consume capability probes that cover:
@@ -413,6 +447,13 @@ It should not know:
 Runtime providers should consume `PolymarketExecutionSource`.
 
 They may remain repo-owned provider types, but they should no longer store transport-facing auth header payloads.
+
+For live submit cutover:
+
+- metadata and stream cutover may proceed independently of order-signing cutover
+- mainline live submit must not be routed through the gateway until the real signer described in
+  Section 10.0.2 exists
+- any path that would otherwise send `TestOrderSigner` artifacts to Polymarket is invalid
 
 For reconciliation truth:
 
@@ -555,6 +596,7 @@ Phase B should begin only after the strategy-neutral control-plane branch is mer
 Move all Polymarket call sites in `app-live` to capability-oriented construction:
 
 - doctor probes
+- live signer construction
 - runtime provider construction
 - discovery wiring
 - websocket task construction
@@ -602,6 +644,8 @@ At minimum:
 
 - `bootstrap` on smoke config reaches discovery and authenticated probes through the new gateway
 - `doctor` surfaces auth vs connectivity failures correctly
+- missing `POLYMARKET_PRIVATE_KEY` fails closed before gateway-backed live submit starts
+- gateway-backed live submit path does not rely on `TestOrderSigner`
 - `apply --start` can pass through submit/reconcile/stream setup without using repo-owned protocol auth
 
 ## 14. Merge Risk Management
@@ -634,6 +678,7 @@ This project is complete when:
 - relayer remains available behind the same venue gateway surface
 - `app-live` no longer relies on static L2 auth material or direct transport request construction
 - the current real-user smoke path can authenticate and progress using the rewritten gateway
+- the live submit path has a real signer source and cannot silently fall back to `TestOrderSigner`
 - the resulting venue boundary is compatible with the strategy-neutral control-plane project without another venue rewrite
 - Phase A delivers reusable SDK-backed protocol core without painting the repository into a pre-merge cutover corner
 - Phase B completes the actual mainline switch and old-path deletion after the control-plane branch lands

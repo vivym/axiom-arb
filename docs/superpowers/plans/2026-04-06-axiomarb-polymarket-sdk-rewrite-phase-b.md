@@ -6,7 +6,7 @@
 
 **Goal:** Cut `app-live` and config/mainline runtime wiring over to the SDK-backed Polymarket gateway, then delete the old transport/auth main path after `strategy-neutral-control-plane` has landed.
 
-**Architecture:** Treat this as post-merge cutover work. Rebase onto the strategy-neutral control-plane result first, then rewire config/auth handling, doctor probes, runtime providers, discovery wiring, and docs to the new gateway. Remove the temporary compatibility shell only after the new app-facing path is fully verified. In particular, treat the Phase A gateway-backed websocket shell as an event-compatibility seam rather than the final mainline design: Phase B must replace it with a stateful SDK subscription model before deleting the legacy websocket transport path.
+**Architecture:** Treat this as post-merge cutover work. Rebase onto the strategy-neutral control-plane result first, then rewire config/auth handling, doctor probes, runtime providers, discovery wiring, and docs to the new gateway. Remove the temporary compatibility shell only after the new app-facing path is fully verified. In particular, treat the Phase A gateway-backed websocket shell as an event-compatibility seam rather than the final mainline design: Phase B must replace it with a stateful SDK subscription model before deleting the legacy websocket transport path. Also treat live submit cutover as signer-gated work: do not route the mainline live submit path through the gateway until a real Polymarket `OrderSigner` exists. That signer must load private-key material from an operator secret channel such as `POLYMARKET_PRIVATE_KEY`, not from TOML config, and the production path must fail closed rather than falling back to `TestOrderSigner`.
 
 **Tech Stack:** Rust, existing `app-live` and `config-schema` crates, Phase A gateway in `venue-polymarket`, `cargo test`, `cargo fmt`, `cargo clippy`
 
@@ -238,6 +238,7 @@ git commit -m "refactor: route doctor probes through polymarket gateway"
 
 **Files:**
 - Modify: `crates/app-live/src/polymarket_runtime_adapter.rs`
+- Modify: `crates/app-live/src/config.rs`
 - Modify: `crates/app-live/src/source_tasks.rs`
 - Modify: `crates/app-live/src/negrisk_live.rs`
 - Modify: `crates/app-live/src/commands/discover.rs`
@@ -247,13 +248,19 @@ git commit -m "refactor: route doctor probes through polymarket gateway"
 - Test: `crates/app-live/tests/run_command.rs`
 - Test: `crates/app-live/tests/real_user_shadow_smoke.rs`
 
-- [ ] **Step 1: Write the failing runtime-cutover tests**
+- [ ] **Step 1: Write the failing signer-gated runtime-cutover tests**
 
 ```rust
 #[test]
 fn discover_uses_gateway_backed_metadata_refresh() {
     let output = run_discover_with_scripted_gateway_metadata();
     assert!(output.contains("Discovery completed"));
+}
+
+#[test]
+fn gateway_live_submit_requires_real_polymarket_signer_material() {
+    let error = run_live_submit_without_env("POLYMARKET_PRIVATE_KEY").unwrap_err();
+    assert!(error.to_string().contains("POLYMARKET_PRIVATE_KEY"));
 }
 
 #[test]
@@ -273,7 +280,7 @@ cargo test -p app-live --test discover_command --test bootstrap_command --test r
 
 Expected: FAIL because runtime/discovery still use legacy client construction and per-call async bridging.
 
-- [ ] **Step 3: Implement the shared gateway adapter**
+- [ ] **Step 3: Introduce the real Polymarket signer and shared gateway adapter**
 
 Target shape:
 
@@ -286,6 +293,13 @@ pub struct PolymarketRuntimeAdapter {
 
 Rules:
 
+- introduce a production `OrderSigner` for Polymarket live submit before switching the mainline
+  gateway submit path
+- keep `execution::signing::OrderSigner` as the stable contract; add the concrete Polymarket
+  implementation in the app-side runtime/provider adapter layer rather than inside the gateway
+- load live signer material from an operator secret channel such as `POLYMARKET_PRIVATE_KEY`;
+  do not add private key fields to TOML config
+- keep `TestOrderSigner` limited to tests and synthetic hook-only seams
 - no fresh `Runtime::new()` per provider call
 - route-owned signed payloads get translated into `PolymarketSignedOrder` before crossing the gateway
 - discovery/metadata and stream tasks all use the same gateway-backed construction path
@@ -305,6 +319,7 @@ Expected: PASS
 
 ```bash
 git add crates/app-live/src/polymarket_runtime_adapter.rs \
+  crates/app-live/src/config.rs \
   crates/app-live/src/source_tasks.rs \
   crates/app-live/src/negrisk_live.rs \
   crates/app-live/src/commands/discover.rs \
