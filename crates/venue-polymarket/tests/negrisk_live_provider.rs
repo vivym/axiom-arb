@@ -559,10 +559,7 @@ impl MockServer {
             }
         });
 
-        Self {
-            request,
-            join,
-        }
+        Self { request, join }
     }
 
     fn finish_without_request(self) {

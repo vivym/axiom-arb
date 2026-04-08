@@ -147,10 +147,7 @@ impl FamilySubmitAggregation {
 }
 
 impl PolymarketNegRiskSubmitProvider {
-    pub fn with_gateway(
-        transport: PostOrderTransport,
-        gateway: PolymarketGateway,
-    ) -> Self {
+    pub fn with_gateway(transport: PostOrderTransport, gateway: PolymarketGateway) -> Self {
         Self {
             gateway,
             runtime_handle: None,
@@ -271,10 +268,7 @@ impl VenueExecutionProvider for PolymarketNegRiskSubmitProvider {
 }
 
 impl<'a> PolymarketNegRiskReconcileProvider<'a> {
-    pub fn with_gateway(
-        relayer_auth: RelayerAuth<'a>,
-        gateway: PolymarketGateway,
-    ) -> Self {
+    pub fn with_gateway(relayer_auth: RelayerAuth<'a>, gateway: PolymarketGateway) -> Self {
         Self {
             gateway,
             runtime_handle: None,
@@ -519,11 +513,7 @@ impl<'a> ReconcileProvider for PolymarketNegRiskReconcileProvider<'a> {
         work: &PendingReconcileWork,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
         if let Some(runtime_handle) = &self.runtime_handle {
-            return self.reconcile_live_via_gateway_runtime(
-                &self.gateway,
-                runtime_handle,
-                work,
-            );
+            return self.reconcile_live_via_gateway_runtime(&self.gateway, runtime_handle, work);
         }
 
         run_blocking(self.reconcile_live_async(work))

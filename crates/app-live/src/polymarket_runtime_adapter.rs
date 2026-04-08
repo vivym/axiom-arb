@@ -561,9 +561,7 @@ mod tests {
         polymarket_metadata_gateway_backend, GatewayBackedSubmitProvider,
         PolymarketMetadataGatewayBackend, PolymarketOrderSigner,
     };
-    use crate::{
-        config::PolymarketSourceConfig, PolymarketGatewayCredentials,
-    };
+    use crate::{config::PolymarketSourceConfig, PolymarketGatewayCredentials};
 
     const TEST_PRIVATE_KEY: &str =
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
