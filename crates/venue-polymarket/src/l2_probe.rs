@@ -7,13 +7,14 @@ use url::Url;
 
 use crate::errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
 
+const DEFAULT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const POLY_API_KEY: HeaderName = HeaderName::from_static("poly-api-key");
 const POLY_ADDRESS: HeaderName = HeaderName::from_static("poly-address");
 const POLY_PASSPHRASE: HeaderName = HeaderName::from_static("poly-passphrase");
 const POLY_SIGNATURE: HeaderName = HeaderName::from_static("poly-signature");
 const POLY_TIMESTAMP: HeaderName = HeaderName::from_static("poly-timestamp");
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PolymarketL2ProbeCredentials {
     pub address: String,
     pub api_key: String,
@@ -21,17 +22,45 @@ pub struct PolymarketL2ProbeCredentials {
     pub passphrase: String,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for PolymarketL2ProbeCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolymarketL2ProbeCredentials")
+            .field("address", &"<redacted>")
+            .field("api_key", &"<redacted>")
+            .field("secret", &"<redacted>")
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct PolymarketL2ProbeClient {
     host: Url,
     http: Client,
     credentials: PolymarketL2ProbeCredentials,
 }
 
+impl std::fmt::Debug for PolymarketL2ProbeClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PolymarketL2ProbeClient")
+            .field("host", &self.host)
+            .field("http", &"<redacted>")
+            .field("credentials", &"<redacted>")
+            .finish()
+    }
+}
+
 impl PolymarketL2ProbeClient {
     #[must_use]
-    pub fn new(host: Url, credentials: PolymarketL2ProbeCredentials) -> Self {
-        Self::with_http_client(Client::new(), host, credentials)
+    pub fn new(
+        host: Url,
+        credentials: PolymarketL2ProbeCredentials,
+    ) -> Result<Self, PolymarketGatewayError> {
+        Ok(Self::with_http_client(
+            build_default_http_client()?,
+            host,
+            credentials,
+        ))
     }
 
     #[must_use]
@@ -276,10 +305,11 @@ fn decode_base64(input: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let mut output = Vec::with_capacity(filtered.len() / 4 * 3);
+    let total_chunks = filtered.len() / 4;
 
-    for chunk in filtered.chunks(4) {
+    for (chunk_index, chunk) in filtered.chunks(4).enumerate() {
         let mut values = [0_u8; 4];
-        let mut padding = 0;
+        let mut seen_padding = false;
 
         for (index, byte) in chunk.iter().enumerate() {
             match byte {
@@ -287,13 +317,20 @@ fn decode_base64(input: &[u8]) -> Result<Vec<u8>, String> {
                     if index < 2 {
                         return Err("invalid base64 padding".to_owned());
                     }
-                    padding += 1;
+                    seen_padding = true;
                 }
                 other => {
+                    if seen_padding {
+                        return Err("invalid base64 padding".to_owned());
+                    }
                     values[index] = decode_base64_char(*other)
                         .ok_or_else(|| format!("invalid base64 character: {}", *other as char))?;
                 }
             }
+        }
+
+        if seen_padding && chunk_index + 1 != total_chunks {
+            return Err("invalid base64 padding".to_owned());
         }
 
         let word = ((values[0] as u32) << 18)
@@ -302,10 +339,10 @@ fn decode_base64(input: &[u8]) -> Result<Vec<u8>, String> {
             | (values[3] as u32);
 
         output.push((word >> 16) as u8);
-        if padding < 2 {
+        if chunk[2] != b'=' {
             output.push((word >> 8) as u8);
         }
-        if padding < 1 {
+        if chunk[3] != b'=' {
             output.push(word as u8);
         }
     }
@@ -322,6 +359,15 @@ fn decode_base64_char(byte: u8) -> Option<u8> {
         b'/' => Some(63),
         _ => None,
     }
+}
+
+fn build_default_http_client() -> Result<Client, PolymarketGatewayError> {
+    Client::builder()
+        .timeout(DEFAULT_HTTP_TIMEOUT)
+        .build()
+        .map_err(|err| {
+            PolymarketGatewayError::connectivity(format!("failed to build l2 probe client: {err}"))
+        })
 }
 
 #[cfg(test)]
@@ -406,12 +452,56 @@ mod tests {
     }
 
     #[test]
+    fn debug_output_redacts_sensitive_credentials() {
+        let credentials = sample_credentials();
+        let client = PolymarketL2ProbeClient::with_http_client(
+            Client::builder().build().unwrap(),
+            Url::parse("http://127.0.0.1/").unwrap(),
+            credentials.clone(),
+        );
+
+        let credentials_debug = format!("{:?}", credentials);
+        let client_debug = format!("{:?}", client);
+
+        assert!(!credentials_debug.contains("0x1111111111111111111111111111111111111111"));
+        assert!(!credentials_debug.contains("key-1"));
+        assert!(!credentials_debug.contains("c2VjcmV0LWJ5dGVz"));
+        assert!(!credentials_debug.contains("pass-1"));
+        assert!(credentials_debug.contains("redacted"));
+
+        assert!(!client_debug.contains("0x1111111111111111111111111111111111111111"));
+        assert!(!client_debug.contains("key-1"));
+        assert!(!client_debug.contains("c2VjcmV0LWJ5dGVz"));
+        assert!(!client_debug.contains("pass-1"));
+        assert!(client_debug.contains("redacted"));
+    }
+
+    #[test]
     fn signature_rejects_invalid_secret_encoding() {
         let err = build_l2_probe_signature(
             &PolymarketL2ProbeCredentials {
                 address: "0x1111111111111111111111111111111111111111".to_owned(),
                 api_key: "key-1".to_owned(),
                 secret: "not-base64!".to_owned(),
+                passphrase: "pass-1".to_owned(),
+            },
+            "1700000000",
+            "GET",
+            "/data/orders",
+            "",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind, PolymarketGatewayErrorKind::Protocol);
+    }
+
+    #[test]
+    fn signature_rejects_malformed_base64_padding() {
+        let err = build_l2_probe_signature(
+            &PolymarketL2ProbeCredentials {
+                address: "0x1111111111111111111111111111111111111111".to_owned(),
+                api_key: "key-1".to_owned(),
+                secret: "AA=A".to_owned(),
                 passphrase: "pass-1".to_owned(),
             },
             "1700000000",

@@ -6,7 +6,7 @@ use venue_polymarket::{PolymarketL2ProbeClient, PolymarketL2ProbeCredentials};
 #[tokio::test]
 async fn l2_probe_fetch_open_orders_uses_current_data_orders_path() {
     let server = support::MockServer::spawn("200 OK", r#"{"data":[]}"#);
-    let probe = sample_probe(server.base_url());
+    let probe = sample_probe(server.base_url()).unwrap();
 
     probe.fetch_open_orders().await.unwrap();
 
@@ -21,7 +21,7 @@ async fn l2_probe_fetch_open_orders_uses_current_data_orders_path() {
 #[tokio::test]
 async fn l2_probe_post_heartbeat_uses_current_heartbeat_path_and_body() {
     let server = support::MockServer::spawn("200 OK", r#"{"ok":true}"#);
-    let probe = sample_probe(server.base_url());
+    let probe = sample_probe(server.base_url()).unwrap();
 
     probe.post_heartbeat(Some("hb-41")).await.unwrap();
 
@@ -43,7 +43,8 @@ async fn l2_probe_rejects_invalid_secret_encoding() {
             secret: "not-base64!".to_owned(),
             passphrase: "pass-1".to_owned(),
         },
-    );
+    )
+    .unwrap();
 
     let err = probe.fetch_open_orders().await.unwrap_err();
 
@@ -53,7 +54,7 @@ async fn l2_probe_rejects_invalid_secret_encoding() {
 #[tokio::test]
 async fn l2_probe_post_heartbeat_without_previous_id_sends_null_body() {
     let server = support::MockServer::spawn("200 OK", r#"{"ok":true}"#);
-    let probe = sample_probe(server.base_url());
+    let probe = sample_probe(server.base_url()).unwrap();
 
     probe.post_heartbeat(None).await.unwrap();
 
@@ -62,7 +63,9 @@ async fn l2_probe_post_heartbeat_without_previous_id_sends_null_body() {
     assert!(request.contains(r#""heartbeat_id":null"#));
 }
 
-fn sample_probe(base_url: Url) -> PolymarketL2ProbeClient {
+fn sample_probe(
+    base_url: Url,
+) -> Result<PolymarketL2ProbeClient, venue_polymarket::PolymarketGatewayError> {
     std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
     PolymarketL2ProbeClient::new(base_url, sample_credentials())
 }
