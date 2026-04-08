@@ -12,15 +12,13 @@ heartbeat_interval_seconds = 0
 relayer_poll_interval_seconds = 0
 metadata_refresh_interval_seconds = 0
 
-[polymarket.signer]
+[polymarket.account]
 address = ""
-funder_address = ""
 signature_type = "eoa"
-wallet_route = "proxy"
+wallet_route = "eoa"
 api_key = ""
+secret = ""
 passphrase = ""
-timestamp = ""
-signature = ""
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"

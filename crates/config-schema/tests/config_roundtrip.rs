@@ -89,11 +89,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x2222222222222222222222222222222222222222"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"

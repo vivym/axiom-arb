@@ -511,6 +511,7 @@ pub(crate) fn validate_global_invariants(raw: &RawAxiomConfig) -> Result<(), Con
 
     validate_strategy_control(raw)?;
     validate_negrisk(raw)?;
+    validate_wallet_kind_relayer_invariants(raw)?;
 
     Ok(())
 }
@@ -535,8 +536,10 @@ fn validate_app_live_requiredness(
             let account = require_account(raw)?;
             validate_account_view(account)?;
 
-            let relayer_auth = require_relayer_auth_view(raw)?;
-            validate_relayer_auth_view(relayer_auth)?;
+            if validated_wallet_kind(account).requires_relayer_auth() {
+                let relayer_auth = require_relayer_auth_view(raw)?;
+                validate_relayer_auth_view(relayer_auth)?;
+            }
 
             require_strategy_control_or_legacy_target_source(raw)?;
             if raw
@@ -632,6 +635,59 @@ fn require_relayer_auth_view(
         .and_then(|polymarket| polymarket.relayer_auth.as_ref())
         .map(|raw| AppLivePolymarketRelayerAuthView { raw })
         .ok_or_else(|| validation_error("missing required section: polymarket.relayer_auth"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalletKind {
+    Eoa,
+    NonEoa,
+}
+
+impl WalletKind {
+    fn requires_relayer_auth(self) -> bool {
+        matches!(self, Self::NonEoa)
+    }
+}
+
+fn validate_wallet_kind_relayer_invariants(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
+    let Some(account) = raw
+        .polymarket
+        .as_ref()
+        .and_then(|polymarket| polymarket.account.as_ref())
+        .map(|raw| AppLivePolymarketAccountView { raw })
+    else {
+        return Ok(());
+    };
+
+    if raw
+        .polymarket
+        .as_ref()
+        .and_then(|polymarket| polymarket.relayer_auth.as_ref())
+        .is_some()
+        && matches!(raw_wallet_kind(account), Some(WalletKind::Eoa))
+    {
+        return Err(validation_error(
+            "polymarket.relayer_auth is not allowed for EOA polymarket.account credentials",
+        ));
+    }
+
+    Ok(())
+}
+
+fn raw_wallet_kind(account: AppLivePolymarketAccountView<'_>) -> Option<WalletKind> {
+    match (account.raw.signature_type, account.raw.wallet_route) {
+        (SignatureTypeToml::Eoa, WalletRouteToml::Eoa) => Some(WalletKind::Eoa),
+        (SignatureTypeToml::Proxy, WalletRouteToml::Proxy)
+        | (SignatureTypeToml::Safe, WalletRouteToml::Safe) => Some(WalletKind::NonEoa),
+        _ => None,
+    }
+}
+
+fn validated_wallet_kind(account: AppLivePolymarketAccountView<'_>) -> WalletKind {
+    match account.raw.signature_type {
+        SignatureTypeToml::Eoa => WalletKind::Eoa,
+        SignatureTypeToml::Proxy | SignatureTypeToml::Safe => WalletKind::NonEoa,
+    }
 }
 
 fn validate_negrisk(raw: &RawAxiomConfig) -> Result<(), ConfigSchemaError> {
