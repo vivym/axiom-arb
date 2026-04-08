@@ -17,7 +17,7 @@ use venue_polymarket::{
     LiveRelayerApi, LiveWsSdkApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
     PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
     PolymarketOrderQuery, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
-    PolymarketUserStreamAuth, UserWsEvent,
+    PolymarketUrl as Url, PolymarketUserStreamAuth, UserWsEvent,
 };
 
 use crate::{
@@ -287,11 +287,73 @@ enum StreamProbeBackend {
 fn stream_probe_backend(source: &PolymarketSourceConfig) -> StreamProbeBackend {
     let market_base = sdk_ws_base_endpoint(source.market_ws_url.as_str());
     let user_base = sdk_ws_base_endpoint(source.user_ws_url.as_str());
-    if market_base != user_base {
+    if market_base != user_base || ws_endpoints_use_env_proxy(source) {
         StreamProbeBackend::LegacyShell
     } else {
         StreamProbeBackend::SdkGateway
     }
+}
+
+fn ws_endpoints_use_env_proxy(source: &PolymarketSourceConfig) -> bool {
+    ws_endpoint_uses_env_proxy(&source.market_ws_url)
+        || ws_endpoint_uses_env_proxy(&source.user_ws_url)
+}
+
+fn ws_endpoint_uses_env_proxy(target: &Url) -> bool {
+    if read_env_any(&["NO_PROXY", "no_proxy"])
+        .as_deref()
+        .is_some_and(|value| host_matches_no_proxy(target, value))
+    {
+        return false;
+    }
+
+    match target.scheme() {
+        "https" | "wss" => {
+            read_env_any(&["HTTPS_PROXY", "https_proxy"]).is_some()
+                || read_env_any(&["ALL_PROXY", "all_proxy"]).is_some()
+        }
+        "http" | "ws" => {
+            read_env_any(&["HTTP_PROXY", "http_proxy"]).is_some()
+                || read_env_any(&["ALL_PROXY", "all_proxy"]).is_some()
+        }
+        _ => false,
+    }
+}
+
+fn read_env_any(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn host_matches_no_proxy(target: &Url, no_proxy: &str) -> bool {
+    let Some(host) = target.host_str() else {
+        return false;
+    };
+
+    let host = host.trim_matches('.').to_ascii_lowercase();
+    no_proxy
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| {
+            if entry == "*" {
+                return true;
+            }
+
+            let candidate = entry
+                .trim_matches('.')
+                .split(':')
+                .next()
+                .unwrap_or(entry)
+                .trim_matches('.')
+                .to_ascii_lowercase();
+
+            host == candidate || host.ends_with(&format!(".{candidate}"))
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -646,6 +708,8 @@ mod tests {
 
     #[test]
     fn stream_probe_backend_defaults_to_sdk_without_proxy() {
+        let _guard = env_lock().blocking_lock();
+        let _proxy_guard = ProxyEnvGuard::clear();
         let source = sample_source_config(
             "wss://ws-subscriptions-clob.polymarket.com/ws/market",
             "wss://ws-subscriptions-clob.polymarket.com/ws/user",
@@ -659,9 +723,26 @@ mod tests {
 
     #[test]
     fn stream_probe_backend_uses_legacy_when_market_and_user_bases_differ() {
+        let _guard = env_lock().blocking_lock();
+        let _proxy_guard = ProxyEnvGuard::clear();
         let source = sample_source_config(
             "wss://market-ws.polymarket.test/ws/market",
             "wss://user-ws.polymarket.test/ws/user",
+        );
+
+        assert_eq!(
+            stream_probe_backend(&source),
+            StreamProbeBackend::LegacyShell
+        );
+    }
+
+    #[test]
+    fn stream_probe_backend_uses_legacy_when_ws_proxy_env_applies() {
+        let _guard = env_lock().blocking_lock();
+        let _proxy_guard = ProxyEnvGuard::set_https("http://127.0.0.1:7897");
+        let source = sample_source_config(
+            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
         );
 
         assert_eq!(
@@ -750,26 +831,56 @@ mod tests {
     }
 
     struct ProxyEnvGuard {
+        http_proxy: Option<String>,
+        http_proxy_lower: Option<String>,
+        https_proxy: Option<String>,
+        https_proxy_lower: Option<String>,
         all_proxy: Option<String>,
         all_proxy_lower: Option<String>,
+        no_proxy: Option<String>,
+        no_proxy_lower: Option<String>,
     }
 
     impl ProxyEnvGuard {
         fn clear() -> Self {
             let guard = Self {
+                http_proxy: std::env::var("HTTP_PROXY").ok(),
+                http_proxy_lower: std::env::var("http_proxy").ok(),
+                https_proxy: std::env::var("HTTPS_PROXY").ok(),
+                https_proxy_lower: std::env::var("https_proxy").ok(),
                 all_proxy: std::env::var("ALL_PROXY").ok(),
                 all_proxy_lower: std::env::var("all_proxy").ok(),
+                no_proxy: std::env::var("NO_PROXY").ok(),
+                no_proxy_lower: std::env::var("no_proxy").ok(),
             };
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("http_proxy");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("https_proxy");
             std::env::remove_var("ALL_PROXY");
             std::env::remove_var("all_proxy");
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+            guard
+        }
+
+        fn set_https(value: &str) -> Self {
+            let guard = Self::clear();
+            std::env::set_var("HTTPS_PROXY", value);
             guard
         }
     }
 
     impl Drop for ProxyEnvGuard {
         fn drop(&mut self) {
+            restore_env_var("HTTP_PROXY", self.http_proxy.take());
+            restore_env_var("http_proxy", self.http_proxy_lower.take());
+            restore_env_var("HTTPS_PROXY", self.https_proxy.take());
+            restore_env_var("https_proxy", self.https_proxy_lower.take());
             restore_env_var("ALL_PROXY", self.all_proxy.take());
             restore_env_var("all_proxy", self.all_proxy_lower.take());
+            restore_env_var("NO_PROXY", self.no_proxy.take());
+            restore_env_var("no_proxy", self.no_proxy_lower.take());
         }
     }
 

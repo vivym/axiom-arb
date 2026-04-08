@@ -762,6 +762,23 @@ real_user_shadow_smoke = true
     assert!(error.contains("real_user_shadow_smoke"));
 }
 
+#[test]
+fn removed_polymarket_http_proxy_config_is_rejected_with_env_guidance() {
+    let error = validated_err(&format!(
+        r#"
+{BASE_LIVE_CONFIG}
+
+[polymarket.http]
+proxy_url = "http://127.0.0.1:7897"
+"#
+    ));
+
+    assert!(error.contains("[polymarket.http]"));
+    assert!(error.contains("proxy_url"));
+    assert!(error.contains("no longer supported"));
+    assert!(error.contains("environment variables"));
+}
+
 fn paper_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {
     let raw = Box::leak(Box::new(
         load_raw_config_from_str(extra).expect("config should parse"),
