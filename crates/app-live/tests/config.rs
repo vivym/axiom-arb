@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 
 use app_live::config::PolymarketSourceConfig;
 use app_live::{
@@ -346,12 +346,45 @@ fn operator_facing_account_builds_gateway_credentials() {
 }
 
 #[test]
-fn venue_polymarket_public_lib_omits_legacy_rest_ws_and_auth_reexports() {
-    let text = fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../venue-polymarket/src/lib.rs"),
-    )
-    .expect("venue-polymarket lib should be readable");
+fn venue_polymarket_public_lib_rejects_removed_root_reexports() {
+    let venue_polymarket_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../venue-polymarket");
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    fs::create_dir(temp_dir.path().join("src")).expect("test src dir");
+    fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "venue-polymarket-root-export-probe"
+version = "0.1.0"
+edition = "2021"
 
+[dependencies]
+venue-polymarket = {{ path = "{}" }}
+"#,
+            venue_polymarket_root.display()
+        ),
+    )
+    .expect("probe manifest");
+    fs::write(
+        temp_dir.path().join("src/main.rs"),
+        r#"
+use venue_polymarket::{L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, SignerContext};
+
+fn main() {}
+"#,
+    )
+    .expect("probe main");
+
+    let output = Command::new(env!("CARGO"))
+        .arg("check")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(temp_dir.path().join("Cargo.toml"))
+        .output()
+        .expect("cargo check should run");
+
+    assert!(!output.status.success(), "probe unexpectedly compiled");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     for legacy in [
         "PolymarketRestClient",
         "PolymarketWsClient",
@@ -359,8 +392,8 @@ fn venue_polymarket_public_lib_omits_legacy_rest_ws_and_auth_reexports() {
         "SignerContext",
     ] {
         assert!(
-            !text.contains(legacy),
-            "public venue-polymarket lib should not mention legacy export {legacy}"
+            stderr.contains(legacy),
+            "expected compile failure for removed root export {legacy}; stderr was: {stderr}"
         );
     }
 }

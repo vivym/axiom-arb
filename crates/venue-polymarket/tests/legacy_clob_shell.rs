@@ -8,8 +8,9 @@ use url::Url;
 use venue_polymarket::{
     HeartbeatFetchResult, OpenOrderSummary, PolymarketClobApi, PolymarketGatewayError,
     PolymarketHeartbeatStatus, PolymarketOpenOrderSummary, PolymarketOrderQuery,
-    PolymarketRestClient, PolymarketSignedOrder,
+    PolymarketSignedOrder,
 };
+use venue_polymarket::rest::PolymarketRestClient;
 
 #[derive(Debug, Clone)]
 struct ScriptedLegacyClobApi {

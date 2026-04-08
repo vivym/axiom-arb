@@ -8,9 +8,10 @@ use support::{
 };
 use url::Url;
 use venue_polymarket::{
-    MarketWsEvent, PolymarketWsClient, UserWsEvent, WsClientError, WsMessageSource,
-    WsTransportMessage, WsUserChannelAuth,
+    MarketWsEvent, UserWsEvent, WsClientError, WsMessageSource, WsTransportMessage,
+    WsUserChannelAuth,
 };
+use venue_polymarket::ws_client::PolymarketWsClient;
 
 #[tokio::test]
 async fn gateway_backed_market_ws_client_reads_gateway_events_without_transport_reads() {

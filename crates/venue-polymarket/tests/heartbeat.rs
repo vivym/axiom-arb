@@ -5,9 +5,10 @@ use domain::{SignatureType, WalletRoute};
 use support::MockServer;
 use url::Url;
 use venue_polymarket::{
-    HeartbeatFetchResult, HeartbeatReconcileReason, L2AuthHeaders, OrderHeartbeatMonitor,
-    OrderHeartbeatState, PolymarketRestClient, SignerContext,
+    HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
 };
+use venue_polymarket::auth::{L2AuthHeaders, SignerContext};
+use venue_polymarket::rest::PolymarketRestClient;
 
 #[test]
 fn heartbeat_missing_success_triggers_reconcile_once_and_persists_attention() {

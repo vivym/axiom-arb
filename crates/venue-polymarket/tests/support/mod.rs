@@ -22,12 +22,13 @@ use tracing::{
     Event, Metadata, Subscriber,
 };
 use venue_polymarket::{
-    FlexibleStringList, GammaEvent, GammaMarket, L2AuthHeaders, MarketTradePriceUpdate,
-    MarketWsEvent, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
-    PolymarketHeartbeatStatus, PolymarketMetadataApi, PolymarketOpenOrderSummary,
-    PolymarketRelayerApi, PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi,
-    PolymarketSubmitResponse, PolymarketUserStreamAuth, RelayerAuth, RelayerTransaction,
-    RelayerTransactionType, SignerContext, UserTradeUpdate, UserWsEvent,
+    auth::{L2AuthHeaders, SignerContext},
+    rest::PolymarketRestClient,
+    FlexibleStringList, GammaEvent, GammaMarket, MarketTradePriceUpdate, MarketWsEvent,
+    PolymarketClobApi, PolymarketGateway, PolymarketGatewayError, PolymarketHeartbeatStatus,
+    PolymarketMetadataApi, PolymarketOpenOrderSummary, PolymarketRelayerApi, PolymarketSignedOrder,
+    PolymarketStreamApi, PolymarketSubmitResponse, PolymarketUserStreamAuth, RelayerAuth,
+    RelayerTransaction, RelayerTransactionType, UserTradeUpdate, UserWsEvent,
     VenueProducerInstrumentation,
 };
 

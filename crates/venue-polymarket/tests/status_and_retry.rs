@@ -9,9 +9,10 @@ use support::{
     sample_proxy_auth, sample_relayer_api_auth, sample_safe_auth, MockServer,
 };
 use venue_polymarket::{
-    map_venue_status, AuthError, BusinessErrorKind, HttpRetryContext, PolymarketRestClient,
-    RelayerTransaction, RelayerTransactionType, RestError, RetryClass, RetryDecision,
+    map_venue_status, AuthError, BusinessErrorKind, HttpRetryContext, RelayerTransaction,
+    RelayerTransactionType, RestError, RetryClass, RetryDecision,
 };
+use venue_polymarket::rest::PolymarketRestClient;
 
 #[test]
 fn http_503_cancel_only_maps_to_no_new_risk_cancel_only() {

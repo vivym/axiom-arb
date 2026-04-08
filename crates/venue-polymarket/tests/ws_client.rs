@@ -7,10 +7,10 @@ use std::{
 
 use url::Url;
 use venue_polymarket::{
-    MarketBookUpdate, MarketWsEvent, PolymarketWsClient, UserTradeUpdate, UserWsEvent,
-    WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp, WsTransportMessage,
-    WsUserChannelAuth,
+    MarketBookUpdate, MarketWsEvent, UserTradeUpdate, UserWsEvent, WsClientError, WsCloseFrame,
+    WsMessageSource, WsSubscriptionOp, WsTransportMessage, WsUserChannelAuth,
 };
+use venue_polymarket::ws_client::PolymarketWsClient;
 
 #[tokio::test]
 async fn market_ws_client_yields_parsed_market_events_from_scripted_messages() {

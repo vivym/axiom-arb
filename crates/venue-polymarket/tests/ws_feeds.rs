@@ -5,10 +5,11 @@ use url::Url;
 use venue_polymarket::{
     parse_market_message, parse_market_messages, parse_user_message, MarketBookUpdate,
     MarketLifecycleUpdate, MarketPriceChangeUpdate, MarketTickSizeChangeUpdate,
-    MarketTradePriceUpdate, MarketWsEvent, PolymarketWsClient, UserOrderUpdate, UserTradeUpdate,
-    UserWsEvent, WsChannelKind, WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState,
+    MarketTradePriceUpdate, MarketWsEvent, UserOrderUpdate, UserTradeUpdate, UserWsEvent,
+    WsChannelKind, WsChannelLivenessMonitor, WsChannelReconcileReason, WsChannelState,
     WsClientError, WsMessageSource, WsParseError, WsTransportMessage,
 };
+use venue_polymarket::ws_client::PolymarketWsClient;
 
 #[test]
 fn ws_market_parses_book_update_and_ping_pong() {

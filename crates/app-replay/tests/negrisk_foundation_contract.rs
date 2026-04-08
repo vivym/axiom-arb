@@ -23,7 +23,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use strategy_negrisk::{
     build_family_graph, validate_family, FamilyValidationStatus, NegRiskGraphFamily,
 };
-use venue_polymarket::PolymarketRestClient;
+use venue_polymarket::rest::PolymarketRestClient;
 
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 

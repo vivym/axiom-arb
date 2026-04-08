@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use support::{sample_builder_relayer_auth, sample_relayer_api_auth};
 use url::Url;
 use venue_polymarket::{
-    PolymarketGatewayError, PolymarketRelayerApi, PolymarketRestClient, RelayerTransaction,
+    PolymarketGatewayError, PolymarketRelayerApi, RelayerTransaction,
     RelayerTransactionType,
 };
+use venue_polymarket::rest::PolymarketRestClient;
 
 #[derive(Debug, Clone)]
 struct ScriptedLegacyRelayerApi {
