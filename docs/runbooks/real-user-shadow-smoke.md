@@ -108,7 +108,7 @@ Interpret `status` before `apply` like this:
 - `blocked`
   - fix the reported blocker first, then rerun `status` or `apply`
 
-`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat plus relayer probes, and explicit next actions at the end. The smoke guard keeps every risk-expanding route on the shadow path even though the runtime itself is in `live` mode. `apply` reuses that same `doctor -> run` sequence; it does not bypass preflight, and it does not claim any process-management ability beyond the foreground `run` it starts itself.
+`doctor` must pass before `run`. In smoke mode it now acts as the real venue preflight gate: expect sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, real authenticated REST plus ws plus heartbeat probes, and explicit next actions at the end. The probe set is wallet-kind-aware: proxy/safe smoke still includes the relayer probe, while EOA smoke omits relayer probe because the config does not carry `[polymarket.relayer_auth]`. The smoke guard keeps every risk-expanding route on the shadow path even though the runtime itself is in `live` mode. `apply` reuses that same `doctor -> run` sequence; it does not bypass preflight, and it does not claim any process-management ability beyond the foreground `run` it starts itself.
 
 After `run`, use the high-level verifier as the default happy path:
 

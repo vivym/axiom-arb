@@ -1057,6 +1057,57 @@ fn init_interactive_non_eoa_still_collects_and_renders_relayer_auth() {
 }
 
 #[test]
+fn init_interactive_non_eoa_relayer_api_key_still_collects_and_renders_relayer_auth() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\nreplace\nproxy\n0x1111111111111111111111111111111111111111\n0x2222222222222222222222222222222222222222\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x3333333333333333333333333333333333333333\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let live = validated
+        .for_app_live()
+        .expect("generated live config should validate");
+
+    let account = live.account().expect("account should exist");
+    assert_eq!(account.signature_type_label(), "Proxy");
+    assert_eq!(account.wallet_route_label(), "Proxy");
+    let relayer_auth = live
+        .polymarket_relayer_auth()
+        .expect("non-EOA relayer_api_key path should still render relayer auth");
+    assert_eq!(
+        relayer_auth.kind(),
+        config_schema::AppLivePolymarketRelayerAuthKind::RelayerApiKey
+    );
+    assert_eq!(relayer_auth.api_key(), "relay-key-1");
+    assert_eq!(
+        relayer_auth.address(),
+        Some("0x3333333333333333333333333333333333333333")
+    );
+    assert!(text.contains("[polymarket.relayer_auth]"));
+    assert!(text.contains("kind = \"relayer_api_key\""));
+}
+
+#[test]
 fn example_config_omits_default_source_block_and_separates_eoa_from_non_eoa_relayer_examples() {
     let text = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/axiom-arb.example.toml"),
@@ -1068,6 +1119,31 @@ fn example_config_omits_default_source_block_and_separates_eoa_from_non_eoa_rela
     assert!(!text.contains("\n[polymarket.relayer_auth]\n"));
     assert!(text.contains("EOA"));
     assert!(text.contains("# [polymarket.relayer_auth]"));
+}
+
+#[test]
+fn readme_scopes_eoa_truth_to_smoke_and_l2_only_flows() {
+    let text =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../README.md"))
+            .expect("README should be readable");
+    assert!(text.contains("EOA"));
+    assert!(text.contains("smoke"));
+    assert!(text.contains("account-L2-only"));
+    assert!(text.contains("non-shadow live"));
+    assert!(text.contains("fail-closed"));
+}
+
+#[test]
+fn smoke_runbook_describes_wallet_kind_aware_doctor_probe_set() {
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/runbooks/real-user-shadow-smoke.md"),
+    )
+    .expect("smoke runbook should be readable");
+    assert!(text.contains("wallet kind"));
+    assert!(text.contains("EOA smoke"));
+    assert!(text.contains("relayer"));
+    assert!(text.contains("omits relayer probe"));
 }
 
 fn app_live_binary() -> PathBuf {
