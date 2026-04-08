@@ -1448,43 +1448,43 @@ impl ProbeWsServer {
             .expect("ws probe server should be nonblocking");
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
         let handle = thread::spawn(move || loop {
-                if shutdown_rx.try_recv().is_ok() {
-                    break;
-                }
+            if shutdown_rx.try_recv().is_ok() {
+                break;
+            }
 
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        stream
-                            .set_nonblocking(false)
-                            .expect("accepted ws stream should be blocking");
-                        let mut requested_path = None::<String>;
-                        let mut websocket =
-                            accept_websocket(stream, |request: &WsRequest, response: WsResponse| {
-                                requested_path = Some(request.uri().path().to_owned());
-                                Ok(response)
-                            })
-                            .expect("accept ws probe websocket");
-                        loop {
-                            match websocket.read() {
-                                Ok(WsMessage::Text(text)) => {
-                                    websocket
-                                        .send(WsMessage::Text(
-                                            response_payload_for_request(
-                                                requested_path
-                                                    .as_deref()
-                                                    .expect("ws request path should be captured"),
-                                                &text,
-                                            )
-                                            .into(),
-                                        ))
-                                        .expect("send ws probe response");
-                                    break;
-                                }
-                                Ok(_) => {}
-                                Err(_) => break,
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream
+                        .set_nonblocking(false)
+                        .expect("accepted ws stream should be blocking");
+                    let mut requested_path = None::<String>;
+                    let mut websocket =
+                        accept_websocket(stream, |request: &WsRequest, response: WsResponse| {
+                            requested_path = Some(request.uri().path().to_owned());
+                            Ok(response)
+                        })
+                        .expect("accept ws probe websocket");
+                    loop {
+                        match websocket.read() {
+                            Ok(WsMessage::Text(text)) => {
+                                websocket
+                                    .send(WsMessage::Text(
+                                        response_payload_for_request(
+                                            requested_path
+                                                .as_deref()
+                                                .expect("ws request path should be captured"),
+                                            &text,
+                                        )
+                                        .into(),
+                                    ))
+                                    .expect("send ws probe response");
+                                break;
                             }
+                            Ok(_) => {}
+                            Err(_) => break,
                         }
                     }
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }

@@ -5,11 +5,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use support::{sample_builder_relayer_auth, sample_relayer_api_auth};
 use url::Url;
-use venue_polymarket::{
-    PolymarketGatewayError, PolymarketRelayerApi, RelayerTransaction,
-    RelayerTransactionType,
-};
 use venue_polymarket::rest::PolymarketRestClient;
+use venue_polymarket::{
+    PolymarketGatewayError, PolymarketRelayerApi, RelayerTransaction, RelayerTransactionType,
+};
 
 #[derive(Debug, Clone)]
 struct ScriptedLegacyRelayerApi {

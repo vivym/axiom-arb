@@ -1,11 +1,11 @@
 use domain::{SignatureType, WalletRoute};
 use serde_json::json;
 use url::Url;
+use venue_polymarket::auth::{L2AuthHeaders, SignerContext};
+use venue_polymarket::rest::PolymarketRestClient;
 use venue_polymarket::{
     build_post_order_request_from_signed_member, OrderType, PostOrderTransport,
 };
-use venue_polymarket::auth::{L2AuthHeaders, SignerContext};
-use venue_polymarket::rest::PolymarketRestClient;
 
 use execution::plans::{ExecutionPlan, NegRiskMemberOrderPlan};
 use execution::signing::TestOrderSigner;

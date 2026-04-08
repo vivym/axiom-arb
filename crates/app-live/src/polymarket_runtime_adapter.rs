@@ -28,9 +28,10 @@ use polymarket_client_sdk::{contract_config, POLYGON, PRIVATE_KEY_VAR};
 use tokio::runtime::Runtime;
 use venue_polymarket::{
     auth::{L2AuthHeaders, SignerContext},
-    build_post_order_request_from_signed_member, rest::PolymarketRestClient, LiveClobSdkApi,
-    LiveMetadataSdkApi, PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport,
-    RestClientBuildError,
+    build_post_order_request_from_signed_member,
+    rest::PolymarketRestClient,
+    LiveClobSdkApi, LiveMetadataSdkApi, PolymarketGateway, PolymarketNegRiskSubmitProvider,
+    PostOrderTransport, RestClientBuildError,
 };
 
 use crate::{

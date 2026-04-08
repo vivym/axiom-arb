@@ -20,14 +20,14 @@ use support::{
     scripted_gateway_with_open_orders, scripted_gateway_with_relayer, scripted_open_order,
 };
 use url::Url;
+use venue_polymarket::auth::{L2AuthHeaders, SignerContext};
+use venue_polymarket::rest::PolymarketRestClient;
 use venue_polymarket::{
     OrderType, PolymarketClobApi, PolymarketGateway, PolymarketGatewayError,
     PolymarketHeartbeatStatus, PolymarketNegRiskReconcileProvider, PolymarketNegRiskSubmitProvider,
     PolymarketRelayerApi, PolymarketSignedOrder, PolymarketSubmitResponse, PostOrderTransport,
     RelayerAuth, RelayerTransaction, RelayerTransactionType,
 };
-use venue_polymarket::auth::{L2AuthHeaders, SignerContext};
-use venue_polymarket::rest::PolymarketRestClient;
 
 #[tokio::test]
 async fn polymarket_submit_provider_maps_live_response_into_submission_record() {

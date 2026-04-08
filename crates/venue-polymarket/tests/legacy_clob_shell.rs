@@ -5,12 +5,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use support::sample_auth_with_funder;
 use url::Url;
+use venue_polymarket::rest::PolymarketRestClient;
 use venue_polymarket::{
     HeartbeatFetchResult, OpenOrderSummary, PolymarketClobApi, PolymarketGatewayError,
     PolymarketHeartbeatStatus, PolymarketOpenOrderSummary, PolymarketOrderQuery,
     PolymarketSignedOrder,
 };
-use venue_polymarket::rest::PolymarketRestClient;
 
 #[derive(Debug, Clone)]
 struct ScriptedLegacyClobApi {

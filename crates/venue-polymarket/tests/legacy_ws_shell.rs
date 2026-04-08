@@ -7,11 +7,11 @@ use support::{
     scripted_market_trade_event, scripted_user_trade_event,
 };
 use url::Url;
+use venue_polymarket::ws_client::PolymarketWsClient;
 use venue_polymarket::{
     MarketWsEvent, UserWsEvent, WsClientError, WsMessageSource, WsTransportMessage,
     WsUserChannelAuth,
 };
-use venue_polymarket::ws_client::PolymarketWsClient;
 
 #[tokio::test]
 async fn gateway_backed_market_ws_client_reads_gateway_events_without_transport_reads() {

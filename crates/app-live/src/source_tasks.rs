@@ -2,11 +2,11 @@ use state::RemoteSnapshot;
 use venue_polymarket::HeartbeatFetchResult;
 
 use crate::{
-    BootstrapSource, HeartbeatSource, HeartbeatTaskGroup, LocalSignerConfig, MarketDataTaskGroup,
-    MetadataTaskGroup, StaticSnapshotSource,
     config::PolymarketSourceConfig,
     polymarket_runtime_adapter::PolymarketMetadataGatewayBackend,
     task_groups::{RelayerTaskGroup, UserStateTaskGroup},
+    BootstrapSource, HeartbeatSource, HeartbeatTaskGroup, LocalSignerConfig, MarketDataTaskGroup,
+    MetadataTaskGroup, StaticSnapshotSource,
 };
 
 #[derive(Debug)]
@@ -120,10 +120,10 @@ impl RealUserShadowSmokeSources {
 
 #[cfg(test)]
 mod tests {
-    use config_schema::{ValidatedConfig, load_raw_config_from_str};
+    use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
     use super::build_real_user_shadow_smoke_sources;
-    use crate::{LocalSignerConfig, config::PolymarketSourceConfig};
+    use crate::{config::PolymarketSourceConfig, LocalSignerConfig};
 
     #[test]
     fn smoke_source_builder_threads_run_session_id_into_heartbeat_group() {
