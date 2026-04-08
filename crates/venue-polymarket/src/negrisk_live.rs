@@ -289,6 +289,12 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
+        if signed.members.len() > 1 {
+            return Err(SubmitProviderError::new(
+                "polymarket live submit requires a single signed family member",
+            ));
+        }
+
         if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
             return self.submit_family_via_gateway_runtime(
                 gateway,

@@ -131,37 +131,18 @@ async fn polymarket_submit_provider_maps_delayed_response_into_plain_acceptance(
 }
 
 #[tokio::test]
-async fn polymarket_submit_provider_sequentially_submits_multi_member_family_over_rest() {
-    let server = MultiRequestServer::spawn(vec![
-        (
-            "200 OK",
-            r#"{"success":true,"orderID":"0xorder-1","status":"live","makingAmount":"10","takingAmount":"5","errorMsg":""}"#,
-        ),
-        (
-            "200 OK",
-            r#"{"success":true,"orderID":"0xorder-2","status":"live","makingAmount":"8","takingAmount":"4.4","errorMsg":""}"#,
-        ),
-    ]);
+async fn polymarket_submit_provider_rejects_multi_member_family_without_submitting_any_member() {
+    let server = MultiRequestServer::spawn(vec![]);
     let provider = sample_submit_provider(server.base_url());
 
-    let outcome = provider
+    let err = provider
         .submit_family(&sample_multi_member_submission(), &sample_attempt())
-        .expect("multi-member family should submit sequentially");
+        .expect_err("multi-member family should be rejected before any submit");
 
-    match outcome {
-        LiveSubmitOutcome::Accepted { submission_record } => {
-            assert_eq!(submission_record.provider, "polymarket");
-            assert_eq!(submission_record.submission_ref, "0xorder-1");
-        }
-        other => panic!("unexpected outcome: {other:?}"),
-    }
+    assert!(err.reason.contains("single signed family member"));
 
     let requests = server.finish();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].starts_with("POST /order HTTP/1.1"));
-    assert!(requests[1].starts_with("POST /order HTTP/1.1"));
-    assert!(requests[0].contains(r#""tokenId":"token-1""#));
-    assert!(requests[1].contains(r#""tokenId":"token-2""#));
+    assert!(requests.is_empty(), "unexpected submit requests: {requests:?}");
 }
 
 #[tokio::test]
@@ -188,7 +169,7 @@ async fn polymarket_submit_provider_can_use_gateway_without_http_side_effects() 
 }
 
 #[tokio::test]
-async fn polymarket_submit_provider_aggregates_partial_gateway_failure_after_first_success() {
+async fn polymarket_submit_provider_rejects_multi_member_family_before_gateway_submit() {
     let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
     let submitted_tokens = Arc::new(Mutex::new(Vec::new()));
     let gateway = PolymarketGateway::from_clob_api(Arc::new(SequencedSubmitClobApi::new(
@@ -206,25 +187,15 @@ async fn polymarket_submit_provider_aggregates_partial_gateway_failure_after_fir
     )));
     let provider = sample_submit_provider_with_gateway(server.base_url(), gateway);
 
-    let outcome = provider
+    let err = provider
         .submit_family(&sample_multi_member_submission(), &sample_attempt())
-        .expect("partial gateway failure should still aggregate into an outcome");
+        .expect_err("multi-member family should be rejected before gateway submit");
 
-    match outcome {
-        LiveSubmitOutcome::Ambiguous {
-            pending_ref,
-            reason,
-        } => {
-            assert_eq!(pending_ref, "0xorder-gw-1");
-            assert!(reason.contains("1/2"));
-            assert!(reason.contains("gateway submit failed"));
-        }
-        other => panic!("unexpected outcome: {other:?}"),
-    }
+    assert!(err.reason.contains("single signed family member"));
 
     assert_eq!(
         submitted_tokens.lock().expect("submitted tokens").clone(),
-        vec!["token-1".to_owned(), "token-2".to_owned()]
+        Vec::<String>::new()
     );
     server.finish_without_request();
 }
