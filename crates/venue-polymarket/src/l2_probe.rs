@@ -8,12 +8,14 @@ use url::Url;
 use crate::errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
 
 const POLY_API_KEY: HeaderName = HeaderName::from_static("poly-api-key");
+const POLY_ADDRESS: HeaderName = HeaderName::from_static("poly-address");
 const POLY_PASSPHRASE: HeaderName = HeaderName::from_static("poly-passphrase");
 const POLY_SIGNATURE: HeaderName = HeaderName::from_static("poly-signature");
 const POLY_TIMESTAMP: HeaderName = HeaderName::from_static("poly-timestamp");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolymarketL2ProbeCredentials {
+    pub address: String,
     pub api_key: String,
     pub secret: String,
     pub passphrase: String,
@@ -54,16 +56,16 @@ impl PolymarketL2ProbeClient {
         &self,
         previous_heartbeat_id: Option<&str>,
     ) -> Result<(), PolymarketGatewayError> {
-        let body = match previous_heartbeat_id {
-            Some(heartbeat_id) => Some(
-                serde_json::to_string(&HeartbeatRequest { heartbeat_id }).map_err(|err| {
-                    PolymarketGatewayError::protocol(format!(
-                        "failed to serialize heartbeat request: {err}"
-                    ))
-                })?,
-            ),
-            None => None,
-        };
+        let body = Some(
+            serde_json::to_string(&HeartbeatRequest {
+                heartbeat_id: previous_heartbeat_id,
+            })
+            .map_err(|err| {
+                PolymarketGatewayError::protocol(format!(
+                    "failed to serialize heartbeat request: {err}"
+                ))
+            })?,
+        );
 
         self.send_signed_request(Method::POST, "v1/heartbeats", body)
             .await
@@ -92,6 +94,7 @@ impl PolymarketL2ProbeClient {
         let mut request = self
             .http
             .request(method, url)
+            .header(POLY_ADDRESS, header_value(&self.credentials.address)?)
             .header(POLY_API_KEY, header_value(&self.credentials.api_key)?)
             .header(POLY_PASSPHRASE, header_value(&self.credentials.passphrase)?)
             .header(POLY_TIMESTAMP, header_value(&timestamp)?)
@@ -121,6 +124,7 @@ fn build_l2_probe_signature(
     body: &str,
 ) -> Result<String, PolymarketGatewayError> {
     ensure_field("api_key", &credentials.api_key)?;
+    ensure_field("address", &credentials.address)?;
     ensure_field("secret", &credentials.secret)?;
     ensure_field("passphrase", &credentials.passphrase)?;
     ensure_field("timestamp", timestamp)?;
@@ -128,7 +132,7 @@ fn build_l2_probe_signature(
     ensure_field("request_path", request_path)?;
 
     let secret = decode_base64(credentials.secret.as_bytes()).map_err(|err| {
-        PolymarketGatewayError::auth(format!("invalid l2 probe secret encoding: {err}"))
+        PolymarketGatewayError::protocol(format!("invalid l2 probe secret encoding: {err}"))
     })?;
     let payload = format!(
         "{}{}{}{}",
@@ -143,7 +147,7 @@ fn build_l2_probe_signature(
 
 #[derive(Debug, Serialize)]
 struct HeartbeatRequest<'a> {
-    heartbeat_id: &'a str,
+    heartbeat_id: Option<&'a str>,
 }
 
 async fn map_upstream_error(response: reqwest::Response) -> PolymarketGatewayError {
@@ -326,6 +330,7 @@ mod tests {
 
     fn sample_credentials() -> PolymarketL2ProbeCredentials {
         PolymarketL2ProbeCredentials {
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
             api_key: "key-1".to_owned(),
             secret: "c2VjcmV0LWJ5dGVz".to_owned(),
             passphrase: "pass-1".to_owned(),
@@ -381,9 +386,30 @@ mod tests {
     }
 
     #[test]
+    fn signature_matches_official_fixture() {
+        let signature = build_l2_probe_signature(
+            &PolymarketL2ProbeCredentials {
+                address: "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5".to_owned(),
+                api_key: "019894b9-cb40-79c4-b2bd-6aecb6f8c6c5".to_owned(),
+                secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_owned(),
+                passphrase: "1816e5ed89518467ffa78c65a2d6a62d240f6fd6d159cba7b2c4dc510800f75a"
+                    .to_owned(),
+            },
+            "1758744060",
+            "POST",
+            "/order",
+            r#"{"deferExec":false,"order":{"salt":718139292476,"maker":"0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5","signer":"0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5","taker":"0x0000000000000000000000000000000000000000","tokenId":"15871154585880608648532107628464183779895785213830018178010423617714102767076","makerAmount":"5000000","takerAmount":"10000000","side":"BUY","expiration":"0","nonce":"0","feeRateBps":"1000","signatureType":0,"signature":"0x64a2b097cf14f9a24403748b4060bedf8f33f3dbe2a38e5f85bc2a5f2b841af633a2afcc9c4d57e60e4ff1d58df2756b2ca469f984ecfd46cb0c8baba8a0d6411b"},"owner":"5d1c266a-ed39-b9bd-c1f5-f24ae3e14a7b","orderType":"GTC"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(signature, "8xh8d0qZHhBcLLYbsKNeiOW3Z0W2N5yNEq1kCVMe5QE=");
+    }
+
+    #[test]
     fn signature_rejects_invalid_secret_encoding() {
         let err = build_l2_probe_signature(
             &PolymarketL2ProbeCredentials {
+                address: "0x1111111111111111111111111111111111111111".to_owned(),
                 api_key: "key-1".to_owned(),
                 secret: "not-base64!".to_owned(),
                 passphrase: "pass-1".to_owned(),
@@ -395,6 +421,6 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("secret"));
+        assert_eq!(err.kind, PolymarketGatewayErrorKind::Protocol);
     }
 }
