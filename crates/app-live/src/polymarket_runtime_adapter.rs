@@ -82,26 +82,22 @@ impl std::error::Error for PolymarketRuntimeAdapterError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PolymarketMetadataGatewayBackend {
     Sdk,
-    #[allow(dead_code)]
     LegacyRest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolymarketSubmitBackend {
     GatewayRuntime,
-    #[allow(dead_code)]
     LegacyRest,
 }
 
 pub(crate) fn polymarket_metadata_gateway_backend(
-    source: &PolymarketSourceConfig,
+    _source: &PolymarketSourceConfig,
 ) -> PolymarketMetadataGatewayBackend {
-    let _ = source;
     PolymarketMetadataGatewayBackend::Sdk
 }
 
-fn polymarket_submit_backend(source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
-    let _ = source;
+fn polymarket_submit_backend(_source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
     PolymarketSubmitBackend::GatewayRuntime
 }
 

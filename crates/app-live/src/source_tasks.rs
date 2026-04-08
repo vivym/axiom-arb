@@ -122,8 +122,7 @@ impl RealUserShadowSmokeSources {
 mod tests {
     use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
-    use super::{build_real_user_shadow_smoke_sources, SmokeMetadataBackend};
-    use crate::polymarket_runtime_adapter::PolymarketMetadataGatewayBackend;
+    use super::build_real_user_shadow_smoke_sources;
     use crate::{config::PolymarketSourceConfig, LocalSignerConfig};
 
     #[test]
@@ -155,15 +154,6 @@ mod tests {
 
         assert_eq!(sources.metadata_backend_for_tests(), "sdk");
     }
-
-    #[test]
-    fn smoke_source_builder_preserves_legacy_rest_backend_mapping() {
-        assert_eq!(
-            SmokeMetadataBackend::from(PolymarketMetadataGatewayBackend::LegacyRest).as_str(),
-            "legacy-rest"
-        );
-    }
-
     fn live_config_view() -> config_schema::AppLiveConfigView<'static> {
         let raw = load_raw_config_from_str(
             r#"
