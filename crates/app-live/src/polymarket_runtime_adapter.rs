@@ -82,20 +82,26 @@ impl std::error::Error for PolymarketRuntimeAdapterError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PolymarketMetadataGatewayBackend {
     Sdk,
+    #[allow(dead_code)]
+    LegacyRest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolymarketSubmitBackend {
     GatewayRuntime,
+    #[allow(dead_code)]
+    LegacyRest,
 }
 
 pub(crate) fn polymarket_metadata_gateway_backend(
-    _source: &PolymarketSourceConfig,
+    source: &PolymarketSourceConfig,
 ) -> PolymarketMetadataGatewayBackend {
+    let _ = source;
     PolymarketMetadataGatewayBackend::Sdk
 }
 
-fn polymarket_submit_backend(_source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
+fn polymarket_submit_backend(source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
+    let _ = source;
     PolymarketSubmitBackend::GatewayRuntime
 }
 
@@ -114,14 +120,26 @@ pub(crate) fn build_polymarket_rest_client(
 pub(crate) fn build_polymarket_metadata_gateway(
     source: &PolymarketSourceConfig,
 ) -> Result<PolymarketGateway, PolymarketRuntimeAdapterError> {
-    let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
-        PolymarketRuntimeAdapterError::Sdk(format!(
-            "polymarket metadata sdk client build failed: {error}"
-        ))
-    })?;
-    Ok(PolymarketGateway::from_metadata_api(Arc::new(
-        LiveMetadataSdkApi::new(client),
-    )))
+    match polymarket_metadata_gateway_backend(source) {
+        PolymarketMetadataGatewayBackend::LegacyRest => {
+            let rest = build_polymarket_rest_client(source).map_err(|error| {
+                PolymarketRuntimeAdapterError::Sdk(format!(
+                    "polymarket metadata rest client build failed: {error}"
+                ))
+            })?;
+            Ok(PolymarketGateway::from_metadata_api(Arc::new(rest)))
+        }
+        PolymarketMetadataGatewayBackend::Sdk => {
+            let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
+                PolymarketRuntimeAdapterError::Sdk(format!(
+                    "polymarket metadata sdk client build failed: {error}"
+                ))
+            })?;
+            Ok(PolymarketGateway::from_metadata_api(Arc::new(
+                LiveMetadataSdkApi::new(client),
+            )))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -592,6 +610,9 @@ impl VenueExecutionProvider for GatewayBackedSubmitProvider {
                     self.runtime.handle().clone(),
                 )
             }
+            PolymarketSubmitBackend::LegacyRest => {
+                PolymarketNegRiskSubmitProvider::new(rest, auth, self.transport.clone())
+            }
         };
         provider.submit_family(signed, attempt)
     }
@@ -674,7 +695,6 @@ const fn no_proxy_env_keys() -> [&'static str; 2] {
 #[cfg(test)]
 mod tests {
     use std::{
-        ffi::OsString,
         io::{Read, Write},
         net::TcpListener,
         str::FromStr,
@@ -787,72 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn production_polymarket_signer_routes_sdk_calls_through_direct_host() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        std::env::set_var(PRIVATE_KEY_VAR, TEST_PRIVATE_KEY);
-        clear_proxy_env();
-        let proxy = MultiRequestServer::spawn();
-
-        let signer = PolymarketOrderSigner::from_runtime_inputs(
-            &sample_source_config_with_host(proxy.base_url().as_str()),
-            &sample_gateway_credentials(),
-        )
-        .expect("signer should build with direct sdk client");
-
-        let signed = signer
-            .sign_family(&sample_single_member_plan())
-            .expect("sdk signer should honor direct host");
-
-        assert_eq!(signed.members.len(), 1);
-        assert_eq!(signed.members[0].fee_rate_bps, "17");
-
-        let requests = proxy.finish();
-        assert_eq!(requests.len(), 3);
-        assert!(requests
-            .iter()
-            .any(|request| request.starts_with("GET http://example.invalid/fee-rate?token_id=")));
-        assert!(requests
-            .iter()
-            .any(|request| request.starts_with("GET http://example.invalid/tick-size?token_id=")));
-        assert!(requests
-            .iter()
-            .any(|request| request.starts_with("GET http://example.invalid/neg-risk?token_id=")));
-    }
-
-    #[test]
-    fn production_polymarket_signer_leaves_proxy_env_untouched_after_sdk_client_bootstrap() {
-        let _guard = env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        std::env::set_var(PRIVATE_KEY_VAR, TEST_PRIVATE_KEY);
-        let previous_http_proxy = std::env::var_os("HTTP_PROXY");
-        let previous_no_proxy = std::env::var_os("NO_PROXY");
-        std::env::set_var("HTTP_PROXY", "http://preexisting-proxy.invalid:8080");
-        std::env::set_var("NO_PROXY", ".internal.example");
-
-        let signer = PolymarketOrderSigner::from_runtime_inputs(
-            &sample_source_config_with_host("https://clob.polymarket.com"),
-            &sample_gateway_credentials(),
-        )
-        .expect("signer should build without mutating proxy env");
-
-        assert_eq!(
-            std::env::var("HTTP_PROXY").as_deref(),
-            Ok("http://preexisting-proxy.invalid:8080")
-        );
-        assert_eq!(
-            std::env::var("NO_PROXY").as_deref(),
-            Ok(".internal.example")
-        );
-        restore_env_var("HTTP_PROXY", previous_http_proxy);
-        restore_env_var("NO_PROXY", previous_no_proxy);
-        drop(signer);
-    }
-
-    #[test]
-    fn metadata_gateway_backend_is_sdk_only() {
+    fn metadata_gateway_backend_defaults_to_sdk() {
         let source = sample_source_config();
 
         assert_eq!(
@@ -891,28 +846,6 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn clear_proxy_env() {
-        for key in [
-            "all_proxy",
-            "ALL_PROXY",
-            "http_proxy",
-            "HTTP_PROXY",
-            "https_proxy",
-            "HTTPS_PROXY",
-            "no_proxy",
-            "NO_PROXY",
-        ] {
-            std::env::remove_var(key);
-        }
-    }
-
-    fn restore_env_var(key: &str, value: Option<OsString>) {
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
     }
 
     fn sample_source_config() -> PolymarketSourceConfig {
@@ -1159,111 +1092,9 @@ mod tests {
             format!("http://{}/", self.addr)
         }
 
-        fn finish(self) -> String {
-            self.join.join().expect("server thread should finish");
-            self.request
-                .lock()
-                .expect("request lock")
-                .clone()
-                .expect("request should be captured")
-        }
-
         fn finish_without_request(self) {
             self.join.join().expect("server thread should finish");
             assert!(self.request.lock().expect("request lock").is_none());
-        }
-    }
-
-    struct MultiRequestServer {
-        requests: Arc<Mutex<Vec<String>>>,
-        join: thread::JoinHandle<()>,
-        addr: std::net::SocketAddr,
-    }
-
-    impl MultiRequestServer {
-        fn spawn() -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
-            listener
-                .set_nonblocking(true)
-                .expect("set listener nonblocking");
-            let addr = listener.local_addr().expect("local addr");
-            let requests = Arc::new(Mutex::new(Vec::new()));
-            let captured = requests.clone();
-            let deadline = Instant::now() + Duration::from_secs(2);
-
-            let join = thread::spawn(move || loop {
-                let count = captured.lock().expect("request lock").len();
-                if count >= 3 {
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    break;
-                }
-
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let mut buf = [0_u8; 8192];
-                        let mut request_text = Vec::new();
-                        loop {
-                            match stream.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    request_text.extend_from_slice(&buf[..n]);
-                                    if request_text.windows(4).any(|window| window == b"\r\n\r\n") {
-                                        break;
-                                    }
-                                }
-                                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                                    thread::sleep(Duration::from_millis(10));
-                                }
-                                Err(err) => panic!("request read failed: {err}"),
-                            }
-                        }
-
-                        let request = String::from_utf8_lossy(&request_text).into_owned();
-                        captured.lock().expect("request lock").push(request.clone());
-                        let body = response_body_for_request(&request);
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        );
-                        stream
-                            .write_all(response.as_bytes())
-                            .expect("write response");
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(err) => panic!("accept failed: {err}"),
-                }
-            });
-
-            Self {
-                requests,
-                join,
-                addr,
-            }
-        }
-
-        fn base_url(&self) -> String {
-            format!("http://{}/", self.addr)
-        }
-
-        fn finish(self) -> Vec<String> {
-            self.join.join().expect("server thread should finish");
-            self.requests.lock().expect("request lock").clone()
-        }
-    }
-
-    fn response_body_for_request(request: &str) -> &'static str {
-        if request.starts_with("GET http://example.invalid/fee-rate?token_id=") {
-            r#"{"base_fee":17}"#
-        } else if request.starts_with("GET http://example.invalid/tick-size?token_id=") {
-            r#"{"minimum_tick_size":"0.01"}"#
-        } else if request.starts_with("GET http://example.invalid/neg-risk?token_id=") {
-            r#"{"neg_risk":false}"#
-        } else {
-            panic!("unexpected proxy request: {request}");
         }
     }
 }

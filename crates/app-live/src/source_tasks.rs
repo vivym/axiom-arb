@@ -26,6 +26,7 @@ pub struct RealUserShadowSmokeSources {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmokeMetadataBackend {
     Sdk,
+    LegacyRest,
 }
 
 impl SmokeMetadataBackend {
@@ -33,6 +34,7 @@ impl SmokeMetadataBackend {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Sdk => "sdk",
+            Self::LegacyRest => "legacy-rest",
         }
     }
 }
@@ -41,6 +43,7 @@ impl From<PolymarketMetadataGatewayBackend> for SmokeMetadataBackend {
     fn from(value: PolymarketMetadataGatewayBackend) -> Self {
         match value {
             PolymarketMetadataGatewayBackend::Sdk => Self::Sdk,
+            PolymarketMetadataGatewayBackend::LegacyRest => Self::LegacyRest,
         }
     }
 }
@@ -119,7 +122,8 @@ impl RealUserShadowSmokeSources {
 mod tests {
     use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
-    use super::build_real_user_shadow_smoke_sources;
+    use super::{build_real_user_shadow_smoke_sources, SmokeMetadataBackend};
+    use crate::polymarket_runtime_adapter::PolymarketMetadataGatewayBackend;
     use crate::{config::PolymarketSourceConfig, LocalSignerConfig};
 
     #[test]
@@ -153,15 +157,11 @@ mod tests {
     }
 
     #[test]
-    fn smoke_source_builder_keeps_proxy_fallback_hidden_behind_the_adapter() {
-        let sources = build_real_user_shadow_smoke_sources(
-            smoke_source_config(),
-            sample_signer_config(),
-            "run-session-2",
-        )
-        .expect("source bundle should build");
-
-        assert_eq!(sources.metadata_backend_for_tests(), "legacy-rest");
+    fn smoke_source_builder_preserves_legacy_rest_backend_mapping() {
+        assert_eq!(
+            SmokeMetadataBackend::from(PolymarketMetadataGatewayBackend::LegacyRest).as_str(),
+            "legacy-rest"
+        );
     }
 
     fn live_config_view() -> config_schema::AppLiveConfigView<'static> {

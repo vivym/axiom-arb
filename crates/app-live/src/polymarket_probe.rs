@@ -419,7 +419,7 @@ impl LegacyStreamProbeApi {
             let market_ws_url = self.source_config.market_ws_url.clone();
             let user_ws_url = self.source_config.user_ws_url.clone();
             let client = timeout_gateway_probe("websocket connection", async move {
-                PolymarketWsClient::connect(market_ws_url, user_ws_url)
+                PolymarketWsClient::connect_with_proxy(market_ws_url, user_ws_url, None)
                     .await
                     .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))
             })
@@ -658,7 +658,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn stream_probe_backend_uses_legacy_when_market_and_user_bases_differ() {
         let source = sample_source_config(
             "wss://market-ws.polymarket.test/ws/market",
@@ -695,7 +694,6 @@ mod tests {
         assert_eq!(clob_probe_backend(&source), ClobProbeBackend::LegacyShell);
     }
 
-    #[test]
     #[test]
     fn sdk_stream_base_endpoint_strips_channel_suffixes() {
         assert_eq!(
