@@ -4,7 +4,7 @@ use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use persistence::connect_pool_from_env;
 
 use crate::{
-    config::PolymarketSourceConfig,
+    config::{PolymarketGatewayCredentials, PolymarketSourceConfig},
     polymarket_probe::{
         LivePolymarketProbe, PolymarketProbeError, PolymarketProbeFacade, UserWsProbeAuth,
     },
@@ -80,6 +80,15 @@ fn evaluate_live(
             );
             DoctorFailure::new("ConnectivityError", error.to_string())
         })?;
+    let gateway_credentials = PolymarketGatewayCredentials::try_from(config).map_err(|error| {
+        report.push_check(
+            "Connectivity",
+            DoctorCheckStatus::Fail,
+            "ConnectivityError",
+            error.to_string(),
+        );
+        DoctorFailure::new("ConnectivityError", error.to_string())
+    })?;
     let signer_config = LocalSignerConfig::try_from(config).map_err(|error| {
         report.push_check(
             "Connectivity",
@@ -90,7 +99,7 @@ fn evaluate_live(
         DoctorFailure::new("ConnectivityError", error.to_string())
     })?;
     let user_ws_auth = user_ws_probe_auth_from_config(config);
-    let mut backend = LivePolymarketProbe::new(source_config);
+    let mut backend = LivePolymarketProbe::new(source_config, gateway_credentials);
 
     let checks = live_context
         .runtime

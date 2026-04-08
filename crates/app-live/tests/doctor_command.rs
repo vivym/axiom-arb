@@ -29,6 +29,7 @@ use tokio_tungstenite::tungstenite::{
 };
 
 static SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TEST_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 #[test]
 fn doctor_paper_mode_marks_live_checks_as_skip() {
@@ -988,6 +989,7 @@ fn app_live_command() -> Command {
     command
         .env("no_proxy", "127.0.0.1,localhost")
         .env("NO_PROXY", "127.0.0.1,localhost");
+    command.env("POLYMARKET_PRIVATE_KEY", TEST_PRIVATE_KEY);
     command
 }
 
@@ -1001,8 +1003,38 @@ fn config_fixture(relative: &str) -> PathBuf {
 
 fn temp_live_config(contents: &str) -> tempfile::NamedTempFile {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
-    fs::write(temp.path(), contents).expect("write temp config");
+    fs::write(temp.path(), normalize_sdk_fixture(contents.to_owned())).expect("write temp config");
     temp
+}
+
+fn normalize_sdk_fixture(config: String) -> String {
+    config
+        .replace(
+            "0x1111111111111111111111111111111111111111",
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        )
+        .replace(
+            "0x2222222222222222222222222222222222222222",
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        )
+        .replace("poly-api-key-1", "00000000-0000-0000-0000-000000000001")
+        .replace("poly-api-key", "00000000-0000-0000-0000-000000000002")
+        .replace(
+            "poly-secret-1",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .replace(
+            "poly-secret",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .replace(
+            "poly-passphrase-1",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .replace(
+            "poly-passphrase",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
 }
 
 fn default_test_database_url() -> &'static str {
@@ -1328,9 +1360,11 @@ impl ProbeHttpBehavior {
     fn success() -> Self {
         Self {
             orders_status_line: "200 OK".to_owned(),
-            orders_body: "[]".to_owned(),
+            orders_body: r#"{"data":[],"next_cursor":"LTE=","limit":0,"count":0}"#.to_owned(),
             heartbeat_status_line: "200 OK".to_owned(),
-            heartbeat_body: r#"{"success":true,"heartbeat_id":"hb-1"}"#.to_owned(),
+            heartbeat_body:
+                r#"{"success":true,"heartbeat_id":"00000000-0000-0000-0000-000000000001"}"#
+                    .to_owned(),
             transactions_status_line: "200 OK".to_owned(),
             transactions_body: "[]".to_owned(),
         }

@@ -142,7 +142,10 @@ async fn polymarket_submit_provider_rejects_multi_member_family_without_submitti
     assert!(err.reason.contains("single signed family member"));
 
     let requests = server.finish();
-    assert!(requests.is_empty(), "unexpected submit requests: {requests:?}");
+    assert!(
+        requests.is_empty(),
+        "unexpected submit requests: {requests:?}"
+    );
 }
 
 #[tokio::test]
