@@ -87,6 +87,21 @@ pub struct OpenOrderSummary {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum OpenOrdersResponse {
+    Items(Vec<OpenOrderSummary>),
+    Page {
+        data: Vec<OpenOrderSummary>,
+        #[serde(default)]
+        next_cursor: Option<String>,
+        #[serde(default)]
+        limit: Option<u64>,
+        #[serde(default)]
+        count: Option<u64>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct BalanceAllowanceResponse {
     #[serde(default, alias = "asset")]
     pub asset_id: Option<String>,
@@ -318,7 +333,12 @@ impl PolymarketRestClient {
                 .collect());
         }
         let request = self.build_open_orders_request(auth)?;
-        self.execute_json(request).await
+        let response = self.execute(request).await?;
+        let payload: OpenOrdersResponse = response.json().await?;
+        Ok(match payload {
+            OpenOrdersResponse::Items(orders) => orders,
+            OpenOrdersResponse::Page { data, .. } => data,
+        })
     }
 
     pub fn build_balance_allowance_request(

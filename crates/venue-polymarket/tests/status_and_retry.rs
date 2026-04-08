@@ -241,6 +241,27 @@ async fn fetch_open_orders_preserves_authenticated_error_body() {
 }
 
 #[tokio::test]
+async fn fetch_open_orders_accepts_page_response_shape() {
+    let server = MockServer::spawn(
+        "200 OK",
+        r#"{"data":[{"id":"order-1","status":"live","market":"market-1"}],"next_cursor":"LTE=","limit":100,"count":1}"#,
+    );
+    let client = sample_client_for(server.base_url());
+
+    let orders = client
+        .fetch_open_orders(&sample_auth())
+        .await
+        .expect("page-shaped open orders should parse");
+    let request = server.finish();
+
+    assert!(request.starts_with("GET /data/orders?"));
+    assert_eq!(orders.len(), 1);
+    assert_eq!(orders[0].order_id, "order-1");
+    assert_eq!(orders[0].status.as_deref(), Some("live"));
+    assert_eq!(orders[0].market.as_deref(), Some("market-1"));
+}
+
+#[tokio::test]
 async fn rest_client_fails_hanging_http_request_with_timeout() {
     let server = HangingServer::spawn();
     let client = PolymarketRestClient::new(

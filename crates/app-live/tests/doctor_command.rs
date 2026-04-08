@@ -27,9 +27,17 @@ use tokio_tungstenite::tungstenite::{
     handshake::server::{Request as WsRequest, Response as WsResponse},
     Message as WsMessage,
 };
+use toml_edit::{value, DocumentMut, TableLike};
 
 static SCHEMA_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TEST_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const TEST_SIGNER_ADDRESS: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+const TEST_PRIMARY_SECRET: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+const TEST_SECONDARY_SECRET: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const TEST_PRIMARY_PASSPHRASE: &str =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const TEST_SECONDARY_PASSPHRASE: &str =
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 #[test]
 fn doctor_paper_mode_marks_live_checks_as_skip() {
@@ -425,6 +433,77 @@ quantity = "5"
     );
     assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
     assert!(combined.contains("--adopt-compatibility"), "{combined}");
+}
+
+#[tokio::test]
+async fn doctor_live_explicit_targets_without_private_key_falls_back_to_legacy_probe_path() {
+    let database = TestDatabase::new().await;
+    let venue = MockDoctorVenue::success();
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "00000000-0000-0000-0000-000000000002"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
+price = "0.43"
+quantity = "5"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .env_remove("POLYMARKET_PRIVATE_KEY")
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Connectivity", "PASS");
+    assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
 }
 
 #[tokio::test]
@@ -1007,34 +1086,100 @@ fn temp_live_config(contents: &str) -> tempfile::NamedTempFile {
     temp
 }
 
+#[test]
+fn normalize_sdk_fixture_only_rewrites_polymarket_account_fields() {
+    let normalized = normalize_sdk_fixture(
+        r#"
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "poly-api-key-1"
+address = "0x1111111111111111111111111111111111111111"
+
+[probe_fixture]
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+"#
+        .to_owned(),
+    );
+
+    assert!(normalized.contains(r#"address = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266""#));
+    assert!(normalized.contains(r#"funder_address = "0x2222222222222222222222222222222222222222""#));
+    assert!(normalized.contains(r#"api_key = "00000000-0000-0000-0000-000000000002""#));
+    assert!(normalized.contains(r#"secret = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=""#));
+    assert!(normalized.contains(
+        r#"passphrase = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb""#
+    ));
+    assert!(normalized.contains(r#"api_key = "poly-api-key-1""#));
+    assert!(normalized.contains(r#"secret = "poly-secret-1""#));
+    assert!(normalized.contains(r#"passphrase = "poly-passphrase-1""#));
+    assert!(normalized.contains(r#"address = "0x1111111111111111111111111111111111111111""#));
+}
+
 fn normalize_sdk_fixture(config: String) -> String {
-    config
-        .replace(
-            "0x1111111111111111111111111111111111111111",
-            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-        )
-        .replace(
-            "0x2222222222222222222222222222222222222222",
-            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-        )
-        .replace("poly-api-key-1", "00000000-0000-0000-0000-000000000001")
-        .replace("poly-api-key", "00000000-0000-0000-0000-000000000002")
-        .replace(
-            "poly-secret-1",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        )
-        .replace(
-            "poly-secret",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        )
-        .replace(
-            "poly-passphrase-1",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
-        .replace(
-            "poly-passphrase",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
+    let mut document = config.parse::<DocumentMut>().expect("parse sdk fixture");
+    let Some(account) = document
+        .get_mut("polymarket")
+        .and_then(|polymarket| polymarket.get_mut("account"))
+        .and_then(|account| account.as_table_like_mut())
+    else {
+        return config;
+    };
+
+    rewrite_fixture_string(
+        account,
+        "address",
+        "0x1111111111111111111111111111111111111111",
+        TEST_SIGNER_ADDRESS,
+    );
+    rewrite_fixture_string(
+        account,
+        "api_key",
+        "poly-api-key-1",
+        "00000000-0000-0000-0000-000000000001",
+    );
+    rewrite_fixture_string(
+        account,
+        "api_key",
+        "poly-api-key",
+        "00000000-0000-0000-0000-000000000002",
+    );
+    rewrite_fixture_string(account, "secret", "poly-secret-1", TEST_PRIMARY_SECRET);
+    rewrite_fixture_string(account, "secret", "poly-secret", TEST_SECONDARY_SECRET);
+    rewrite_fixture_string(
+        account,
+        "passphrase",
+        "poly-passphrase-1",
+        TEST_PRIMARY_PASSPHRASE,
+    );
+    rewrite_fixture_string(
+        account,
+        "passphrase",
+        "poly-passphrase",
+        TEST_SECONDARY_PASSPHRASE,
+    );
+
+    document.to_string()
+}
+
+fn rewrite_fixture_string(table: &mut dyn TableLike, key: &str, from: &str, to: &str) {
+    let Some(item) = table.get_mut(key) else {
+        return;
+    };
+    let Some(current) = item.as_str() else {
+        return;
+    };
+    if current == from {
+        *item = value(to);
+    }
 }
 
 fn default_test_database_url() -> &'static str {
