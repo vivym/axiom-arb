@@ -90,12 +90,22 @@ After this change:
 - relayer auth must become conditional on wallet kind
 - app-side config conversion must not force EOA paths through a relayer-bearing signer object
 
-The repository may implement this either by:
+This slice should make that split explicit rather than leaving it as an implementation choice.
 
-- splitting the current structure into account-side and relayer-side config objects
-- or making relayer material explicitly optional with wallet-kind validation guarantees
+Recommended shape:
 
-But the end state must be:
+- an account/L2 runtime config object used by:
+  - authenticated REST probe
+  - websocket auth
+  - heartbeat
+  - discovery/bootstrap/startup paths that only need account credentials
+- a separate relayer runtime config object used only by:
+  - relayer reachability
+  - relayer-backed runtime/reconcile paths
+
+`LocalSignerConfig` should no longer remain the universal app-facing runtime credential object.
+
+The end state must be:
 
 - EOA live/smoke config can construct the required runtime inputs without relayer auth
 - non-EOA config still carries relayer auth explicitly
@@ -117,6 +127,15 @@ Therefore the design must distinguish:
   - paths that genuinely require relayer-backed submit/reconcile truth
 
 Until a true relayer-free non-shadow live path exists, the repository should fail closed before entering a relayer-backed runtime path that EOA cannot satisfy.
+
+That fail-closed seam should be explicit in app runtime entry, not accidental fallout from config conversion.
+
+Recommended boundary:
+
+- config validation accepts EOA for account/L2-only live capabilities
+- runtime backend construction or run-command preflight rejects EOA when non-shadow live work would require relayer-backed behavior
+
+The implementation should not scatter this rule across unrelated helpers.
 
 This avoids the ambiguous state where:
 
@@ -207,6 +226,15 @@ This requirement applies to both:
 
 If an existing preserved config is EOA and still contains `[polymarket.relayer_auth]`, the wizard/render path must actively remove that section rather than preserving an invalid combination.
 
+Preserve mode must also honor the operator's newly selected wallet kind.
+
+That means:
+
+- preserve mode must not blindly copy previous `signature_type` / `wallet_route` back into the rendered config
+- the newly selected wallet kind wins
+- only safe carry-forward fields may be preserved
+- an old EOA config with relayer auth must be rewritten into the new valid EOA shape rather than reproduced with stale fields
+
 The wizard must also make the non-EOA path real rather than implicit.
 
 That means the operator-facing flow must either:
@@ -281,6 +309,7 @@ This applies to both auth shapes:
 
 - `crates/app-live/src/commands/init/wizard.rs`
 - `crates/app-live/src/commands/init/render.rs`
+- `crates/app-live/src/commands/init/summary.rs`
 - `config/axiom-arb.example.toml`
 - `docs/runbooks/real-user-shadow-smoke.md`
 - `README.md` where it currently implies relayer is part of the generic live config shape
@@ -292,9 +321,11 @@ This applies to both auth shapes:
 - `crates/app-live/tests/init_command.rs`
 - `crates/app-live/tests/real_user_shadow_smoke.rs`
 - `crates/config-schema/tests/validated_views.rs`
+- `crates/config-schema/tests/config_roundtrip.rs`
 - `crates/config-schema/tests/fixtures/*.toml`
 - `crates/app-live/tests/startup_resolution.rs`
 - `crates/app-live/tests/support/verify_db.rs`
+- `crates/app-live/tests/apply_command.rs`
 - any startup/apply/support fixtures still embedding `EOA + relayer_auth`
 
 ## Risks
@@ -320,9 +351,11 @@ This slice changes a repository-wide semantic default, so broad fixture cleanup 
 ## Recommended Implementation Order
 
 1. Fix validation and app-side config modeling.
-2. Fix `doctor`, `discover`, and runtime/startup source construction.
-3. Fix init/example/runbook UX, including preserve-mode cleanup of invalid legacy EOA relayer sections.
-4. Update fixtures and tests to the new truth across both `relayer_api_key` and `builder_api_key` variants.
+2. Split account/L2 runtime config from relayer runtime config and remove `LocalSignerConfig` as the universal live credential seam.
+3. Fix `doctor`, `discover`, and runtime/startup source construction.
+4. Add an explicit fail-closed boundary for EOA non-shadow live work at runtime backend construction or run-command preflight.
+5. Fix init/example/runbook UX, including preserve-mode cleanup of invalid legacy EOA relayer sections and truthful init summaries.
+6. Update fixtures and tests to the new truth across both `relayer_api_key` and `builder_api_key` variants.
 
 ## Acceptance Criteria
 
@@ -332,5 +365,8 @@ This slice changes a repository-wide semantic default, so broad fixture cleanup 
 - `doctor` does not perform relayer reachability probes for EOA
 - EOA non-shadow live paths that still depend on relayer-backed behavior fail closed explicitly rather than entering an undefined runtime shape
 - `real_user_shadow_smoke` works with EOA account credentials and no relayer config
+- preserve-mode re-render removes stale EOA relayer sections and respects the operator's newly selected wallet kind
 - init/example/runbook no longer instruct EOA operators to configure relayer auth
+- init summary output no longer claims EOA live/smoke writes `[polymarket.relayer_auth]`
+- valid non-EOA configs with relayer auth still survive preserve-mode and validation unchanged
 - no test fixture continues to treat `EOA + relayer_auth` as a valid default configuration
