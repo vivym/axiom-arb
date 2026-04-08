@@ -51,7 +51,6 @@ impl std::fmt::Debug for PolymarketL2ProbeClient {
 }
 
 impl PolymarketL2ProbeClient {
-    #[must_use]
     pub fn new(
         host: Url,
         credentials: PolymarketL2ProbeCredentials,
@@ -254,7 +253,7 @@ fn base64_urlsafe(bytes: &[u8]) -> String {
 
 fn base64_standard(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(((bytes.len() + 2) / 3) * 4);
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
 
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0];

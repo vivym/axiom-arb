@@ -899,7 +899,6 @@ mod tests {
     struct SingleRequestServer {
         request: Arc<Mutex<Option<String>>>,
         join: thread::JoinHandle<()>,
-        addr: std::net::SocketAddr,
     }
 
     impl SingleRequestServer {
@@ -908,7 +907,6 @@ mod tests {
             listener
                 .set_nonblocking(true)
                 .expect("set listener nonblocking");
-            let addr = listener.local_addr().expect("local addr");
             let request = Arc::new(Mutex::new(None));
             let captured = request.clone();
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -956,15 +954,7 @@ mod tests {
                 }
             });
 
-            Self {
-                request,
-                join,
-                addr,
-            }
-        }
-
-        fn base_url(&self) -> String {
-            format!("http://{}/", self.addr)
+            Self { request, join }
         }
 
         fn finish_without_request(self) {
