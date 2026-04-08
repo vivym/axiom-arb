@@ -5,7 +5,9 @@ use persistence::connect_pool_from_env;
 use venue_polymarket::PolymarketL2ProbeCredentials;
 
 use crate::{
-    config::{PolymarketGatewayCredentials, PolymarketSourceConfig},
+    config::{
+        runtime_wallet_kind_requires_relayer, PolymarketGatewayCredentials, PolymarketSourceConfig,
+    },
     polymarket_probe::{
         LivePolymarketProbe, PolymarketProbeError, PolymarketProbeFacade, UserWsProbeAuth,
     },
@@ -97,7 +99,7 @@ fn evaluate_live(
             );
             DoctorFailure::new("ConnectivityError", error.to_string())
         })?;
-    let relayer_runtime_config = if wallet_kind_requires_relayer(config) {
+    let relayer_runtime_config = if runtime_wallet_kind_requires_relayer(config) {
         Some(
             LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
                 report.push_check(
@@ -200,13 +202,6 @@ fn user_ws_probe_auth_from_config<'a>(
         secret: account.secret(),
         passphrase: account.passphrase(),
     })
-}
-
-fn wallet_kind_requires_relayer(config: &AppLiveConfigView<'_>) -> bool {
-    config
-        .account()
-        .map(|account| account.signature_type_label() != "Eoa")
-        .unwrap_or(false)
 }
 
 async fn run_live_probes<B: PolymarketProbeFacade>(

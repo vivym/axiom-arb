@@ -494,6 +494,79 @@ quantity = "5"
 }
 
 #[tokio::test]
+async fn doctor_live_non_eoa_explicit_targets_still_runs_relayer_probe() {
+    let database = TestDatabase::new().await;
+    let venue = MockDoctorVenue::success();
+    let config = temp_live_config(&format!(
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+
+[polymarket.source]
+clob_host = "{clob_host}"
+data_api_host = "{data_api_host}"
+relayer_host = "{relayer_host}"
+market_ws_url = "{market_ws_url}"
+user_ws_url = "{user_ws_url}"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
+api_key = "00000000-0000-0000-0000-000000000002"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
+price = "0.43"
+quantity = "5"
+"#,
+        clob_host = venue.http_base_url(),
+        data_api_host = venue.http_base_url(),
+        relayer_host = venue.http_base_url(),
+        market_ws_url = venue.market_ws_url(),
+        user_ws_url = venue.user_ws_url(),
+    ));
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(config.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    assert!(output.status.success(), "{}", combined(&output));
+    let combined = combined(&output);
+    assert_section_summary(&combined, "Connectivity", "PASS");
+    assert!(
+        combined.contains("relayer reachability probe succeeded"),
+        "{combined}"
+    );
+}
+
+#[tokio::test]
 async fn doctor_live_explicit_targets_fail_when_database_is_unreachable() {
     let venue = MockDoctorVenue::success();
     let config = temp_live_config(&format!(

@@ -131,6 +131,36 @@ fn run_eoa_non_shadow_live_fails_closed_before_relayer_backed_runtime_work() {
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn run_non_eoa_non_shadow_live_does_not_trip_eoa_fail_closed_gate() {
+    let db = apply_db::TestDatabase::new();
+    db.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path(
+        "app-live-ux-smoke.toml",
+        normalize_non_eoa_non_shadow_live_fixture,
+    );
+
+    let output = app_live_command()
+        .arg("run")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", db.database_url())
+        .env_remove("POLYMARKET_PRIVATE_KEY")
+        .output()
+        .expect("live run should execute");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        !text.contains("EOA non-shadow live runtime is not supported"),
+        "{text}"
+    );
+    assert!(text.contains("POLYMARKET_PRIVATE_KEY"), "{text}");
+
+    db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
 fn app_live_command() -> Command {
     let mut command = Command::new(cli::app_live_binary());
     for key in [
@@ -175,4 +205,13 @@ fn normalize_non_shadow_live_fixture(config: String) -> String {
         )
         .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
         .replace("ready_scopes = []", "ready_scopes = [\"family-a\"]")
+}
+
+fn normalize_non_eoa_non_shadow_live_fixture(config: String) -> String {
+    format!(
+        "{}\n\n[polymarket.relayer_auth]\nkind = \"relayer_api_key\"\napi_key = \"relay-key\"\naddress = \"0x1111111111111111111111111111111111111111\"\n",
+        normalize_non_shadow_live_fixture(config)
+            .replace("signature_type = \"eoa\"", "signature_type = \"proxy\"")
+            .replace("wallet_route = \"eoa\"", "wallet_route = \"proxy\"")
+    )
 }

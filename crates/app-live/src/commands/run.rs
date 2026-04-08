@@ -5,7 +5,10 @@ use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
 use crate::cli::RunArgs;
-use crate::config::{neg_risk_live_targets_from_route_artifacts, PolymarketSourceConfig};
+use crate::config::{
+    neg_risk_live_targets_from_route_artifacts, runtime_wallet_kind_requires_relayer,
+    PolymarketSourceConfig,
+};
 use crate::daemon::run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented;
 use crate::negrisk_live::NegRiskLiveExecutionBackend;
 use crate::polymarket_runtime_adapter::PolymarketLiveExecutionBackend;
@@ -211,7 +214,7 @@ fn build_live_neg_risk_execution_backend(
         return Ok(None);
     }
 
-    if !wallet_kind_requires_relayer(config) {
+    if !runtime_wallet_kind_requires_relayer(config) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "EOA non-shadow live runtime is not supported; relayer-backed runtime work requires a non-EOA wallet kind",
@@ -224,13 +227,6 @@ fn build_live_neg_risk_execution_backend(
     let backend =
         PolymarketLiveExecutionBackend::from_runtime_inputs(&source_config, &credentials)?;
     Ok(Some(Box::new(backend)))
-}
-
-fn wallet_kind_requires_relayer(config: &config_schema::AppLiveConfigView<'_>) -> bool {
-    config
-        .account()
-        .map(|account| account.signature_type_label() != "Eoa")
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

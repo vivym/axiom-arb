@@ -1,6 +1,9 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
-use crate::{LocalAccountRuntimeConfig, LocalRelayerRuntimeConfig};
+use crate::{
+    config::runtime_wallet_kind_requires_relayer, LocalAccountRuntimeConfig,
+    LocalRelayerRuntimeConfig,
+};
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
@@ -43,7 +46,7 @@ fn evaluate_live(
             );
             DoctorFailure::new("CredentialError", error.to_string())
         })?;
-        if wallet_kind_requires_relayer(config) {
+        if runtime_wallet_kind_requires_relayer(config) {
             LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
                 report.push_check(
                     "Credentials",
@@ -79,11 +82,4 @@ fn evaluate_live(
     }
 
     Ok(())
-}
-
-fn wallet_kind_requires_relayer(config: &AppLiveConfigView<'_>) -> bool {
-    config
-        .account()
-        .map(|account| account.signature_type_label() != "Eoa")
-        .unwrap_or(false)
 }

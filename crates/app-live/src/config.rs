@@ -151,6 +151,12 @@ pub struct PolymarketSourceConfig {
     pub metadata_refresh_interval_seconds: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeWalletKind {
+    Eoa,
+    NonEoa,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     InvalidJson { value: String, message: String },
@@ -353,6 +359,20 @@ impl LocalRelayerRuntimeConfig {
     pub fn required_from(config: &AppLiveConfigView<'_>) -> Result<Self, ConfigError> {
         Self::optional_from(config)?.ok_or(ConfigError::MissingLocalRelayerRuntimeConfig)
     }
+}
+
+pub(crate) fn runtime_wallet_kind(config: &AppLiveConfigView<'_>) -> Option<RuntimeWalletKind> {
+    config.account().map(|_| {
+        if config.polymarket_relayer_auth().is_some() {
+            RuntimeWalletKind::NonEoa
+        } else {
+            RuntimeWalletKind::Eoa
+        }
+    })
+}
+
+pub(crate) fn runtime_wallet_kind_requires_relayer(config: &AppLiveConfigView<'_>) -> bool {
+    matches!(runtime_wallet_kind(config), Some(RuntimeWalletKind::NonEoa))
 }
 
 pub fn neg_risk_live_targets_from_route_artifacts(
@@ -810,5 +830,92 @@ fn map_relayer_error_to_signer_error(error: ConfigError) -> ConfigError {
             ConfigError::InvalidLocalSignerConfig { value, message }
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use config_schema::{load_raw_config_from_str, ValidatedConfig};
+
+    use super::{runtime_wallet_kind, runtime_wallet_kind_requires_relayer, RuntimeWalletKind};
+
+    #[test]
+    fn runtime_wallet_kind_marks_validated_eoa_live_config_as_not_requiring_relayer() {
+        let config = live_view(
+            r#"
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+"#,
+        );
+
+        assert_eq!(runtime_wallet_kind(&config), Some(RuntimeWalletKind::Eoa));
+        assert!(!runtime_wallet_kind_requires_relayer(&config));
+    }
+
+    #[test]
+    fn runtime_wallet_kind_marks_validated_non_eoa_live_config_as_requiring_relayer() {
+        let config = live_view(
+            r#"
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+        );
+
+        assert_eq!(
+            runtime_wallet_kind(&config),
+            Some(RuntimeWalletKind::NonEoa)
+        );
+        assert!(runtime_wallet_kind_requires_relayer(&config));
+    }
+
+    fn live_view(extra: &str) -> config_schema::AppLiveConfigView<'static> {
+        let raw = Box::leak(Box::new(
+            load_raw_config_from_str(&format!(
+                r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+{extra}
+"#
+            ))
+            .expect("config should parse"),
+        ));
+        let validated = Box::leak(Box::new(
+            ValidatedConfig::new(raw.clone()).expect("config should validate"),
+        ));
+
+        validated.for_app_live().expect("live view should validate")
     }
 }
