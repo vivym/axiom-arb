@@ -90,6 +90,19 @@ Its implementation should:
 - rely on environment proxy behavior only
 - map failures into the existing connectivity/protocol categories expected by `doctor`
 
+The L2 HMAC implementation must not be left implicit.
+
+It should match the current Polymarket SDK/documentation behavior:
+
+- signature payload is constructed from `timestamp + method + requestPath + body`
+- `method` is the uppercase HTTP method
+- `requestPath` is the path plus query string exactly as sent on the wire
+- `body` is the exact request body bytes rendered as a UTF-8 string, or the empty string for requests without a body
+- the stored `secret` is decoded according to the current Polymarket credential format before HMAC calculation
+- the resulting HMAC-SHA256 digest is encoded in the same format expected by current Polymarket L2 headers
+
+The implementation should be verified against the official current-spec reference behavior, not against the repository's previous `derive_l2_auth_material` output.
+
 It should not:
 
 - create or derive API credentials
