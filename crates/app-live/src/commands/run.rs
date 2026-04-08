@@ -220,13 +220,9 @@ fn build_live_neg_risk_execution_backend(
     }
 
     let source_config = PolymarketSourceConfig::try_from(config)?;
-    let signer_config = LocalSignerConfig::try_from(config)?;
     let credentials = PolymarketGatewayCredentials::try_from(config)?;
-    let backend = PolymarketLiveExecutionBackend::from_runtime_inputs(
-        &source_config,
-        &signer_config,
-        &credentials,
-    )?;
+    let backend =
+        PolymarketLiveExecutionBackend::from_runtime_inputs(&source_config, &credentials)?;
     Ok(Some(Box::new(backend)))
 }
 

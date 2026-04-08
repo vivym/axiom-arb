@@ -35,7 +35,7 @@ use crate::negrisk_live::{
     NegRiskLiveExecutionRecord,
 };
 use crate::{
-    config::{LocalSignerConfig, NegRiskFamilyLiveTarget, PolymarketSourceConfig},
+    config::{NegRiskFamilyLiveTarget, PolymarketSourceConfig},
     PolymarketGatewayCredentials,
 };
 
@@ -299,7 +299,6 @@ pub(crate) struct PolymarketLiveExecutionBackend {
 impl PolymarketLiveExecutionBackend {
     pub(crate) fn from_runtime_inputs(
         source: &PolymarketSourceConfig,
-        _signer_config: &LocalSignerConfig,
         credentials: &PolymarketGatewayCredentials,
     ) -> Result<Self, PolymarketRuntimeAdapterError> {
         let signer = Arc::new(PolymarketOrderSigner::from_runtime_inputs(

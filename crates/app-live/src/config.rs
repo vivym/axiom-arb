@@ -154,10 +154,14 @@ pub struct PolymarketSourceConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     InvalidJson { value: String, message: String },
+    InvalidLocalAccountRuntimeConfig { value: String, message: String },
+    InvalidLocalRelayerRuntimeConfig { value: String, message: String },
     InvalidLocalSignerConfig { value: String, message: String },
     MissingPolymarketGatewayCredentials,
     InvalidPolymarketSourceConfig { value: String, message: String },
     DuplicateFamilyId { family_id: String },
+    MissingLocalAccountRuntimeConfig,
+    MissingLocalRelayerRuntimeConfig,
     MissingLocalSignerConfig,
     MissingPolymarketSourceConfig,
 }
@@ -167,6 +171,12 @@ impl fmt::Display for ConfigError {
         match self {
             Self::InvalidJson { message, .. } => {
                 write!(f, "invalid neg-risk live target config: {message}")
+            }
+            Self::InvalidLocalAccountRuntimeConfig { message, .. } => {
+                write!(f, "invalid local account runtime config: {message}")
+            }
+            Self::InvalidLocalRelayerRuntimeConfig { message, .. } => {
+                write!(f, "invalid local relayer runtime config: {message}")
             }
             Self::InvalidLocalSignerConfig { message, .. } => {
                 write!(f, "invalid local signer config: {message}")
@@ -184,6 +194,18 @@ impl fmt::Display for ConfigError {
                 write!(
                     f,
                     "duplicate neg-risk family_id in live target config: {family_id}"
+                )
+            }
+            Self::MissingLocalAccountRuntimeConfig => {
+                write!(
+                    f,
+                    "missing local account runtime config for live neg-risk operator inputs"
+                )
+            }
+            Self::MissingLocalRelayerRuntimeConfig => {
+                write!(
+                    f,
+                    "missing local relayer runtime config for live neg-risk operator inputs"
                 )
             }
             Self::MissingLocalSignerConfig => {
@@ -245,14 +267,10 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
     type Error = ConfigError;
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
-        let account_runtime = LocalAccountRuntimeConfig::try_from(config).map_err(|error| {
-            if matches!(error, ConfigError::MissingPolymarketGatewayCredentials) {
-                ConfigError::MissingLocalSignerConfig
-            } else {
-                error
-            }
-        })?;
-        let relayer_runtime = LocalRelayerRuntimeConfig::required_from(config)?;
+        let account_runtime = LocalAccountRuntimeConfig::try_from(config)
+            .map_err(map_account_error_to_signer_error)?;
+        let relayer_runtime = LocalRelayerRuntimeConfig::required_from(config)
+            .map_err(map_relayer_error_to_signer_error)?;
 
         Ok(LocalSignerConfig {
             signer: account_runtime.signer,
@@ -267,20 +285,26 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalAccountRuntimeConfig {
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
         if config.polymarket_signer().is_some() {
-            return Err(ConfigError::InvalidLocalSignerConfig {
+            return Err(ConfigError::InvalidLocalAccountRuntimeConfig {
                 value: "app_live".to_owned(),
                 message: "polymarket.signer is no longer supported; use polymarket.account"
                     .to_owned(),
             });
         }
-        let credentials = PolymarketGatewayCredentials::try_from(config)?;
+        let credentials = PolymarketGatewayCredentials::try_from(config).map_err(|error| {
+            if matches!(error, ConfigError::MissingPolymarketGatewayCredentials) {
+                ConfigError::MissingLocalAccountRuntimeConfig
+            } else {
+                error
+            }
+        })?;
         let derived = derive_l2_auth_material(
             &credentials.api_key,
             &credentials.secret,
             &credentials.passphrase,
             Utc::now(),
         )
-        .map_err(|error| ConfigError::InvalidLocalSignerConfig {
+        .map_err(|error| ConfigError::InvalidLocalAccountRuntimeConfig {
             value: "app_live".to_owned(),
             message: error.to_string(),
         })?;
@@ -302,7 +326,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for PolymarketGatewayCredentials {
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
         if config.polymarket_signer().is_some() {
-            return Err(ConfigError::InvalidLocalSignerConfig {
+            return Err(ConfigError::InvalidLocalAccountRuntimeConfig {
                 value: "app_live".to_owned(),
                 message: "polymarket.signer is no longer supported; use polymarket.account"
                     .to_owned(),
@@ -327,7 +351,7 @@ impl LocalRelayerRuntimeConfig {
     }
 
     pub fn required_from(config: &AppLiveConfigView<'_>) -> Result<Self, ConfigError> {
-        Self::optional_from(config)?.ok_or(ConfigError::MissingLocalSignerConfig)
+        Self::optional_from(config)?.ok_or(ConfigError::MissingLocalRelayerRuntimeConfig)
     }
 }
 
@@ -589,7 +613,7 @@ fn map_relayer_auth(
     match raw.kind() {
         AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
             let api_key = raw.api_key().to_owned();
-            let passphrase = require_non_empty_optional_local_signer_field(
+            let passphrase = require_non_empty_optional_relayer_field(
                 raw.passphrase(),
                 "polymarket.relayer_auth.passphrase",
             )?;
@@ -597,7 +621,7 @@ fn map_relayer_auth(
             if let Some(secret) = raw.secret() {
                 let derived =
                     derive_builder_relayer_auth_material(&api_key, secret, &passphrase, Utc::now())
-                        .map_err(|error| ConfigError::InvalidLocalSignerConfig {
+                        .map_err(|error| ConfigError::InvalidLocalRelayerRuntimeConfig {
                             value: "app_live".to_owned(),
                             message: error.to_string(),
                         })?;
@@ -611,12 +635,12 @@ fn map_relayer_auth(
             } else {
                 Ok(LocalRelayerAuth::BuilderApiKey {
                     api_key,
-                    timestamp: require_non_empty_optional_local_signer_field(
+                    timestamp: require_non_empty_optional_relayer_field(
                         raw.timestamp(),
                         "polymarket.relayer_auth.timestamp",
                     )?,
                     passphrase,
-                    signature: require_non_empty_optional_local_signer_field(
+                    signature: require_non_empty_optional_relayer_field(
                         raw.signature(),
                         "polymarket.relayer_auth.signature",
                     )?,
@@ -625,7 +649,7 @@ fn map_relayer_auth(
         }
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => Ok(LocalRelayerAuth::RelayerApiKey {
             api_key: raw.api_key().to_owned(),
-            address: require_non_empty_optional_local_signer_field(
+            address: require_non_empty_optional_relayer_field(
                 raw.address(),
                 "polymarket.relayer_auth.address",
             )?,
@@ -671,16 +695,16 @@ impl From<LocalSignerConfig> for LocalAccountRuntimeConfig {
 }
 
 fn validate_account_view(account: AppLivePolymarketAccountView<'_>) -> Result<(), ConfigError> {
-    require_non_empty_local_signer_field(account.address(), "polymarket.account.address")?;
+    require_non_empty_account_field(account.address(), "polymarket.account.address")?;
     if let Some(funder_address) = account.funder_address() {
-        require_non_empty_local_signer_field(funder_address, "polymarket.account.funder_address")?;
+        require_non_empty_account_field(funder_address, "polymarket.account.funder_address")?;
     }
-    require_non_empty_local_signer_field(account.api_key(), "polymarket.account.api_key")?;
-    require_non_empty_local_signer_field(account.secret(), "polymarket.account.secret")?;
-    require_non_empty_local_signer_field(account.passphrase(), "polymarket.account.passphrase")?;
+    require_non_empty_account_field(account.api_key(), "polymarket.account.api_key")?;
+    require_non_empty_account_field(account.secret(), "polymarket.account.secret")?;
+    require_non_empty_account_field(account.passphrase(), "polymarket.account.passphrase")?;
 
     if account.signature_type_label() != account.wallet_route_label() {
-        return Err(ConfigError::InvalidLocalSignerConfig {
+        return Err(ConfigError::InvalidLocalAccountRuntimeConfig {
             value: "app_live".to_owned(),
             message: "polymarket.account.wallet_route must match polymarket.account.signature_type"
                 .to_owned(),
@@ -693,32 +717,32 @@ fn validate_account_view(account: AppLivePolymarketAccountView<'_>) -> Result<()
 fn validate_relayer_auth_view(
     raw: AppLivePolymarketRelayerAuthView<'_>,
 ) -> Result<(), ConfigError> {
-    require_non_empty_local_signer_field(raw.api_key(), "polymarket.relayer_auth.api_key")?;
+    require_non_empty_relayer_field(raw.api_key(), "polymarket.relayer_auth.api_key")?;
 
     match raw.kind() {
         AppLivePolymarketRelayerAuthKind::BuilderApiKey => {
-            require_non_empty_optional_local_signer_field(
+            require_non_empty_optional_relayer_field(
                 raw.passphrase(),
                 "polymarket.relayer_auth.passphrase",
             )?;
             if raw.secret().is_some() {
-                require_non_empty_optional_local_signer_field(
+                require_non_empty_optional_relayer_field(
                     raw.secret(),
                     "polymarket.relayer_auth.secret",
                 )?;
             } else {
-                require_non_empty_optional_local_signer_field(
+                require_non_empty_optional_relayer_field(
                     raw.timestamp(),
                     "polymarket.relayer_auth.timestamp",
                 )?;
-                require_non_empty_optional_local_signer_field(
+                require_non_empty_optional_relayer_field(
                     raw.signature(),
                     "polymarket.relayer_auth.signature",
                 )?;
             }
         }
         AppLivePolymarketRelayerAuthKind::RelayerApiKey => {
-            require_non_empty_optional_local_signer_field(
+            require_non_empty_optional_relayer_field(
                 raw.address(),
                 "polymarket.relayer_auth.address",
             )?;
@@ -728,12 +752,9 @@ fn validate_relayer_auth_view(
     Ok(())
 }
 
-fn require_non_empty_local_signer_field(
-    value: &str,
-    field: &'static str,
-) -> Result<(), ConfigError> {
+fn require_non_empty_account_field(value: &str, field: &'static str) -> Result<(), ConfigError> {
     if value.trim().is_empty() {
-        Err(ConfigError::InvalidLocalSignerConfig {
+        Err(ConfigError::InvalidLocalAccountRuntimeConfig {
             value: "app_live".to_owned(),
             message: format!("{field} must not be empty"),
         })
@@ -742,21 +763,52 @@ fn require_non_empty_local_signer_field(
     }
 }
 
-fn require_non_empty_optional_local_signer_field(
+fn require_non_empty_optional_relayer_field(
     value: Option<&str>,
     field: &'static str,
 ) -> Result<String, ConfigError> {
-    let value = value.ok_or_else(|| ConfigError::InvalidLocalSignerConfig {
+    let value = value.ok_or_else(|| ConfigError::InvalidLocalRelayerRuntimeConfig {
         value: "app_live".to_owned(),
         message: format!("{field} is required"),
     })?;
 
     if value.trim().is_empty() {
-        Err(ConfigError::InvalidLocalSignerConfig {
+        Err(ConfigError::InvalidLocalRelayerRuntimeConfig {
             value: "app_live".to_owned(),
             message: format!("{field} must not be empty"),
         })
     } else {
         Ok(value.to_owned())
+    }
+}
+
+fn require_non_empty_relayer_field(value: &str, field: &'static str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        Err(ConfigError::InvalidLocalRelayerRuntimeConfig {
+            value: "app_live".to_owned(),
+            message: format!("{field} must not be empty"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn map_account_error_to_signer_error(error: ConfigError) -> ConfigError {
+    match error {
+        ConfigError::MissingLocalAccountRuntimeConfig => ConfigError::MissingLocalSignerConfig,
+        ConfigError::InvalidLocalAccountRuntimeConfig { value, message } => {
+            ConfigError::InvalidLocalSignerConfig { value, message }
+        }
+        other => other,
+    }
+}
+
+fn map_relayer_error_to_signer_error(error: ConfigError) -> ConfigError {
+    match error {
+        ConfigError::MissingLocalRelayerRuntimeConfig => ConfigError::MissingLocalSignerConfig,
+        ConfigError::InvalidLocalRelayerRuntimeConfig { value, message } => {
+            ConfigError::InvalidLocalSignerConfig { value, message }
+        }
+        other => other,
     }
 }

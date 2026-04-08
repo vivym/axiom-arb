@@ -438,6 +438,52 @@ fn from_targets_with_revision_preserves_external_revision() {
 }
 
 #[test]
+fn missing_local_account_runtime_config_returns_error() {
+    let error = LocalAccountRuntimeConfig::try_from(&paper_view("[runtime]\nmode = \"paper\"\n"))
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::MissingLocalAccountRuntimeConfig
+    ));
+    assert!(error
+        .to_string()
+        .contains("missing local account runtime config"));
+}
+
+#[test]
+fn missing_local_relayer_runtime_config_returns_error() {
+    let error = LocalRelayerRuntimeConfig::required_from(&live_view("")).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::MissingLocalRelayerRuntimeConfig
+    ));
+    assert!(error
+        .to_string()
+        .contains("missing local relayer runtime config"));
+}
+
+#[test]
+fn seam_specific_invalid_runtime_config_errors_have_distinct_messages() {
+    let account_error = ConfigError::InvalidLocalAccountRuntimeConfig {
+        value: "app_live".to_owned(),
+        message: "account bad".to_owned(),
+    };
+    let relayer_error = ConfigError::InvalidLocalRelayerRuntimeConfig {
+        value: "app_live".to_owned(),
+        message: "relayer bad".to_owned(),
+    };
+
+    assert!(account_error
+        .to_string()
+        .contains("invalid local account runtime config"));
+    assert!(relayer_error
+        .to_string()
+        .contains("invalid local relayer runtime config"));
+}
+
+#[test]
 fn missing_local_signer_config_returns_error() {
     let error =
         LocalSignerConfig::try_from(&paper_view("[runtime]\nmode = \"paper\"\n")).unwrap_err();
