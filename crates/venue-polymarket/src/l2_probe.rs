@@ -33,7 +33,7 @@ impl PolymarketL2ProbeClient {
     }
 
     #[must_use]
-    pub fn with_http_client(
+    fn with_http_client(
         http: Client,
         host: Url,
         credentials: PolymarketL2ProbeCredentials,
@@ -113,7 +113,7 @@ impl PolymarketL2ProbeClient {
     }
 }
 
-pub fn build_l2_probe_signature(
+fn build_l2_probe_signature(
     credentials: &PolymarketL2ProbeCredentials,
     timestamp: &str,
     method: &str,
@@ -317,5 +317,84 @@ fn decode_base64_char(byte: u8) -> Option<u8> {
         b'+' => Some(62),
         b'/' => Some(63),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_credentials() -> PolymarketL2ProbeCredentials {
+        PolymarketL2ProbeCredentials {
+            api_key: "key-1".to_owned(),
+            secret: "c2VjcmV0LWJ5dGVz".to_owned(),
+            passphrase: "pass-1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn signature_normalizes_method_and_keeps_query_and_empty_body() {
+        let lower = build_l2_probe_signature(
+            &sample_credentials(),
+            "1700000000",
+            "post",
+            "/v1/heartbeats",
+            "",
+        )
+        .unwrap();
+        let upper = build_l2_probe_signature(
+            &sample_credentials(),
+            "1700000000",
+            "POST",
+            "/v1/heartbeats",
+            "",
+        )
+        .unwrap();
+        let query = build_l2_probe_signature(
+            &sample_credentials(),
+            "1700000000",
+            "GET",
+            "/data/orders?cursor=abc",
+            "",
+        )
+        .unwrap();
+        let no_query = build_l2_probe_signature(
+            &sample_credentials(),
+            "1700000000",
+            "GET",
+            "/data/orders",
+            "",
+        )
+        .unwrap();
+        let nonempty_body = build_l2_probe_signature(
+            &sample_credentials(),
+            "1700000000",
+            "GET",
+            "/data/orders?cursor=abc",
+            r#"{"heartbeat_id":"abc"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(lower, upper);
+        assert_ne!(query, no_query);
+        assert_ne!(query, nonempty_body);
+    }
+
+    #[test]
+    fn signature_rejects_invalid_secret_encoding() {
+        let err = build_l2_probe_signature(
+            &PolymarketL2ProbeCredentials {
+                api_key: "key-1".to_owned(),
+                secret: "not-base64!".to_owned(),
+                passphrase: "pass-1".to_owned(),
+            },
+            "1700000000",
+            "GET",
+            "/data/orders",
+            "",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("secret"));
     }
 }

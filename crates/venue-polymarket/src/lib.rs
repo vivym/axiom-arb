@@ -36,9 +36,7 @@ pub use heartbeat::{
     HeartbeatFetchResult, HeartbeatReconcileReason, OrderHeartbeatMonitor, OrderHeartbeatState,
 };
 pub use instrumentation::VenueProducerInstrumentation;
-pub use l2_probe::{
-    build_l2_probe_signature, PolymarketL2ProbeClient, PolymarketL2ProbeCredentials,
-};
+pub use l2_probe::{PolymarketL2ProbeClient, PolymarketL2ProbeCredentials};
 #[doc(hidden)]
 pub use metadata::{FlexibleStringList, GammaEvent, GammaMarket, NegRiskMetadataPageFetcher};
 pub use metadata::{NegRiskMarketMetadata, NegRiskMetadataError};

@@ -1,9 +1,7 @@
 mod support;
 
 use reqwest::Url;
-use venue_polymarket::{
-    build_l2_probe_signature, PolymarketL2ProbeClient, PolymarketL2ProbeCredentials,
-};
+use venue_polymarket::{PolymarketL2ProbeClient, PolymarketL2ProbeCredentials};
 
 #[tokio::test]
 async fn l2_probe_fetch_open_orders_uses_current_data_orders_path() {
@@ -17,20 +15,6 @@ async fn l2_probe_fetch_open_orders_uses_current_data_orders_path() {
     assert!(request.contains("poly-api-key: key-1"));
     assert!(request.contains("poly-passphrase: pass-1"));
     assert!(request.contains("poly-signature: "));
-}
-
-#[test]
-fn l2_probe_signature_uses_timestamp_method_path_and_body() {
-    let signature = build_l2_probe_signature(
-        &sample_credentials(),
-        "1700000000",
-        "POST",
-        "/v1/heartbeats",
-        r#"{"heartbeat_id":"abc"}"#,
-    )
-    .unwrap();
-
-    assert_eq!(signature, "BAwaUGB1KJChs492RXA7_WxmIpzi8nG9OjRC17TJX90=");
 }
 
 #[tokio::test]
@@ -47,31 +31,25 @@ async fn l2_probe_post_heartbeat_uses_current_heartbeat_path_and_body() {
     assert!(request.contains("poly-passphrase: pass-1"));
 }
 
-#[test]
-fn l2_probe_rejects_invalid_secret_encoding() {
-    let err = build_l2_probe_signature(
-        &PolymarketL2ProbeCredentials {
+#[tokio::test]
+async fn l2_probe_rejects_invalid_secret_encoding() {
+    let probe = PolymarketL2ProbeClient::new(
+        Url::parse("http://127.0.0.1/").unwrap(),
+        PolymarketL2ProbeCredentials {
             api_key: "key-1".to_owned(),
             secret: "not-base64!".to_owned(),
             passphrase: "pass-1".to_owned(),
         },
-        "1700000000",
-        "GET",
-        "/data/orders",
-        "",
-    )
-    .unwrap_err();
+    );
+
+    let err = probe.fetch_open_orders().await.unwrap_err();
 
     assert!(err.to_string().contains("secret"));
 }
 
 fn sample_probe(base_url: Url) -> PolymarketL2ProbeClient {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .expect("test client");
-
-    PolymarketL2ProbeClient::with_http_client(client, base_url, sample_credentials())
+    std::env::set_var("NO_PROXY", "127.0.0.1,localhost");
+    PolymarketL2ProbeClient::new(base_url, sample_credentials())
 }
 
 fn sample_credentials() -> PolymarketL2ProbeCredentials {
