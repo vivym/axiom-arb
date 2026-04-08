@@ -68,6 +68,40 @@ address = "0x1111111111111111111111111111111111111111"
 }
 
 #[test]
+fn validated_config_rejects_eoa_account_with_builder_relayer_auth() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-key"
+timestamp = "1700000001"
+passphrase = "builder-passphrase"
+signature = "builder-signature"
+"#,
+    )
+    .unwrap();
+
+    let err =
+        ValidatedConfig::new(raw).expect_err("EOA + builder_api_key relayer auth should fail");
+    assert!(err.to_string().contains("polymarket.relayer_auth"));
+}
+
+#[test]
 fn live_view_requires_relayer_auth_for_non_eoa_accounts() {
     let raw = load_raw_config_from_str(
         r#"
@@ -97,6 +131,49 @@ passphrase = "poly-passphrase"
     assert!(err
         .to_string()
         .contains("missing required section: polymarket.relayer_auth"));
+}
+
+#[test]
+fn live_view_accepts_non_eoa_account_with_relayer_auth() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "relay-key"
+address = "0x1111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+
+    let validated =
+        ValidatedConfig::new(raw).expect("non-EOA account with relayer_auth should parse");
+    let live = validated
+        .for_app_live()
+        .expect("non-EOA account with relayer_auth should validate");
+    let relayer_auth = live
+        .polymarket_relayer_auth()
+        .expect("non-EOA live view should expose relayer auth");
+    assert_eq!(
+        relayer_auth.kind(),
+        config_schema::AppLivePolymarketRelayerAuthKind::RelayerApiKey
+    );
+    assert_eq!(relayer_auth.api_key(), "relay-key");
 }
 
 #[test]
