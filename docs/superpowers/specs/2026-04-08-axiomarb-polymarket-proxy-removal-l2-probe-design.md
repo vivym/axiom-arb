@@ -98,6 +98,15 @@ It should not:
 - absorb relayer behavior
 - depend on `POLYMARKET_PRIVATE_KEY`
 
+`doctor` should stop routing its authenticated CLOB probe through `LocalSignerConfig`.
+
+Instead, `doctor` should split its probe inputs into:
+
+- a narrow L2 credential DTO for authenticated CLOB probe calls
+- existing relayer auth / signer-derived material for relayer reachability
+
+This keeps the CLOB probe aligned with the protocol while allowing relayer checks to continue using the separate relayer auth path that already exists in the repository.
+
 ### 4. Keep the protocol split explicit
 
 After this slice, Polymarket integration should be split as follows:
@@ -126,6 +135,40 @@ This matches the Polymarket protocol model:
 - L1 private key for key derivation and order signing
 - L2 credentials for authenticated CLOB request authorization
 
+### 6. Websocket backend selection after `proxy_url` removal
+
+Removing `proxy_url` does not mean websocket selection becomes unconditional SDK usage.
+
+After this slice:
+
+- websocket backend selection must no longer depend on config-provided proxy state
+- websocket backend selection may still choose the environment-aware websocket shell when:
+  - market and user websocket base endpoints differ
+  - or process proxy environment is present and the SDK websocket path would not preserve equivalent behavior
+
+This is necessary because the existing websocket shell already honors environment-derived HTTP proxy settings, while the current SDK websocket path does not provide equivalent env-proxy behavior.
+
+The intent of this slice is:
+
+- remove config-driven proxy branching
+- not regress websocket behavior for operators who rely on environment proxy settings
+
+### 7. Runtime provider boundary tightening
+
+This slice must not stop at `app-live` callsites.
+
+`venue-polymarket` runtime providers that currently still accept `PolymarketRestClient` and `L2AuthHeaders` as part of their mainline CLOB constructor shape must be tightened as part of this work.
+
+In particular:
+
+- gateway-backed submit/reconcile constructors should no longer preserve a mainline legacy CLOB execution dependency
+- any remaining `PolymarketRestClient` usage in runtime submit/reconcile must be justified as relayer-only support, not as a fallback CLOB transport
+
+The repository must not land in a half-migrated state where:
+
+- `app-live` no longer directly chooses legacy CLOB REST
+- but `venue-polymarket` providers still quietly keep a legacy CLOB fallback alive behind gateway-backed constructors
+
 ## File-Level Impact
 
 ### Remove or reshape
@@ -135,6 +178,8 @@ This matches the Polymarket protocol model:
 - `crates/app-live/src/config.rs`
 - `crates/app-live/src/polymarket_probe.rs`
 - `crates/app-live/src/polymarket_runtime_adapter.rs`
+- `crates/app-live/src/commands/doctor/connectivity.rs`
+- `crates/venue-polymarket/src/negrisk_live.rs`
 
 ### Add
 
@@ -173,8 +218,9 @@ This slice is complete when all of the following are true:
 2. `doctor` authenticated REST probe succeeds or fails through the new current-spec L2 probe path, not through legacy L2 auth derivation.
 3. `doctor` no longer requires `POLYMARKET_PRIVATE_KEY` for authenticated REST probe success.
 4. metadata and submit mainline paths no longer branch on proxy config.
-5. relayer reachability still works.
-6. real-user shadow smoke remains able to reach `doctor` and startup without reviving the legacy CLOB REST path.
+5. websocket probe behavior remains intact under environment-proxy setups without relying on config-driven proxy branching.
+6. relayer reachability still works.
+7. real-user shadow smoke remains able to reach `doctor` and startup without reviving the legacy CLOB REST path.
 
 ## Operator Notes
 
