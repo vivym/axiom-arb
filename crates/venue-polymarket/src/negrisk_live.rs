@@ -12,9 +12,8 @@ use execution::{
     SignedFamilySubmission,
 };
 
-use crate::auth::{L2AuthHeaders, RelayerAuth};
+use crate::auth::RelayerAuth;
 use crate::orders::{build_post_order_request_from_signed_member, PostOrderTransport};
-use crate::rest::{PolymarketRestClient, RestError};
 use crate::{
     PolymarketGateway, PolymarketOrderQuery, PolymarketSignedOrder, PolymarketSubmitResponse,
 };
@@ -22,20 +21,16 @@ use crate::{
 const PROVIDER_NAME: &str = "polymarket";
 
 #[derive(Debug, Clone)]
-pub struct PolymarketNegRiskSubmitProvider<'a> {
-    rest: Option<PolymarketRestClient>,
-    gateway: Option<PolymarketGateway>,
+pub struct PolymarketNegRiskSubmitProvider {
+    gateway: PolymarketGateway,
     runtime_handle: Option<Handle>,
-    auth: L2AuthHeaders<'a>,
     transport: PostOrderTransport,
 }
 
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskReconcileProvider<'a> {
-    rest: Option<PolymarketRestClient>,
-    gateway: Option<PolymarketGateway>,
+    gateway: PolymarketGateway,
     runtime_handle: Option<Handle>,
-    l2_auth: L2AuthHeaders<'a>,
     relayer_auth: RelayerAuth<'a>,
 }
 
@@ -151,46 +146,26 @@ impl FamilySubmitAggregation {
     }
 }
 
-impl<'a> PolymarketNegRiskSubmitProvider<'a> {
-    pub fn new(
-        rest: PolymarketRestClient,
-        auth: L2AuthHeaders<'a>,
-        transport: PostOrderTransport,
-    ) -> Self {
-        Self {
-            rest: Some(rest),
-            gateway: None,
-            runtime_handle: None,
-            auth,
-            transport,
-        }
-    }
-
+impl PolymarketNegRiskSubmitProvider {
     pub fn with_gateway(
-        auth: L2AuthHeaders<'a>,
         transport: PostOrderTransport,
         gateway: PolymarketGateway,
     ) -> Self {
         Self {
-            rest: None,
-            gateway: Some(gateway),
+            gateway,
             runtime_handle: None,
-            auth,
             transport,
         }
     }
 
     pub fn with_gateway_runtime(
-        auth: L2AuthHeaders<'a>,
         transport: PostOrderTransport,
         gateway: PolymarketGateway,
         runtime_handle: Handle,
     ) -> Self {
         Self {
-            rest: None,
-            gateway: Some(gateway),
+            gateway,
             runtime_handle: Some(runtime_handle),
-            auth,
             transport,
         }
     }
@@ -237,32 +212,15 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     ) -> Result<LiveSubmitOutcome, SubmitProviderError> {
         let submission = build_post_order_request_from_signed_member(member, &self.transport)
             .map_err(|err| SubmitProviderError::new(format!("order build error: {err:?}")))?;
-        let response = if let Some(gateway) = &self.gateway {
-            let gateway_order = polymarket_signed_order_from_submission(&submission)
-                .map_err(SubmitProviderError::new)?;
-            let response = gateway
-                .submit_order(gateway_order)
-                .await
-                .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
-            submit_order_response_from_gateway(response)
-        } else {
-            let rest = self.rest.as_ref().ok_or_else(|| {
-                SubmitProviderError::new(
-                    "submit provider requires a REST client when no gateway is configured",
-                )
-            })?;
-            let request = self
-                .rest
-                .as_ref()
-                .expect("rest client should be present when gateway is absent")
-                .build_submit_order_request(&self.auth, &submission)
-                .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
-            rest.execute_json::<SubmitOrderResponse>(request)
-                .await
-                .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?
-        };
+        let gateway_order = polymarket_signed_order_from_submission(&submission)
+            .map_err(SubmitProviderError::new)?;
+        let response = self
+            .gateway
+            .submit_order(gateway_order)
+            .await
+            .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
 
-        submit_order_response_to_outcome(response, attempt)
+        submit_order_response_to_outcome(submit_order_response_from_gateway(response), attempt)
     }
 
     fn submit_member_via_gateway_runtime(
@@ -287,7 +245,7 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     }
 }
 
-impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
+impl VenueExecutionProvider for PolymarketNegRiskSubmitProvider {
     fn submit_family(
         &self,
         signed: &SignedFamilySubmission,
@@ -299,9 +257,9 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
             ));
         }
 
-        if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
+        if let Some(runtime_handle) = &self.runtime_handle {
             return self.submit_family_via_gateway_runtime(
-                gateway,
+                &self.gateway,
                 runtime_handle,
                 signed,
                 attempt,
@@ -313,45 +271,25 @@ impl<'a> VenueExecutionProvider for PolymarketNegRiskSubmitProvider<'a> {
 }
 
 impl<'a> PolymarketNegRiskReconcileProvider<'a> {
-    pub fn new(
-        rest: PolymarketRestClient,
-        l2_auth: L2AuthHeaders<'a>,
-        relayer_auth: RelayerAuth<'a>,
-    ) -> Self {
-        Self {
-            rest: Some(rest),
-            gateway: None,
-            runtime_handle: None,
-            l2_auth,
-            relayer_auth,
-        }
-    }
-
     pub fn with_gateway(
-        l2_auth: L2AuthHeaders<'a>,
         relayer_auth: RelayerAuth<'a>,
         gateway: PolymarketGateway,
     ) -> Self {
         Self {
-            rest: None,
-            gateway: Some(gateway),
+            gateway,
             runtime_handle: None,
-            l2_auth,
             relayer_auth,
         }
     }
 
     pub fn with_gateway_runtime(
-        l2_auth: L2AuthHeaders<'a>,
         relayer_auth: RelayerAuth<'a>,
         gateway: PolymarketGateway,
         runtime_handle: Handle,
     ) -> Self {
         Self {
-            rest: None,
-            gateway: Some(gateway),
+            gateway,
             runtime_handle: Some(runtime_handle),
-            l2_auth,
             relayer_auth,
         }
     }
@@ -371,10 +309,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         work: &PendingReconcileWork,
         tx_ref: &str,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
-        let transactions = self
-            .fetch_recent_transactions()
-            .await
-            .map_err(map_relayer_error)?;
+        let transactions = self.fetch_recent_transactions().await?;
         let matching_transactions: Vec<_> = transactions
             .iter()
             .filter(|transaction| transaction.matches_pending_ref(tx_ref))
@@ -414,10 +349,23 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         &self,
         order_id: &str,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
-        let open_orders = self
-            .fetch_open_orders()
+        let open_orders: Vec<crate::OpenOrderSummary> = self
+            .gateway
+            .open_orders(PolymarketOrderQuery::open_orders())
             .await
-            .map_err(map_open_orders_error)?;
+            .map(|orders| {
+                orders
+                    .into_iter()
+                    .map(|order| crate::OpenOrderSummary {
+                        order_id: order.order_id,
+                        status: None,
+                        market: None,
+                    })
+                    .collect()
+            })
+            .map_err(|error| {
+                ReconcileProviderError::new(format!("open orders status error: {error}"))
+            })?;
 
         if open_orders.iter().any(|order| order.order_id == order_id) {
             return Ok(ReconcileOutcome::ConfirmedAuthoritative {
@@ -554,45 +502,14 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
     }
 }
 
-impl PolymarketNegRiskReconcileProvider<'_> {
-    async fn fetch_recent_transactions(&self) -> Result<Vec<crate::RelayerTransaction>, RestError> {
-        if let Some(gateway) = &self.gateway {
-            return gateway
-                .recent_transactions(&self.relayer_auth)
-                .await
-                .map_err(RestError::from);
-        }
-
-        self.rest
-            .as_ref()
-            .expect("rest client should be present when gateway is absent")
-            .fetch_recent_transactions(&self.relayer_auth)
+impl<'a> PolymarketNegRiskReconcileProvider<'a> {
+    async fn fetch_recent_transactions(
+        &self,
+    ) -> Result<Vec<crate::RelayerTransaction>, ReconcileProviderError> {
+        self.gateway
+            .recent_transactions(&self.relayer_auth)
             .await
-    }
-
-    async fn fetch_open_orders(&self) -> Result<Vec<crate::OpenOrderSummary>, RestError> {
-        if let Some(gateway) = &self.gateway {
-            return gateway
-                .open_orders(PolymarketOrderQuery::open_orders())
-                .await
-                .map(|orders| {
-                    orders
-                        .into_iter()
-                        .map(|order| crate::OpenOrderSummary {
-                            order_id: order.order_id,
-                            status: None,
-                            market: None,
-                        })
-                        .collect()
-                })
-                .map_err(RestError::from);
-        }
-
-        self.rest
-            .as_ref()
-            .expect("rest client should be present when gateway is absent")
-            .fetch_open_orders(&self.l2_auth)
-            .await
+            .map_err(|error| ReconcileProviderError::new(format!("relayer status error: {error}")))
     }
 }
 
@@ -601,8 +518,12 @@ impl<'a> ReconcileProvider for PolymarketNegRiskReconcileProvider<'a> {
         &self,
         work: &PendingReconcileWork,
     ) -> Result<ReconcileOutcome, ReconcileProviderError> {
-        if let (Some(gateway), Some(runtime_handle)) = (&self.gateway, &self.runtime_handle) {
-            return self.reconcile_live_via_gateway_runtime(gateway, runtime_handle, work);
+        if let Some(runtime_handle) = &self.runtime_handle {
+            return self.reconcile_live_via_gateway_runtime(
+                &self.gateway,
+                runtime_handle,
+                work,
+            );
         }
 
         run_blocking(self.reconcile_live_async(work))
@@ -712,14 +633,6 @@ fn submit_rejection_reason(response: &SubmitOrderResponse) -> String {
     } else {
         format!("polymarket rejected order {}", response.order_id)
     }
-}
-
-fn map_relayer_error(error: RestError) -> ReconcileProviderError {
-    ReconcileProviderError::new(format!("relayer status error: {error}"))
-}
-
-fn map_open_orders_error(error: RestError) -> ReconcileProviderError {
-    ReconcileProviderError::new(format!("open orders status error: {error}"))
 }
 
 fn polymarket_signed_order_from_submission(

@@ -8,7 +8,7 @@ use alloy::dyn_abi::Eip712Domain;
 use alloy::hex::ToHexExt as _;
 use alloy::signers::{local::PrivateKeySigner, Signer as _};
 use alloy::sol_types::SolStruct as _;
-use domain::{ExecutionMode, SignatureType, WalletRoute};
+use domain::ExecutionMode;
 use execution::negrisk::plan_family_submission;
 use execution::plans::ExecutionPlan;
 use execution::providers::{SignerProvider, SubmitProviderError, VenueExecutionProvider};
@@ -26,7 +26,6 @@ use polymarket_client_sdk::types::{Address as SdkAddress, U256};
 use polymarket_client_sdk::{contract_config, POLYGON, PRIVATE_KEY_VAR};
 use tokio::runtime::Runtime;
 use venue_polymarket::{
-    auth::{L2AuthHeaders, SignerContext},
     build_post_order_request_from_signed_member, LiveClobSdkApi, LiveMetadataSdkApi,
     PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport,
 };
@@ -295,7 +294,6 @@ impl OrderSigner for PolymarketOrderSigner {
 #[derive(Clone)]
 pub(crate) struct PolymarketLiveExecutionBackend {
     signer: Arc<PolymarketOrderSigner>,
-    signer_config: LocalSignerConfig,
     gateway: PolymarketGateway,
     runtime: Arc<Runtime>,
     transport: PostOrderTransport,
@@ -304,7 +302,7 @@ pub(crate) struct PolymarketLiveExecutionBackend {
 impl PolymarketLiveExecutionBackend {
     pub(crate) fn from_runtime_inputs(
         source: &PolymarketSourceConfig,
-        signer_config: &LocalSignerConfig,
+        _signer_config: &LocalSignerConfig,
         credentials: &PolymarketGatewayCredentials,
     ) -> Result<Self, PolymarketRuntimeAdapterError> {
         let signer = Arc::new(PolymarketOrderSigner::from_runtime_inputs(
@@ -317,7 +315,6 @@ impl PolymarketLiveExecutionBackend {
 
         Ok(Self {
             signer,
-            signer_config: signer_config.clone(),
             gateway,
             runtime,
             transport: PostOrderTransport {
@@ -358,7 +355,6 @@ impl NegRiskLiveExecutionBackend for PolymarketLiveExecutionBackend {
                 last_signed: signed_capture.clone(),
             }),
             Arc::new(GatewayBackedSubmitProvider {
-                signer_config: self.signer_config.clone(),
                 gateway: self.gateway.clone(),
                 runtime: self.runtime.clone(),
                 transport: self.transport.clone(),
@@ -476,45 +472,6 @@ fn signed_order_hash(
         .encode_hex_with_prefix())
 }
 
-fn l2_auth_headers_from_signer_config<'a>(
-    signer_config: &'a LocalSignerConfig,
-) -> Result<L2AuthHeaders<'a>, PolymarketRuntimeAdapterError> {
-    Ok(L2AuthHeaders {
-        signer: SignerContext {
-            address: &signer_config.signer.address,
-            funder_address: &signer_config.signer.funder_address,
-            signature_type: parse_venue_signature_type(&signer_config.signer.signature_type)?,
-            wallet_route: parse_venue_wallet_route(&signer_config.signer.wallet_route)?,
-        },
-        api_key: &signer_config.l2_auth.api_key,
-        passphrase: &signer_config.l2_auth.passphrase,
-        timestamp: &signer_config.l2_auth.timestamp,
-        signature: &signer_config.l2_auth.signature,
-    })
-}
-
-fn parse_venue_signature_type(value: &str) -> Result<SignatureType, PolymarketRuntimeAdapterError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(SignatureType::Eoa),
-        "proxy" | "poly_proxy" => Ok(SignatureType::Proxy),
-        "safe" | "gnosis_safe" => Ok(SignatureType::Safe),
-        other => Err(PolymarketRuntimeAdapterError::InvalidSignatureType(
-            other.to_owned(),
-        )),
-    }
-}
-
-fn parse_venue_wallet_route(value: &str) -> Result<WalletRoute, PolymarketRuntimeAdapterError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(WalletRoute::Eoa),
-        "proxy" => Ok(WalletRoute::Proxy),
-        "safe" => Ok(WalletRoute::Safe),
-        other => Err(PolymarketRuntimeAdapterError::InvalidSignatureType(
-            other.to_owned(),
-        )),
-    }
-}
-
 #[derive(Clone)]
 struct RecordingSignerProvider {
     inner: Arc<PolymarketOrderSigner>,
@@ -534,7 +491,6 @@ impl SignerProvider for RecordingSignerProvider {
 
 #[derive(Clone)]
 struct GatewayBackedSubmitProvider {
-    signer_config: LocalSignerConfig,
     gateway: PolymarketGateway,
     runtime: Arc<Runtime>,
     transport: PostOrderTransport,
@@ -546,11 +502,7 @@ impl VenueExecutionProvider for GatewayBackedSubmitProvider {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<domain::LiveSubmitOutcome, SubmitProviderError> {
-        let auth = l2_auth_headers_from_signer_config(&self.signer_config).map_err(|error| {
-            SubmitProviderError::new(format!("polymarket l2 auth build failed: {error}"))
-        })?;
         let provider = PolymarketNegRiskSubmitProvider::with_gateway_runtime(
-            auth,
             self.transport.clone(),
             self.gateway.clone(),
             self.runtime.handle().clone(),
@@ -610,8 +562,7 @@ mod tests {
         PolymarketMetadataGatewayBackend, PolymarketOrderSigner,
     };
     use crate::{
-        config::PolymarketSourceConfig, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig,
-        LocalSignerIdentity, PolymarketGatewayCredentials,
+        config::PolymarketSourceConfig, PolymarketGatewayCredentials,
     };
 
     const TEST_PRIVATE_KEY: &str =
@@ -775,7 +726,6 @@ mod tests {
         submit_calls: Arc<AtomicUsize>,
     ) -> GatewayBackedSubmitProvider {
         GatewayBackedSubmitProvider {
-            signer_config: sample_signer_config(),
             gateway: PolymarketGateway::from_clob_api(Arc::new(RecordingSubmitClobApi {
                 submit_calls,
             })),
@@ -787,27 +737,6 @@ mod tests {
                     .expect("submit runtime should build"),
             ),
             transport: sample_post_order_transport(),
-        }
-    }
-
-    fn sample_signer_config() -> LocalSignerConfig {
-        LocalSignerConfig {
-            signer: LocalSignerIdentity {
-                address: "0xowner".to_owned(),
-                funder_address: "0xfunder".to_owned(),
-                signature_type: "eoa".to_owned(),
-                wallet_route: "eoa".to_owned(),
-            },
-            l2_auth: LocalL2AuthHeaders {
-                api_key: "key-1".to_owned(),
-                passphrase: "pass-1".to_owned(),
-                timestamp: "1700000000".to_owned(),
-                signature: "0xsig".to_owned(),
-            },
-            relayer_auth: LocalRelayerAuth::RelayerApiKey {
-                api_key: "relay-key".to_owned(),
-                address: "0xowner".to_owned(),
-            },
         }
     }
 
