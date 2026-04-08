@@ -1,6 +1,6 @@
 [runtime]
 mode = "live"
-real_user_shadow_smoke = false
+real_user_shadow_smoke = true
 
 # Operators normally omit source config; the built-in defaults apply.
 # Use [polymarket.source_overrides] only for non-default endpoints or cadence.
@@ -18,6 +18,10 @@ secret = "YOUR_API_SECRET"
 passphrase = "YOUR_PASSPHRASE"
 # L2 auth timestamp/signature are derived at startup. Do not hand-author them here.
 
+# This checked-in default keeps the EOA example on the shadow smoke path.
+# Non-shadow live still requires a relayer-backed path; do not treat this
+# EOA-without-relayer shape as a runnable generic live config for non-shadow live.
+#
 # EOA operators stop here. Do not add [polymarket.relayer_auth].
 #
 # Proxy/safe operators keep `signature_type` and `wallet_route` in sync and add one of these

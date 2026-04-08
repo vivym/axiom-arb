@@ -1116,8 +1116,12 @@ fn example_config_omits_default_source_block_and_separates_eoa_from_non_eoa_rela
     assert!(!text.contains("[polymarket.source]"));
     assert!(text.contains("built-in defaults"));
     assert!(text.contains("source_overrides"));
+    assert!(text.contains("real_user_shadow_smoke = true"));
+    assert!(!text.contains("real_user_shadow_smoke = false"));
     assert!(!text.contains("\n[polymarket.relayer_auth]\n"));
     assert!(text.contains("EOA"));
+    assert!(text.contains("shadow smoke"));
+    assert!(text.contains("non-shadow live"));
     assert!(text.contains("# [polymarket.relayer_auth]"));
 }
 
@@ -1129,6 +1133,8 @@ fn readme_scopes_eoa_truth_to_smoke_and_l2_only_flows() {
     assert!(text.contains("EOA"));
     assert!(text.contains("smoke"));
     assert!(text.contains("account-L2-only"));
+    assert!(text.contains("example config"));
+    assert!(text.contains("shadow smoke"));
     assert!(text.contains("non-shadow live"));
     assert!(text.contains("fail-closed"));
 }
