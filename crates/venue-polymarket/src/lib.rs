@@ -1,4 +1,5 @@
-mod auth;
+#[doc(hidden)]
+pub mod auth;
 mod errors;
 mod gateway;
 mod heartbeat;
@@ -8,10 +9,12 @@ mod negrisk_live;
 mod orders;
 mod proxy;
 mod relayer;
-mod rest;
+#[doc(hidden)]
+pub mod rest;
 mod retry;
 mod sdk_backend;
-mod ws_client;
+#[doc(hidden)]
+pub mod ws_client;
 mod ws_market;
 mod ws_session;
 mod ws_user;
@@ -20,8 +23,7 @@ pub use auth::{
     build_l2_auth_headers, build_relayer_auth_headers, derive_builder_relayer_auth_material,
     derive_l2_auth_material, signature_type_label, signature_type_to_wallet_route,
     wallet_route_label, wallet_route_to_signature_type, AuthError,
-    DerivedBuilderRelayerAuthMaterial, DerivedL2AuthMaterial, L2AuthHeaders, RelayerAuth,
-    SignerContext,
+    DerivedBuilderRelayerAuthMaterial, DerivedL2AuthMaterial, RelayerAuth,
 };
 pub use domain::{MarketRoute, NegRiskVariant};
 pub use errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
@@ -43,8 +45,8 @@ pub use orders::{
 };
 pub use relayer::{RelayerTransaction, RelayerTransactionType};
 pub use rest::{
-    BalanceAllowanceResponse, OpenOrderSummary, PolymarketRestClient, RestClientBuildError,
-    RestError, VenueStatusResponse,
+    BalanceAllowanceResponse, OpenOrderSummary, RestClientBuildError, RestError,
+    VenueStatusResponse,
 };
 pub use retry::{map_venue_status, BusinessErrorKind, HttpRetryContext, RetryClass, RetryDecision};
 #[doc(hidden)]
@@ -54,8 +56,8 @@ pub use sdk_backend::{
 };
 pub use url::Url as PolymarketUrl;
 pub use ws_client::{
-    PolymarketWsClient, WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp,
-    WsTransportMessage, WsUserChannelAuth,
+    WsClientError, WsCloseFrame, WsMessageSource, WsSubscriptionOp, WsTransportMessage,
+    WsUserChannelAuth,
 };
 pub use ws_market::{
     parse_market_message, parse_market_messages, MarketBookUpdate, MarketLifecycleUpdate,

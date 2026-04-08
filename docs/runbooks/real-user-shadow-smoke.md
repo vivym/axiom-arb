@@ -16,7 +16,7 @@ Prepare a smoke config at `config/axiom-arb.local.toml` with the preferred high-
 cargo run -p app-live -- bootstrap --config config/axiom-arb.local.toml
 ```
 
-For smoke, `bootstrap` is the Day 0 happy path. It reuses the init wizard, keeps startup authority on `[strategy_control].operator_strategy_revision`, and when no strategy anchor or discovery artifacts exist yet it runs `discover` first. From there it either lists adoptable revisions and waits for explicit confirmation, or it truthfully stops at `discovery-ready-not-adoptable` with the recorded reasons. If you prefer the lower-level Day 0 fallback, run `app-live init`, then `app-live discover`, then `targets candidates`, and finally `targets adopt`. The smoke config must keep rollout lists empty until the operator explicitly confirms the smoke-only rollout posture:
+For smoke, `bootstrap` is the Day 0 happy path. It reuses the init wizard, keeps startup authority on `[strategy_control].operator_strategy_revision`, and when no strategy anchor or discovery artifacts exist yet it runs `discover` first. From there it either lists adoptable revisions and waits for explicit confirmation, or it truthfully stops at `discovery-ready-not-adoptable` with the recorded reasons. If you prefer the lower-level Day 0 fallback, start from `config/axiom-arb.example.toml` or an existing operator-local config, fill the long-lived account and relayer auth values there, then run `discover`, `targets candidates`, and finally `targets adopt`. New configs should stay on built-in defaults plus optional `[polymarket.source_overrides]`; do not introduce legacy `[polymarket.source]`. The smoke config must keep rollout lists empty until the operator explicitly confirms the smoke-only rollout posture:
 
 ```toml
 [runtime]
@@ -46,7 +46,7 @@ The runtime now records a durable `run_session`, so the operator-facing lifecycl
 - `stale` is projected from freshness; it is not stored as a separate durable truth value.
 - `verify` defaults to the latest relevant run session and only falls back to evidence-only when a historical window cannot be tied to a single session.
 
-Before running the smoke with the lower-level Day 0 fallback, materialize discovery artifacts first, then inspect the current control-plane state and adopt the startup-scoped strategy revision you intend to test:
+Before running the smoke with the lower-level Day 0 fallback, materialize discovery artifacts from the example/local config shape first, then inspect the current control-plane state and adopt the startup-scoped strategy revision you intend to test:
 
 ```bash
 cargo run -p app-live -- discover --config config/axiom-arb.local.toml

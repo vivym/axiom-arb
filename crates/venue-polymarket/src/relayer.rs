@@ -1,10 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::{
-    build_relayer_auth_headers, PolymarketRestClient, RelayerAuth, RestError,
-    VenueProducerInstrumentation,
-};
+use crate::auth::{build_relayer_auth_headers, RelayerAuth};
+use crate::instrumentation::VenueProducerInstrumentation;
+use crate::rest::{PolymarketRestClient, RestError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum RelayerTransactionType {

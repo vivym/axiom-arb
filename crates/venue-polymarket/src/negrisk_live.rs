@@ -12,10 +12,11 @@ use execution::{
     SignedFamilySubmission,
 };
 
+use crate::auth::{L2AuthHeaders, RelayerAuth};
 use crate::orders::{build_post_order_request_from_signed_member, PostOrderTransport};
+use crate::rest::{PolymarketRestClient, RestError};
 use crate::{
-    L2AuthHeaders, PolymarketGateway, PolymarketOrderQuery, PolymarketRestClient,
-    PolymarketSignedOrder, PolymarketSubmitResponse, RelayerAuth, RestError,
+    PolymarketGateway, PolymarketOrderQuery, PolymarketSignedOrder, PolymarketSubmitResponse,
 };
 
 const PROVIDER_NAME: &str = "polymarket";

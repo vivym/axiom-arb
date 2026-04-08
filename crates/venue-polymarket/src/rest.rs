@@ -18,8 +18,10 @@ use crate::metadata::{NegRiskMetadataCache, NegRiskMetadataError};
 use crate::orders::PostOrderRequest;
 use crate::proxy::ProxyConfigError;
 use crate::sdk_backend::{PolymarketClobApi, PolymarketMetadataApi, PolymarketRelayerApi};
-use crate::{
+use crate::auth::{
     build_l2_auth_headers, signature_type_label, wallet_route_label, AuthError, L2AuthHeaders,
+};
+use crate::{
     PolymarketGatewayError, PolymarketOrderQuery,
 };
 

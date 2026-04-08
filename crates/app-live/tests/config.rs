@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use app_live::config::PolymarketSourceConfig;
 use app_live::{
@@ -343,6 +343,26 @@ fn operator_facing_account_builds_gateway_credentials() {
     assert_eq!(credentials.api_key, "poly-api-key");
     assert_eq!(credentials.secret, "poly-secret");
     assert_eq!(credentials.passphrase, "poly-passphrase");
+}
+
+#[test]
+fn venue_polymarket_public_lib_omits_legacy_rest_ws_and_auth_reexports() {
+    let text = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../venue-polymarket/src/lib.rs"),
+    )
+    .expect("venue-polymarket lib should be readable");
+
+    for legacy in [
+        "PolymarketRestClient",
+        "PolymarketWsClient",
+        "L2AuthHeaders",
+        "SignerContext",
+    ] {
+        assert!(
+            !text.contains(legacy),
+            "public venue-polymarket lib should not mention legacy export {legacy}"
+        );
+    }
 }
 
 #[test]

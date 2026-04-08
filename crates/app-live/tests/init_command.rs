@@ -121,7 +121,7 @@ ready_families = ["family-b"]
 }
 
 #[test]
-fn init_preserve_keeps_existing_source_block_when_present() {
+fn init_preserve_migrates_existing_source_block_to_source_overrides_when_present() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(
         temp.path(),
@@ -184,16 +184,18 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
         .polymarket
         .as_ref()
         .expect("polymarket section should exist");
-    assert!(text.contains("[polymarket.source]"));
+    assert!(!text.contains("[polymarket.source]"));
+    assert!(text.contains("[polymarket.source_overrides]"));
     assert!(text.contains("clob_host = \"https://custom-clob.example\""));
     assert!(text.contains("metadata_refresh_interval_seconds = 99"));
     assert!(
-        combined(&output).contains("preserved existing [polymarket.source]."),
+        combined(&output)
+            .contains("migrated existing [polymarket.source] into [polymarket.source_overrides]."),
         "{}",
         combined(&output)
     );
-    assert!(polymarket.source.as_ref().is_some());
-    assert!(polymarket.source_overrides.is_none());
+    assert!(polymarket.source.is_none());
+    assert!(polymarket.source_overrides.as_ref().is_some());
 }
 
 #[test]
@@ -273,7 +275,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
 }
 
 #[test]
-fn init_preserve_keeps_existing_source_and_source_overrides_blocks_when_present() {
+fn init_preserve_drops_legacy_source_block_when_source_overrides_already_present() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(
         temp.path(),
@@ -346,17 +348,18 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
         .polymarket
         .as_ref()
         .expect("polymarket section should exist");
-    assert!(text.contains("[polymarket.source]"));
-    assert!(text.contains("clob_host = \"https://source-clob.example\""));
+    assert!(!text.contains("[polymarket.source]"));
+    assert!(!text.contains("clob_host = \"https://source-clob.example\""));
     assert!(text.contains("[polymarket.source_overrides]"));
     assert!(text.contains("clob_host = \"https://override-clob.example\""));
     assert!(
-        combined(&output)
-            .contains("preserved existing [polymarket.source] and [polymarket.source_overrides]."),
+        combined(&output).contains(
+            "kept existing [polymarket.source_overrides] and dropped legacy [polymarket.source].",
+        ),
         "{}",
         combined(&output)
     );
-    assert!(polymarket.source.as_ref().is_some());
+    assert!(polymarket.source.is_none());
     assert!(polymarket.source_overrides.as_ref().is_some());
 }
 

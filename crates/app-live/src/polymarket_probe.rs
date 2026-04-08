@@ -5,12 +5,13 @@ use domain::{SignatureType, WalletRoute};
 use polymarket_client_sdk::ws::config::Config as SdkWsConfig;
 use tokio::sync::Mutex as AsyncMutex;
 use venue_polymarket::{
-    L2AuthHeaders, LiveRelayerApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
+    auth::{L2AuthHeaders, RelayerAuth, SignerContext},
+    rest::{PolymarketRestClient, RestClientBuildError, RestError},
+    ws_client::{PolymarketWsClient, RealWsMessageSource, WsUserChannelAuth},
+    LiveRelayerApi, LiveWsSdkApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
     PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
-    PolymarketOrderQuery, PolymarketRestClient, PolymarketSignedOrder, PolymarketStreamApi,
-    PolymarketSubmitResponse, PolymarketUserStreamAuth, PolymarketWsClient, RelayerAuth,
-    RestClientBuildError, RestError, SignerContext, UserWsEvent, WsUserChannelAuth,
-    LiveWsSdkApi,
+    PolymarketOrderQuery, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
+    PolymarketUserStreamAuth, UserWsEvent,
 };
 
 use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig};
@@ -311,7 +312,7 @@ impl PolymarketClobApi for LegacyClobProbeApi {
 
 struct LegacyStreamProbeApi {
     source_config: PolymarketSourceConfig,
-    ws_client: AsyncMutex<Option<PolymarketWsClient>>,
+    ws_client: AsyncMutex<Option<PolymarketWsClient<RealWsMessageSource>>>,
 }
 
 impl LegacyStreamProbeApi {
