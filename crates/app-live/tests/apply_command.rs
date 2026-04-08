@@ -634,12 +634,15 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
     let database = apply_db::TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
     let venue = MockDoctorVenue::success();
-    let config_path = temp_sdk_config_fixture_path("app-live-ux-live.toml", |config| {
-        format!(
+    let config_path = temp_non_eoa_sdk_live_config_fixture_path(
+        "app-live-ux-live.toml",
+        |config| {
+            format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
         )
-    });
+        },
+    );
 
     let output = app_live_command()
         .arg("apply")
@@ -1061,12 +1064,15 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
     let database = apply_db::TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
     let venue = MockDoctorVenue::success();
-    let config_path = temp_sdk_config_fixture_path("app-live-ux-live.toml", |config| {
-        format!(
+    let config_path = temp_non_eoa_sdk_live_config_fixture_path(
+        "app-live-ux-live.toml",
+        |config| {
+            format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
         )
-    });
+        },
+    );
 
     let output = run_apply_with_options_with_private_key(
         &config_path,
@@ -1156,12 +1162,15 @@ fn apply_live_conflicting_active_running_session_with_start_stops_at_boundary() 
 fn apply_live_stale_active_run_session_id_does_not_block_restart_path() {
     let database = TestDatabase::new();
     let venue = MockDoctorVenue::success();
-    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        format!(
+    let config_path = temp_non_eoa_sdk_live_config_fixture_path(
+        "app-live-ux-live.toml",
+        |config| {
+            format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
         )
-    });
+        },
+    );
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
     database.seed_run_session(live_run_session(
         "rs-stale",
@@ -1202,12 +1211,15 @@ fn apply_live_stale_active_run_session_id_does_not_block_restart_path() {
 fn apply_live_exited_active_run_session_id_does_not_block_restart_path() {
     let database = TestDatabase::new();
     let venue = MockDoctorVenue::success();
-    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        format!(
+    let config_path = temp_non_eoa_sdk_live_config_fixture_path(
+        "app-live-ux-live.toml",
+        |config| {
+            format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
         )
-    });
+        },
+    );
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
     database.seed_run_session(live_run_session(
         "rs-exited",
@@ -1264,6 +1276,15 @@ fn temp_sdk_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> Str
     })
 }
 
+fn temp_non_eoa_sdk_live_config_fixture_path(
+    relative: &str,
+    edit: impl FnOnce(String) -> String,
+) -> PathBuf {
+    temp_sdk_config_fixture_path(relative, |config| {
+        edit(normalize_non_eoa_live_fixture(config))
+    })
+}
+
 fn normalize_sdk_fixture(config: String) -> String {
     config
         .replace(
@@ -1289,6 +1310,15 @@ fn normalize_sdk_fixture(config: String) -> String {
             "0x0000000000000000000000000000000000000000000000000000000000000001",
         )
         .replace("token-1", "29")
+}
+
+fn normalize_non_eoa_live_fixture(config: String) -> String {
+    format!(
+        "{}\n\n[polymarket.relayer_auth]\nkind = \"relayer_api_key\"\napi_key = \"relay-key\"\naddress = \"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\"\n",
+        config
+            .replace("signature_type = \"eoa\"", "signature_type = \"proxy\"")
+            .replace("wallet_route = \"eoa\"", "wallet_route = \"proxy\"")
+    )
 }
 
 fn compatibility_mode_live_config_path() -> PathBuf {

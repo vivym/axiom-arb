@@ -109,13 +109,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"

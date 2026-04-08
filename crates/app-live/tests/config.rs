@@ -14,6 +14,11 @@ use app_live::{
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use rust_decimal::Decimal;
 
+#[path = "support/cli.rs"]
+mod cli;
+#[path = "support/verify_db.rs"]
+mod verify_db;
+
 #[test]
 fn parses_neg_risk_live_target_config_from_validated_view() {
     let config = NegRiskLiveTargetSet::try_from(&live_view(NEG_RISK_TARGETS_A)).unwrap();
@@ -537,6 +542,26 @@ fn relayer_auth_fields_trim_whitespace_before_validation() {
     assert!(error
         .to_string()
         .contains("polymarket.relayer_auth.timestamp"));
+}
+
+#[test]
+fn canonical_eoa_support_configs_omit_relayer_auth() {
+    for config_text in [
+        verify_db::live_ready_config(),
+        verify_db::live_ready_strategy_config(),
+        verify_db::smoke_rollout_required_config(),
+        verify_db::smoke_ready_config(),
+    ] {
+        let raw = load_raw_config_from_str(&config_text).expect("support config should parse");
+        let validated =
+            ValidatedConfig::new(raw).expect("canonical EOA support config should validate");
+        let live = validated
+            .for_app_live()
+            .expect("canonical EOA support config should load in app-live view");
+
+        assert!(live.has_polymarket_account());
+        assert!(live.polymarket_relayer_auth().is_none());
+    }
 }
 
 #[test]

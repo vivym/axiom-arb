@@ -521,11 +521,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [strategy_control]
 source = "adopted"
 operator_strategy_revision = "{operator_strategy_revision}"
@@ -558,11 +553,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "{operator_target_revision}"
@@ -589,11 +579,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "{operator_target_revision}"
@@ -618,11 +603,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"
@@ -658,11 +638,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [polymarket.source_overrides]
 clob_host = "https://clob.polymarket.com"

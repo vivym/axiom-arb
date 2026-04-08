@@ -843,13 +843,6 @@ api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
-
 [negrisk.rollout]
 approved_families = ["family-a"]
 ready_families = ["family-a"]
