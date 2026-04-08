@@ -18,11 +18,19 @@ secret = "YOUR_API_SECRET"
 passphrase = "YOUR_PASSPHRASE"
 # L2 auth timestamp/signature are derived at startup. Do not hand-author them here.
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "YOUR_RELAYER_API_KEY"
-address = "0xYOUR_RELAYER_API_KEY_ADDRESS"
-
+# EOA operators stop here. Do not add [polymarket.relayer_auth].
+#
+# Proxy/safe operators keep `signature_type` and `wallet_route` in sync and add one of these
+# relayer auth shapes:
+#
+# signature_type = "safe"
+# wallet_route = "safe"
+#
+# [polymarket.relayer_auth]
+# kind = "relayer_api_key"
+# api_key = "YOUR_RELAYER_API_KEY"
+# address = "0xYOUR_RELAYER_API_KEY_ADDRESS"
+#
 # Builder API key operators can switch to this shape instead:
 # [polymarket.relayer_auth]
 # kind = "builder_api_key"

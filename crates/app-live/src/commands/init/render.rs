@@ -7,14 +7,52 @@ use config_schema::{
 
 use super::InitError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiveInitWalletKind {
+    Eoa,
+    Proxy,
+    Safe,
+}
+
+impl LiveInitWalletKind {
+    pub fn option_label(self) -> &'static str {
+        match self {
+            Self::Eoa => "eoa",
+            Self::Proxy => "proxy",
+            Self::Safe => "safe",
+        }
+    }
+
+    pub fn signature_type(self) -> SignatureTypeToml {
+        match self {
+            Self::Eoa => SignatureTypeToml::Eoa,
+            Self::Proxy => SignatureTypeToml::Proxy,
+            Self::Safe => SignatureTypeToml::Safe,
+        }
+    }
+
+    pub fn wallet_route(self) -> WalletRouteToml {
+        match self {
+            Self::Eoa => WalletRouteToml::Eoa,
+            Self::Proxy => WalletRouteToml::Proxy,
+            Self::Safe => WalletRouteToml::Safe,
+        }
+    }
+
+    pub fn requires_relayer_auth(self) -> bool {
+        !matches!(self, Self::Eoa)
+    }
+}
+
 pub struct LiveInitAnswers {
+    pub wallet_kind: LiveInitWalletKind,
     pub account_address: String,
     pub funder_address: Option<String>,
     pub account_api_key: String,
     pub account_secret: String,
     pub account_passphrase: String,
-    pub relayer_auth_kind: RelayerAuthKindToml,
-    pub relayer_api_key: String,
+    pub relayer_auth_kind: Option<RelayerAuthKindToml>,
+    pub relayer_api_key: Option<String>,
     pub relayer_secret: Option<String>,
     pub relayer_passphrase: Option<String>,
     pub relayer_address: Option<String>,
@@ -36,21 +74,29 @@ pub fn render_live_config(
             account: Some(PolymarketAccountToml {
                 address: answers.account_address,
                 funder_address: answers.funder_address,
-                signature_type: SignatureTypeToml::Eoa,
-                wallet_route: WalletRouteToml::Eoa,
+                signature_type: answers.wallet_kind.signature_type(),
+                wallet_route: answers.wallet_kind.wallet_route(),
                 api_key: answers.account_api_key,
                 secret: answers.account_secret,
                 passphrase: answers.account_passphrase,
             }),
-            relayer_auth: Some(PolymarketRelayerAuthToml {
-                kind: answers.relayer_auth_kind,
-                api_key: answers.relayer_api_key,
-                secret: answers.relayer_secret,
-                timestamp: None,
-                passphrase: answers.relayer_passphrase,
-                signature: None,
-                address: answers.relayer_address,
-            }),
+            relayer_auth: if answers.wallet_kind.requires_relayer_auth() {
+                Some(PolymarketRelayerAuthToml {
+                    kind: answers
+                        .relayer_auth_kind
+                        .expect("non-EOA init flow should collect relayer auth kind"),
+                    api_key: answers
+                        .relayer_api_key
+                        .expect("non-EOA init flow should collect relayer API key"),
+                    secret: answers.relayer_secret,
+                    timestamp: None,
+                    passphrase: answers.relayer_passphrase,
+                    signature: None,
+                    address: answers.relayer_address,
+                })
+            } else {
+                None
+            },
             source_overrides: None,
             source: None,
             signer: None,
@@ -113,8 +159,6 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
             if account.funder_address.is_none() {
                 account.funder_address = existing_account.funder_address.clone();
             }
-            account.signature_type = existing_account.signature_type;
-            account.wallet_route = existing_account.wallet_route;
         }
     }
 

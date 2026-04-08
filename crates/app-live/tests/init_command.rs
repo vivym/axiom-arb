@@ -63,7 +63,7 @@ ready_families = ["family-b"]
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nrelay-key-1\nrelay-secret-1\nrelay-passphrase-1\n",
+            b"live\npreserve\nsafe\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nrelay-key-1\nrelay-secret-1\nrelay-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -171,7 +171,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\npreserve\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -249,7 +249,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\npreserve\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -335,7 +335,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\npreserve\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -375,8 +375,8 @@ mode = "live"
 [polymarket.account]
 address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-signature_type = "eoa"
-wallet_route = "eoa"
+signature_type = "safe"
+wallet_route = "safe"
 api_key = "existing-account-api-key"
 secret = "existing-account-secret"
 passphrase = "existing-account-passphrase"
@@ -415,7 +415,7 @@ ready_families = ["family-b"]
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\npreserve\nsafe\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
         )
         .expect("wizard answers should write");
 
@@ -464,7 +464,7 @@ ready_families = ["family-b"]
 }
 
 #[test]
-fn init_preserve_rejects_invalid_merged_config_before_writing() {
+fn init_preserve_new_wallet_kind_overrides_stale_invalid_existing_account_kind() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     let original = r#"
 [runtime]
@@ -477,11 +477,6 @@ wallet_route = "eoa"
 api_key = "existing-account-api-key"
 secret = "existing-account-secret"
 passphrase = "existing-account-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "existing-relay-key"
-address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 [negrisk.target_source]
 source = "adopted"
@@ -508,15 +503,23 @@ ready_families = ["family-b"]
         .take()
         .expect("stdin")
         .write_all(
-            b"live\npreserve\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\npreserve\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
     let output = child.wait_with_output().expect("output");
-    assert!(!output.status.success(), "{}", combined(&output));
+    assert!(output.status.success(), "{}", combined(&output));
     let text = fs::read_to_string(temp.path()).expect("config should still exist");
-    assert_eq!(text, original);
-    assert!(combined(&output).contains("wallet_route must match polymarket.account.signature_type"));
+    assert_ne!(text, original);
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let live = validated
+        .for_app_live()
+        .expect("generated live config should validate");
+    let account = live.account().expect("account should exist");
+    assert_eq!(account.signature_type_label(), "Eoa");
+    assert_eq!(account.wallet_route_label(), "Eoa");
+    assert!(live.polymarket_relayer_auth().is_none());
 }
 
 #[test]
@@ -554,7 +557,7 @@ ready_families = ["family-b"]
         .take()
         .expect("stdin")
         .write_all(
-            b"live\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -692,7 +695,7 @@ fn init_without_operator_target_revision_points_operator_to_candidates_then_adop
         .take()
         .expect("stdin")
         .write_all(
-            b"live\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nrelay-key-1\nrelay-secret-1\nrelay-passphrase-1\n",
+            b"live\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -723,7 +726,7 @@ fn init_with_empty_rollout_warns_that_negrisk_work_remains_inactive() {
         .take()
         .expect("stdin")
         .write_all(
-            b"live\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -767,7 +770,7 @@ fn init_paper_summary_only_points_to_doctor_then_run() {
 }
 
 #[test]
-fn init_interactive_live_writes_account_relayer_target_source_and_safe_empty_rollout() {
+fn init_interactive_live_writes_eoa_account_target_source_and_safe_empty_rollout() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     let mut child = Command::new(app_live_binary())
         .arg("init")
@@ -784,7 +787,7 @@ fn init_interactive_live_writes_account_relayer_target_source_and_safe_empty_rol
         .take()
         .expect("stdin")
         .write_all(
-            b"live\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"live\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -799,9 +802,7 @@ fn init_interactive_live_writes_account_relayer_target_source_and_safe_empty_rol
     assert!(text.contains("address = \"0x1111111111111111111111111111111111111111\""));
     assert!(!text.contains("timestamp ="));
     assert!(!text.contains("signature ="));
-    assert!(text.contains("[polymarket.relayer_auth]"));
-    assert!(text.contains("kind = \"relayer_api_key\""));
-    assert!(text.contains("api_key = \"relay-key-1\""));
+    assert!(!text.contains("[polymarket.relayer_auth]"));
     assert!(text.contains("[negrisk.target_source]"));
     assert!(text.contains("source = \"adopted\""));
     assert!(!text.contains("operator_target_revision ="));
@@ -809,14 +810,53 @@ fn init_interactive_live_writes_account_relayer_target_source_and_safe_empty_rol
     assert!(text.contains("approved_families = []"));
     assert!(text.contains("ready_families = []"));
     assert!(!text.contains("[polymarket.source]"));
-    assert!(combined(&output).contains("app-live targets candidates --config"));
-    assert!(combined(&output).contains("app-live targets adopt --config"));
-    assert!(combined(&output).contains("--adoptable-revision ADOPTABLE_REVISION"));
-    assert!(combined(&output).contains("app-live doctor --config"));
-    assert!(combined(&output).contains("app-live run --config"));
-    assert!(!combined(&output).contains("[polymarket.source]"));
-    assert!(combined(&output).contains("built-in defaults"));
-    assert!(combined(&output).contains("source_overrides"));
+    let combined = combined(&output);
+    assert!(combined.contains("app-live targets candidates --config"));
+    assert!(combined.contains("app-live targets adopt --config"));
+    assert!(combined.contains("--adoptable-revision ADOPTABLE_REVISION"));
+    assert!(combined.contains("app-live doctor --config"));
+    assert!(combined.contains("app-live run --config"));
+    assert!(!combined.contains("[polymarket.source]"));
+    assert!(combined.contains("built-in defaults"));
+    assert!(combined.contains("source_overrides"));
+    assert!(!combined.contains("[polymarket.relayer_auth]"));
+    assert_generated_live_config_is_schema_valid(&text);
+}
+
+#[test]
+fn init_interactive_live_eoa_omits_relayer_auth() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    assert!(text.contains("[polymarket.account]"));
+    assert!(!text.contains("[polymarket.relayer_auth]"));
+    let combined = combined(&output);
+    assert!(combined.contains("[polymarket.account]"), "{combined}");
+    assert!(
+        !combined.contains("[polymarket.relayer_auth]"),
+        "{combined}"
+    );
     assert_generated_live_config_is_schema_valid(&text);
 }
 
@@ -838,7 +878,7 @@ fn init_interactive_smoke_sets_live_mode_plus_shadow_guard() {
         .take()
         .expect("stdin")
         .write_all(
-            b"smoke\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nrelayer_api_key\nrelay-key-1\n0x2222222222222222222222222222222222222222\n",
+            b"smoke\nreplace\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -849,22 +889,93 @@ fn init_interactive_smoke_sets_live_mode_plus_shadow_guard() {
     assert!(text.contains("mode = \"live\""));
     assert!(text.contains("real_user_shadow_smoke = true"));
     assert!(text.contains("[polymarket.account]"));
-    assert!(text.contains("[polymarket.relayer_auth]"));
-    assert!(text.contains("kind = \"relayer_api_key\""));
+    assert!(!text.contains("[polymarket.relayer_auth]"));
     assert!(text.contains("[negrisk.target_source]"));
     assert!(text.contains("source = \"adopted\""));
     assert!(text.contains("approved_families = []"));
     assert!(text.contains("ready_families = []"));
     assert!(!text.contains("[polymarket.source]"));
-    assert!(combined(&output).contains("app-live targets candidates --config"));
-    assert!(combined(&output).contains("app-live targets adopt --config"));
-    assert!(combined(&output).contains("--adoptable-revision ADOPTABLE_REVISION"));
-    assert!(combined(&output).contains("app-live doctor --config"));
-    assert!(combined(&output).contains("app-live run --config"));
-    assert!(!combined(&output).contains("[polymarket.source]"));
-    assert!(combined(&output).contains("built-in defaults"));
-    assert!(combined(&output).contains("source_overrides"));
+    let combined = combined(&output);
+    assert!(combined.contains("app-live targets candidates --config"));
+    assert!(combined.contains("app-live targets adopt --config"));
+    assert!(combined.contains("--adoptable-revision ADOPTABLE_REVISION"));
+    assert!(combined.contains("app-live doctor --config"));
+    assert!(combined.contains("app-live run --config"));
+    assert!(!combined.contains("[polymarket.source]"));
+    assert!(combined.contains("built-in defaults"));
+    assert!(combined.contains("source_overrides"));
+    assert!(!combined.contains("[polymarket.relayer_auth]"));
     assert_generated_live_config_is_schema_valid(&text);
+}
+
+#[test]
+fn init_preserve_eoa_rewrites_stale_relayer_section_out_of_config() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "existing-account-api-key"
+secret = "existing-account-secret"
+passphrase = "existing-account-passphrase"
+
+[polymarket.relayer_auth]
+kind = "relayer_api_key"
+api_key = "existing-relay-key"
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-b"]
+"#,
+    )
+    .expect("seed existing config");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\npreserve\neoa\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let live = validated
+        .for_app_live()
+        .expect("generated live config should validate");
+
+    assert!(live.polymarket_relayer_auth().is_none());
+    assert!(!text.contains("[polymarket.relayer_auth]"));
+    assert!(text.contains("operator_target_revision = \"targets-rev-9\""));
+    assert!(text.contains("approved_families = [\"family-a\"]"));
+    assert!(text.contains("ready_families = [\"family-b\"]"));
 }
 
 #[test]
@@ -885,7 +996,7 @@ fn init_interactive_live_supports_builder_relayer_auth_without_transient_fields(
         .take()
         .expect("stdin")
         .write_all(
-            b"live\nreplace\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nbuilder-relayer-key-1\nbuilder-relayer-secret-1\nbuilder-relayer-passphrase-1\n",
+            b"live\nreplace\nsafe\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nbuilder-relayer-key-1\nbuilder-relayer-secret-1\nbuilder-relayer-passphrase-1\n",
         )
         .expect("wizard answers should write");
 
@@ -903,7 +1014,50 @@ fn init_interactive_live_supports_builder_relayer_auth_without_transient_fields(
 }
 
 #[test]
-fn example_config_omits_default_source_block_and_points_to_source_overrides() {
+fn init_interactive_non_eoa_still_collects_and_renders_relayer_auth() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\nreplace\nsafe\n0x1111111111111111111111111111111111111111\n0x2222222222222222222222222222222222222222\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nbuilder-relayer-key-1\nbuilder-relayer-secret-1\nbuilder-relayer-passphrase-1\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    let raw = load_raw_config_from_str(&text).expect("generated config should parse");
+    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let live = validated
+        .for_app_live()
+        .expect("generated live config should validate");
+
+    let account = live.account().expect("account should exist");
+    assert_eq!(account.signature_type_label(), "Safe");
+    assert_eq!(account.wallet_route_label(), "Safe");
+    let relayer_auth = live
+        .polymarket_relayer_auth()
+        .expect("non-EOA path should still render relayer auth");
+    assert!(relayer_auth.is_builder_api_key());
+    assert!(text.contains("[polymarket.relayer_auth]"));
+    assert!(text.contains("kind = \"builder_api_key\""));
+}
+
+#[test]
+fn example_config_omits_default_source_block_and_separates_eoa_from_non_eoa_relayer_examples() {
     let text = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/axiom-arb.example.toml"),
     )
@@ -911,6 +1065,9 @@ fn example_config_omits_default_source_block_and_points_to_source_overrides() {
     assert!(!text.contains("[polymarket.source]"));
     assert!(text.contains("built-in defaults"));
     assert!(text.contains("source_overrides"));
+    assert!(!text.contains("\n[polymarket.relayer_auth]\n"));
+    assert!(text.contains("EOA"));
+    assert!(text.contains("# [polymarket.relayer_auth]"));
 }
 
 fn app_live_binary() -> PathBuf {

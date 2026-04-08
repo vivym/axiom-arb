@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::{
     prompt::{self, PromptIo},
-    render::{self, LiveInitAnswers},
+    render::{self, LiveInitAnswers, LiveInitWalletKind},
     summary::{self, InitSummary, WizardMode, WizardSummary},
     InitError,
 };
@@ -18,6 +18,7 @@ pub(crate) fn paper(config_path: &Path) -> WizardResult {
         rendered_config: render_paper_config(),
         summary: summary::render(InitSummary {
             mode: WizardMode::Paper,
+            wallet_kind: LiveInitWalletKind::Eoa,
             config_path,
             has_existing_polymarket_source: false,
             has_existing_polymarket_source_overrides: false,
@@ -77,6 +78,7 @@ fn render_live_or_smoke<P: PromptIo>(
         None
     };
     let answers = collect_live_answers(prompt)?;
+    let wallet_kind = answers.wallet_kind;
     let rendered_config =
         render::render_live_config(answers, real_user_shadow_smoke, existing_config.as_ref())?;
     Ok(WizardResult {
@@ -85,6 +87,7 @@ fn render_live_or_smoke<P: PromptIo>(
             config_path,
             real_user_shadow_smoke,
             existing_config.as_ref(),
+            wallet_kind,
         )),
     })
 }
@@ -93,6 +96,7 @@ fn build_summary_view<'a>(
     config_path: &'a Path,
     real_user_shadow_smoke: bool,
     existing_config: Option<&'a RawAxiomConfig>,
+    wallet_kind: LiveInitWalletKind,
 ) -> InitSummary<'a> {
     let configured_operator_target_revision = existing_config
         .and_then(|config| config.negrisk.as_ref())
@@ -120,6 +124,7 @@ fn build_summary_view<'a>(
         } else {
             WizardMode::Live
         },
+        wallet_kind,
         config_path,
         has_existing_polymarket_source,
         has_existing_polymarket_source_overrides,
@@ -150,35 +155,56 @@ fn select_existing_config_mode<P: PromptIo>(
 }
 
 fn collect_live_answers<P: PromptIo>(prompt: &mut P) -> Result<LiveInitAnswers, InitError> {
+    let wallet_kind =
+        match prompt::select_one(prompt, "Choose a wallet kind:", &["eoa", "proxy", "safe"])? {
+            0 => LiveInitWalletKind::Eoa,
+            1 => LiveInitWalletKind::Proxy,
+            2 => LiveInitWalletKind::Safe,
+            _ => unreachable!("prompt selection should stay within the provided options"),
+        };
     let account_address = prompt::ask_nonempty(prompt, "Account address:")?;
     let funder_address = ask_optional(prompt, "Funder address (optional, press Enter to skip):")?;
     let account_api_key = prompt::ask_nonempty(prompt, "Account API key:")?;
     let account_secret = prompt::ask_nonempty(prompt, "Account secret:")?;
     let account_passphrase = prompt::ask_nonempty(prompt, "Account passphrase:")?;
-    let relayer_auth_kind = match prompt::select_one(
-        prompt,
-        "Choose a relayer auth type:",
-        &["builder_api_key", "relayer_api_key"],
-    )? {
-        0 => config_schema::RelayerAuthKindToml::BuilderApiKey,
-        1 => config_schema::RelayerAuthKindToml::RelayerApiKey,
-        _ => unreachable!("prompt selection should stay within the provided options"),
-    };
-    let relayer_api_key = prompt::ask_nonempty(prompt, "Relayer API key:")?;
+    let (relayer_auth_kind, relayer_api_key, relayer_secret, relayer_passphrase, relayer_address) =
+        if wallet_kind.requires_relayer_auth() {
+            let relayer_auth_kind = match prompt::select_one(
+                prompt,
+                "Choose a relayer auth type:",
+                &["builder_api_key", "relayer_api_key"],
+            )? {
+                0 => config_schema::RelayerAuthKindToml::BuilderApiKey,
+                1 => config_schema::RelayerAuthKindToml::RelayerApiKey,
+                _ => unreachable!("prompt selection should stay within the provided options"),
+            };
+            let relayer_api_key = prompt::ask_nonempty(prompt, "Relayer API key:")?;
 
-    let (relayer_secret, relayer_passphrase, relayer_address) = match relayer_auth_kind {
-        config_schema::RelayerAuthKindToml::BuilderApiKey => {
-            let relayer_secret = prompt::ask_nonempty(prompt, "Relayer secret:")?;
-            let relayer_passphrase = prompt::ask_nonempty(prompt, "Relayer passphrase:")?;
-            (Some(relayer_secret), Some(relayer_passphrase), None)
-        }
-        config_schema::RelayerAuthKindToml::RelayerApiKey => {
-            let relayer_address = prompt::ask_nonempty(prompt, "Relayer address:")?;
-            (None, None, Some(relayer_address))
-        }
-    };
+            let (relayer_secret, relayer_passphrase, relayer_address) = match relayer_auth_kind {
+                config_schema::RelayerAuthKindToml::BuilderApiKey => {
+                    let relayer_secret = prompt::ask_nonempty(prompt, "Relayer secret:")?;
+                    let relayer_passphrase = prompt::ask_nonempty(prompt, "Relayer passphrase:")?;
+                    (Some(relayer_secret), Some(relayer_passphrase), None)
+                }
+                config_schema::RelayerAuthKindToml::RelayerApiKey => {
+                    let relayer_address = prompt::ask_nonempty(prompt, "Relayer address:")?;
+                    (None, None, Some(relayer_address))
+                }
+            };
+
+            (
+                Some(relayer_auth_kind),
+                Some(relayer_api_key),
+                relayer_secret,
+                relayer_passphrase,
+                relayer_address,
+            )
+        } else {
+            (None, None, None, None, None)
+        };
 
     Ok(LiveInitAnswers {
+        wallet_kind,
         account_address,
         funder_address,
         account_api_key,

@@ -1,7 +1,10 @@
 use std::path::Path;
 
+use super::render::LiveInitWalletKind;
+
 pub struct InitSummary<'a> {
     pub mode: WizardMode,
+    pub wallet_kind: LiveInitWalletKind,
     pub config_path: &'a Path,
     pub has_existing_polymarket_source: bool,
     pub has_existing_polymarket_source_overrides: bool,
@@ -60,15 +63,19 @@ fn render_live_summary(summary: InitSummary<'_>) -> WizardSummary {
     if matches!(summary.mode, WizardMode::Smoke) {
         lines.push("real_user_shadow_smoke = true".to_string());
     }
-    lines.extend([
-        "[polymarket.account]".to_string(),
-        "[polymarket.relayer_auth]".to_string(),
-        polymarket_source_summary_line(
-            summary.has_existing_polymarket_source,
-            summary.has_existing_polymarket_source_overrides,
-        ),
-        "[negrisk.target_source]".to_string(),
-    ]);
+    lines.push("[polymarket.account]".to_string());
+    lines.push(format!(
+        "wallet kind = {}",
+        summary.wallet_kind.option_label()
+    ));
+    if summary.wallet_kind.requires_relayer_auth() {
+        lines.push("[polymarket.relayer_auth]".to_string());
+    }
+    lines.push(polymarket_source_summary_line(
+        summary.has_existing_polymarket_source,
+        summary.has_existing_polymarket_source_overrides,
+    ));
+    lines.push("[negrisk.target_source]".to_string());
     if let Some(revision) = summary.configured_operator_target_revision {
         lines.push(format!("operator_target_revision = \"{revision}\""));
     }
