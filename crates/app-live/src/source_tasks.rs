@@ -26,7 +26,6 @@ pub struct RealUserShadowSmokeSources {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmokeMetadataBackend {
     Sdk,
-    LegacyRest,
 }
 
 impl SmokeMetadataBackend {
@@ -34,7 +33,6 @@ impl SmokeMetadataBackend {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Sdk => "sdk",
-            Self::LegacyRest => "legacy-rest",
         }
     }
 }
@@ -43,7 +41,6 @@ impl From<PolymarketMetadataGatewayBackend> for SmokeMetadataBackend {
     fn from(value: PolymarketMetadataGatewayBackend) -> Self {
         match value {
             PolymarketMetadataGatewayBackend::Sdk => Self::Sdk,
-            PolymarketMetadataGatewayBackend::LegacyRest => Self::LegacyRest,
         }
     }
 }

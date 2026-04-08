@@ -151,10 +151,8 @@ async fn polymarket_submit_provider_rejects_multi_member_family_without_submitti
 #[tokio::test]
 async fn polymarket_submit_provider_can_use_gateway_without_http_side_effects() {
     let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
-    let provider = sample_submit_provider_with_gateway(
-        server.base_url(),
-        scripted_gateway_with_open_orders(Vec::new()),
-    );
+    let provider =
+        sample_submit_provider_with_gateway(scripted_gateway_with_open_orders(Vec::new()));
 
     let outcome = provider
         .submit_family(&sample_signed_submission(), &sample_attempt())
@@ -188,7 +186,7 @@ async fn polymarket_submit_provider_rejects_multi_member_family_before_gateway_s
             Err(PolymarketGatewayError::protocol("gateway submit failed")),
         ],
     )));
-    let provider = sample_submit_provider_with_gateway(server.base_url(), gateway);
+    let provider = sample_submit_provider_with_gateway(gateway);
 
     let err = provider
         .submit_family(&sample_multi_member_submission(), &sample_attempt())
@@ -304,10 +302,9 @@ async fn polymarket_reconcile_provider_confirms_matching_open_order_for_order_pe
 #[tokio::test]
 async fn polymarket_reconcile_provider_confirms_gateway_open_order_without_http_side_effects() {
     let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
-    let provider = sample_reconcile_provider_with_gateway(
-        server.base_url(),
-        scripted_gateway_with_open_orders(vec![scripted_open_order("order-gateway-open")]),
-    );
+    let provider = sample_reconcile_provider_with_gateway(scripted_gateway_with_open_orders(vec![
+        scripted_open_order("order-gateway-open"),
+    ]));
 
     let outcome = provider
         .reconcile_live(&sample_pending_work("order:order-gateway-open"))
@@ -326,13 +323,10 @@ async fn polymarket_reconcile_provider_confirms_gateway_open_order_without_http_
 #[tokio::test]
 async fn polymarket_reconcile_provider_confirms_gateway_tx_without_http_side_effects() {
     let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
-    let provider = sample_reconcile_provider_with_gateway(
-        server.base_url(),
-        scripted_gateway_with_relayer(
-            Ok(vec![confirmed_transaction("0xtx-gateway")]),
-            Ok("60".to_owned()),
-        ),
-    );
+    let provider = sample_reconcile_provider_with_gateway(scripted_gateway_with_relayer(
+        Ok(vec![confirmed_transaction("0xtx-gateway")]),
+        Ok("60".to_owned()),
+    ));
 
     let outcome = provider
         .reconcile_live(&sample_pending_work("tx:0xtx-gateway"))
@@ -351,15 +345,12 @@ async fn polymarket_reconcile_provider_confirms_gateway_tx_without_http_side_eff
 #[tokio::test]
 async fn polymarket_reconcile_provider_maps_gateway_relayer_errors_to_provider_errors() {
     let server = MockServer::spawn("200 OK", r#"{"unused":true}"#);
-    let provider = sample_reconcile_provider_with_gateway(
-        server.base_url(),
-        scripted_gateway_with_relayer(
-            Err(venue_polymarket::PolymarketGatewayError::relayer(
-                "gateway relayer down",
-            )),
-            Ok("60".to_owned()),
-        ),
-    );
+    let provider = sample_reconcile_provider_with_gateway(scripted_gateway_with_relayer(
+        Err(venue_polymarket::PolymarketGatewayError::relayer(
+            "gateway relayer down",
+        )),
+        Ok("60".to_owned()),
+    ));
 
     let err = provider
         .reconcile_live(&sample_pending_work("tx:0xtx-gateway"))
@@ -388,7 +379,6 @@ fn polymarket_submit_provider_with_gateway_runtime_executes_on_supplied_runtime(
     let recorder = Arc::new(Mutex::new(Vec::new()));
     let runtime = SharedRuntimeHarness::spawn("shared-gateway-submit");
     let provider = sample_submit_provider_with_gateway_runtime(
-        server.base_url(),
         PolymarketGateway::from_clob_api(Arc::new(ThreadRecordingClobApi {
             submit_threads: recorder.clone(),
         })),
@@ -417,7 +407,6 @@ fn polymarket_reconcile_provider_with_gateway_runtime_executes_on_supplied_runti
     let recorder = Arc::new(Mutex::new(Vec::new()));
     let runtime = SharedRuntimeHarness::spawn("shared-gateway-reconcile");
     let provider = sample_reconcile_provider_with_gateway_runtime(
-        server.base_url(),
         PolymarketGateway::from_relayer_api(Arc::new(ThreadRecordingRelayerApi {
             recent_transactions: vec![confirmed_transaction("0xtx-shared-runtime")],
             recent_threads: recorder.clone(),
@@ -447,7 +436,6 @@ fn polymarket_reconcile_open_orders_with_gateway_runtime_executes_on_supplied_ru
     let recorder = Arc::new(Mutex::new(Vec::new()));
     let runtime = SharedRuntimeHarness::spawn("shared-gateway-open-orders");
     let provider = sample_reconcile_provider_with_gateway_runtime(
-        server.base_url(),
         PolymarketGateway::from_clob_api(Arc::new(ThreadRecordingOpenOrdersClobApi {
             open_orders: vec![scripted_open_order("order-shared-open")],
             open_order_threads: recorder.clone(),
@@ -482,7 +470,6 @@ fn polymarket_submit_provider_with_shutdown_runtime_surfaces_provider_error() {
     let runtime_handle = runtime.handle().clone();
     drop(runtime);
     let provider = sample_submit_provider_with_gateway_runtime(
-        server.base_url(),
         scripted_gateway_with_open_orders(Vec::new()),
         runtime_handle,
     );
@@ -506,7 +493,6 @@ fn polymarket_reconcile_provider_with_shutdown_runtime_surfaces_provider_error()
     let runtime_handle = runtime.handle().clone();
     drop(runtime);
     let provider = sample_reconcile_provider_with_gateway_runtime(
-        server.base_url(),
         scripted_gateway_with_open_orders(vec![scripted_open_order("order-unused")]),
         runtime_handle,
     );
@@ -528,11 +514,9 @@ fn sample_submit_provider(base_url: Url) -> PolymarketNegRiskSubmitProvider<'sta
 }
 
 fn sample_submit_provider_with_gateway(
-    base_url: Url,
     gateway: PolymarketGateway,
 ) -> PolymarketNegRiskSubmitProvider<'static> {
     PolymarketNegRiskSubmitProvider::with_gateway(
-        sample_rest_client(base_url),
         sample_l2_auth(),
         sample_post_order_transport(),
         gateway,
@@ -540,12 +524,10 @@ fn sample_submit_provider_with_gateway(
 }
 
 fn sample_submit_provider_with_gateway_runtime(
-    base_url: Url,
     gateway: PolymarketGateway,
     runtime_handle: tokio::runtime::Handle,
 ) -> PolymarketNegRiskSubmitProvider<'static> {
     PolymarketNegRiskSubmitProvider::with_gateway_runtime(
-        sample_rest_client(base_url),
         sample_l2_auth(),
         sample_post_order_transport(),
         gateway,
@@ -562,11 +544,9 @@ fn sample_reconcile_provider(base_url: Url) -> PolymarketNegRiskReconcileProvide
 }
 
 fn sample_reconcile_provider_with_gateway(
-    base_url: Url,
     gateway: PolymarketGateway,
 ) -> PolymarketNegRiskReconcileProvider<'static> {
     PolymarketNegRiskReconcileProvider::with_gateway(
-        sample_rest_client(base_url),
         sample_l2_auth(),
         sample_relayer_auth(),
         gateway,
@@ -574,12 +554,10 @@ fn sample_reconcile_provider_with_gateway(
 }
 
 fn sample_reconcile_provider_with_gateway_runtime(
-    base_url: Url,
     gateway: PolymarketGateway,
     runtime_handle: tokio::runtime::Handle,
 ) -> PolymarketNegRiskReconcileProvider<'static> {
     PolymarketNegRiskReconcileProvider::with_gateway_runtime(
-        sample_rest_client(base_url),
         sample_l2_auth(),
         sample_relayer_auth(),
         gateway,

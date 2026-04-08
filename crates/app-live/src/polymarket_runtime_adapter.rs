@@ -1,8 +1,7 @@
 use std::{
     borrow::Cow,
-    ffi::OsString,
     str::FromStr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 use alloy::dyn_abi::Eip712Domain;
@@ -28,10 +27,8 @@ use polymarket_client_sdk::{contract_config, POLYGON, PRIVATE_KEY_VAR};
 use tokio::runtime::Runtime;
 use venue_polymarket::{
     auth::{L2AuthHeaders, SignerContext},
-    build_post_order_request_from_signed_member,
-    rest::PolymarketRestClient,
-    LiveClobSdkApi, LiveMetadataSdkApi, PolymarketGateway, PolymarketNegRiskSubmitProvider,
-    PostOrderTransport, RestClientBuildError,
+    build_post_order_request_from_signed_member, LiveClobSdkApi, LiveMetadataSdkApi,
+    PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport,
 };
 
 use crate::{
@@ -82,13 +79,6 @@ impl std::error::Error for PolymarketRuntimeAdapterError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PolymarketMetadataGatewayBackend {
     Sdk,
-    LegacyRest,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PolymarketSubmitBackend {
-    GatewayRuntime,
-    LegacyRest,
 }
 
 pub(crate) fn polymarket_metadata_gateway_backend(
@@ -97,45 +87,17 @@ pub(crate) fn polymarket_metadata_gateway_backend(
     PolymarketMetadataGatewayBackend::Sdk
 }
 
-fn polymarket_submit_backend(_source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
-    PolymarketSubmitBackend::GatewayRuntime
-}
-
-pub(crate) fn build_polymarket_rest_client(
-    source: &PolymarketSourceConfig,
-) -> Result<PolymarketRestClient, RestClientBuildError> {
-    PolymarketRestClient::new(
-        source.clob_host.clone(),
-        source.data_api_host.clone(),
-        source.relayer_host.clone(),
-        None,
-        None,
-    )
-}
-
 pub(crate) fn build_polymarket_metadata_gateway(
     source: &PolymarketSourceConfig,
 ) -> Result<PolymarketGateway, PolymarketRuntimeAdapterError> {
-    match polymarket_metadata_gateway_backend(source) {
-        PolymarketMetadataGatewayBackend::LegacyRest => {
-            let rest = build_polymarket_rest_client(source).map_err(|error| {
-                PolymarketRuntimeAdapterError::Sdk(format!(
-                    "polymarket metadata rest client build failed: {error}"
-                ))
-            })?;
-            Ok(PolymarketGateway::from_metadata_api(Arc::new(rest)))
-        }
-        PolymarketMetadataGatewayBackend::Sdk => {
-            let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
-                PolymarketRuntimeAdapterError::Sdk(format!(
-                    "polymarket metadata sdk client build failed: {error}"
-                ))
-            })?;
-            Ok(PolymarketGateway::from_metadata_api(Arc::new(
-                LiveMetadataSdkApi::new(client),
-            )))
-        }
-    }
+    let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
+        PolymarketRuntimeAdapterError::Sdk(format!(
+            "polymarket metadata sdk client build failed: {error}"
+        ))
+    })?;
+    Ok(PolymarketGateway::from_metadata_api(Arc::new(
+        LiveMetadataSdkApi::new(client),
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -168,31 +130,29 @@ impl PolymarketOrderSigner {
                 .build()
                 .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))?,
         );
-        let client = with_sdk_proxy_env(None, || {
-            runtime.block_on(async {
-                let base = SdkClobClient::new(source.clob_host.as_str(), SdkClobConfig::default())
-                    .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))?;
-                let mut auth = base
-                    .authentication_builder(&signer)
-                    .credentials(SdkCredentials::new(
-                        api_key,
-                        credentials.secret.clone(),
-                        credentials.passphrase.clone(),
-                    ))
-                    .signature_type(parse_signature_type(&credentials.signature_type)?);
-                if !matches!(
-                    parse_signature_type(&credentials.signature_type)?,
-                    SdkSignatureType::Eoa
-                ) {
-                    auth = auth.funder(parse_address(
-                        "polymarket.account.funder_address",
-                        &credentials.funder_address,
-                    )?);
-                }
-                auth.authenticate()
-                    .await
-                    .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))
-            })
+        let client = runtime.block_on(async {
+            let base = SdkClobClient::new(source.clob_host.as_str(), SdkClobConfig::default())
+                .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))?;
+            let mut auth = base
+                .authentication_builder(&signer)
+                .credentials(SdkCredentials::new(
+                    api_key,
+                    credentials.secret.clone(),
+                    credentials.passphrase.clone(),
+                ))
+                .signature_type(parse_signature_type(&credentials.signature_type)?);
+            if !matches!(
+                parse_signature_type(&credentials.signature_type)?,
+                SdkSignatureType::Eoa
+            ) {
+                auth = auth.funder(parse_address(
+                    "polymarket.account.funder_address",
+                    &credentials.funder_address,
+                )?);
+            }
+            auth.authenticate()
+                .await
+                .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))
         })?;
         Ok(Self {
             runtime,
@@ -336,7 +296,6 @@ impl OrderSigner for PolymarketOrderSigner {
 pub(crate) struct PolymarketLiveExecutionBackend {
     signer: Arc<PolymarketOrderSigner>,
     signer_config: LocalSignerConfig,
-    source_config: PolymarketSourceConfig,
     gateway: PolymarketGateway,
     runtime: Arc<Runtime>,
     transport: PostOrderTransport,
@@ -359,7 +318,6 @@ impl PolymarketLiveExecutionBackend {
         Ok(Self {
             signer,
             signer_config: signer_config.clone(),
-            source_config: source.clone(),
             gateway,
             runtime,
             transport: PostOrderTransport {
@@ -401,7 +359,6 @@ impl NegRiskLiveExecutionBackend for PolymarketLiveExecutionBackend {
             }),
             Arc::new(GatewayBackedSubmitProvider {
                 signer_config: self.signer_config.clone(),
-                source_config: self.source_config.clone(),
                 gateway: self.gateway.clone(),
                 runtime: self.runtime.clone(),
                 transport: self.transport.clone(),
@@ -578,7 +535,6 @@ impl SignerProvider for RecordingSignerProvider {
 #[derive(Clone)]
 struct GatewayBackedSubmitProvider {
     signer_config: LocalSignerConfig,
-    source_config: PolymarketSourceConfig,
     gateway: PolymarketGateway,
     runtime: Arc<Runtime>,
     transport: PostOrderTransport,
@@ -590,26 +546,15 @@ impl VenueExecutionProvider for GatewayBackedSubmitProvider {
         signed: &SignedFamilySubmission,
         attempt: &domain::ExecutionAttemptContext,
     ) -> Result<domain::LiveSubmitOutcome, SubmitProviderError> {
-        let rest = build_polymarket_rest_client(&self.source_config).map_err(|error| {
-            SubmitProviderError::new(format!("polymarket rest client build failed: {error}"))
-        })?;
         let auth = l2_auth_headers_from_signer_config(&self.signer_config).map_err(|error| {
             SubmitProviderError::new(format!("polymarket l2 auth build failed: {error}"))
         })?;
-        let provider = match polymarket_submit_backend(&self.source_config) {
-            PolymarketSubmitBackend::GatewayRuntime => {
-                PolymarketNegRiskSubmitProvider::with_gateway_runtime(
-                    rest,
-                    auth,
-                    self.transport.clone(),
-                    self.gateway.clone(),
-                    self.runtime.handle().clone(),
-                )
-            }
-            PolymarketSubmitBackend::LegacyRest => {
-                PolymarketNegRiskSubmitProvider::new(rest, auth, self.transport.clone())
-            }
-        };
+        let provider = PolymarketNegRiskSubmitProvider::with_gateway_runtime(
+            auth,
+            self.transport.clone(),
+            self.gateway.clone(),
+            self.runtime.handle().clone(),
+        );
         provider.submit_family(signed, attempt)
     }
 }
@@ -625,67 +570,6 @@ fn ensure_live_execution_succeeded(
             receipt.outcome
         )))
     }
-}
-
-fn with_sdk_proxy_env<T>(
-    proxy_url: Option<&str>,
-    build: impl FnOnce() -> Result<T, PolymarketRuntimeAdapterError>,
-) -> Result<T, PolymarketRuntimeAdapterError> {
-    let _guard = sdk_proxy_env_lock()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let _env = proxy_url.map(ScopedProxyEnv::install);
-    build()
-}
-
-fn sdk_proxy_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-struct ScopedProxyEnv {
-    previous: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl ScopedProxyEnv {
-    fn install(proxy_url: &str) -> Self {
-        let mut previous = Vec::with_capacity(8);
-        for key in proxy_env_keys() {
-            previous.push((key, std::env::var_os(key)));
-            std::env::set_var(key, proxy_url);
-        }
-        for key in no_proxy_env_keys() {
-            previous.push((key, std::env::var_os(key)));
-            std::env::set_var(key, "");
-        }
-        Self { previous }
-    }
-}
-
-impl Drop for ScopedProxyEnv {
-    fn drop(&mut self) {
-        for (key, value) in self.previous.drain(..).rev() {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
-}
-
-const fn proxy_env_keys() -> [&'static str; 6] {
-    [
-        "all_proxy",
-        "ALL_PROXY",
-        "http_proxy",
-        "HTTP_PROXY",
-        "https_proxy",
-        "HTTPS_PROXY",
-    ]
-}
-
-const fn no_proxy_env_keys() -> [&'static str; 2] {
-    ["no_proxy", "NO_PROXY"]
 }
 
 #[cfg(test)]
@@ -819,10 +703,7 @@ mod tests {
             r#"{"success":true,"orderID":"rest-order-1","status":"live","makingAmount":"10","takingAmount":"5","errorMsg":""}"#,
         );
         let submit_calls = Arc::new(AtomicUsize::new(0));
-        let provider = sample_adapter_submit_provider(
-            sample_source_config_with_host(server.base_url().as_str()),
-            submit_calls.clone(),
-        );
+        let provider = sample_adapter_submit_provider(submit_calls.clone());
 
         let outcome = provider
             .submit_family(&sample_signed_submission(), &sample_attempt())
@@ -891,12 +772,10 @@ mod tests {
     }
 
     fn sample_adapter_submit_provider(
-        source_config: PolymarketSourceConfig,
         submit_calls: Arc<AtomicUsize>,
     ) -> GatewayBackedSubmitProvider {
         GatewayBackedSubmitProvider {
             signer_config: sample_signer_config(),
-            source_config,
             gateway: PolymarketGateway::from_clob_api(Arc::new(RecordingSubmitClobApi {
                 submit_calls,
             })),

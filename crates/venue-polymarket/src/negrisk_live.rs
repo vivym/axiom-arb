@@ -23,7 +23,7 @@ const PROVIDER_NAME: &str = "polymarket";
 
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskSubmitProvider<'a> {
-    rest: PolymarketRestClient,
+    rest: Option<PolymarketRestClient>,
     gateway: Option<PolymarketGateway>,
     runtime_handle: Option<Handle>,
     auth: L2AuthHeaders<'a>,
@@ -32,7 +32,7 @@ pub struct PolymarketNegRiskSubmitProvider<'a> {
 
 #[derive(Debug, Clone)]
 pub struct PolymarketNegRiskReconcileProvider<'a> {
-    rest: PolymarketRestClient,
+    rest: Option<PolymarketRestClient>,
     gateway: Option<PolymarketGateway>,
     runtime_handle: Option<Handle>,
     l2_auth: L2AuthHeaders<'a>,
@@ -158,7 +158,7 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
         transport: PostOrderTransport,
     ) -> Self {
         Self {
-            rest,
+            rest: Some(rest),
             gateway: None,
             runtime_handle: None,
             auth,
@@ -167,13 +167,12 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     }
 
     pub fn with_gateway(
-        rest: PolymarketRestClient,
         auth: L2AuthHeaders<'a>,
         transport: PostOrderTransport,
         gateway: PolymarketGateway,
     ) -> Self {
         Self {
-            rest,
+            rest: None,
             gateway: Some(gateway),
             runtime_handle: None,
             auth,
@@ -182,14 +181,13 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
     }
 
     pub fn with_gateway_runtime(
-        rest: PolymarketRestClient,
         auth: L2AuthHeaders<'a>,
         transport: PostOrderTransport,
         gateway: PolymarketGateway,
         runtime_handle: Handle,
     ) -> Self {
         Self {
-            rest,
+            rest: None,
             gateway: Some(gateway),
             runtime_handle: Some(runtime_handle),
             auth,
@@ -248,12 +246,18 @@ impl<'a> PolymarketNegRiskSubmitProvider<'a> {
                 .map_err(|err| SubmitProviderError::new(format!("submit gateway error: {err}")))?;
             submit_order_response_from_gateway(response)
         } else {
+            let rest = self.rest.as_ref().ok_or_else(|| {
+                SubmitProviderError::new(
+                    "submit provider requires a REST client when no gateway is configured",
+                )
+            })?;
             let request = self
                 .rest
+                .as_ref()
+                .expect("rest client should be present when gateway is absent")
                 .build_submit_order_request(&self.auth, &submission)
                 .map_err(|err| SubmitProviderError::new(format!("submit request error: {err}")))?;
-            self.rest
-                .execute_json::<SubmitOrderResponse>(request)
+            rest.execute_json::<SubmitOrderResponse>(request)
                 .await
                 .map_err(|err| SubmitProviderError::new(format!("submit transport error: {err}")))?
         };
@@ -315,7 +319,7 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
         relayer_auth: RelayerAuth<'a>,
     ) -> Self {
         Self {
-            rest,
+            rest: Some(rest),
             gateway: None,
             runtime_handle: None,
             l2_auth,
@@ -324,13 +328,12 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
     }
 
     pub fn with_gateway(
-        rest: PolymarketRestClient,
         l2_auth: L2AuthHeaders<'a>,
         relayer_auth: RelayerAuth<'a>,
         gateway: PolymarketGateway,
     ) -> Self {
         Self {
-            rest,
+            rest: None,
             gateway: Some(gateway),
             runtime_handle: None,
             l2_auth,
@@ -339,14 +342,13 @@ impl<'a> PolymarketNegRiskReconcileProvider<'a> {
     }
 
     pub fn with_gateway_runtime(
-        rest: PolymarketRestClient,
         l2_auth: L2AuthHeaders<'a>,
         relayer_auth: RelayerAuth<'a>,
         gateway: PolymarketGateway,
         runtime_handle: Handle,
     ) -> Self {
         Self {
-            rest,
+            rest: None,
             gateway: Some(gateway),
             runtime_handle: Some(runtime_handle),
             l2_auth,
@@ -562,6 +564,8 @@ impl PolymarketNegRiskReconcileProvider<'_> {
         }
 
         self.rest
+            .as_ref()
+            .expect("rest client should be present when gateway is absent")
             .fetch_recent_transactions(&self.relayer_auth)
             .await
     }
@@ -584,7 +588,11 @@ impl PolymarketNegRiskReconcileProvider<'_> {
                 .map_err(RestError::from);
         }
 
-        self.rest.fetch_open_orders(&self.l2_auth).await
+        self.rest
+            .as_ref()
+            .expect("rest client should be present when gateway is absent")
+            .fetch_open_orders(&self.l2_auth)
+            .await
     }
 }
 
