@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use app_live::config::PolymarketSourceConfig;
 use app_live::{
@@ -346,13 +351,22 @@ fn operator_facing_account_builds_gateway_credentials() {
 }
 
 #[test]
+fn venue_polymarket_probe_uses_workspace_target_dir() {
+    let (probe_dir, target_dir) = venue_polymarket_probe_paths();
+
+    assert!(probe_dir.starts_with(&target_dir));
+    assert_eq!(probe_dir, venue_polymarket_probe_paths().0);
+}
+
+#[test]
 fn venue_polymarket_public_lib_rejects_removed_root_reexports() {
-    let venue_polymarket_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../venue-polymarket");
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    fs::create_dir(temp_dir.path().join("src")).expect("test src dir");
-    fs::write(
-        temp_dir.path().join("Cargo.toml"),
-        format!(
+    let venue_polymarket_root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../venue-polymarket");
+    let (probe_dir, _) = venue_polymarket_probe_paths();
+    fs::create_dir_all(probe_dir.join("src")).expect("test src dir");
+    write_file_if_changed(
+        &probe_dir.join("Cargo.toml"),
+        &format!(
             r#"[package]
 name = "venue-polymarket-root-export-probe"
 version = "0.1.0"
@@ -360,26 +374,26 @@ edition = "2021"
 
 [dependencies]
 venue-polymarket = {{ path = "{}" }}
+
+[workspace]
 "#,
             venue_polymarket_root.display()
         ),
-    )
-    .expect("probe manifest");
-    fs::write(
-        temp_dir.path().join("src/main.rs"),
+    );
+    write_file_if_changed(
+        &probe_dir.join("src/main.rs"),
         r#"
 use venue_polymarket::{L2AuthHeaders, PolymarketRestClient, PolymarketWsClient, SignerContext};
 
 fn main() {}
 "#,
-    )
-    .expect("probe main");
+    );
 
     let output = Command::new(env!("CARGO"))
         .arg("check")
         .arg("--quiet")
         .arg("--manifest-path")
-        .arg(temp_dir.path().join("Cargo.toml"))
+        .arg(probe_dir.join("Cargo.toml"))
         .output()
         .expect("cargo check should run");
 
@@ -427,6 +441,25 @@ fn missing_local_signer_config_returns_error() {
 
     assert!(matches!(error, ConfigError::MissingLocalSignerConfig));
     assert!(error.to_string().contains("missing local signer config"));
+}
+
+fn venue_polymarket_probe_paths() -> (PathBuf, PathBuf) {
+    let target_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target");
+    let probe_dir = target_dir
+        .join("compile-fail-probes")
+        .join("venue-polymarket-root-export-probe");
+
+    (probe_dir, target_dir)
+}
+
+fn write_file_if_changed(path: &Path, contents: &str) {
+    let needs_write = fs::read_to_string(path).map_or(true, |existing| existing != contents);
+    if needs_write {
+        fs::write(path, contents).expect("write probe file");
+    }
 }
 
 #[test]
