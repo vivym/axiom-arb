@@ -420,11 +420,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 "#,
         );
 
@@ -463,11 +458,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 "#,
         );
 

@@ -5,9 +5,7 @@ use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
 use crate::cli::RunArgs;
-use crate::config::{
-    neg_risk_live_targets_from_route_artifacts, LocalSignerConfig, PolymarketSourceConfig,
-};
+use crate::config::{neg_risk_live_targets_from_route_artifacts, PolymarketSourceConfig};
 use crate::daemon::run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented;
 use crate::negrisk_live::NegRiskLiveExecutionBackend;
 use crate::polymarket_runtime_adapter::PolymarketLiveExecutionBackend;
@@ -66,13 +64,8 @@ fn run_from_config_path_for_source(
                 )?;
                 let neg_risk_live_approved_families = rollout_approved_families(&config);
                 let neg_risk_live_ready_families = rollout_ready_families(&config);
-                let signer_config = if real_user_shadow_smoke.is_some()
-                    || live_neg_risk_work_requested(
-                        &neg_risk_live_targets,
-                        &neg_risk_live_approved_families,
-                        &neg_risk_live_ready_families,
-                    ) {
-                    Some(LocalSignerConfig::try_from(&config)?)
+                let account_runtime_config = if real_user_shadow_smoke.is_some() {
+                    Some(LocalAccountRuntimeConfig::try_from(&config)?)
                 } else {
                     None
                 };
@@ -87,9 +80,8 @@ fn run_from_config_path_for_source(
                     Some(smoke) => SmokeSafeStartupSource::RealUserShadowSmoke(Box::new(
                         build_real_user_shadow_smoke_sources(
                             smoke.source_config.clone(),
-                            signer_config
+                            account_runtime_config
                                 .clone()
-                                .map(LocalAccountRuntimeConfig::from)
                                 .expect("smoke startup should require signer config"),
                             run_session.run_session_id(),
                         )
@@ -219,11 +211,26 @@ fn build_live_neg_risk_execution_backend(
         return Ok(None);
     }
 
+    if !wallet_kind_requires_relayer(config) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "EOA non-shadow live runtime is not supported; relayer-backed runtime work requires a non-EOA wallet kind",
+        )
+        .into());
+    }
+
     let source_config = PolymarketSourceConfig::try_from(config)?;
     let credentials = PolymarketGatewayCredentials::try_from(config)?;
     let backend =
         PolymarketLiveExecutionBackend::from_runtime_inputs(&source_config, &credentials)?;
     Ok(Some(Box::new(backend)))
+}
+
+fn wallet_kind_requires_relayer(config: &config_schema::AppLiveConfigView<'_>) -> bool {
+    config
+        .account()
+        .map(|account| account.signature_type_label() != "Eoa")
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -244,13 +251,13 @@ mod tests {
     };
 
     #[test]
-    fn live_neg_risk_backend_requires_private_key_for_real_live_work() {
+    fn non_eoa_live_neg_risk_backend_requires_private_key_for_real_live_work() {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         std::env::remove_var(PRIVATE_KEY_VAR);
 
-        let config = live_view(false);
+        let config = non_eoa_live_view(false);
         let smoke = load_real_user_shadow_smoke_config(&config).expect("smoke config should load");
         let error = build_live_neg_risk_execution_backend(
             &config,
@@ -316,6 +323,31 @@ mod tests {
     }
 
     fn live_view(real_user_shadow_smoke: bool) -> config_schema::AppLiveConfigView<'static> {
+        live_view_for_wallet_kind("eoa", "", real_user_shadow_smoke)
+    }
+
+    fn non_eoa_live_view(
+        real_user_shadow_smoke: bool,
+    ) -> config_schema::AppLiveConfigView<'static> {
+        live_view_for_wallet_kind(
+            "proxy",
+            r#"
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "builder-api-key"
+timestamp = "1700000001"
+passphrase = "builder-passphrase"
+signature = "builder-signature"
+"#,
+            real_user_shadow_smoke,
+        )
+    }
+
+    fn live_view_for_wallet_kind(
+        wallet_kind: &str,
+        relayer_auth: &str,
+        real_user_shadow_smoke: bool,
+    ) -> config_schema::AppLiveConfigView<'static> {
         let smoke_flag = if real_user_shadow_smoke {
             "true"
         } else {
@@ -345,22 +377,17 @@ metadata_refresh_interval_seconds = 60
 [polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
-signature_type = "eoa"
-wallet_route = "eoa"
+signature_type = "{wallet_kind}"
+wallet_route = "{wallet_kind}"
 api_key = "550e8400-e29b-41d4-a716-446655440000"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
-
 [negrisk.rollout]
 approved_families = ["family-a"]
 ready_families = ["family-a"]
+
+{relayer_auth}
 "#
             ))
             .expect("config should parse"),

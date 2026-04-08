@@ -97,16 +97,21 @@ fn evaluate_live(
             );
             DoctorFailure::new("ConnectivityError", error.to_string())
         })?;
-    let relayer_runtime_config =
-        LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
-            report.push_check(
-                "Connectivity",
-                DoctorCheckStatus::Fail,
-                "ConnectivityError",
-                error.to_string(),
-            );
-            DoctorFailure::new("ConnectivityError", error.to_string())
-        })?;
+    let relayer_runtime_config = if wallet_kind_requires_relayer(config) {
+        Some(
+            LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
+                report.push_check(
+                    "Connectivity",
+                    DoctorCheckStatus::Fail,
+                    "ConnectivityError",
+                    error.to_string(),
+                );
+                DoctorFailure::new("ConnectivityError", error.to_string())
+            })?,
+        )
+    } else {
+        None
+    };
     let user_ws_auth = user_ws_probe_auth_from_config(config);
     let mut backend = LivePolymarketProbe::new(source_config);
 
@@ -116,7 +121,7 @@ fn evaluate_live(
             &mut backend,
             resolved_targets,
             &l2_probe_credentials,
-            &relayer_runtime_config,
+            relayer_runtime_config.as_ref(),
             user_ws_auth,
         ))
         .map_err(|error| {
@@ -197,11 +202,18 @@ fn user_ws_probe_auth_from_config<'a>(
     })
 }
 
+fn wallet_kind_requires_relayer(config: &AppLiveConfigView<'_>) -> bool {
+    config
+        .account()
+        .map(|account| account.signature_type_label() != "Eoa")
+        .unwrap_or(false)
+}
+
 async fn run_live_probes<B: PolymarketProbeFacade>(
     backend: &mut B,
     resolved_targets: &ResolvedTargets,
     l2_probe_credentials: &PolymarketL2ProbeCredentials,
-    relayer_runtime_config: &LocalRelayerRuntimeConfig,
+    relayer_runtime_config: Option<&LocalRelayerRuntimeConfig>,
     user_ws_auth: Option<UserWsProbeAuth<'_>>,
 ) -> Result<Vec<ConnectivityCheck>, PolymarketProbeError> {
     let mut checks = Vec::new();
@@ -240,12 +252,14 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
     backend.post_order_heartbeat(l2_probe_credentials).await?;
     checks.push(ConnectivityCheck::pass("heartbeat probe succeeded"));
 
-    backend
-        .fetch_recent_transactions(relayer_runtime_config)
-        .await?;
-    checks.push(ConnectivityCheck::pass(
-        "relayer reachability probe succeeded",
-    ));
+    if let Some(relayer_runtime_config) = relayer_runtime_config {
+        backend
+            .fetch_recent_transactions(relayer_runtime_config)
+            .await?;
+        checks.push(ConnectivityCheck::pass(
+            "relayer reachability probe succeeded",
+        ));
+    }
 
     Ok(checks)
 }
@@ -286,8 +300,7 @@ mod tests {
 
     use crate::polymarket_probe::ProbeFuture;
     use crate::{
-        LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerIdentity, NegRiskFamilyLiveTarget,
-        NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
+        LocalRelayerAuth, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
     };
     use venue_polymarket::PolymarketL2ProbeCredentials;
 
@@ -303,7 +316,7 @@ mod tests {
             &mut backend,
             &resolved_targets,
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -336,7 +349,7 @@ mod tests {
             &mut backend,
             &resolved_targets,
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -367,7 +380,7 @@ mod tests {
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -386,7 +399,7 @@ mod tests {
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -404,7 +417,7 @@ mod tests {
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             None,
         )
         .await
@@ -429,6 +442,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn eoa_live_probe_set_skips_relayer_reachability() {
+        let mut backend = FakeBackend::default();
+
+        let checks = run_live_probes(
+            &mut backend,
+            &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
+            None,
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect("probe execution should succeed");
+
+        assert!(checks
+            .iter()
+            .all(|check| check.label != "relayer reachability probe succeeded"));
+        assert!(!backend.calls.contains(&ProbeCall::FetchRecentTransactions));
+    }
+
+    #[tokio::test]
     async fn run_live_probes_passes_full_account_credentials_to_user_ws_probe() {
         let mut backend = FakeBackend::default();
 
@@ -436,7 +469,7 @@ mod tests {
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -463,7 +496,7 @@ mod tests {
             &mut backend,
             &resolved_targets,
             &l2_credentials,
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -484,7 +517,7 @@ mod tests {
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
             &sample_l2_probe_credentials(),
-            &sample_signer_config(),
+            Some(&sample_relayer_runtime_config()),
             Some(sample_user_ws_auth()),
         )
         .await
@@ -564,7 +597,7 @@ mod tests {
 
         fn fetch_recent_transactions<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            _relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
         ) -> ProbeFuture<'a> {
             self.calls.push(ProbeCall::FetchRecentTransactions);
             Box::pin(async { Ok(()) })
@@ -607,7 +640,7 @@ mod tests {
 
         fn fetch_recent_transactions<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            _relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
         ) -> ProbeFuture<'a> {
             Box::pin(async { Ok(()) })
         }
@@ -637,21 +670,9 @@ mod tests {
         }
     }
 
-    fn sample_signer_config() -> LocalSignerConfig {
-        LocalSignerConfig {
-            signer: LocalSignerIdentity {
-                address: "0x1111111111111111111111111111111111111111".to_owned(),
-                funder_address: "0x2222222222222222222222222222222222222222".to_owned(),
-                signature_type: "eoa".to_owned(),
-                wallet_route: "eoa".to_owned(),
-            },
-            l2_auth: LocalL2AuthHeaders {
-                api_key: "poly-api-key".to_owned(),
-                passphrase: "poly-passphrase".to_owned(),
-                timestamp: "1700000000".to_owned(),
-                signature: "poly-signature".to_owned(),
-            },
-            relayer_auth: LocalRelayerAuth::RelayerApiKey {
+    fn sample_relayer_runtime_config() -> LocalRelayerRuntimeConfig {
+        LocalRelayerRuntimeConfig {
+            auth: LocalRelayerAuth::RelayerApiKey {
                 api_key: "relay-key".to_owned(),
                 address: "0x1111111111111111111111111111111111111111".to_owned(),
             },

@@ -17,7 +17,7 @@ use state::{
 
 use crate::{
     cli::DiscoverArgs,
-    config::{LocalSignerConfig, PolymarketSourceConfig},
+    config::{LocalAccountRuntimeConfig, PolymarketSourceConfig},
     polymarket_runtime_adapter::build_polymarket_metadata_gateway,
     task_groups::{MetadataDiscoveryBatch, MetadataTaskGroup},
     CandidateNotice, CandidateRestrictionTruth, DiscoverySupervisor, InputTaskEvent,
@@ -92,7 +92,7 @@ pub(crate) async fn run_discover_from_config(
         .into());
     }
     let source = PolymarketSourceConfig::try_from(&config)?;
-    let signer = LocalSignerConfig::try_from(&config)?;
+    let account_runtime_config = LocalAccountRuntimeConfig::try_from(&config)?;
     tracing::debug!(
         config_path = %config_path.display(),
         "discover loaded live config"
@@ -125,7 +125,7 @@ pub(crate) async fn run_discover_from_config(
         batch.rendered_live_targets.clone(),
         CandidateRestrictionTruth::eligible(),
     )
-    .with_full_set_basis_digest(full_set_basis_digest(&source, &signer)?);
+    .with_full_set_basis_digest(full_set_basis_digest(&source, &account_runtime_config)?);
     let discovery_summary = DiscoverySupervisor::persist_notice_for_runtime(notice).await?;
     tracing::debug!(
         source_session_id,
@@ -237,17 +237,17 @@ fn apply_input(store: &mut StateStore, input: InputTaskEvent) -> Result<(), io::
 
 fn full_set_basis_digest(
     source: &PolymarketSourceConfig,
-    signer: &LocalSignerConfig,
+    account_runtime_config: &LocalAccountRuntimeConfig,
 ) -> Result<String, io::Error> {
     let canonical = json!({
         "route": "full-set",
         "scope": "default",
         "policy_version": "full-set-route-policy-v1",
         "operator": {
-            "address": signer.signer.address,
-            "funder_address": signer.signer.funder_address,
-            "signature_type": signer.signer.signature_type,
-            "wallet_route": signer.signer.wallet_route,
+            "address": account_runtime_config.signer.address,
+            "funder_address": account_runtime_config.signer.funder_address,
+            "signature_type": account_runtime_config.signer.signature_type,
+            "wallet_route": account_runtime_config.signer.wallet_route,
         },
         "source": {
             "clob_host": source.clob_host.as_str(),

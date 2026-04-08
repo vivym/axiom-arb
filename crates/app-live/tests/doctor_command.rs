@@ -181,11 +181,6 @@ api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key-1"
-address = "0x3333333333333333333333333333333333333333"
-
 [negrisk.target_source]
 source = "adopted"
 
@@ -259,11 +254,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key-1"
-address = "0x3333333333333333333333333333333333333333"
 "#,
     )
     .expect("seed neutral adopted config");
@@ -314,11 +304,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -389,11 +374,6 @@ api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [negrisk.rollout]
 approved_families = ["family-a"]
 ready_families = ["family-a"]
@@ -427,6 +407,10 @@ quantity = "5"
     assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
     assert_section_summary(&combined, "Connectivity", "PASS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
+    assert!(
+        !combined.contains("relayer reachability probe"),
+        "{combined}"
+    );
     assert!(
         combined.contains("Next: app-live run --config"),
         "{combined}"
@@ -467,11 +451,6 @@ api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [negrisk.rollout]
 approved_families = ["family-a"]
 ready_families = ["family-a"]
@@ -504,6 +483,10 @@ quantity = "5"
     let combined = combined(&output);
     assert_section_summary(&combined, "Connectivity", "PASS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
+    assert!(
+        !combined.contains("relayer reachability probe"),
+        "{combined}"
+    );
     assert!(
         !combined.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
         "{combined}"
@@ -540,11 +523,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -622,11 +600,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.target_source]
 source = "adopted"
@@ -710,11 +683,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 "#,
         clob_host = venue.http_base_url(),
         data_api_host = venue.http_base_url(),
@@ -791,11 +759,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 "#,
         clob_host = venue.http_base_url(),
         data_api_host = venue.http_base_url(),
@@ -856,11 +819,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key-1"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -925,11 +883,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -1001,13 +954,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 
 [negrisk.rollout]
 approved_families = ["family-a"]

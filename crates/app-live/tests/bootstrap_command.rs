@@ -227,6 +227,7 @@ fn bootstrap_already_adopted_smoke_path_falls_through_to_doctor_and_rollout() {
     assert!(text.contains("Config: PASS"), "{text}");
     assert!(text.contains("Connectivity: PASS"), "{text}");
     assert!(text.contains("Overall: PASS"), "{text}");
+    assert!(!text.contains("relayer reachability probe"), "{text}");
     assert!(
         text.contains("Smoke rollout readiness is currently preflight-only."),
         "{text}"

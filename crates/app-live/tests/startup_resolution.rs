@@ -399,13 +399,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "{operator_target_revision}"
@@ -459,13 +452,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
 "#,
         ))
         .expect("config should parse"),
@@ -513,13 +499,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
 "#,
         )
         .expect("config should parse"),
@@ -557,13 +536,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key"
-timestamp = "1700000001"
-passphrase = "builder-passphrase"
-signature = "builder-signature"
 
 [[negrisk.targets]]
 family_id = "family-a"

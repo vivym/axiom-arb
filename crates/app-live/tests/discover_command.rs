@@ -172,6 +172,35 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_live_adopted_con
 }
 
 #[test]
+fn discover_live_eoa_config_without_relayer_auth_still_materializes_artifacts() {
+    let database = discover_db::TestDatabase::new();
+    let venue = MockDiscoverVenue::spawn();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = format!(
+            "{config}\n[polymarket.source_overrides]\nclob_host = \"https://clob.polymarket.com\"\ndata_api_host = \"https://gamma-api.polymarket.com\"\nrelayer_host = \"https://relayer-v2.polymarket.com\"\nmarket_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"\nuser_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"\nheartbeat_interval_seconds = 15\nrelayer_poll_interval_seconds = 5\nmetadata_refresh_interval_seconds = 60\n"
+        );
+        with_mock_discover_venue(config, &venue)
+    });
+
+    let output = app_live_command()
+        .arg("discover")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live discover should execute");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("candidate_count = 2"), "{text}");
+    assert!(text.contains("adoptable_count = 2"), "{text}");
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn discover_noop_rediscovery_reuses_strategy_bundle_identity() {
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::with_responses(vec![

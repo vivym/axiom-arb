@@ -1,6 +1,6 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
-use crate::config::LocalSignerConfig;
+use crate::{LocalAccountRuntimeConfig, LocalRelayerRuntimeConfig};
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;
@@ -34,7 +34,7 @@ fn evaluate_live(
         || config.polymarket_relayer_auth().is_some()
     {
         checked_anything = true;
-        LocalSignerConfig::try_from(config).map_err(|error| {
+        LocalAccountRuntimeConfig::try_from(config).map_err(|error| {
             report.push_check(
                 "Credentials",
                 DoctorCheckStatus::Fail,
@@ -43,12 +43,30 @@ fn evaluate_live(
             );
             DoctorFailure::new("CredentialError", error.to_string())
         })?;
-        report.push_check(
-            "Credentials",
-            DoctorCheckStatus::Pass,
-            "long-lived account and relayer auth shapes validated",
-            "",
-        );
+        if wallet_kind_requires_relayer(config) {
+            LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
+                report.push_check(
+                    "Credentials",
+                    DoctorCheckStatus::Fail,
+                    "CredentialError",
+                    error.to_string(),
+                );
+                DoctorFailure::new("CredentialError", error.to_string())
+            })?;
+            report.push_check(
+                "Credentials",
+                DoctorCheckStatus::Pass,
+                "long-lived account and relayer auth shapes validated",
+                "",
+            );
+        } else {
+            report.push_check(
+                "Credentials",
+                DoctorCheckStatus::Pass,
+                "long-lived account and L2 auth shapes validated",
+                "",
+            );
+        }
     }
 
     if !checked_anything {
@@ -61,4 +79,11 @@ fn evaluate_live(
     }
 
     Ok(())
+}
+
+fn wallet_kind_requires_relayer(config: &AppLiveConfigView<'_>) -> bool {
+    config
+        .account()
+        .map(|account| account.signature_type_label() != "Eoa")
+        .unwrap_or(false)
 }

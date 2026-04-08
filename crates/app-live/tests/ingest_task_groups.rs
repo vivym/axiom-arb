@@ -1,4 +1,4 @@
-use app_live::config::LocalSignerConfig;
+use app_live::LocalAccountRuntimeConfig;
 use app_live::{
     source_tasks::build_real_user_shadow_smoke_sources, BootstrapSource, DecisionTaskGroup,
     FollowUpQueue, FollowUpWork, HeartbeatSource, HeartbeatTaskGroup, IngressQueue, InputTaskEvent,
@@ -123,17 +123,18 @@ fn real_user_shadow_smoke_source_bundle_carries_source_and_signer_configs() {
     let smoke = app_live::load_real_user_shadow_smoke_config(&config)
         .expect("smoke config should parse")
         .expect("smoke should be enabled");
-    let signer = LocalSignerConfig::try_from(&config).expect("signer config should parse");
+    let account_runtime_config =
+        LocalAccountRuntimeConfig::try_from(&config).expect("account config should parse");
 
     let sources = build_real_user_shadow_smoke_sources(
         smoke.source_config.clone(),
-        signer.clone(),
+        account_runtime_config.clone(),
         "run-session-77",
     )
     .expect("source bundle should build");
 
     assert_eq!(sources.source_config, smoke.source_config);
-    assert_eq!(sources.signer_config, signer);
+    assert_eq!(sources.account_runtime_config, account_runtime_config);
     assert_eq!(sources.snapshot(), StaticSnapshotSource::empty().snapshot());
 }
 
@@ -210,13 +211,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 
 [negrisk.target_source]
 source = "adopted"
