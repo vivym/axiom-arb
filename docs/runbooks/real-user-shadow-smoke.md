@@ -28,14 +28,9 @@ Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.
 
 If the config is still using legacy explicit `[[negrisk.targets]]`, smoke commands treat that as read-only compatibility mode. `status`, `doctor`, `verify`, and `run` can still read it, but high-level mutation flows do not auto-migrate it; use `targets adopt` explicitly when you want to enter the neutral adopted-revision model.
 
-If Polymarket traffic must traverse an outbound proxy, add this operator-local block:
+If Polymarket traffic must traverse an outbound proxy, set `HTTPS_PROXY` or `ALL_PROXY` in the environment before running `bootstrap`, `doctor`, `apply`, or `run`. Use `HTTP_PROXY` only if you override Polymarket endpoints to `http` or `ws`.
 
-```toml
-[polymarket.http]
-proxy_url = "http://127.0.0.1:7897"
-```
-
-The built-in Polymarket data API default now points at `https://gamma-api.polymarket.com`. The Rust REST and websocket clients honor the explicit `[polymarket.http]` proxy setting, but they do not automatically read macOS system proxy settings.
+The built-in Polymarket data API default now points at `https://gamma-api.polymarket.com`, and the default websocket endpoints use `wss`. The Rust REST and websocket clients honor those environment variables, but they do not automatically read macOS system proxy settings.
 
 If bootstrap stops in `preflight-ready smoke startup`, the config is valid and `doctor` can still pass, but a later run is expected to produce zero `neg-risk` shadow rows. If bootstrap reaches `shadow-work-ready smoke startup`, it has already written the adopted `neg-risk` scopes into both rollout lists. After that Day 0 setup, keep using `status` and `apply` for Day 1+ smoke progression instead of re-running bootstrap as a generic operator action.
 

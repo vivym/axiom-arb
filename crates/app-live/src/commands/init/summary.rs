@@ -129,9 +129,23 @@ fn polymarket_source_summary_line(
         has_existing_polymarket_source,
         has_existing_polymarket_source_overrides,
     ) {
-        (false, false) => "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence, and [polymarket.http] only for explicit outbound proxying.".to_string(),
+        (false, false) => "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence, and set HTTPS_PROXY or ALL_PROXY in the environment if Polymarket traffic must traverse an outbound proxy.".to_string(),
         (true, true) => "kept existing [polymarket.source_overrides] and dropped legacy [polymarket.source].".to_string(),
         (true, false) => "migrated existing [polymarket.source] into [polymarket.source_overrides].".to_string(),
         (false, true) => "preserved existing [polymarket.source_overrides].".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::polymarket_source_summary_line;
+
+    #[test]
+    fn default_polymarket_source_summary_line_uses_env_proxy_guidance() {
+        let line = polymarket_source_summary_line(false, false);
+
+        assert!(line.contains("HTTPS_PROXY") || line.contains("ALL_PROXY"));
+        assert!(!line.contains("[polymarket.http]"));
+        assert!(!line.contains("proxy_url"));
     }
 }
