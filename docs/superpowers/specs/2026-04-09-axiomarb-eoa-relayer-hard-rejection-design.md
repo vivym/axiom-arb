@@ -36,6 +36,7 @@ This is the wrong system model.
 - Make `EOA + relayer_auth` an invalid configuration combination.
 - Remove relayer as a default requirement for EOA live and smoke flows.
 - Keep relayer as a first-class capability for non-EOA builder/proxy/safe-style flows.
+- Keep EOA support explicit and truthful: supported for account/L2-only live and shadow-smoke paths, but not silently treated as a complete relayer-backed live-submit configuration.
 - Align config validation, runtime behavior, operator UX, and tests to one consistent rule.
 
 ## Non-Goals
@@ -99,7 +100,30 @@ But the end state must be:
 - EOA live/smoke config can construct the required runtime inputs without relayer auth
 - non-EOA config still carries relayer auth explicitly
 
-### 4. `doctor` probe sets must be wallet-kind aware
+### 4. EOA live support boundary must be written down explicitly
+
+This slice is not implicitly claiming that every live runtime path is fully supported for EOA.
+
+Current code still couples true non-shadow live submit/reconcile behavior to relayer-backed capabilities.
+
+Therefore the design must distinguish:
+
+- EOA account/L2-only live capabilities:
+  - config validation
+  - discovery/bootstrap/startup inputs that do not require relayer
+  - `doctor` REST/ws/heartbeat probes
+  - `real_user_shadow_smoke`
+- relayer-backed non-EOA live capabilities:
+  - paths that genuinely require relayer-backed submit/reconcile truth
+
+Until a true relayer-free non-shadow live path exists, the repository should fail closed before entering a relayer-backed runtime path that EOA cannot satisfy.
+
+This avoids the ambiguous state where:
+
+- config validation accepts EOA live
+- but runtime later silently assumes relayer-backed behavior
+
+### 5. `doctor` probe sets must be wallet-kind aware
 
 `doctor` currently treats relayer reachability as a universal live-mode requirement.
 
@@ -131,7 +155,7 @@ The change should apply to both:
 `doctor` output for EOA should not imply that relayer is skipped because of a failure or fallback.
 It should reflect that relayer is not part of the required probe set for that wallet kind.
 
-### 5. `real_user_shadow_smoke` must no longer inherit relayer requiredness from type shape
+### 6. `real_user_shadow_smoke` must no longer inherit relayer requiredness from type shape
 
 The current smoke path still carries relayer assumptions because runtime source construction depends on config types that bundle relayer auth.
 
@@ -145,7 +169,21 @@ After this change:
 
 This is a semantic correction, not just a doctor-only fix.
 
-### 6. Operator-facing UX must stop teaching the wrong configuration
+### 7. `discover`, `startup`, and bootstrap-owned entrypoints must not reintroduce the old shape
+
+The relayer assumption is not isolated to `doctor` and `run`.
+
+Current code also routes EOA configs through relayer-bearing app-side config at other entrypoints, including discovery and startup-owned flows.
+
+This slice must therefore cover:
+
+- `discover`
+- startup bundle construction
+- bootstrap-owned config examples and guidance
+
+No app-facing entrypoint should keep reconstructing the old implicit truth that live EOA means "account plus relayer auth".
+
+### 8. Operator-facing UX must stop teaching the wrong configuration
 
 The operator surface must match the new rule everywhere.
 
@@ -161,6 +199,22 @@ Correct flow:
    - render no `polymarket.relayer_auth` section
 3. if non-EOA:
    - collect relayer auth as today
+
+This requirement applies to both:
+
+- fresh config generation
+- preserve/re-render flows
+
+If an existing preserved config is EOA and still contains `[polymarket.relayer_auth]`, the wizard/render path must actively remove that section rather than preserving an invalid combination.
+
+The wizard must also make the non-EOA path real rather than implicit.
+
+That means the operator-facing flow must either:
+
+- explicitly collect wallet kind and generate non-EOA account shape when selected
+- or clearly restrict generation to EOA while treating non-EOA as a preserve/manual-config path
+
+The implementation must not leave non-EOA support as an unstated branch that the wizard cannot actually produce.
 
 #### Example config
 
@@ -184,9 +238,9 @@ It should say explicitly:
 - `doctor` does not require relayer reachability for EOA
 - relayer applies only to non-EOA Polymarket flows
 
-### 7. Test and fixture truth must be updated
+### 9. Test and fixture truth must be updated
 
-The repository currently normalizes `EOA + relayer_api_key` across many tests and fixtures.
+The repository currently normalizes `EOA + relayer_auth` across many tests and fixtures.
 
 That test truth must change with the product truth.
 
@@ -201,6 +255,11 @@ Required coverage:
 
 Fixtures and tests should stop using relayer sections as harmless filler in EOA configs.
 
+This applies to both auth shapes:
+
+- `relayer_api_key`
+- `builder_api_key`
+
 ## File-Level Impact
 
 ### Core validation and config modeling
@@ -214,6 +273,9 @@ Fixtures and tests should stop using relayer sections as harmless filler in EOA 
 - `crates/app-live/src/commands/doctor/connectivity.rs`
 - `crates/app-live/src/commands/run.rs`
 - `crates/app-live/src/source_tasks.rs`
+- `crates/app-live/src/commands/discover.rs`
+- `crates/app-live/src/startup.rs`
+- `crates/app-live/src/commands/bootstrap/flow.rs`
 
 ### Operator-facing UX
 
@@ -231,7 +293,9 @@ Fixtures and tests should stop using relayer sections as harmless filler in EOA 
 - `crates/app-live/tests/real_user_shadow_smoke.rs`
 - `crates/config-schema/tests/validated_views.rs`
 - `crates/config-schema/tests/fixtures/*.toml`
-- any startup/apply/support fixtures still embedding `EOA + relayer_api_key`
+- `crates/app-live/tests/startup_resolution.rs`
+- `crates/app-live/tests/support/verify_db.rs`
+- any startup/apply/support fixtures still embedding `EOA + relayer_auth`
 
 ## Risks
 
@@ -256,9 +320,9 @@ This slice changes a repository-wide semantic default, so broad fixture cleanup 
 ## Recommended Implementation Order
 
 1. Fix validation and app-side config modeling.
-2. Fix `doctor` and runtime source construction.
-3. Fix init/example/runbook UX.
-4. Update fixtures and tests to the new truth.
+2. Fix `doctor`, `discover`, and runtime/startup source construction.
+3. Fix init/example/runbook UX, including preserve-mode cleanup of invalid legacy EOA relayer sections.
+4. Update fixtures and tests to the new truth across both `relayer_api_key` and `builder_api_key` variants.
 
 ## Acceptance Criteria
 
@@ -266,6 +330,7 @@ This slice changes a repository-wide semantic default, so broad fixture cleanup 
 - live EOA configs fail if relayer auth is present
 - non-EOA live configs still require relayer auth
 - `doctor` does not perform relayer reachability probes for EOA
+- EOA non-shadow live paths that still depend on relayer-backed behavior fail closed explicitly rather than entering an undefined runtime shape
 - `real_user_shadow_smoke` works with EOA account credentials and no relayer config
 - init/example/runbook no longer instruct EOA operators to configure relayer auth
-- no test fixture continues to treat `EOA + relayer_api_key` as a valid default configuration
+- no test fixture continues to treat `EOA + relayer_auth` as a valid default configuration
