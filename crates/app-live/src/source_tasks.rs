@@ -1,11 +1,12 @@
 use state::RemoteSnapshot;
-use venue_polymarket::{HeartbeatFetchResult, PolymarketRestClient, RestClientBuildError};
+use venue_polymarket::HeartbeatFetchResult;
 
 use crate::{
-    config::PolymarketSourceConfig,
-    task_groups::{RelayerTaskGroup, UserStateTaskGroup},
     BootstrapSource, HeartbeatSource, HeartbeatTaskGroup, LocalSignerConfig, MarketDataTaskGroup,
     MetadataTaskGroup, StaticSnapshotSource,
+    config::PolymarketSourceConfig,
+    polymarket_runtime_adapter::PolymarketMetadataGatewayBackend,
+    task_groups::{RelayerTaskGroup, UserStateTaskGroup},
 };
 
 #[derive(Debug)]
@@ -17,7 +18,34 @@ pub struct RealUserShadowSmokeSources {
     pub heartbeat: HeartbeatTaskGroup<SmokeHeartbeatSource>,
     pub relayer: RelayerTaskGroup,
     pub metadata: MetadataTaskGroup,
+    #[cfg_attr(not(test), allow(dead_code))]
+    metadata_backend: SmokeMetadataBackend,
     bootstrap_snapshot: RemoteSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SmokeMetadataBackend {
+    Sdk,
+    LegacyRest,
+}
+
+impl SmokeMetadataBackend {
+    #[cfg_attr(not(test), allow(dead_code))]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sdk => "sdk",
+            Self::LegacyRest => "legacy-rest",
+        }
+    }
+}
+
+impl From<PolymarketMetadataGatewayBackend> for SmokeMetadataBackend {
+    fn from(value: PolymarketMetadataGatewayBackend) -> Self {
+        match value {
+            PolymarketMetadataGatewayBackend::Sdk => Self::Sdk,
+            PolymarketMetadataGatewayBackend::LegacyRest => Self::LegacyRest,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +96,8 @@ pub fn build_real_user_shadow_smoke_sources(
     signer: LocalSignerConfig,
     run_session_id: &str,
 ) -> Result<RealUserShadowSmokeSources, String> {
+    let metadata_backend =
+        crate::polymarket_runtime_adapter::polymarket_metadata_gateway_backend(&source).into();
     Ok(RealUserShadowSmokeSources {
         source_config: source,
         signer_config: signer,
@@ -76,28 +106,24 @@ pub fn build_real_user_shadow_smoke_sources(
         heartbeat: HeartbeatTaskGroup::for_runtime(SmokeHeartbeatSource, run_session_id),
         relayer: RelayerTaskGroup,
         metadata: MetadataTaskGroup,
+        metadata_backend,
         bootstrap_snapshot: RemoteSnapshot::empty(),
     })
 }
 
-pub fn build_polymarket_rest_client(
-    source: &PolymarketSourceConfig,
-) -> Result<PolymarketRestClient, RestClientBuildError> {
-    PolymarketRestClient::new(
-        source.clob_host.clone(),
-        source.data_api_host.clone(),
-        source.relayer_host.clone(),
-        source.outbound_proxy_url.clone(),
-        None,
-    )
+impl RealUserShadowSmokeSources {
+    #[cfg(test)]
+    pub(crate) fn metadata_backend_for_tests(&self) -> &'static str {
+        self.metadata_backend.as_str()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use config_schema::{load_raw_config_from_str, ValidatedConfig};
+    use config_schema::{ValidatedConfig, load_raw_config_from_str};
 
     use super::build_real_user_shadow_smoke_sources;
-    use crate::LocalSignerConfig;
+    use crate::{LocalSignerConfig, config::PolymarketSourceConfig};
 
     #[test]
     fn smoke_source_builder_threads_run_session_id_into_heartbeat_group() {
@@ -115,6 +141,30 @@ mod tests {
         .expect("source bundle should build");
 
         assert_eq!(sources.heartbeat.test_source_session_id(), "run-session-77");
+    }
+
+    #[test]
+    fn smoke_source_builder_uses_adapter_owned_metadata_backend_selection() {
+        let sources = build_real_user_shadow_smoke_sources(
+            smoke_source_config(None),
+            sample_signer_config(),
+            "run-session-1",
+        )
+        .expect("source bundle should build");
+
+        assert_eq!(sources.metadata_backend_for_tests(), "sdk");
+    }
+
+    #[test]
+    fn smoke_source_builder_keeps_proxy_fallback_hidden_behind_the_adapter() {
+        let sources = build_real_user_shadow_smoke_sources(
+            smoke_source_config(Some("http://127.0.0.1:7897")),
+            sample_signer_config(),
+            "run-session-2",
+        )
+        .expect("source bundle should build");
+
+        assert_eq!(sources.metadata_backend_for_tests(), "legacy-rest");
     }
 
     fn live_config_view() -> config_schema::AppLiveConfigView<'static> {
@@ -157,5 +207,35 @@ metadata_refresh_interval_seconds = 60
         let validated = ValidatedConfig::new(raw).expect("validated config should parse");
         let leaked = Box::leak(Box::new(validated));
         leaked.for_app_live().expect("app-live config should load")
+    }
+
+    fn sample_signer_config() -> LocalSignerConfig {
+        let config = live_config_view();
+        LocalSignerConfig::try_from(&config).expect("signer config should parse")
+    }
+
+    fn smoke_source_config(outbound_proxy_url: Option<&str>) -> PolymarketSourceConfig {
+        PolymarketSourceConfig {
+            clob_host: "https://clob.polymarket.com"
+                .parse()
+                .expect("clob host should parse"),
+            data_api_host: "https://gamma-api.polymarket.com"
+                .parse()
+                .expect("data host should parse"),
+            relayer_host: "https://relayer-v2.polymarket.com"
+                .parse()
+                .expect("relayer host should parse"),
+            market_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+                .parse()
+                .expect("market ws should parse"),
+            user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+                .parse()
+                .expect("user ws should parse"),
+            outbound_proxy_url: outbound_proxy_url
+                .map(|url| url.parse().expect("proxy url should parse")),
+            heartbeat_interval_seconds: 15,
+            relayer_poll_interval_seconds: 5,
+            metadata_refresh_interval_seconds: 60,
+        }
     }
 }

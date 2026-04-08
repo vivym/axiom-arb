@@ -6,41 +6,41 @@ use std::{
 
 use alloy::dyn_abi::Eip712Domain;
 use alloy::hex::ToHexExt as _;
-use alloy::signers::{local::PrivateKeySigner, Signer as _};
+use alloy::signers::{Signer as _, local::PrivateKeySigner};
 use alloy::sol_types::SolStruct as _;
 use domain::{ExecutionMode, SignatureType, WalletRoute};
+use execution::ExecutionInstrumentation;
 use execution::negrisk::plan_family_submission;
 use execution::plans::ExecutionPlan;
 use execution::providers::{SignerProvider, SubmitProviderError, VenueExecutionProvider};
 use execution::signing::{OrderSigner, SignedFamilySubmission, SigningError};
 use execution::sink::LiveVenueSink;
-use execution::ExecutionInstrumentation;
-use polymarket_client_sdk::auth::{state::Authenticated, Normal};
 use polymarket_client_sdk::auth::{Credentials as SdkCredentials, Uuid};
+use polymarket_client_sdk::auth::{Normal, state::Authenticated};
 use polymarket_client_sdk::clob::types::{
     OrderType as SdkOrderType, Side as SdkSide, SignatureType as SdkSignatureType,
 };
 use polymarket_client_sdk::clob::{Client as SdkClobClient, Config as SdkClobConfig};
 use polymarket_client_sdk::gamma::Client as SdkGammaClient;
 use polymarket_client_sdk::types::{Address as SdkAddress, U256};
-use polymarket_client_sdk::{contract_config, POLYGON, PRIVATE_KEY_VAR};
+use polymarket_client_sdk::{POLYGON, PRIVATE_KEY_VAR, contract_config};
 use tokio::runtime::Runtime;
 use venue_polymarket::{
-    build_post_order_request_from_signed_member, L2AuthHeaders, LiveClobSdkApi, LiveMetadataSdkApi,
-    PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport, SignerContext,
+    L2AuthHeaders, LiveClobSdkApi, LiveMetadataSdkApi, PolymarketGateway,
+    PolymarketNegRiskSubmitProvider, PolymarketRestClient, PostOrderTransport,
+    RestClientBuildError, SignerContext, build_post_order_request_from_signed_member,
 };
 
 use crate::{
-    config::{NegRiskFamilyLiveTarget, PolymarketSourceConfig},
-    PolymarketGatewayCredentials,
+    LocalSignerConfig,
+    negrisk_live::{
+        NegRiskLiveArtifact, NegRiskLiveError, NegRiskLiveExecutionBackend,
+        NegRiskLiveExecutionRecord, to_execution_target,
+    },
 };
 use crate::{
-    negrisk_live::{
-        to_execution_target, NegRiskLiveArtifact, NegRiskLiveError, NegRiskLiveExecutionBackend,
-        NegRiskLiveExecutionRecord,
-    },
-    source_tasks::build_polymarket_rest_client,
-    LocalSignerConfig,
+    PolymarketGatewayCredentials,
+    config::{NegRiskFamilyLiveTarget, PolymarketSourceConfig},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +90,18 @@ pub(crate) fn polymarket_metadata_gateway_backend(
     } else {
         PolymarketMetadataGatewayBackend::Sdk
     }
+}
+
+pub(crate) fn build_polymarket_rest_client(
+    source: &PolymarketSourceConfig,
+) -> Result<PolymarketRestClient, RestClientBuildError> {
+    PolymarketRestClient::new(
+        source.clob_host.clone(),
+        source.data_api_host.clone(),
+        source.relayer_host.clone(),
+        source.outbound_proxy_url.clone(),
+        None,
+    )
 }
 
 pub(crate) fn build_polymarket_metadata_gateway(
@@ -281,7 +293,7 @@ impl OrderSigner for PolymarketOrderSigner {
                                             "unsupported sdk side value: {}",
                                             signed_order.order.side
                                         ),
-                                    })
+                                    });
                                 }
                             },
                             expiration: signed_order.order.expiration.to_string(),
@@ -613,10 +625,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        polymarket_metadata_gateway_backend, PolymarketMetadataGatewayBackend,
-        PolymarketOrderSigner,
+        PolymarketMetadataGatewayBackend, PolymarketOrderSigner,
+        polymarket_metadata_gateway_backend,
     };
-    use crate::{config::PolymarketSourceConfig, PolymarketGatewayCredentials};
+    use crate::{PolymarketGatewayCredentials, config::PolymarketSourceConfig};
 
     const TEST_PRIVATE_KEY: &str =
         "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
@@ -683,10 +695,12 @@ mod tests {
         assert_ne!(signed.members[0].signer, "0xsigner");
         assert_eq!(signed.members[0].fee_rate_bps, "17");
         assert!(signed.members[0].identity.signature.starts_with("0x"));
-        assert!(signed.members[0]
-            .identity
-            .signed_order_hash
-            .starts_with("0x"));
+        assert!(
+            signed.members[0]
+                .identity
+                .signed_order_hash
+                .starts_with("0x")
+        );
         assert_ne!(signed.members[0].identity.signature, "test-sig:plan-1:0");
     }
 
