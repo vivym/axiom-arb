@@ -18,8 +18,7 @@ use support::{apply_db, status_db::TestDatabase};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
 use toml_edit::{table, value, DocumentMut};
 
-const TEST_PRIVATE_KEY: &str =
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const TEST_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 #[test]
 fn apply_subcommand_is_exposed() {
@@ -662,7 +661,10 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
         "{text}"
     );
     assert!(text.contains("Execution"), "{text}");
-    assert!(text.contains("Starting runtime in the foreground"), "{text}");
+    assert!(
+        text.contains("Starting runtime in the foreground"),
+        "{text}"
+    );
     assert!(text.contains("app-live bootstrap complete"), "{text}");
     assert!(text.contains("negrisk_mode=Live"), "{text}");
     assert!(text.contains("neg_risk_live_attempt_count=1"), "{text}");
