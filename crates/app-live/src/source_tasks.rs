@@ -5,14 +5,14 @@ use crate::{
     config::PolymarketSourceConfig,
     polymarket_runtime_adapter::PolymarketMetadataGatewayBackend,
     task_groups::{RelayerTaskGroup, UserStateTaskGroup},
-    BootstrapSource, HeartbeatSource, HeartbeatTaskGroup, LocalSignerConfig, MarketDataTaskGroup,
-    MetadataTaskGroup, StaticSnapshotSource,
+    BootstrapSource, HeartbeatSource, HeartbeatTaskGroup, LocalAccountRuntimeConfig,
+    MarketDataTaskGroup, MetadataTaskGroup, StaticSnapshotSource,
 };
 
 #[derive(Debug)]
 pub struct RealUserShadowSmokeSources {
     pub source_config: PolymarketSourceConfig,
-    pub signer_config: LocalSignerConfig,
+    pub account_runtime_config: LocalAccountRuntimeConfig,
     pub market: MarketDataTaskGroup,
     pub user: UserStateTaskGroup,
     pub heartbeat: HeartbeatTaskGroup<SmokeHeartbeatSource>,
@@ -90,14 +90,14 @@ impl BootstrapSource for SmokeSafeStartupSource {
 
 pub fn build_real_user_shadow_smoke_sources(
     source: PolymarketSourceConfig,
-    signer: LocalSignerConfig,
+    account_runtime_config: LocalAccountRuntimeConfig,
     run_session_id: &str,
 ) -> Result<RealUserShadowSmokeSources, String> {
     let metadata_backend =
         crate::polymarket_runtime_adapter::polymarket_metadata_gateway_backend(&source).into();
     Ok(RealUserShadowSmokeSources {
         source_config: source,
-        signer_config: signer,
+        account_runtime_config,
         market: MarketDataTaskGroup,
         user: UserStateTaskGroup,
         heartbeat: HeartbeatTaskGroup::for_runtime(SmokeHeartbeatSource, run_session_id),
@@ -120,7 +120,7 @@ mod tests {
     use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
     use super::build_real_user_shadow_smoke_sources;
-    use crate::{config::PolymarketSourceConfig, LocalSignerConfig};
+    use crate::{config::PolymarketSourceConfig, LocalAccountRuntimeConfig};
 
     #[test]
     fn smoke_source_builder_threads_run_session_id_into_heartbeat_group() {
@@ -128,11 +128,12 @@ mod tests {
         let smoke = crate::load_real_user_shadow_smoke_config(&config)
             .expect("smoke config should parse")
             .expect("smoke should be enabled");
-        let signer = LocalSignerConfig::try_from(&config).expect("signer config should parse");
+        let account_runtime_config =
+            LocalAccountRuntimeConfig::try_from(&config).expect("account config should parse");
 
         let sources = build_real_user_shadow_smoke_sources(
             smoke.source_config.clone(),
-            signer,
+            account_runtime_config,
             "run-session-77",
         )
         .expect("source bundle should build");
@@ -144,7 +145,7 @@ mod tests {
     fn smoke_source_builder_uses_adapter_owned_metadata_backend_selection() {
         let sources = build_real_user_shadow_smoke_sources(
             smoke_source_config(),
-            sample_signer_config(),
+            sample_account_runtime_config(),
             "run-session-1",
         )
         .expect("source bundle should build");
@@ -167,11 +168,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"
@@ -193,9 +189,27 @@ metadata_refresh_interval_seconds = 60
         leaked.for_app_live().expect("app-live config should load")
     }
 
-    fn sample_signer_config() -> LocalSignerConfig {
+    fn sample_account_runtime_config() -> LocalAccountRuntimeConfig {
         let config = live_config_view();
-        LocalSignerConfig::try_from(&config).expect("signer config should parse")
+        LocalAccountRuntimeConfig::try_from(&config).expect("account config should parse")
+    }
+
+    #[test]
+    fn smoke_source_builder_stores_account_runtime_config_without_relayer_auth() {
+        let sources = build_real_user_shadow_smoke_sources(
+            smoke_source_config(),
+            sample_account_runtime_config(),
+            "run-session-2",
+        )
+        .expect("source bundle should build");
+
+        assert_eq!(
+            sources.account_runtime_config,
+            LocalAccountRuntimeConfig {
+                signer: sample_account_runtime_config().signer,
+                l2_auth: sample_account_runtime_config().l2_auth,
+            }
+        );
     }
 
     fn smoke_source_config() -> PolymarketSourceConfig {

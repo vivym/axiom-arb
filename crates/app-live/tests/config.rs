@@ -7,9 +7,10 @@ use std::{
 
 use app_live::config::PolymarketSourceConfig;
 use app_live::{
-    load_real_user_shadow_smoke_config, ConfigError, LocalRelayerAuth, LocalSignerConfig,
-    LocalSignerIdentity, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
-    PolymarketGatewayCredentials, RealUserShadowSmokeConfig,
+    load_real_user_shadow_smoke_config, ConfigError, LocalAccountRuntimeConfig, LocalRelayerAuth,
+    LocalRelayerRuntimeConfig, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
+    NegRiskLiveTargetSet, NegRiskMemberLiveTarget, PolymarketGatewayCredentials,
+    RealUserShadowSmokeConfig,
 };
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use rust_decimal::Decimal;
@@ -112,13 +113,6 @@ api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
-
 [negrisk.rollout]
 approved_families = ["family-a", "family-missing"]
 ready_families = ["family-a"]
@@ -185,13 +179,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 "#,
     )
     .unwrap();
@@ -210,8 +197,8 @@ signature = "builder-signature-1"
 }
 
 #[test]
-fn derives_local_signer_config_from_account_backed_live_view() {
-    let config = LocalSignerConfig::try_from(&live_view("")).unwrap();
+fn eoa_live_view_builds_account_runtime_config_without_relayer_auth() {
+    let config = LocalAccountRuntimeConfig::try_from(&live_view("")).unwrap();
 
     assert_eq!(
         config.signer,
@@ -226,20 +213,64 @@ fn derives_local_signer_config_from_account_backed_live_view() {
     assert_eq!(config.l2_auth.passphrase, "poly-passphrase-1");
     assert!(!config.l2_auth.timestamp.is_empty());
     assert!(!config.l2_auth.signature.is_empty());
+}
+
+#[test]
+fn eoa_live_view_does_not_build_relayer_runtime_config() {
+    let relayer = LocalRelayerRuntimeConfig::optional_from(&live_view("")).unwrap();
+
+    assert!(relayer.is_none());
+}
+
+#[test]
+fn non_eoa_live_config_without_relayer_is_rejected_before_app_live_view() {
+    let raw = load_raw_config_from_str(BASE_NON_EOA_LIVE_CONFIG_WITHOUT_RELAYER)
+        .expect("config should parse");
+    let validated = ValidatedConfig::new(raw).expect("global validation should succeed");
+    let error = validated
+        .for_app_live()
+        .expect_err("non-EOA app-live view without relayer should fail");
+
+    assert!(error.to_string().contains("polymarket.relayer_auth"));
+}
+
+#[test]
+fn non_eoa_live_view_builds_relayer_runtime_config() {
+    let config = LocalRelayerRuntimeConfig::required_from(&non_eoa_live_view()).unwrap();
+
     assert_eq!(
-        config.relayer_auth,
-        LocalRelayerAuth::BuilderApiKey {
-            api_key: "builder-api-key-1".to_owned(),
-            timestamp: "1700000001".to_owned(),
-            passphrase: "builder-passphrase-1".to_owned(),
-            signature: "builder-signature-1".to_owned(),
+        config.auth,
+        LocalRelayerAuth::RelayerApiKey {
+            api_key: "relay-key".to_owned(),
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
         }
     );
 }
 
 #[test]
-fn operator_facing_account_derives_local_signer_config() {
-    let config = LocalSignerConfig::try_from(&operator_live_view()).unwrap();
+fn non_eoa_live_view_builds_builder_relayer_runtime_config() {
+    let config =
+        LocalRelayerRuntimeConfig::required_from(&non_eoa_live_view_with_builder_auth()).unwrap();
+
+    match config.auth {
+        LocalRelayerAuth::BuilderApiKey {
+            api_key,
+            timestamp,
+            passphrase,
+            signature,
+        } => {
+            assert_eq!(api_key, "builder-api-key");
+            assert_eq!(passphrase, "builder-passphrase");
+            assert!(!timestamp.is_empty());
+            assert!(!signature.is_empty());
+        }
+        other => panic!("expected builder auth, got {other:?}"),
+    }
+}
+
+#[test]
+fn operator_facing_account_builds_account_runtime_config_without_relayer_auth() {
+    let config = LocalAccountRuntimeConfig::try_from(&operator_live_view()).unwrap();
 
     assert_eq!(
         config.signer,
@@ -254,33 +285,6 @@ fn operator_facing_account_derives_local_signer_config() {
     assert_eq!(config.l2_auth.passphrase, "poly-passphrase");
     assert!(!config.l2_auth.timestamp.is_empty());
     assert!(!config.l2_auth.signature.is_empty());
-    assert_eq!(
-        config.relayer_auth,
-        LocalRelayerAuth::RelayerApiKey {
-            api_key: "relay-key".to_owned(),
-            address: "0x1111111111111111111111111111111111111111".to_owned(),
-        }
-    );
-}
-
-#[test]
-fn operator_facing_account_derives_builder_relayer_auth() {
-    let config = LocalSignerConfig::try_from(&operator_live_view_with_builder_auth()).unwrap();
-
-    match config.relayer_auth {
-        LocalRelayerAuth::BuilderApiKey {
-            api_key,
-            timestamp,
-            passphrase,
-            signature,
-        } => {
-            assert_eq!(api_key, "builder-api-key");
-            assert_eq!(passphrase, "builder-passphrase");
-            assert!(!timestamp.is_empty());
-            assert!(!signature.is_empty());
-        }
-        other => panic!("expected builder auth, got {other:?}"),
-    }
 }
 
 #[test]
@@ -475,7 +479,7 @@ fn account_fields_trim_whitespace_before_validation() {
 
 #[test]
 fn relayer_auth_fields_trim_whitespace_before_validation() {
-    let config = format!("{BASE_LIVE_CONFIG}\n{DEFAULT_ROLLOUT}")
+    let config = format!("{BASE_NON_EOA_LIVE_CONFIG}\n{DEFAULT_ROLLOUT}")
         .replace("timestamp = \"1700000001\"", "timestamp = \"   \"")
         .replace("signature = \"builder-signature-1\"", "signature = \"   \"");
     let raw = load_raw_config_from_str(&config).unwrap();
@@ -832,13 +836,6 @@ real_user_shadow_smoke = true
 source = "adopted"
 operator_strategy_revision = "targets-rev-9"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
-
 [polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
@@ -865,7 +862,11 @@ ready_families = []
 }
 
 fn operator_live_view() -> config_schema::AppLiveConfigView<'static> {
-    operator_live_view_from(
+    operator_live_view_from("")
+}
+
+fn non_eoa_live_view() -> config_schema::AppLiveConfigView<'static> {
+    non_eoa_live_view_from(
         r#"
 [polymarket.relayer_auth]
 kind = "relayer_api_key"
@@ -875,8 +876,8 @@ address = "0x1111111111111111111111111111111111111111"
     )
 }
 
-fn operator_live_view_with_builder_auth() -> config_schema::AppLiveConfigView<'static> {
-    operator_live_view_from(
+fn non_eoa_live_view_with_builder_auth() -> config_schema::AppLiveConfigView<'static> {
+    non_eoa_live_view_from(
         r#"
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -903,11 +904,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[polymarket.relayer_auth]
-kind = "relayer_api_key"
-api_key = "relay-key"
-address = "0x1111111111111111111111111111111111111111"
 
 [negrisk.target_source]
 source = "adopted"
@@ -960,13 +956,6 @@ api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
 
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
-
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = "targets-rev-9"
@@ -1008,6 +997,49 @@ address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+{relayer_auth}
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+"#,
+        ))
+        .expect("config should parse"),
+    ));
+    let validated = Box::leak(Box::new(
+        ValidatedConfig::new(raw.clone()).expect("config should validate"),
+    ));
+
+    validated.for_app_live().expect("live view should validate")
+}
+
+fn non_eoa_live_view_from(relayer_auth: &str) -> config_schema::AppLiveConfigView<'static> {
+    let raw = Box::leak(Box::new(
+        load_raw_config_from_str(&format!(
+            r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
 api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
@@ -1087,6 +1119,35 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
+"#;
+
+const BASE_NON_EOA_LIVE_CONFIG: &str = r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
 
 [polymarket.relayer_auth]
 kind = "builder_api_key"
@@ -1094,6 +1155,35 @@ api_key = "builder-api-key-1"
 timestamp = "1700000001"
 passphrase = "builder-passphrase-1"
 signature = "builder-signature-1"
+"#;
+
+const BASE_NON_EOA_LIVE_CONFIG_WITHOUT_RELAYER: &str = r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "proxy"
+wallet_route = "proxy"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
 "#;
 
 const BASE_LIVE_WITH_RAW_SOURCE: &str = r#"
@@ -1113,13 +1203,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 
 [negrisk.rollout]
 approved_families = []
@@ -1153,13 +1236,6 @@ wallet_route = "eoa"
 api_key = "poly-api-key-1"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 
 [negrisk.rollout]
 approved_families = []

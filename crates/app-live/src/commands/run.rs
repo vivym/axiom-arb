@@ -12,9 +12,9 @@ use crate::polymarket_runtime_adapter::PolymarketLiveExecutionBackend;
 use crate::{
     build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
     load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
-    startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError, LocalSignerConfig,
-    NegRiskLiveTargetSet, PolymarketGatewayCredentials, SmokeSafeStartupSource,
-    StaticSnapshotSource,
+    startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError,
+    LocalAccountRuntimeConfig, LocalSignerConfig, NegRiskLiveTargetSet,
+    PolymarketGatewayCredentials, SmokeSafeStartupSource, StaticSnapshotSource,
 };
 
 pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {
@@ -87,6 +87,7 @@ fn run_from_config_path_for_source(
                             smoke.source_config.clone(),
                             signer_config
                                 .clone()
+                                .map(LocalAccountRuntimeConfig::from)
                                 .expect("smoke startup should require signer config"),
                             run_session.run_session_id(),
                         )

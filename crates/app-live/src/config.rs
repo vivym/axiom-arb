@@ -87,6 +87,12 @@ pub struct LocalSignerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LocalAccountRuntimeConfig {
+    pub signer: LocalSignerIdentity,
+    pub l2_auth: LocalL2AuthHeaders,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LocalSignerIdentity {
     pub address: String,
     pub funder_address: String,
@@ -111,6 +117,11 @@ pub struct LocalL2AuthHeaders {
     pub passphrase: String,
     pub timestamp: String,
     pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LocalRelayerRuntimeConfig {
+    pub auth: LocalRelayerAuth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -234,6 +245,27 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
     type Error = ConfigError;
 
     fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
+        let account_runtime = LocalAccountRuntimeConfig::try_from(config).map_err(|error| {
+            if matches!(error, ConfigError::MissingPolymarketGatewayCredentials) {
+                ConfigError::MissingLocalSignerConfig
+            } else {
+                error
+            }
+        })?;
+        let relayer_runtime = LocalRelayerRuntimeConfig::required_from(config)?;
+
+        Ok(LocalSignerConfig {
+            signer: account_runtime.signer,
+            l2_auth: account_runtime.l2_auth,
+            relayer_auth: relayer_runtime.auth,
+        })
+    }
+}
+
+impl TryFrom<&AppLiveConfigView<'_>> for LocalAccountRuntimeConfig {
+    type Error = ConfigError;
+
+    fn try_from(config: &AppLiveConfigView<'_>) -> Result<Self, Self::Error> {
         if config.polymarket_signer().is_some() {
             return Err(ConfigError::InvalidLocalSignerConfig {
                 value: "app_live".to_owned(),
@@ -241,16 +273,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
                     .to_owned(),
             });
         }
-        let relayer_auth = config
-            .polymarket_relayer_auth()
-            .ok_or(ConfigError::MissingLocalSignerConfig)?;
-        let credentials = PolymarketGatewayCredentials::try_from(config).map_err(|error| {
-            if matches!(error, ConfigError::MissingPolymarketGatewayCredentials) {
-                ConfigError::MissingLocalSignerConfig
-            } else {
-                error
-            }
-        })?;
+        let credentials = PolymarketGatewayCredentials::try_from(config)?;
         let derived = derive_l2_auth_material(
             &credentials.api_key,
             &credentials.secret,
@@ -262,7 +285,7 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
             message: error.to_string(),
         })?;
 
-        Ok(LocalSignerConfig {
+        Ok(LocalAccountRuntimeConfig {
             signer: signer_identity_from_credentials(&credentials),
             l2_auth: LocalL2AuthHeaders {
                 api_key: derived.api_key,
@@ -270,7 +293,6 @@ impl TryFrom<&AppLiveConfigView<'_>> for LocalSignerConfig {
                 timestamp: derived.timestamp,
                 signature: derived.signature,
             },
-            relayer_auth: map_relayer_auth(relayer_auth)?,
         })
     }
 }
@@ -293,6 +315,19 @@ impl TryFrom<&AppLiveConfigView<'_>> for PolymarketGatewayCredentials {
         validate_account_view(account)?;
 
         Ok(gateway_credentials_from_account(account))
+    }
+}
+
+impl LocalRelayerRuntimeConfig {
+    pub fn optional_from(config: &AppLiveConfigView<'_>) -> Result<Option<Self>, ConfigError> {
+        config
+            .polymarket_relayer_auth()
+            .map(|raw| map_relayer_auth(raw).map(|auth| Self { auth }))
+            .transpose()
+    }
+
+    pub fn required_from(config: &AppLiveConfigView<'_>) -> Result<Self, ConfigError> {
+        Self::optional_from(config)?.ok_or(ConfigError::MissingLocalSignerConfig)
     }
 }
 
@@ -623,6 +658,15 @@ fn signer_identity_from_credentials(
         funder_address: credentials.funder_address.clone(),
         signature_type: credentials.signature_type.clone(),
         wallet_route: credentials.wallet_route.clone(),
+    }
+}
+
+impl From<LocalSignerConfig> for LocalAccountRuntimeConfig {
+    fn from(value: LocalSignerConfig) -> Self {
+        Self {
+            signer: value.signer,
+            l2_auth: value.l2_auth,
+        }
     }
 }
 

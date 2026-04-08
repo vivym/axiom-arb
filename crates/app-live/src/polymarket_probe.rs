@@ -12,7 +12,7 @@ use venue_polymarket::{
     PolymarketUrl as Url, PolymarketUserStreamAuth, UserWsEvent,
 };
 
-use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig};
+use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalRelayerRuntimeConfig};
 
 const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 const HEARTBEAT_PREVIOUS_ID: &str = "00000000-0000-0000-0000-000000000000";
@@ -60,7 +60,7 @@ pub(crate) trait PolymarketProbeFacade {
     ) -> ProbeFuture<'a>;
     fn fetch_recent_transactions<'a>(
         &'a mut self,
-        signer_config: &'a LocalSignerConfig,
+        relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
     ) -> ProbeFuture<'a>;
 }
 
@@ -196,11 +196,11 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
 
     fn fetch_recent_transactions<'a>(
         &'a mut self,
-        signer_config: &'a LocalSignerConfig,
+        relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
             let gateway = self.relayer_gateway()?;
-            let auth = relayer_auth_from_signer_config(signer_config)?;
+            let auth = relayer_auth_from_runtime_config(relayer_runtime_config)?;
             timeout_probe("relayer reachability", async move {
                 gateway
                     .recent_transactions(&auth)
@@ -442,10 +442,10 @@ fn map_gateway_error(label: &str, error: PolymarketGatewayError) -> PolymarketPr
     )
 }
 
-fn relayer_auth_from_signer_config<'a>(
-    signer_config: &'a LocalSignerConfig,
+fn relayer_auth_from_runtime_config<'a>(
+    relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
 ) -> Result<RelayerAuth<'a>, PolymarketProbeError> {
-    Ok(match &signer_config.relayer_auth {
+    Ok(match &relayer_runtime_config.auth {
         LocalRelayerAuth::BuilderApiKey {
             api_key,
             timestamp,

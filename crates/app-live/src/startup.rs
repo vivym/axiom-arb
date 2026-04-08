@@ -8,15 +8,17 @@ use persistence::{
 use sqlx::PgPool;
 
 use crate::config::{
-    neg_risk_live_targets_from_route_artifacts, ConfigError, LocalSignerConfig,
-    NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, PolymarketSourceConfig, RouteRuntimeArtifact,
+    neg_risk_live_targets_from_route_artifacts, ConfigError, LocalAccountRuntimeConfig,
+    LocalRelayerRuntimeConfig, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet,
+    PolymarketSourceConfig, RouteRuntimeArtifact,
 };
 use crate::strategy_control::validate_live_route_scope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartupBundle {
     pub source_config: PolymarketSourceConfig,
-    pub signer_config: Option<LocalSignerConfig>,
+    pub account_runtime_config: Option<LocalAccountRuntimeConfig>,
+    pub relayer_runtime_config: Option<LocalRelayerRuntimeConfig>,
     pub targets: NegRiskLiveTargetSet,
     pub operator_target_revision: Option<String>,
 }

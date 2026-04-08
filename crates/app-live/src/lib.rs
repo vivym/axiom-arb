@@ -26,9 +26,9 @@ pub mod task_groups;
 
 pub use bootstrap::{BootstrapSource, StaticSnapshotSource};
 pub use config::{
-    ConfigError, LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerConfig, LocalSignerIdentity,
-    NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
-    PolymarketGatewayCredentials,
+    ConfigError, LocalAccountRuntimeConfig, LocalL2AuthHeaders, LocalRelayerAuth,
+    LocalRelayerRuntimeConfig, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
+    NegRiskLiveTargetSet, NegRiskMemberLiveTarget, PolymarketGatewayCredentials,
 };
 pub use daemon::{
     run_live_daemon_from_durable_store_with_neg_risk_live_targets_instrumented,

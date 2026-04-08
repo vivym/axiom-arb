@@ -9,7 +9,7 @@ use crate::{
     polymarket_probe::{
         LivePolymarketProbe, PolymarketProbeError, PolymarketProbeFacade, UserWsProbeAuth,
     },
-    LocalSignerConfig, ResolvedTargets,
+    LocalRelayerRuntimeConfig, ResolvedTargets,
 };
 
 use super::{
@@ -97,15 +97,16 @@ fn evaluate_live(
             );
             DoctorFailure::new("ConnectivityError", error.to_string())
         })?;
-    let signer_config = LocalSignerConfig::try_from(config).map_err(|error| {
-        report.push_check(
-            "Connectivity",
-            DoctorCheckStatus::Fail,
-            "ConnectivityError",
-            error.to_string(),
-        );
-        DoctorFailure::new("ConnectivityError", error.to_string())
-    })?;
+    let relayer_runtime_config =
+        LocalRelayerRuntimeConfig::required_from(config).map_err(|error| {
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Fail,
+                "ConnectivityError",
+                error.to_string(),
+            );
+            DoctorFailure::new("ConnectivityError", error.to_string())
+        })?;
     let user_ws_auth = user_ws_probe_auth_from_config(config);
     let mut backend = LivePolymarketProbe::new(source_config);
 
@@ -115,7 +116,7 @@ fn evaluate_live(
             &mut backend,
             resolved_targets,
             &l2_probe_credentials,
-            &signer_config,
+            &relayer_runtime_config,
             user_ws_auth,
         ))
         .map_err(|error| {
@@ -200,7 +201,7 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
     backend: &mut B,
     resolved_targets: &ResolvedTargets,
     l2_probe_credentials: &PolymarketL2ProbeCredentials,
-    signer_config: &LocalSignerConfig,
+    relayer_runtime_config: &LocalRelayerRuntimeConfig,
     user_ws_auth: Option<UserWsProbeAuth<'_>>,
 ) -> Result<Vec<ConnectivityCheck>, PolymarketProbeError> {
     let mut checks = Vec::new();
@@ -239,7 +240,9 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
     backend.post_order_heartbeat(l2_probe_credentials).await?;
     checks.push(ConnectivityCheck::pass("heartbeat probe succeeded"));
 
-    backend.fetch_recent_transactions(signer_config).await?;
+    backend
+        .fetch_recent_transactions(relayer_runtime_config)
+        .await?;
     checks.push(ConnectivityCheck::pass(
         "relayer reachability probe succeeded",
     ));
