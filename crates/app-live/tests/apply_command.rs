@@ -664,6 +664,8 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
     assert!(text.contains("Execution"), "{text}");
     assert!(text.contains("Starting runtime in the foreground"), "{text}");
     assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(text.contains("negrisk_mode=Live"), "{text}");
+    assert!(text.contains("neg_risk_live_attempt_count=1"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -1080,6 +1082,8 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
         "{text}"
     );
     assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(text.contains("negrisk_mode=Live"), "{text}");
+    assert!(text.contains("neg_risk_live_attempt_count=1"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
