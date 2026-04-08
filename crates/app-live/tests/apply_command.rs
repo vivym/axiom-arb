@@ -18,6 +18,9 @@ use support::{apply_db, status_db::TestDatabase};
 use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
 use toml_edit::{table, value, DocumentMut};
 
+const TEST_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
 #[test]
 fn apply_subcommand_is_exposed() {
     let output = Command::new(cli::app_live_binary())
@@ -629,10 +632,10 @@ fn apply_live_config_ready_without_start_stops_at_ready_to_start_outcome() {
 
 #[test]
 fn apply_live_config_ready_with_start_enters_run_successfully() {
-    let database = TestDatabase::new();
+    let database = apply_db::TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
     let venue = MockDoctorVenue::success();
-    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+    let config_path = temp_sdk_config_fixture_path("app-live-ux-live.toml", |config| {
         format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
@@ -645,11 +648,12 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
         .arg(&config_path)
         .arg("--start")
         .env("DATABASE_URL", database.database_url())
+        .env("POLYMARKET_PRIVATE_KEY", TEST_PRIVATE_KEY)
         .output()
         .expect("app-live apply should execute for live config ready with start");
 
     let text = cli::combined(&output);
-    assert!(!output.status.success(), "{text}");
+    assert!(output.status.success(), "{text}");
     assert!(text.contains("Planned Actions"), "{text}");
     let planned = section_text(&text, "Planned Actions");
     assert!(planned.contains("Run doctor preflight checks."), "{text}");
@@ -658,19 +662,8 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
         "{text}"
     );
     assert!(text.contains("Execution"), "{text}");
-    assert!(
-        text.contains("Starting runtime in the foreground."),
-        "{text}"
-    );
-    assert!(
-        text.contains("Foreground runtime startup failed."),
-        "{text}"
-    );
-    assert!(
-        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
-        "{text}"
-    );
-    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+    assert!(text.contains("Starting runtime in the foreground"), "{text}");
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -1061,17 +1054,17 @@ fn apply_live_declining_restart_confirmation_stops_cleanly() {
 
 #[test]
 fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() {
-    let database = TestDatabase::new();
+    let database = apply_db::TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
     let venue = MockDoctorVenue::success();
-    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
+    let config_path = temp_sdk_config_fixture_path("app-live-ux-live.toml", |config| {
         format!(
             "{}\n[negrisk.rollout]\napproved_families = [\"family-a\"]\nready_families = [\"family-a\"]\n",
             with_mock_doctor_venue(config, &venue)
         )
     });
 
-    let output = run_apply_with_options(
+    let output = run_apply_with_options_with_private_key(
         &config_path,
         database.database_url(),
         "confirm\n",
@@ -1080,21 +1073,13 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
     );
 
     let text = cli::combined(&output);
-    assert!(!output.status.success(), "{text}");
+    assert!(output.status.success(), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
     assert!(
         text.contains("Manual restart boundary confirmed. Starting runtime in the foreground."),
         "{text}"
     );
-    assert!(
-        text.contains("Foreground runtime startup failed."),
-        "{text}"
-    );
-    assert!(
-        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
-        "{text}"
-    );
-    assert!(!text.contains("app-live bootstrap complete"), "{text}");
+    assert!(text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -1267,6 +1252,39 @@ fn temp_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String)
     path
 }
 
+fn temp_sdk_config_fixture_path(relative: &str, edit: impl FnOnce(String) -> String) -> PathBuf {
+    temp_config_fixture_path(relative, |config| {
+        normalize_sdk_fixture(edit(normalize_sdk_fixture(config)))
+    })
+}
+
+fn normalize_sdk_fixture(config: String) -> String {
+    config
+        .replace(
+            "0x1111111111111111111111111111111111111111",
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        )
+        .replace(
+            "0x2222222222222222222222222222222222222222",
+            "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        )
+        .replace("poly-api-key-1", "00000000-0000-0000-0000-000000000001")
+        .replace("poly-api-key", "00000000-0000-0000-0000-000000000002")
+        .replace(
+            "poly-secret",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .replace(
+            "poly-passphrase",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .replace(
+            "condition-1",
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .replace("token-1", "29")
+}
+
 fn compatibility_mode_live_config_path() -> PathBuf {
     temp_config_fixture_path("app-live-ux-live.toml", |config| {
         format!(
@@ -1338,6 +1356,44 @@ fn run_apply_with_options(
         .arg("--config")
         .arg(config_path)
         .env("DATABASE_URL", database_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if start {
+        command.arg("--start");
+    }
+    if force_interactive {
+        command.env("APP_LIVE_APPLY_FORCE_INTERACTIVE", "1");
+    }
+
+    let mut child = command.spawn().expect("app-live apply should spawn");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin should be piped")
+        .write_all(stdin_input.as_bytes())
+        .expect("stdin should write");
+
+    child
+        .wait_with_output()
+        .expect("app-live apply should finish")
+}
+
+fn run_apply_with_options_with_private_key(
+    config_path: &std::path::Path,
+    database_url: &str,
+    stdin_input: &str,
+    force_interactive: bool,
+    start: bool,
+) -> std::process::Output {
+    let mut command = app_live_command();
+    command
+        .arg("apply")
+        .arg("--config")
+        .arg(config_path)
+        .env("DATABASE_URL", database_url)
+        .env("POLYMARKET_PRIVATE_KEY", TEST_PRIVATE_KEY)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1680,6 +1736,17 @@ fn http_probe_response<'a>(
 
     match (method, path) {
         ("GET", "/data/orders") => (&behavior.orders_status_line, behavior.orders_body.clone()),
+        ("GET", "/fee-rate") => ("200 OK", r#"{"base_fee":17}"#.to_owned()),
+        ("GET", "/tick-size") => (
+            "200 OK",
+            r#"{"minimum_tick_size":"0.01"}"#.to_owned(),
+        ),
+        ("GET", "/neg-risk") => ("200 OK", r#"{"neg_risk":false}"#.to_owned()),
+        ("POST", "/order") => (
+            "200 OK",
+            r#"{"makingAmount":"0","orderID":"order-1","status":"live","success":true,"takingAmount":"0"}"#
+                .to_owned(),
+        ),
         ("POST", "/v1/heartbeats") => (
             &behavior.heartbeat_status_line,
             behavior.heartbeat_body.clone(),
