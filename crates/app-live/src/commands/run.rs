@@ -5,7 +5,9 @@ use observability::{bootstrap_observability, span_names};
 use persistence::connect_pool_from_env;
 
 use crate::cli::RunArgs;
-use crate::config::{neg_risk_live_targets_from_route_artifacts, PolymarketSourceConfig};
+use crate::config::{
+    neg_risk_live_targets_from_route_artifacts, LocalSignerConfig, PolymarketSourceConfig,
+};
 use crate::daemon::run_live_daemon_from_durable_store_with_strategy_revision_and_session_instrumented;
 use crate::negrisk_live::NegRiskLiveExecutionBackend;
 use crate::polymarket_runtime_adapter::PolymarketLiveExecutionBackend;
@@ -13,8 +15,8 @@ use crate::{
     build_real_user_shadow_smoke_sources, instrumentation::emit_bootstrap_completion_observability,
     load_real_user_shadow_smoke_config, run_paper_instrumented, run_session::RunSessionHandle,
     startup::resolve_startup_strategy_revision, AppInstrumentation, ConfigError,
-    LocalAccountRuntimeConfig, LocalSignerConfig, NegRiskLiveTargetSet,
-    PolymarketGatewayCredentials, SmokeSafeStartupSource, StaticSnapshotSource,
+    LocalAccountRuntimeConfig, NegRiskLiveTargetSet, PolymarketGatewayCredentials,
+    SmokeSafeStartupSource, StaticSnapshotSource,
 };
 
 pub fn execute(args: RunArgs) -> Result<(), Box<dyn Error>> {

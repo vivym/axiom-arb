@@ -30,16 +30,13 @@ use venue_polymarket::{
     PolymarketGateway, PolymarketNegRiskSubmitProvider, PostOrderTransport,
 };
 
-use crate::{
-    config::{NegRiskFamilyLiveTarget, PolymarketSourceConfig},
-    PolymarketGatewayCredentials,
+use crate::negrisk_live::{
+    to_execution_target, NegRiskLiveArtifact, NegRiskLiveError, NegRiskLiveExecutionBackend,
+    NegRiskLiveExecutionRecord,
 };
 use crate::{
-    negrisk_live::{
-        to_execution_target, NegRiskLiveArtifact, NegRiskLiveError, NegRiskLiveExecutionBackend,
-        NegRiskLiveExecutionRecord,
-    },
-    LocalSignerConfig,
+    config::{LocalSignerConfig, NegRiskFamilyLiveTarget, PolymarketSourceConfig},
+    PolymarketGatewayCredentials,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

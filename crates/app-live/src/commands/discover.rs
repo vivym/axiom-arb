@@ -17,11 +17,10 @@ use state::{
 
 use crate::{
     cli::DiscoverArgs,
-    config::PolymarketSourceConfig,
+    config::{LocalSignerConfig, PolymarketSourceConfig},
     polymarket_runtime_adapter::build_polymarket_metadata_gateway,
     task_groups::{MetadataDiscoveryBatch, MetadataTaskGroup},
     CandidateNotice, CandidateRestrictionTruth, DiscoverySupervisor, InputTaskEvent,
-    LocalSignerConfig,
 };
 use venue_polymarket::{NegRiskMarketMetadata, PolymarketGateway};
 

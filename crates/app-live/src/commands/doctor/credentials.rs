@@ -1,6 +1,6 @@
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 
-use crate::LocalSignerConfig;
+use crate::config::LocalSignerConfig;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
 use super::DoctorFailure;

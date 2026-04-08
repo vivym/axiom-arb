@@ -1,8 +1,9 @@
+use app_live::config::LocalSignerConfig;
 use app_live::{
     source_tasks::build_real_user_shadow_smoke_sources, BootstrapSource, DecisionTaskGroup,
     FollowUpQueue, FollowUpWork, HeartbeatSource, HeartbeatTaskGroup, IngressQueue, InputTaskEvent,
-    LocalSignerConfig, ScopeRestriction, ScopeRestrictionKind, SnapshotDispatchQueue,
-    SnapshotNotice, StaticSnapshotSource, SupervisorPosture,
+    ScopeRestriction, ScopeRestrictionKind, SnapshotDispatchQueue, SnapshotNotice,
+    StaticSnapshotSource, SupervisorPosture,
 };
 use chrono::Utc;
 use config_schema::{load_raw_config_from_str, ValidatedConfig};

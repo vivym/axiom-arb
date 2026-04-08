@@ -5,12 +5,11 @@ use std::{
     process::Command,
 };
 
-use app_live::config::PolymarketSourceConfig;
+use app_live::config::{LocalSignerConfig, PolymarketSourceConfig};
 use app_live::{
     load_real_user_shadow_smoke_config, ConfigError, LocalAccountRuntimeConfig, LocalRelayerAuth,
-    LocalRelayerRuntimeConfig, LocalSignerConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget,
-    NegRiskLiveTargetSet, NegRiskMemberLiveTarget, PolymarketGatewayCredentials,
-    RealUserShadowSmokeConfig,
+    LocalRelayerRuntimeConfig, LocalSignerIdentity, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet,
+    NegRiskMemberLiveTarget, PolymarketGatewayCredentials, RealUserShadowSmokeConfig,
 };
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 use rust_decimal::Decimal;
