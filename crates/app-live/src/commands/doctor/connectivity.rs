@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use config_schema::{AppLiveConfigView, RuntimeModeToml};
 use persistence::connect_pool_from_env;
+use venue_polymarket::PolymarketL2ProbeCredentials;
 
 use crate::{
     config::{PolymarketGatewayCredentials, PolymarketSourceConfig},
@@ -80,15 +81,22 @@ fn evaluate_live(
             );
             DoctorFailure::new("ConnectivityError", error.to_string())
         })?;
-    let gateway_credentials = PolymarketGatewayCredentials::try_from(config).map_err(|error| {
-        report.push_check(
-            "Connectivity",
-            DoctorCheckStatus::Fail,
-            "ConnectivityError",
-            error.to_string(),
-        );
-        DoctorFailure::new("ConnectivityError", error.to_string())
-    })?;
+    let l2_probe_credentials = PolymarketGatewayCredentials::try_from(config)
+        .map(|credentials| PolymarketL2ProbeCredentials {
+            address: credentials.address,
+            api_key: credentials.api_key,
+            secret: credentials.secret,
+            passphrase: credentials.passphrase,
+        })
+        .map_err(|error| {
+            report.push_check(
+                "Connectivity",
+                DoctorCheckStatus::Fail,
+                "ConnectivityError",
+                error.to_string(),
+            );
+            DoctorFailure::new("ConnectivityError", error.to_string())
+        })?;
     let signer_config = LocalSignerConfig::try_from(config).map_err(|error| {
         report.push_check(
             "Connectivity",
@@ -99,13 +107,14 @@ fn evaluate_live(
         DoctorFailure::new("ConnectivityError", error.to_string())
     })?;
     let user_ws_auth = user_ws_probe_auth_from_config(config);
-    let mut backend = LivePolymarketProbe::new(source_config, gateway_credentials);
+    let mut backend = LivePolymarketProbe::new(source_config);
 
     let checks = live_context
         .runtime
         .block_on(run_live_probes(
             &mut backend,
             resolved_targets,
+            &l2_probe_credentials,
             &signer_config,
             user_ws_auth,
         ))
@@ -190,12 +199,13 @@ fn user_ws_probe_auth_from_config<'a>(
 async fn run_live_probes<B: PolymarketProbeFacade>(
     backend: &mut B,
     resolved_targets: &ResolvedTargets,
+    l2_probe_credentials: &PolymarketL2ProbeCredentials,
     signer_config: &LocalSignerConfig,
     user_ws_auth: Option<UserWsProbeAuth<'_>>,
 ) -> Result<Vec<ConnectivityCheck>, PolymarketProbeError> {
     let mut checks = Vec::new();
 
-    backend.fetch_open_orders(signer_config).await?;
+    backend.fetch_open_orders(l2_probe_credentials).await?;
     checks.push(ConnectivityCheck::pass(
         "authenticated REST probe succeeded",
     ));
@@ -226,7 +236,7 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
         ));
     }
 
-    backend.post_order_heartbeat(signer_config).await?;
+    backend.post_order_heartbeat(l2_probe_credentials).await?;
     checks.push(ConnectivityCheck::pass("heartbeat probe succeeded"));
 
     backend.fetch_recent_transactions(signer_config).await?;
@@ -276,6 +286,7 @@ mod tests {
         LocalL2AuthHeaders, LocalRelayerAuth, LocalSignerIdentity, NegRiskFamilyLiveTarget,
         NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
     };
+    use venue_polymarket::PolymarketL2ProbeCredentials;
 
     use super::*;
 
@@ -288,6 +299,7 @@ mod tests {
         let checks = run_live_probes(
             &mut backend,
             &resolved_targets,
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
@@ -300,13 +312,13 @@ mod tests {
         assert_eq!(
             backend.calls,
             vec![
-                ProbeCall::FetchOpenOrders,
+                ProbeCall::FetchOpenOrders(sample_l2_probe_credentials()),
                 ProbeCall::SubscribeMarketAssets(vec!["token-1".to_owned(), "token-2".to_owned()]),
                 ProbeCall::SubscribeUserMarkets(vec![
                     "condition-1".to_owned(),
                     "condition-2".to_owned(),
                 ]),
-                ProbeCall::PostOrderHeartbeat,
+                ProbeCall::PostOrderHeartbeat(sample_l2_probe_credentials()),
                 ProbeCall::FetchRecentTransactions,
             ]
         );
@@ -320,6 +332,7 @@ mod tests {
         let checks = run_live_probes(
             &mut backend,
             &resolved_targets,
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
@@ -336,8 +349,8 @@ mod tests {
         assert_eq!(
             backend.calls,
             vec![
-                ProbeCall::FetchOpenOrders,
-                ProbeCall::PostOrderHeartbeat,
+                ProbeCall::FetchOpenOrders(sample_l2_probe_credentials()),
+                ProbeCall::PostOrderHeartbeat(sample_l2_probe_credentials()),
                 ProbeCall::FetchRecentTransactions,
             ]
         );
@@ -350,13 +363,16 @@ mod tests {
         run_live_probes(
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
         .await
         .expect("probe execution should succeed");
 
-        assert!(backend.calls.contains(&ProbeCall::PostOrderHeartbeat));
+        assert!(backend
+            .calls
+            .contains(&ProbeCall::PostOrderHeartbeat(sample_l2_probe_credentials())));
     }
 
     #[tokio::test]
@@ -366,6 +382,7 @@ mod tests {
         run_live_probes(
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
@@ -383,6 +400,7 @@ mod tests {
         let checks = run_live_probes(
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             None,
         )
@@ -399,9 +417,9 @@ mod tests {
         assert_eq!(
             backend.calls,
             vec![
-                ProbeCall::FetchOpenOrders,
+                ProbeCall::FetchOpenOrders(sample_l2_probe_credentials()),
                 ProbeCall::SubscribeMarketAssets(vec!["token-1".to_owned()]),
-                ProbeCall::PostOrderHeartbeat,
+                ProbeCall::PostOrderHeartbeat(sample_l2_probe_credentials()),
                 ProbeCall::FetchRecentTransactions,
             ]
         );
@@ -414,6 +432,7 @@ mod tests {
         run_live_probes(
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
@@ -432,12 +451,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connectivity_probe_passes_only_narrow_l2_credentials_to_clob_checks() {
+        let mut backend = FakeBackend::default();
+        let resolved_targets = sample_resolved_targets(vec![("condition-1", "token-1")]);
+        let l2_credentials = sample_l2_probe_credentials();
+
+        run_live_probes(
+            &mut backend,
+            &resolved_targets,
+            &l2_credentials,
+            &sample_signer_config(),
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect("probe execution should succeed");
+
+        assert_eq!(
+            backend.l2_probe_credentials,
+            Some(l2_credentials),
+            "doctor CLOB probes should be driven by the narrow L2 credential DTO"
+        );
+    }
+
+    #[tokio::test]
     async fn run_live_probes_propagates_facade_error_category_and_message() {
         let mut backend = FailingBackend;
 
         let error = run_live_probes(
             &mut backend,
             &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
             &sample_signer_config(),
             Some(sample_user_ws_auth()),
         )
@@ -450,10 +493,10 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ProbeCall {
-        FetchOpenOrders,
+        FetchOpenOrders(PolymarketL2ProbeCredentials),
         SubscribeMarketAssets(Vec<String>),
         SubscribeUserMarkets(Vec<String>),
-        PostOrderHeartbeat,
+        PostOrderHeartbeat(PolymarketL2ProbeCredentials),
         FetchRecentTransactions,
         SubmitLike,
     }
@@ -462,6 +505,7 @@ mod tests {
     struct FakeBackend {
         calls: Vec<ProbeCall>,
         user_ws_auth: Option<RecordedUserWsAuth>,
+        l2_probe_credentials: Option<PolymarketL2ProbeCredentials>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,9 +519,11 @@ mod tests {
     impl PolymarketProbeFacade for FakeBackend {
         fn fetch_open_orders<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
         ) -> ProbeFuture<'a> {
-            self.calls.push(ProbeCall::FetchOpenOrders);
+            self.l2_probe_credentials = Some(l2_probe_credentials.clone());
+            self.calls
+                .push(ProbeCall::FetchOpenOrders(l2_probe_credentials.clone()));
             Box::pin(async { Ok(()) })
         }
 
@@ -505,9 +551,11 @@ mod tests {
 
         fn post_order_heartbeat<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
         ) -> ProbeFuture<'a> {
-            self.calls.push(ProbeCall::PostOrderHeartbeat);
+            self.l2_probe_credentials = Some(l2_probe_credentials.clone());
+            self.calls
+                .push(ProbeCall::PostOrderHeartbeat(l2_probe_credentials.clone()));
             Box::pin(async { Ok(()) })
         }
 
@@ -525,7 +573,7 @@ mod tests {
     impl PolymarketProbeFacade for FailingBackend {
         fn fetch_open_orders<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            _l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
         ) -> ProbeFuture<'a> {
             Box::pin(async {
                 Err(PolymarketProbeError::new(
@@ -549,7 +597,7 @@ mod tests {
 
         fn post_order_heartbeat<'a>(
             &'a mut self,
-            _signer_config: &'a LocalSignerConfig,
+            _l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
         ) -> ProbeFuture<'a> {
             Box::pin(async { Ok(()) })
         }
@@ -604,6 +652,15 @@ mod tests {
                 api_key: "relay-key".to_owned(),
                 address: "0x1111111111111111111111111111111111111111".to_owned(),
             },
+        }
+    }
+
+    fn sample_l2_probe_credentials() -> PolymarketL2ProbeCredentials {
+        PolymarketL2ProbeCredentials {
+            address: "0x1111111111111111111111111111111111111111".to_owned(),
+            api_key: "poly-api-key".to_owned(),
+            secret: "poly-secret".to_owned(),
+            passphrase: "poly-passphrase".to_owned(),
         }
     }
 

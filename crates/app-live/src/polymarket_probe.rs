@@ -1,29 +1,18 @@
-use std::{future::Future, pin::Pin, str::FromStr, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use alloy::signers::{local::PrivateKeySigner, Signer as _};
 use async_trait::async_trait;
-use domain::{SignatureType, WalletRoute};
-use polymarket_client_sdk::auth::{Credentials as SdkCredentials, Uuid as SdkUuid};
-use polymarket_client_sdk::clob::types::SignatureType as SdkSignatureType;
-use polymarket_client_sdk::clob::{Client as SdkClobClient, Config as SdkClobConfig};
-use polymarket_client_sdk::types::Address as SdkAddress;
 use polymarket_client_sdk::ws::config::Config as SdkWsConfig;
-use polymarket_client_sdk::{POLYGON, PRIVATE_KEY_VAR};
 use tokio::sync::Mutex as AsyncMutex;
+use venue_polymarket::auth::RelayerAuth;
+use venue_polymarket::rest::{PolymarketRestClient, RestClientBuildError};
+use venue_polymarket::ws_client::{PolymarketWsClient, RealWsMessageSource, WsUserChannelAuth};
 use venue_polymarket::{
-    auth::{L2AuthHeaders, RelayerAuth, SignerContext},
-    rest::{PolymarketRestClient, RestClientBuildError, RestError},
-    ws_client::{PolymarketWsClient, RealWsMessageSource, WsUserChannelAuth},
-    LiveRelayerApi, LiveWsSdkApi, MarketWsEvent, PolymarketClobApi, PolymarketGateway,
-    PolymarketGatewayError, PolymarketHeartbeatStatus, PolymarketOpenOrderSummary,
-    PolymarketOrderQuery, PolymarketSignedOrder, PolymarketStreamApi, PolymarketSubmitResponse,
+    LiveRelayerApi, LiveWsSdkApi, MarketWsEvent, PolymarketGateway, PolymarketGatewayError,
+    PolymarketL2ProbeClient, PolymarketL2ProbeCredentials, PolymarketStreamApi,
     PolymarketUrl as Url, PolymarketUserStreamAuth, UserWsEvent,
 };
 
-use crate::{
-    config::{PolymarketGatewayCredentials, PolymarketSourceConfig},
-    LocalRelayerAuth, LocalSignerConfig,
-};
+use crate::{config::PolymarketSourceConfig, LocalRelayerAuth, LocalSignerConfig};
 
 const CONNECTIVITY_TIMEOUT: Duration = Duration::from_secs(5);
 const HEARTBEAT_PREVIOUS_ID: &str = "00000000-0000-0000-0000-000000000000";
@@ -55,8 +44,10 @@ pub(crate) struct UserWsProbeAuth<'a> {
 }
 
 pub(crate) trait PolymarketProbeFacade {
-    fn fetch_open_orders<'a>(&'a mut self, signer_config: &'a LocalSignerConfig)
-        -> ProbeFuture<'a>;
+    fn fetch_open_orders<'a>(
+        &'a mut self,
+        l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
+    ) -> ProbeFuture<'a>;
     fn subscribe_market_assets<'a>(&'a mut self, token_ids: &'a [String]) -> ProbeFuture<'a>;
     fn subscribe_user_markets<'a>(
         &'a mut self,
@@ -65,7 +56,7 @@ pub(crate) trait PolymarketProbeFacade {
     ) -> ProbeFuture<'a>;
     fn post_order_heartbeat<'a>(
         &'a mut self,
-        signer_config: &'a LocalSignerConfig,
+        l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
     ) -> ProbeFuture<'a>;
     fn fetch_recent_transactions<'a>(
         &'a mut self,
@@ -75,15 +66,11 @@ pub(crate) trait PolymarketProbeFacade {
 
 pub(crate) struct LivePolymarketProbe {
     source_config: PolymarketSourceConfig,
-    gateway_credentials: PolymarketGatewayCredentials,
     stream_api: Arc<dyn PolymarketStreamApi>,
 }
 
 impl LivePolymarketProbe {
-    pub(crate) fn new(
-        source_config: PolymarketSourceConfig,
-        gateway_credentials: PolymarketGatewayCredentials,
-    ) -> Self {
+    pub(crate) fn new(source_config: PolymarketSourceConfig) -> Self {
         let stream_api: Arc<dyn PolymarketStreamApi> = match stream_probe_backend(&source_config) {
             StreamProbeBackend::LegacyShell => {
                 Arc::new(LegacyStreamProbeApi::new(source_config.clone()))
@@ -96,7 +83,6 @@ impl LivePolymarketProbe {
         Self {
             stream_api,
             source_config,
-            gateway_credentials,
         }
     }
 
@@ -108,23 +94,6 @@ impl LivePolymarketProbe {
             None,
             None,
         )
-    }
-
-    async fn clob_gateway(
-        &self,
-        signer_config: &LocalSignerConfig,
-    ) -> Result<PolymarketGateway, PolymarketProbeError> {
-        match clob_probe_backend(&self.source_config) {
-            ClobProbeBackend::LegacyShell => {
-                let client = self.rest_client().map_err(|error| {
-                    PolymarketProbeError::new("ConnectivityError", error.to_string())
-                })?;
-                Ok(PolymarketGateway::from_clob_api(Arc::new(
-                    LegacyClobProbeApi::new(client, signer_config.clone()),
-                )))
-            }
-            ClobProbeBackend::SdkGateway => self.sdk_clob_gateway().await,
-        }
     }
 
     fn stream_gateway(&self) -> PolymarketGateway {
@@ -140,62 +109,28 @@ impl LivePolymarketProbe {
         )))
     }
 
-    async fn sdk_clob_gateway(&self) -> Result<PolymarketGateway, PolymarketProbeError> {
-        let private_key = std::env::var(PRIVATE_KEY_VAR).map_err(|_| {
-            PolymarketProbeError::new(
-                "ConnectivityError",
-                format!("missing required environment variable {PRIVATE_KEY_VAR}"),
-            )
-        })?;
-        let signer = PrivateKeySigner::from_str(&private_key)
-            .map_err(|error| PolymarketProbeError::new("ConnectivityError", error.to_string()))?
-            .with_chain_id(Some(POLYGON));
-        let api_key = SdkUuid::parse_str(&self.gateway_credentials.api_key)
-            .map_err(|error| PolymarketProbeError::new("ConnectivityError", error.to_string()))?;
-        let client = SdkClobClient::new(
-            self.source_config.clob_host.as_str(),
-            SdkClobConfig::default(),
+    fn l2_probe_client(
+        &self,
+        l2_probe_credentials: &PolymarketL2ProbeCredentials,
+    ) -> Result<PolymarketL2ProbeClient, PolymarketProbeError> {
+        PolymarketL2ProbeClient::new(
+            self.source_config.clob_host.clone(),
+            l2_probe_credentials.clone(),
         )
-        .map_err(|error| PolymarketProbeError::new("ConnectivityError", error.to_string()))?;
-        let mut auth = client
-            .authentication_builder(&signer)
-            .credentials(SdkCredentials::new(
-                api_key,
-                self.gateway_credentials.secret.clone(),
-                self.gateway_credentials.passphrase.clone(),
-            ))
-            .signature_type(parse_sdk_signature_type(
-                &self.gateway_credentials.signature_type,
-            )?);
-        if !matches!(
-            parse_sdk_signature_type(&self.gateway_credentials.signature_type)?,
-            SdkSignatureType::Eoa
-        ) {
-            let funder = SdkAddress::from_str(&self.gateway_credentials.funder_address).map_err(
-                |error| PolymarketProbeError::new("ConnectivityError", error.to_string()),
-            )?;
-            auth = auth.funder(funder);
-        }
-        let clob = auth
-            .authenticate()
-            .await
-            .map_err(|error| PolymarketProbeError::new("ConnectivityError", error.to_string()))?;
-        Ok(PolymarketGateway::from_clob_api(Arc::new(
-            venue_polymarket::LiveClobSdkApi::new(clob),
-        )))
+        .map_err(|error| PolymarketProbeError::new("ConnectivityError", error.to_string()))
     }
 }
 
 impl PolymarketProbeFacade for LivePolymarketProbe {
     fn fetch_open_orders<'a>(
         &'a mut self,
-        signer_config: &'a LocalSignerConfig,
+        l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
-            let gateway = self.clob_gateway(signer_config).await?;
+            let client = self.l2_probe_client(l2_probe_credentials)?;
             timeout_probe("authenticated REST", async move {
-                gateway
-                    .open_orders(PolymarketOrderQuery::open_orders())
+                client
+                    .fetch_open_orders()
                     .await
                     .map(|_| ())
                     .map_err(|error| map_gateway_error("authenticated REST", error))
@@ -244,12 +179,12 @@ impl PolymarketProbeFacade for LivePolymarketProbe {
 
     fn post_order_heartbeat<'a>(
         &'a mut self,
-        signer_config: &'a LocalSignerConfig,
+        l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
     ) -> ProbeFuture<'a> {
         Box::pin(async move {
-            let gateway = self.clob_gateway(signer_config).await?;
+            let client = self.l2_probe_client(l2_probe_credentials)?;
             timeout_probe("heartbeat", async move {
-                gateway
+                client
                     .post_heartbeat(Some(HEARTBEAT_PREVIOUS_ID))
                     .await
                     .map(|_| ())
@@ -356,18 +291,15 @@ fn host_matches_no_proxy(target: &Url, no_proxy: &str) -> bool {
         })
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClobProbeBackend {
-    LegacyShell,
-    SdkGateway,
+    L2Probe,
 }
 
+#[cfg(test)]
 fn clob_probe_backend(_source: &PolymarketSourceConfig) -> ClobProbeBackend {
-    if std::env::var_os(PRIVATE_KEY_VAR).is_none() {
-        ClobProbeBackend::LegacyShell
-    } else {
-        ClobProbeBackend::SdkGateway
-    }
+    ClobProbeBackend::L2Probe
 }
 
 fn sdk_ws_base_endpoint(endpoint: &str) -> String {
@@ -380,85 +312,6 @@ fn sdk_ws_base_endpoint(endpoint: &str) -> String {
         stripped.to_owned()
     } else {
         trimmed.to_owned()
-    }
-}
-
-fn parse_sdk_signature_type(label: &str) -> Result<SdkSignatureType, PolymarketProbeError> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(SdkSignatureType::Eoa),
-        "proxy" | "poly_proxy" => Ok(SdkSignatureType::Proxy),
-        "safe" | "gnosis_safe" => Ok(SdkSignatureType::GnosisSafe),
-        other => Err(PolymarketProbeError::new(
-            "ConnectivityError",
-            format!("unsupported signature type label {other}"),
-        )),
-    }
-}
-
-struct LegacyClobProbeApi {
-    client: PolymarketRestClient,
-    signer_config: LocalSignerConfig,
-}
-
-impl LegacyClobProbeApi {
-    fn new(client: PolymarketRestClient, signer_config: LocalSignerConfig) -> Self {
-        Self {
-            client,
-            signer_config,
-        }
-    }
-}
-
-#[async_trait]
-impl PolymarketClobApi for LegacyClobProbeApi {
-    async fn open_orders(
-        &self,
-        query: &PolymarketOrderQuery,
-    ) -> Result<Vec<PolymarketOpenOrderSummary>, PolymarketGatewayError> {
-        match query {
-            PolymarketOrderQuery::OpenOrders => {
-                let auth = l2_auth_headers_from_signer_config(&self.signer_config)
-                    .map_err(map_probe_protocol_error)?;
-                self.client
-                    .fetch_open_orders(&auth)
-                    .await
-                    .map(|orders| {
-                        orders
-                            .into_iter()
-                            .map(|order| PolymarketOpenOrderSummary {
-                                order_id: order.order_id,
-                            })
-                            .collect()
-                    })
-                    .map_err(map_rest_error)
-            }
-        }
-    }
-
-    async fn submit_order(
-        &self,
-        _order: &PolymarketSignedOrder,
-    ) -> Result<PolymarketSubmitResponse, PolymarketGatewayError> {
-        Err(PolymarketGatewayError::protocol(
-            "submit_order is not part of doctor connectivity probes",
-        ))
-    }
-
-    async fn post_heartbeat(
-        &self,
-        previous_heartbeat_id: Option<&str>,
-    ) -> Result<PolymarketHeartbeatStatus, PolymarketGatewayError> {
-        let auth = l2_auth_headers_from_signer_config(&self.signer_config)
-            .map_err(map_probe_protocol_error)?;
-        let previous_heartbeat_id = previous_heartbeat_id.unwrap_or(HEARTBEAT_PREVIOUS_ID);
-        self.client
-            .post_order_heartbeat(&auth, previous_heartbeat_id)
-            .await
-            .map(|heartbeat| PolymarketHeartbeatStatus {
-                heartbeat_id: heartbeat.heartbeat_id,
-                valid: heartbeat.valid,
-            })
-            .map_err(map_rest_error)
     }
 }
 
@@ -589,43 +442,6 @@ fn map_gateway_error(label: &str, error: PolymarketGatewayError) -> PolymarketPr
     )
 }
 
-fn map_probe_protocol_error(error: PolymarketProbeError) -> PolymarketGatewayError {
-    PolymarketGatewayError::protocol(error.message)
-}
-
-fn map_rest_error(error: RestError) -> PolymarketGatewayError {
-    match error {
-        RestError::Auth(error) => PolymarketGatewayError::auth(error.to_string()),
-        RestError::Http(error) => PolymarketGatewayError::connectivity(error.to_string()),
-        RestError::HttpResponse { status, body } => {
-            PolymarketGatewayError::upstream_response(format!("{status}: {body}"))
-        }
-        RestError::Gateway(error) => error,
-        RestError::Metadata(error) => PolymarketGatewayError::protocol(error.to_string()),
-        RestError::Url(error) => PolymarketGatewayError::protocol(error.to_string()),
-        RestError::MissingField(field) => {
-            PolymarketGatewayError::relayer(format!("missing response field: {field}"))
-        }
-    }
-}
-
-fn l2_auth_headers_from_signer_config<'a>(
-    signer_config: &'a LocalSignerConfig,
-) -> Result<L2AuthHeaders<'a>, PolymarketProbeError> {
-    Ok(L2AuthHeaders {
-        signer: SignerContext {
-            address: &signer_config.signer.address,
-            funder_address: &signer_config.signer.funder_address,
-            signature_type: parse_signature_type(&signer_config.signer.signature_type)?,
-            wallet_route: parse_wallet_route(&signer_config.signer.wallet_route)?,
-        },
-        api_key: &signer_config.l2_auth.api_key,
-        passphrase: &signer_config.l2_auth.passphrase,
-        timestamp: &signer_config.l2_auth.timestamp,
-        signature: &signer_config.l2_auth.signature,
-    })
-}
-
 fn relayer_auth_from_signer_config<'a>(
     signer_config: &'a LocalSignerConfig,
 ) -> Result<RelayerAuth<'a>, PolymarketProbeError> {
@@ -647,42 +463,14 @@ fn relayer_auth_from_signer_config<'a>(
     })
 }
 
-fn parse_signature_type(label: &str) -> Result<SignatureType, PolymarketProbeError> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(SignatureType::Eoa),
-        "proxy" | "poly_proxy" => Ok(SignatureType::Proxy),
-        "safe" | "gnosis_safe" => Ok(SignatureType::Safe),
-        other => Err(PolymarketProbeError::new(
-            "ConnectivityError",
-            format!("unsupported signature type label {other}"),
-        )),
-    }
-}
-
-fn parse_wallet_route(label: &str) -> Result<WalletRoute, PolymarketProbeError> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "eoa" => Ok(WalletRoute::Eoa),
-        "proxy" => Ok(WalletRoute::Proxy),
-        "safe" => Ok(WalletRoute::Safe),
-        other => Err(PolymarketProbeError::new(
-            "ConnectivityError",
-            format!("unsupported wallet route label {other}"),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{net::TcpListener as StdTcpListener, sync::OnceLock, thread, time::Duration};
 
-    use polymarket_client_sdk::PRIVATE_KEY_VAR;
     use tokio::sync::Mutex;
     use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
 
     use super::*;
-
-    const TEST_PRIVATE_KEY: &str =
-        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
     #[tokio::test]
     async fn legacy_stream_probe_reuses_single_connection_pair_across_market_and_user_events() {
@@ -752,27 +540,14 @@ mod tests {
     }
 
     #[test]
-    fn clob_probe_backend_defaults_to_sdk_without_proxy_when_private_key_is_available() {
+    fn clob_probe_backend_uses_l2_probe_without_proxy_or_private_key_branching() {
         let _guard = env_lock().blocking_lock();
-        let _private_key_guard = PrivateKeyEnvGuard::set(TEST_PRIVATE_KEY);
         let source = sample_source_config(
             "wss://ws-subscriptions-clob.polymarket.com/ws/market",
             "wss://ws-subscriptions-clob.polymarket.com/ws/user",
         );
 
-        assert_eq!(clob_probe_backend(&source), ClobProbeBackend::SdkGateway);
-    }
-
-    #[test]
-    fn clob_probe_backend_uses_legacy_without_private_key() {
-        let _guard = env_lock().blocking_lock();
-        let _private_key_guard = PrivateKeyEnvGuard::clear();
-        let source = sample_source_config(
-            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-        );
-
-        assert_eq!(clob_probe_backend(&source), ClobProbeBackend::LegacyShell);
+        assert_eq!(clob_probe_backend(&source), ClobProbeBackend::L2Probe);
     }
 
     #[test]
@@ -888,34 +663,6 @@ mod tests {
         match value {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
-        }
-    }
-
-    struct PrivateKeyEnvGuard {
-        private_key: Option<String>,
-    }
-
-    impl PrivateKeyEnvGuard {
-        fn set(value: &str) -> Self {
-            let guard = Self {
-                private_key: std::env::var(PRIVATE_KEY_VAR).ok(),
-            };
-            std::env::set_var(PRIVATE_KEY_VAR, value);
-            guard
-        }
-
-        fn clear() -> Self {
-            let guard = Self {
-                private_key: std::env::var(PRIVATE_KEY_VAR).ok(),
-            };
-            std::env::remove_var(PRIVATE_KEY_VAR);
-            guard
-        }
-    }
-
-    impl Drop for PrivateKeyEnvGuard {
-        fn drop(&mut self) {
-            restore_env_var(PRIVATE_KEY_VAR, self.private_key.take());
         }
     }
 

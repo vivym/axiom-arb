@@ -436,7 +436,7 @@ quantity = "5"
 }
 
 #[tokio::test]
-async fn doctor_live_explicit_targets_without_private_key_falls_back_to_legacy_probe_path() {
+async fn doctor_live_explicit_targets_without_private_key_runs_l2_probe() {
     let database = TestDatabase::new().await;
     let venue = MockDoctorVenue::success();
     let config = temp_live_config(&format!(
@@ -504,6 +504,10 @@ quantity = "5"
     let combined = combined(&output);
     assert_section_summary(&combined, "Connectivity", "PASS");
     assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
+    assert!(
+        !combined.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
+        "{combined}"
+    );
 }
 
 #[tokio::test]
