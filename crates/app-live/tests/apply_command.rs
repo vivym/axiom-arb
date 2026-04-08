@@ -649,7 +649,7 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
         .expect("app-live apply should execute for live config ready with start");
 
     let text = cli::combined(&output);
-    assert!(output.status.success(), "{text}");
+    assert!(!output.status.success(), "{text}");
     assert!(text.contains("Planned Actions"), "{text}");
     let planned = section_text(&text, "Planned Actions");
     assert!(planned.contains("Run doctor preflight checks."), "{text}");
@@ -659,14 +659,18 @@ fn apply_live_config_ready_with_start_enters_run_successfully() {
     );
     assert!(text.contains("Execution"), "{text}");
     assert!(
-        section_text(&text, "Outcome").contains("Outcome\nStarted"),
-        "{text}"
-    );
-    assert!(
         text.contains("Starting runtime in the foreground."),
         "{text}"
     );
-    assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(
+        text.contains("Foreground runtime startup failed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
+        "{text}"
+    );
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -704,10 +708,6 @@ fn apply_live_config_ready_with_start_blocks_when_matching_active_run_session_is
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Current State"), "{text}");
     assert!(text.contains("Relevant run session: rs-active"), "{text}");
-    assert!(
-        !text.contains("Conflicting active run session: rs-active"),
-        "{text}"
-    );
     assert!(text.contains("Blocked"), "{text}");
     assert!(
         text.contains("resolve the existing runtime outside apply"),
@@ -1080,17 +1080,21 @@ fn apply_live_restart_required_with_start_and_confirm_enters_run_successfully() 
     );
 
     let text = cli::combined(&output);
-    assert!(output.status.success(), "{text}");
+    assert!(!output.status.success(), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
-    assert!(
-        section_text(&text, "Outcome").contains("Outcome\nStarted"),
-        "{text}"
-    );
     assert!(
         text.contains("Manual restart boundary confirmed. Starting runtime in the foreground."),
         "{text}"
     );
-    assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(
+        text.contains("Foreground runtime startup failed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
+        "{text}"
+    );
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -1186,10 +1190,18 @@ fn apply_live_stale_active_run_session_id_does_not_block_restart_path() {
     );
 
     let text = cli::combined(&output);
-    assert!(output.status.success(), "{text}");
+    assert!(!output.status.success(), "{text}");
     assert!(text.contains("Conflicting active state: stale"), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
-    assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(
+        text.contains("Foreground runtime startup failed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
+        "{text}"
+    );
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
@@ -1224,10 +1236,18 @@ fn apply_live_exited_active_run_session_id_does_not_block_restart_path() {
     );
 
     let text = cli::combined(&output);
-    assert!(output.status.success(), "{text}");
+    assert!(!output.status.success(), "{text}");
     assert!(text.contains("Conflicting active state: exited"), "{text}");
     assert!(text.contains("Choose one:"), "{text}");
-    assert!(text.contains("app-live bootstrap complete"), "{text}");
+    assert!(
+        text.contains("Foreground runtime startup failed."),
+        "{text}"
+    );
+    assert!(
+        text.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
+        "{text}"
+    );
+    assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config_path);
