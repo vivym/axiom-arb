@@ -129,7 +129,7 @@ fn polymarket_source_summary_line(
         has_existing_polymarket_source,
         has_existing_polymarket_source_overrides,
     ) {
-        (false, false) => "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence, and [polymarket.http] only for explicit outbound proxying.".to_string(),
+        (false, false) => "polymarket source uses built-in defaults; use [polymarket.source_overrides] only for non-default endpoints or cadence.".to_string(),
         (true, true) => "kept existing [polymarket.source_overrides] and dropped legacy [polymarket.source].".to_string(),
         (true, false) => "migrated existing [polymarket.source] into [polymarket.source_overrides].".to_string(),
         (false, true) => "preserved existing [polymarket.source_overrides].".to_string(),

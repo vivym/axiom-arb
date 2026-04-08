@@ -26,7 +26,6 @@ pub struct RealUserShadowSmokeSources {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SmokeMetadataBackend {
     Sdk,
-    LegacyRest,
 }
 
 impl SmokeMetadataBackend {
@@ -34,7 +33,6 @@ impl SmokeMetadataBackend {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Sdk => "sdk",
-            Self::LegacyRest => "legacy-rest",
         }
     }
 }
@@ -43,7 +41,6 @@ impl From<PolymarketMetadataGatewayBackend> for SmokeMetadataBackend {
     fn from(value: PolymarketMetadataGatewayBackend) -> Self {
         match value {
             PolymarketMetadataGatewayBackend::Sdk => Self::Sdk,
-            PolymarketMetadataGatewayBackend::LegacyRest => Self::LegacyRest,
         }
     }
 }
@@ -146,7 +143,7 @@ mod tests {
     #[test]
     fn smoke_source_builder_uses_adapter_owned_metadata_backend_selection() {
         let sources = build_real_user_shadow_smoke_sources(
-            smoke_source_config(None),
+            smoke_source_config(),
             sample_signer_config(),
             "run-session-1",
         )
@@ -158,7 +155,7 @@ mod tests {
     #[test]
     fn smoke_source_builder_keeps_proxy_fallback_hidden_behind_the_adapter() {
         let sources = build_real_user_shadow_smoke_sources(
-            smoke_source_config(Some("http://127.0.0.1:7897")),
+            smoke_source_config(),
             sample_signer_config(),
             "run-session-2",
         )
@@ -214,7 +211,7 @@ metadata_refresh_interval_seconds = 60
         LocalSignerConfig::try_from(&config).expect("signer config should parse")
     }
 
-    fn smoke_source_config(outbound_proxy_url: Option<&str>) -> PolymarketSourceConfig {
+    fn smoke_source_config() -> PolymarketSourceConfig {
         PolymarketSourceConfig {
             clob_host: "https://clob.polymarket.com"
                 .parse()
@@ -231,8 +228,6 @@ metadata_refresh_interval_seconds = 60
             user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
                 .parse()
                 .expect("user ws should parse"),
-            outbound_proxy_url: outbound_proxy_url
-                .map(|url| url.parse().expect("proxy url should parse")),
             heartbeat_interval_seconds: 15,
             relayer_poll_interval_seconds: 5,
             metadata_refresh_interval_seconds: 60,

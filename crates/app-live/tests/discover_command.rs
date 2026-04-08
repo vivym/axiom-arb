@@ -112,7 +112,7 @@ fn discover_uses_sdk_metadata_client_without_outbound_proxy() {
     });
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
-        with_discover_venue_hosts(config, venue.base_url().as_str(), None)
+        with_discover_venue_hosts(config, venue.base_url().as_str())
     });
 
     let output = app_live_command()
@@ -512,14 +512,10 @@ fn app_live_command() -> Command {
 }
 
 fn with_mock_discover_venue(config: String, venue: &MockDiscoverVenue) -> String {
-    with_discover_venue_hosts(config, venue.base_url(), None)
+    with_discover_venue_hosts(config, venue.base_url())
 }
 
-fn with_discover_venue_hosts(
-    config: String,
-    venue_base_url: &str,
-    outbound_proxy_url: Option<&str>,
-) -> String {
+fn with_discover_venue_hosts(config: String, venue_base_url: &str) -> String {
     let mut document = config
         .parse::<DocumentMut>()
         .expect("smoke config fixture should parse as TOML");
@@ -539,9 +535,6 @@ fn with_discover_venue_hosts(
 
     for key in ["clob_host", "data_api_host", "relayer_host"] {
         source.insert(key, value(venue_base_url));
-    }
-    if let Some(proxy_url) = outbound_proxy_url {
-        source.insert("outbound_proxy_url", value(proxy_url));
     }
 
     document.to_string()

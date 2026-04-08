@@ -63,8 +63,6 @@ pub struct PolymarketToml {
     #[serde(default)]
     pub relayer_auth: Option<PolymarketRelayerAuthToml>,
     #[serde(default)]
-    pub http: Option<PolymarketHttpToml>,
-    #[serde(default)]
     pub source_overrides: Option<PolymarketSourceToml>,
     #[serde(default)]
     pub source: Option<PolymarketSourceToml>,
@@ -119,12 +117,6 @@ pub struct PolymarketAccountToml {
     pub api_key: String,
     pub secret: String,
     pub passphrase: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PolymarketHttpToml {
-    #[serde(default)]
-    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

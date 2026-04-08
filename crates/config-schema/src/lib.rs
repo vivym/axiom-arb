@@ -5,17 +5,17 @@ mod validate;
 pub use error::ConfigSchemaError;
 pub use raw::{
     NegRiskRolloutToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml, NegRiskTargetsToml,
-    NegRiskToml, PolymarketAccountToml, PolymarketHttpToml, PolymarketRelayerAuthToml,
-    PolymarketSourceToml, PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml,
-    RuntimeToml, SignatureTypeToml, StrategiesToml, StrategyControlSourceToml, StrategyControlToml,
+    NegRiskToml, PolymarketAccountToml, PolymarketRelayerAuthToml, PolymarketSourceToml,
+    PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, RuntimeToml,
+    SignatureTypeToml, StrategiesToml, StrategyControlSourceToml, StrategyControlToml,
     StrategyRouteRolloutToml, StrategyRouteToml, WalletRouteToml,
 };
 pub use validate::{
     AppLiveConfigView, AppLiveNegRiskRolloutView, AppLiveNegRiskTargetMemberView,
     AppLiveNegRiskTargetMembersView, AppLiveNegRiskTargetSourceView, AppLiveNegRiskTargetView,
-    AppLiveNegRiskTargetsView, AppLivePolymarketAccountView, AppLivePolymarketHttpView,
-    AppLivePolymarketRelayerAuthKind, AppLivePolymarketRelayerAuthView,
-    AppLivePolymarketSignerView, AppLivePolymarketSourceView, AppReplayConfigView, ValidatedConfig,
+    AppLiveNegRiskTargetsView, AppLivePolymarketAccountView, AppLivePolymarketRelayerAuthKind,
+    AppLivePolymarketRelayerAuthView, AppLivePolymarketSignerView, AppLivePolymarketSourceView,
+    AppReplayConfigView, ValidatedConfig,
 };
 
 pub fn load_raw_config_from_str(text: &str) -> Result<RawAxiomConfig, ConfigSchemaError> {

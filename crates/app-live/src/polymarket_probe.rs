@@ -105,7 +105,7 @@ impl LivePolymarketProbe {
             self.source_config.clob_host.clone(),
             self.source_config.data_api_host.clone(),
             self.source_config.relayer_host.clone(),
-            self.source_config.outbound_proxy_url.clone(),
+            None,
             None,
         )
     }
@@ -287,7 +287,7 @@ enum StreamProbeBackend {
 fn stream_probe_backend(source: &PolymarketSourceConfig) -> StreamProbeBackend {
     let market_base = sdk_ws_base_endpoint(source.market_ws_url.as_str());
     let user_base = sdk_ws_base_endpoint(source.user_ws_url.as_str());
-    if source.outbound_proxy_url.is_some() || market_base != user_base {
+    if market_base != user_base {
         StreamProbeBackend::LegacyShell
     } else {
         StreamProbeBackend::SdkGateway
@@ -300,8 +300,8 @@ enum ClobProbeBackend {
     SdkGateway,
 }
 
-fn clob_probe_backend(source: &PolymarketSourceConfig) -> ClobProbeBackend {
-    if source.outbound_proxy_url.is_some() || std::env::var_os(PRIVATE_KEY_VAR).is_none() {
+fn clob_probe_backend(_source: &PolymarketSourceConfig) -> ClobProbeBackend {
+    if std::env::var_os(PRIVATE_KEY_VAR).is_none() {
         ClobProbeBackend::LegacyShell
     } else {
         ClobProbeBackend::SdkGateway
@@ -418,15 +418,10 @@ impl LegacyStreamProbeApi {
         if guard.is_none() {
             let market_ws_url = self.source_config.market_ws_url.clone();
             let user_ws_url = self.source_config.user_ws_url.clone();
-            let outbound_proxy_url = self.source_config.outbound_proxy_url.clone();
             let client = timeout_gateway_probe("websocket connection", async move {
-                PolymarketWsClient::connect_with_proxy(
-                    market_ws_url,
-                    user_ws_url,
-                    outbound_proxy_url,
-                )
-                .await
-                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))
+                PolymarketWsClient::connect(market_ws_url, user_ws_url)
+                    .await
+                    .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))
             })
             .await?;
             *guard = Some(client);
@@ -663,19 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn stream_probe_backend_uses_legacy_with_explicit_proxy() {
-        let mut source = sample_source_config(
-            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-        );
-        source.outbound_proxy_url = Some("http://127.0.0.1:8080".parse().expect("proxy url"));
-
-        assert_eq!(
-            stream_probe_backend(&source),
-            StreamProbeBackend::LegacyShell
-        );
-    }
-
     #[test]
     fn stream_probe_backend_uses_legacy_when_market_and_user_bases_differ() {
         let source = sample_source_config(
@@ -714,18 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn clob_probe_backend_uses_legacy_with_explicit_proxy() {
-        let _guard = env_lock().blocking_lock();
-        let _private_key_guard = PrivateKeyEnvGuard::set(TEST_PRIVATE_KEY);
-        let mut source = sample_source_config(
-            "wss://ws-subscriptions-clob.polymarket.com/ws/market",
-            "wss://ws-subscriptions-clob.polymarket.com/ws/user",
-        );
-        source.outbound_proxy_url = Some("http://127.0.0.1:8080".parse().expect("proxy url"));
-
-        assert_eq!(clob_probe_backend(&source), ClobProbeBackend::LegacyShell);
-    }
-
     #[test]
     fn sdk_stream_base_endpoint_strips_channel_suffixes() {
         assert_eq!(
@@ -761,7 +731,6 @@ mod tests {
             relayer_host: "http://127.0.0.1:1".parse().expect("relayer host"),
             market_ws_url: market_ws_url.parse().expect("market ws url"),
             user_ws_url: user_ws_url.parse().expect("user ws url"),
-            outbound_proxy_url: None,
             heartbeat_interval_seconds: 15,
             relayer_poll_interval_seconds: 5,
             metadata_refresh_interval_seconds: 60,

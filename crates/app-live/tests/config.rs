@@ -11,7 +11,7 @@ use app_live::{
     LocalSignerIdentity, NegRiskFamilyLiveTarget, NegRiskLiveTargetSet, NegRiskMemberLiveTarget,
     PolymarketGatewayCredentials, RealUserShadowSmokeConfig,
 };
-use config_schema::{load_raw_config_from_str, ValidatedConfig};
+use config_schema::{load_raw_config_from_str, render_raw_config_to_string, ValidatedConfig};
 use rust_decimal::Decimal;
 
 #[test]
@@ -598,19 +598,33 @@ fn source_overrides_win_over_source_when_both_are_present() {
 }
 
 #[test]
-fn parses_optional_polymarket_http_proxy_from_validated_view() {
-    let config = PolymarketSourceConfig::try_from(&live_view(
+fn polymarket_http_proxy_block_is_not_preserved_in_raw_config_roundtrip() {
+    let raw = load_raw_config_from_str(
         r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
 [polymarket.http]
 proxy_url = "http://127.0.0.1:7897"
 "#,
-    ))
+    )
     .unwrap();
 
-    assert_eq!(
-        config.outbound_proxy_url.as_ref().map(|url| url.as_str()),
-        Some("http://127.0.0.1:7897/")
-    );
+    let rendered = render_raw_config_to_string(&raw).unwrap();
+
+    assert!(!rendered.contains("[polymarket.http]"), "{rendered}");
+    assert!(!rendered.contains("proxy_url"), "{rendered}");
 }
 
 #[test]

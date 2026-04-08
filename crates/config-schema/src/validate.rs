@@ -4,9 +4,9 @@ use std::sync::OnceLock;
 use crate::error::ConfigSchemaError;
 use crate::raw::{
     NegRiskTargetMemberToml, NegRiskTargetSourceKindToml, NegRiskTargetSourceToml,
-    NegRiskTargetToml, PolymarketAccountToml, PolymarketHttpToml, PolymarketRelayerAuthToml,
-    PolymarketSignerToml, PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml,
-    RuntimeModeToml, SignatureTypeToml, StrategyControlSourceToml, WalletRouteToml,
+    NegRiskTargetToml, PolymarketAccountToml, PolymarketRelayerAuthToml, PolymarketSignerToml,
+    PolymarketSourceToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, SignatureTypeToml,
+    StrategyControlSourceToml, WalletRouteToml,
 };
 
 #[derive(Debug, Clone)]
@@ -48,11 +48,6 @@ pub struct AppReplayConfigView<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AppLivePolymarketSourceView<'a> {
     raw: &'a PolymarketSourceToml,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct AppLivePolymarketHttpView<'a> {
-    raw: &'a PolymarketHttpToml,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,14 +137,6 @@ impl<'a> AppLiveConfigView<'a> {
             .as_ref()
             .and_then(|polymarket| polymarket.signer.as_ref())
             .is_some()
-    }
-
-    pub fn polymarket_http(&self) -> Option<AppLivePolymarketHttpView<'a>> {
-        self.raw
-            .polymarket
-            .as_ref()
-            .and_then(|polymarket| polymarket.http.as_ref())
-            .map(|raw| AppLivePolymarketHttpView { raw })
     }
 
     pub fn has_target_source(&self) -> bool {
@@ -327,12 +314,6 @@ impl<'a> AppLivePolymarketSourceView<'a> {
 
     pub fn metadata_refresh_interval_seconds(&self) -> u64 {
         self.raw.metadata_refresh_interval_seconds
-    }
-}
-
-impl<'a> AppLivePolymarketHttpView<'a> {
-    pub fn proxy_url(&self) -> Option<&'a str> {
-        self.raw.proxy_url.as_deref()
     }
 }
 

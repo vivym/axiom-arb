@@ -82,31 +82,21 @@ impl std::error::Error for PolymarketRuntimeAdapterError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PolymarketMetadataGatewayBackend {
     Sdk,
-    LegacyRest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolymarketSubmitBackend {
     GatewayRuntime,
-    LegacyRest,
 }
 
 pub(crate) fn polymarket_metadata_gateway_backend(
-    source: &PolymarketSourceConfig,
+    _source: &PolymarketSourceConfig,
 ) -> PolymarketMetadataGatewayBackend {
-    if source.outbound_proxy_url.is_some() {
-        PolymarketMetadataGatewayBackend::LegacyRest
-    } else {
-        PolymarketMetadataGatewayBackend::Sdk
-    }
+    PolymarketMetadataGatewayBackend::Sdk
 }
 
-fn polymarket_submit_backend(source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
-    if source.outbound_proxy_url.is_some() {
-        PolymarketSubmitBackend::LegacyRest
-    } else {
-        PolymarketSubmitBackend::GatewayRuntime
-    }
+fn polymarket_submit_backend(_source: &PolymarketSourceConfig) -> PolymarketSubmitBackend {
+    PolymarketSubmitBackend::GatewayRuntime
 }
 
 pub(crate) fn build_polymarket_rest_client(
@@ -116,7 +106,7 @@ pub(crate) fn build_polymarket_rest_client(
         source.clob_host.clone(),
         source.data_api_host.clone(),
         source.relayer_host.clone(),
-        source.outbound_proxy_url.clone(),
+        None,
         None,
     )
 }
@@ -124,26 +114,14 @@ pub(crate) fn build_polymarket_rest_client(
 pub(crate) fn build_polymarket_metadata_gateway(
     source: &PolymarketSourceConfig,
 ) -> Result<PolymarketGateway, PolymarketRuntimeAdapterError> {
-    match polymarket_metadata_gateway_backend(source) {
-        PolymarketMetadataGatewayBackend::LegacyRest => {
-            let rest = build_polymarket_rest_client(source).map_err(|error| {
-                PolymarketRuntimeAdapterError::Sdk(format!(
-                    "polymarket metadata rest client build failed: {error}"
-                ))
-            })?;
-            Ok(PolymarketGateway::from_metadata_api(Arc::new(rest)))
-        }
-        PolymarketMetadataGatewayBackend::Sdk => {
-            let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
-                PolymarketRuntimeAdapterError::Sdk(format!(
-                    "polymarket metadata sdk client build failed: {error}"
-                ))
-            })?;
-            Ok(PolymarketGateway::from_metadata_api(Arc::new(
-                LiveMetadataSdkApi::new(client),
-            )))
-        }
-    }
+    let client = SdkGammaClient::new(source.data_api_host.as_str()).map_err(|error| {
+        PolymarketRuntimeAdapterError::Sdk(format!(
+            "polymarket metadata sdk client build failed: {error}"
+        ))
+    })?;
+    Ok(PolymarketGateway::from_metadata_api(Arc::new(
+        LiveMetadataSdkApi::new(client),
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -176,38 +154,32 @@ impl PolymarketOrderSigner {
                 .build()
                 .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))?,
         );
-        let client = with_sdk_proxy_env(
-            source.outbound_proxy_url.as_ref().map(|url| url.as_str()),
-            || {
-                runtime.block_on(async {
-                    let base =
-                        SdkClobClient::new(source.clob_host.as_str(), SdkClobConfig::default())
-                            .map_err(|error| {
-                                PolymarketRuntimeAdapterError::Sdk(error.to_string())
-                            })?;
-                    let mut auth = base
-                        .authentication_builder(&signer)
-                        .credentials(SdkCredentials::new(
-                            api_key,
-                            credentials.secret.clone(),
-                            credentials.passphrase.clone(),
-                        ))
-                        .signature_type(parse_signature_type(&credentials.signature_type)?);
-                    if !matches!(
-                        parse_signature_type(&credentials.signature_type)?,
-                        SdkSignatureType::Eoa
-                    ) {
-                        auth = auth.funder(parse_address(
-                            "polymarket.account.funder_address",
-                            &credentials.funder_address,
-                        )?);
-                    }
-                    auth.authenticate()
-                        .await
-                        .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))
-                })
-            },
-        )?;
+        let client = with_sdk_proxy_env(None, || {
+            runtime.block_on(async {
+                let base = SdkClobClient::new(source.clob_host.as_str(), SdkClobConfig::default())
+                    .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))?;
+                let mut auth = base
+                    .authentication_builder(&signer)
+                    .credentials(SdkCredentials::new(
+                        api_key,
+                        credentials.secret.clone(),
+                        credentials.passphrase.clone(),
+                    ))
+                    .signature_type(parse_signature_type(&credentials.signature_type)?);
+                if !matches!(
+                    parse_signature_type(&credentials.signature_type)?,
+                    SdkSignatureType::Eoa
+                ) {
+                    auth = auth.funder(parse_address(
+                        "polymarket.account.funder_address",
+                        &credentials.funder_address,
+                    )?);
+                }
+                auth.authenticate()
+                    .await
+                    .map_err(|error| PolymarketRuntimeAdapterError::Sdk(error.to_string()))
+            })
+        })?;
         Ok(Self {
             runtime,
             client,
@@ -620,9 +592,6 @@ impl VenueExecutionProvider for GatewayBackedSubmitProvider {
                     self.runtime.handle().clone(),
                 )
             }
-            PolymarketSubmitBackend::LegacyRest => {
-                PolymarketNegRiskSubmitProvider::new(rest, auth, self.transport.clone())
-            }
         };
         provider.submit_family(signed, attempt)
     }
@@ -818,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn production_polymarket_signer_routes_sdk_calls_through_configured_proxy() {
+    fn production_polymarket_signer_routes_sdk_calls_through_direct_host() {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -827,17 +796,14 @@ mod tests {
         let proxy = MultiRequestServer::spawn();
 
         let signer = PolymarketOrderSigner::from_runtime_inputs(
-            &sample_source_config_with_proxy(
-                "http://example.invalid/",
-                Some(proxy.base_url().as_str()),
-            ),
+            &sample_source_config_with_host(proxy.base_url().as_str()),
             &sample_gateway_credentials(),
         )
-        .expect("signer should build with proxy-backed sdk client");
+        .expect("signer should build with direct sdk client");
 
         let signed = signer
             .sign_family(&sample_single_member_plan())
-            .expect("sdk signer should honor configured proxy");
+            .expect("sdk signer should honor direct host");
 
         assert_eq!(signed.members.len(), 1);
         assert_eq!(signed.members[0].fee_rate_bps, "17");
@@ -856,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn production_polymarket_signer_restores_proxy_env_after_sdk_client_bootstrap() {
+    fn production_polymarket_signer_leaves_proxy_env_untouched_after_sdk_client_bootstrap() {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
@@ -867,13 +833,10 @@ mod tests {
         std::env::set_var("NO_PROXY", ".internal.example");
 
         let signer = PolymarketOrderSigner::from_runtime_inputs(
-            &sample_source_config_with_proxy(
-                "https://clob.polymarket.com",
-                Some("http://127.0.0.1:9999"),
-            ),
+            &sample_source_config_with_host("https://clob.polymarket.com"),
             &sample_gateway_credentials(),
         )
-        .expect("signer should build with scoped proxy env bootstrap");
+        .expect("signer should build without mutating proxy env");
 
         assert_eq!(
             std::env::var("HTTP_PROXY").as_deref(),
@@ -889,27 +852,12 @@ mod tests {
     }
 
     #[test]
-    fn metadata_gateway_backend_defaults_to_sdk_without_proxy() {
+    fn metadata_gateway_backend_is_sdk_only() {
         let source = sample_source_config();
 
         assert_eq!(
             polymarket_metadata_gateway_backend(&source),
             PolymarketMetadataGatewayBackend::Sdk
-        );
-    }
-
-    #[test]
-    fn metadata_gateway_backend_uses_legacy_rest_with_proxy() {
-        let mut source = sample_source_config();
-        source.outbound_proxy_url = Some(
-            "http://127.0.0.1:8080"
-                .parse()
-                .expect("proxy url should parse"),
-        );
-
-        assert_eq!(
-            polymarket_metadata_gateway_backend(&source),
-            PolymarketMetadataGatewayBackend::LegacyRest
         );
     }
 
@@ -921,7 +869,7 @@ mod tests {
         );
         let submit_calls = Arc::new(AtomicUsize::new(0));
         let provider = sample_adapter_submit_provider(
-            sample_source_config_with_proxy(server.base_url().as_str(), None),
+            sample_source_config_with_host(server.base_url().as_str()),
             submit_calls.clone(),
         );
 
@@ -938,38 +886,6 @@ mod tests {
 
         assert_eq!(submit_calls.load(Ordering::SeqCst), 1);
         server.finish_without_request();
-    }
-
-    #[test]
-    fn adapter_submit_provider_uses_rest_transport_and_skips_gateway_submit_when_proxy_is_configured(
-    ) {
-        let proxy = SingleRequestServer::spawn(
-            "200 OK",
-            r#"{"success":true,"orderID":"rest-order-1","status":"live","makingAmount":"10","takingAmount":"5","errorMsg":""}"#,
-        );
-        let submit_calls = Arc::new(AtomicUsize::new(0));
-        let provider = sample_adapter_submit_provider(
-            sample_source_config_with_proxy(
-                "http://example.invalid/",
-                Some(proxy.base_url().as_str()),
-            ),
-            submit_calls.clone(),
-        );
-
-        let outcome = provider
-            .submit_family(&sample_signed_submission(), &sample_attempt())
-            .expect("proxy-backed rest submit should succeed");
-
-        match outcome {
-            LiveSubmitOutcome::Accepted { submission_record } => {
-                assert_eq!(submission_record.submission_ref, "rest-order-1");
-            }
-            other => panic!("unexpected outcome: {other:?}"),
-        }
-
-        assert_eq!(submit_calls.load(Ordering::SeqCst), 0);
-        let request = proxy.finish();
-        assert!(request.starts_with("POST http://example.invalid/order HTTP/1.1"));
     }
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1000,17 +916,10 @@ mod tests {
     }
 
     fn sample_source_config() -> PolymarketSourceConfig {
-        sample_source_config_with_proxy("https://clob.polymarket.com", None)
+        sample_source_config_with_host("https://clob.polymarket.com")
     }
 
     fn sample_source_config_with_host(base: &str) -> PolymarketSourceConfig {
-        sample_source_config_with_proxy(base, None)
-    }
-
-    fn sample_source_config_with_proxy(
-        base: &str,
-        outbound_proxy_url: Option<&str>,
-    ) -> PolymarketSourceConfig {
         PolymarketSourceConfig {
             clob_host: base.parse().expect("clob host should parse"),
             data_api_host: base.parse().expect("data host should parse"),
@@ -1021,8 +930,6 @@ mod tests {
             user_ws_url: "wss://ws-subscriptions-clob.polymarket.com/ws/user"
                 .parse()
                 .expect("user ws should parse"),
-            outbound_proxy_url: outbound_proxy_url
-                .map(|url| url.parse().expect("proxy url should parse")),
             heartbeat_interval_seconds: 15,
             relayer_poll_interval_seconds: 5,
             metadata_refresh_interval_seconds: 60,
