@@ -10,7 +10,7 @@ use std::{
 use config_schema::{load_raw_config_from_str, ValidatedConfig};
 
 #[test]
-fn init_preserve_updates_credentials_but_keeps_config_carried_operator_target_revision_and_rollout()
+fn init_preserve_migrates_legacy_target_source_to_canonical_strategy_control_and_preserves_rollout()
 {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(
@@ -72,7 +72,7 @@ ready_families = ["family-b"]
 
     let text = fs::read_to_string(temp.path()).expect("generated config should exist");
     let raw = load_raw_config_from_str(&text).expect("generated config should parse");
-    let validated = ValidatedConfig::new(raw).expect("generated config should validate");
+    let validated = ValidatedConfig::new(raw.clone()).expect("generated config should validate");
     let live = validated
         .for_app_live()
         .expect("generated live config should validate");
@@ -106,15 +106,22 @@ ready_families = ["family-b"]
         Some("0xcccccccccccccccccccccccccccccccccccccccc")
     );
 
-    let target_source = live.target_source().expect("target source should exist");
-    assert_eq!(
-        target_source.operator_target_revision(),
-        Some("targets-rev-9")
-    );
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-9"));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision = \"targets-rev-9\""));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
 
-    let rollout = live.negrisk_rollout().expect("rollout should exist");
-    assert_eq!(rollout.approved_families(), ["family-a"]);
-    assert_eq!(rollout.ready_families(), ["family-b"]);
+    let rollout = raw
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.neg_risk.as_ref())
+        .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        .expect("route-owned rollout should exist");
+    assert_eq!(rollout.approved_scopes, vec!["family-a".to_owned()]);
+    assert_eq!(rollout.ready_scopes, vec!["family-b".to_owned()]);
+    assert!(!text.contains("approved_families ="));
+    assert!(!text.contains("ready_families ="));
 
     assert!(!text.contains("existing-account-api-key"));
     assert!(!text.contains("existing-relay-key"));
@@ -455,9 +462,16 @@ ready_families = ["family-b"]
         Some("0x2222222222222222222222222222222222222222")
     );
 
-    assert!(text.contains("operator_target_revision = \"targets-rev-9\""));
-    assert!(text.contains("approved_families = [\"family-a\"]"));
-    assert!(text.contains("ready_families = [\"family-b\"]"));
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-9"));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
+    assert!(text.contains("[strategies.neg_risk.rollout]"));
+    assert!(text.contains("approved_scopes = [\"family-a\"]"));
+    assert!(text.contains("ready_scopes = [\"family-b\"]"));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision = \"targets-rev-9\""));
+    assert!(!text.contains("approved_families ="));
+    assert!(!text.contains("ready_families ="));
     assert!(!text.contains("existing-relay-secret"));
     assert!(!text.contains("existing-relay-passphrase"));
     assert!(!text.contains("existing-relay-signature"));
@@ -973,9 +987,16 @@ ready_families = ["family-b"]
 
     assert!(live.polymarket_relayer_auth().is_none());
     assert!(!text.contains("[polymarket.relayer_auth]"));
-    assert!(text.contains("operator_target_revision = \"targets-rev-9\""));
-    assert!(text.contains("approved_families = [\"family-a\"]"));
-    assert!(text.contains("ready_families = [\"family-b\"]"));
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-9"));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
+    assert!(text.contains("[strategies.neg_risk.rollout]"));
+    assert!(text.contains("approved_scopes = [\"family-a\"]"));
+    assert!(text.contains("ready_scopes = [\"family-b\"]"));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision = \"targets-rev-9\""));
+    assert!(!text.contains("approved_families ="));
+    assert!(!text.contains("ready_families ="));
 }
 
 #[test]
