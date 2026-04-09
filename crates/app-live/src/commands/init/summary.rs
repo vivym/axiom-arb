@@ -8,7 +8,8 @@ pub struct InitSummary<'a> {
     pub config_path: &'a Path,
     pub has_existing_polymarket_source: bool,
     pub has_existing_polymarket_source_overrides: bool,
-    pub configured_operator_target_revision: Option<&'a str>,
+    pub configured_operator_strategy_revision: Option<String>,
+    pub render_canonical_strategy_control: bool,
     pub rollout_is_empty: bool,
 }
 
@@ -75,25 +76,44 @@ fn render_live_summary(summary: InitSummary<'_>) -> WizardSummary {
         summary.has_existing_polymarket_source,
         summary.has_existing_polymarket_source_overrides,
     ));
-    lines.push("[negrisk.target_source]".to_string());
-    if let Some(revision) = summary.configured_operator_target_revision {
-        lines.push(format!("operator_target_revision = \"{revision}\""));
+    if summary.render_canonical_strategy_control {
+        lines.push("[strategy_control]".to_string());
+        lines.push("source = \"adopted\"".to_string());
+        if let Some(revision) = summary.configured_operator_strategy_revision.as_deref() {
+            lines.push(format!("operator_strategy_revision = \"{revision}\""));
+        }
+    } else {
+        lines.push("[negrisk.target_source]".to_string());
     }
-    lines.push("[negrisk.rollout]".to_string());
+    lines.push(if summary.render_canonical_strategy_control {
+        "[strategies.neg_risk.rollout]".to_string()
+    } else {
+        "[negrisk.rollout]".to_string()
+    });
     if summary.rollout_is_empty {
-        lines.push("approved_families = []".to_string());
-        lines.push("ready_families = []".to_string());
+        if summary.render_canonical_strategy_control {
+            lines.push("approved_scopes = []".to_string());
+            lines.push("ready_scopes = []".to_string());
+        } else {
+            lines.push("approved_families = []".to_string());
+            lines.push("ready_families = []".to_string());
+        }
         lines.push(
             "negrisk rollout is still empty, so negrisk work remains inactive until you adopt candidates."
                 .to_string(),
         );
     } else {
-        lines.push("approved_families = [..existing..]".to_string());
-        lines.push("ready_families = [..existing..]".to_string());
+        if summary.render_canonical_strategy_control {
+            lines.push("approved_scopes = [..existing..]".to_string());
+            lines.push("ready_scopes = [..existing..]".to_string());
+        } else {
+            lines.push("approved_families = [..existing..]".to_string());
+            lines.push("ready_families = [..existing..]".to_string());
+        }
     }
 
     let mut next_steps = vec![format!("app-live doctor --config {quoted_config_path}")];
-    if summary.configured_operator_target_revision.is_none() {
+    if summary.configured_operator_strategy_revision.is_none() {
         next_steps.insert(
             0,
             format!("app-live targets adopt --config {quoted_config_path} --adoptable-revision ADOPTABLE_REVISION"),

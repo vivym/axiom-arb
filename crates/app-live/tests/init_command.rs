@@ -44,6 +44,13 @@ operator_target_revision = "targets-rev-9"
 [negrisk.rollout]
 approved_families = ["family-a"]
 ready_families = ["family-b"]
+
+[strategies.neg_risk]
+enabled = false
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-b"]
 "#,
     )
     .expect("seed existing config");
@@ -118,6 +125,15 @@ ready_families = ["family-b"]
         .and_then(|strategies| strategies.neg_risk.as_ref())
         .and_then(|neg_risk| neg_risk.rollout.as_ref())
         .expect("route-owned rollout should exist");
+    assert!(
+        !raw
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .map(|neg_risk| neg_risk.enabled)
+            .expect("route-owned neg_risk should exist"),
+        "preserve should keep enabled = false"
+    );
     assert_eq!(rollout.approved_scopes, vec!["family-a".to_owned()]);
     assert_eq!(rollout.ready_scopes, vec!["family-b".to_owned()]);
     assert!(!text.contains("approved_families ="));
@@ -203,6 +219,77 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
     );
     assert!(polymarket.source.is_none());
     assert!(polymarket.source_overrides.as_ref().is_some());
+}
+
+#[test]
+fn init_preserve_keeps_legacy_target_source_summary_and_render_in_sync() {
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+funder_address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+signature_type = "safe"
+wallet_route = "safe"
+api_key = "existing-account-api-key"
+secret = "existing-account-secret"
+passphrase = "existing-account-passphrase"
+
+[polymarket.relayer_auth]
+kind = "builder_api_key"
+api_key = "existing-relay-key"
+secret = "existing-relay-secret"
+timestamp = "1700000001"
+passphrase = "existing-relay-passphrase"
+signature = "existing-relay-signature"
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "legacy-revision-1"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-b"]
+"#,
+    )
+    .expect("seed existing config");
+
+    let mut child = Command::new(app_live_binary())
+        .arg("init")
+        .arg("--config")
+        .arg(temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("app-live init should spawn");
+
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(
+            b"live\npreserve\nsafe\n0x1111111111111111111111111111111111111111\n\npoly-api-key-1\npoly-secret-1\npoly-passphrase-1\nbuilder_api_key\nrelay-key-1\nrelay-secret-1\nrelay-passphrase-1\n",
+        )
+        .expect("wizard answers should write");
+
+    let output = child.wait_with_output().expect("output");
+    assert!(output.status.success(), "{}", combined(&output));
+
+    let text = fs::read_to_string(temp.path()).expect("generated config should exist");
+    assert!(text.contains("[negrisk.target_source]"));
+    assert!(text.contains("[negrisk.rollout]"));
+    assert!(!text.contains("[strategy_control]"));
+
+    let combined = combined(&output);
+    assert!(combined.contains("[negrisk.target_source]"), "{combined}");
+    assert!(combined.contains("[negrisk.rollout]"), "{combined}");
+    assert!(!combined.contains("[strategy_control]"), "{combined}");
 }
 
 #[test]

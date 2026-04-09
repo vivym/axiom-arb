@@ -2,7 +2,8 @@ use config_schema::{
     render_raw_config_to_string, NegRiskRolloutToml, NegRiskTargetSourceKindToml,
     NegRiskTargetSourceToml, NegRiskToml, PolymarketAccountToml, PolymarketRelayerAuthToml,
     PolymarketToml, RawAxiomConfig, RelayerAuthKindToml, RuntimeModeToml, RuntimeToml,
-    SignatureTypeToml, WalletRouteToml,
+    SignatureTypeToml, StrategiesToml, StrategyControlSourceToml, StrategyControlToml,
+    StrategyRouteRolloutToml, StrategyRouteToml, WalletRouteToml,
 };
 
 use super::InitError;
@@ -56,6 +57,23 @@ pub struct LiveInitAnswers {
     pub relayer_secret: Option<String>,
     pub relayer_passphrase: Option<String>,
     pub relayer_address: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ExistingStrategyControlShape {
+    pub render_canonical_strategy_control: bool,
+    pub configured_operator_strategy_revision: Option<String>,
+}
+
+pub(crate) fn existing_strategy_control_shape(
+    existing_config: &RawAxiomConfig,
+) -> ExistingStrategyControlShape {
+    let configured_operator_strategy_revision = existing_strategy_revision(existing_config);
+    ExistingStrategyControlShape {
+        render_canonical_strategy_control: existing_config.strategy_control.is_some()
+            || configured_operator_strategy_revision.is_some(),
+        configured_operator_strategy_revision,
+    }
 }
 
 pub fn render_live_config(
@@ -117,23 +135,7 @@ pub fn render_live_config(
     if let Some(existing_config) = existing_config {
         merge_existing_polymarket(&mut raw, existing_config);
 
-        if let Some(existing_negrisk) = &existing_config.negrisk {
-            if let (Some(existing_target_source), Some(target_source)) = (
-                &existing_negrisk.target_source,
-                raw.negrisk
-                    .as_mut()
-                    .and_then(|negrisk| negrisk.target_source.as_mut()),
-            ) {
-                target_source.operator_target_revision =
-                    existing_target_source.operator_target_revision.clone();
-            }
-
-            if let Some(existing_rollout) = &existing_negrisk.rollout {
-                if let Some(negrisk) = raw.negrisk.as_mut() {
-                    negrisk.rollout = Some(existing_rollout.clone());
-                }
-            }
-        }
+        merge_existing_control_plane(&mut raw, existing_config);
     }
 
     render_raw_config_to_string(&raw).map_err(|error| InitError::new(error.to_string()))
@@ -189,4 +191,112 @@ fn merge_existing_polymarket(raw: &mut RawAxiomConfig, existing_config: &RawAxio
     if relayer_auth.address.is_none() {
         relayer_auth.address = existing_relayer_auth.address.clone();
     }
+}
+
+fn merge_existing_control_plane(raw: &mut RawAxiomConfig, existing_config: &RawAxiomConfig) {
+    let existing_full_set = existing_config
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.full_set.clone());
+    let Some(existing_negrisk) = &existing_config.negrisk else {
+        if let Some(existing_strategy_control) = existing_config.strategy_control.as_ref() {
+            raw.strategy_control = Some(existing_strategy_control.clone());
+        }
+        if let Some(existing_neg_risk) = existing_config
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+        {
+            raw.strategies = Some(StrategiesToml {
+                full_set: existing_full_set,
+                neg_risk: Some(existing_neg_risk.clone()),
+            });
+        }
+        return;
+    };
+
+    let existing_strategy_shape = existing_strategy_control_shape(existing_config);
+
+    if existing_strategy_shape.render_canonical_strategy_control {
+        raw.strategy_control = Some(StrategyControlToml {
+            source: StrategyControlSourceToml::Adopted,
+            operator_strategy_revision: existing_strategy_shape
+                .configured_operator_strategy_revision
+                .clone(),
+        });
+        if let Some(negrisk) = raw.negrisk.as_mut() {
+            negrisk.target_source = None;
+            negrisk.rollout = None;
+        }
+
+        if let Some(existing_neg_risk) = existing_config
+            .strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+        {
+            raw.strategies = Some(StrategiesToml {
+                full_set: existing_full_set,
+                neg_risk: Some(existing_neg_risk.clone()),
+            });
+            return;
+        }
+
+        if let Some(existing_rollout) = &existing_negrisk.rollout {
+            raw.strategies = Some(StrategiesToml {
+                full_set: existing_full_set,
+                neg_risk: Some(StrategyRouteToml {
+                    enabled: true,
+                    rollout: Some(StrategyRouteRolloutToml {
+                        approved_scopes: existing_rollout.approved_families.clone(),
+                        ready_scopes: existing_rollout.ready_families.clone(),
+                    }),
+                }),
+            });
+        }
+        return;
+    }
+
+    if let (Some(existing_target_source), Some(target_source)) = (
+        &existing_negrisk.target_source,
+        raw.negrisk
+            .as_mut()
+            .and_then(|negrisk| negrisk.target_source.as_mut()),
+    ) {
+        target_source.operator_target_revision = existing_target_source.operator_target_revision.clone();
+    }
+
+    if let Some(existing_rollout) = &existing_negrisk.rollout {
+        if let Some(negrisk) = raw.negrisk.as_mut() {
+            negrisk.rollout = Some(existing_rollout.clone());
+        }
+    }
+}
+
+fn existing_strategy_revision(existing_config: &RawAxiomConfig) -> Option<String> {
+    existing_config
+        .strategy_control
+        .as_ref()
+        .and_then(|strategy_control| strategy_control.operator_strategy_revision.clone())
+        .or_else(|| {
+            existing_config
+                .negrisk
+                .as_ref()
+                .and_then(|negrisk| negrisk.target_source.as_ref())
+                .and_then(|target_source| {
+                    target_source
+                        .operator_target_revision
+                        .as_deref()
+                        .and_then(canonical_strategy_revision_from_legacy_target_revision)
+                })
+        })
+}
+
+fn canonical_strategy_revision_from_legacy_target_revision(revision: &str) -> Option<String> {
+    if let Some(suffix) = revision.strip_prefix("targets-rev-") {
+        return Some(format!("strategy-rev-{suffix}"));
+    }
+
+    revision
+        .strip_prefix("sha256:")
+        .map(|suffix| format!("strategy-rev-{suffix}"))
 }

@@ -22,7 +22,8 @@ pub(crate) fn paper(config_path: &Path) -> WizardResult {
             config_path,
             has_existing_polymarket_source: false,
             has_existing_polymarket_source_overrides: false,
-            configured_operator_target_revision: None,
+            configured_operator_strategy_revision: None,
+            render_canonical_strategy_control: false,
             rollout_is_empty: true,
         }),
     }
@@ -98,14 +99,15 @@ fn build_summary_view<'a>(
     existing_config: Option<&'a RawAxiomConfig>,
     wallet_kind: LiveInitWalletKind,
 ) -> InitSummary<'a> {
-    let configured_operator_target_revision = existing_config
-        .and_then(|config| config.negrisk.as_ref())
-        .and_then(|negrisk| negrisk.target_source.as_ref())
-        .and_then(|target_source| target_source.operator_target_revision.as_deref());
+    let strategy_control_shape = existing_config.map(render::existing_strategy_control_shape);
+    let configured_operator_strategy_revision = strategy_control_shape
+        .as_ref()
+        .and_then(|shape| shape.configured_operator_strategy_revision.clone());
+    let render_canonical_strategy_control = strategy_control_shape
+        .as_ref()
+        .is_some_and(|shape| shape.render_canonical_strategy_control);
     let rollout_is_empty = existing_config
-        .and_then(|config| config.negrisk.as_ref())
-        .and_then(|negrisk| negrisk.rollout.as_ref())
-        .map(|rollout| rollout.approved_families.is_empty() && rollout.ready_families.is_empty())
+        .map(existing_rollout_is_empty)
         .unwrap_or(true);
     let (has_existing_polymarket_source, has_existing_polymarket_source_overrides) =
         existing_config
@@ -128,9 +130,29 @@ fn build_summary_view<'a>(
         config_path,
         has_existing_polymarket_source,
         has_existing_polymarket_source_overrides,
-        configured_operator_target_revision,
+        configured_operator_strategy_revision,
+        render_canonical_strategy_control,
         rollout_is_empty,
     }
+}
+
+fn existing_rollout_is_empty(config: &RawAxiomConfig) -> bool {
+    config
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.neg_risk.as_ref())
+        .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        .map(|rollout| rollout.approved_scopes.is_empty() && rollout.ready_scopes.is_empty())
+        .or_else(|| {
+            config
+                .negrisk
+                .as_ref()
+                .and_then(|negrisk| negrisk.rollout.as_ref())
+                .map(|rollout| {
+                    rollout.approved_families.is_empty() && rollout.ready_families.is_empty()
+                })
+        })
+        .unwrap_or(true)
 }
 
 enum ExistingConfigMode {
