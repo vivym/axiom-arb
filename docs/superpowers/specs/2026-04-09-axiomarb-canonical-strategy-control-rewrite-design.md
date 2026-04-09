@@ -215,6 +215,24 @@ In these cases:
 - the command stops with a clear error
 - the error explains which control-plane inputs are contradictory or missing
 
+### Migration precedence for mixed inputs
+
+Resolver behavior should be explicit when multiple control-plane shapes appear in the same config:
+
+1. canonical `[strategy_control]` plus any legacy control-plane field
+   - treat as contradictory
+   - fail closed
+   - do not attempt automatic preference or merge
+2. legacy `[negrisk.target_source]` plus legacy explicit `[[negrisk.targets]]`
+   - treat as contradictory
+   - fail closed
+3. canonical `[strategy_control]` alone
+   - resolve as canonical
+4. one legacy shape alone
+   - resolve as migratable legacy input
+
+The resolver should never silently prioritize one source over another when mixed control-plane shapes coexist.
+
 ## More Ambitious Cleanup Included In Scope
 
 Because this rewrite is intentionally broader than a narrow deletion, it should also include the following architectural cleanup.
@@ -343,6 +361,12 @@ New tests should cover:
 High-impact areas likely include:
 
 - `crates/config-schema/src/validate.rs`
+- `crates/app-live/src/cli.rs`
+- `crates/app-live/src/daemon.rs`
+- `crates/app-live/src/discovery.rs`
+- `crates/app-live/src/supervisor.rs`
+- `crates/app-live/src/queues.rs`
+- `crates/app-live/src/source_tasks.rs`
 - `crates/app-live/src/startup.rs`
 - `crates/app-live/src/commands/status/*`
 - `crates/app-live/src/commands/doctor/*`
@@ -350,6 +374,7 @@ High-impact areas likely include:
 - `crates/app-live/src/commands/apply/*`
 - `crates/app-live/src/commands/verify/*`
 - `crates/app-live/src/commands/targets/adopt.rs`
+- `crates/app-live/src/commands/targets/config_file.rs`
 - `crates/app-live/src/commands/targets/rollback.rs`
 - `crates/app-live/src/commands/targets/state.rs`
 - `crates/app-live/src/commands/targets/status.rs`
