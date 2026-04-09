@@ -83,6 +83,14 @@ App-facing control-plane naming should become strategy-only:
 
 Add a canonical control-plane resolution layer, e.g. `strategy_control::resolver`, that becomes the only authority for interpreting live/smoke control-plane config.
 
+The resolver must be a pure read model:
+
+- it may read validated config, persistence state, and runtime-progress state
+- it must not rewrite config
+- it must not create or mutate persistence records
+
+All config rewriting and migration-related persistence writes should live in a separate migration helper, e.g. `strategy_control::migration`, which is called only by mutation-boundary commands.
+
 The resolver should:
 
 1. parse the validated config plus any required persistence state
@@ -114,6 +122,27 @@ Canonical adopted resolution should be strategy-shaped. The authoritative persis
 Legacy target-shaped persistence is not canonical control-plane truth after this rewrite. Existing target-shaped provenance/artifact tables may still be read only as migration input while converting old config or old persisted lineage into canonical strategy-shaped state, but steady-state command resolution should not depend on target-shaped fallback.
 
 This rewrite does not require a broad database schema rename. It does require persistence read-path cleanup so canonical resolution prefers strategy-shaped provenance/artifacts and treats target-shaped provenance as migration-only compatibility data.
+
+#### Precedence across config, persistence, and runtime-progress
+
+The canonical precedence rules should be:
+
+1. canonical config is the desired control-plane authority
+   - if `[strategy_control]` exists, it defines the configured `operator_strategy_revision`
+2. canonical persistence validates and materializes that configured strategy revision
+   - `strategy_adoption_provenance`, `adoptable_strategy_revisions`, and `strategy_candidate_sets` must support the configured revision
+3. runtime-progress and run-session records are observational only
+   - they may report active/applied state
+   - they may drive restart/conflict reporting
+   - they must never replace or synthesize missing configured strategy control
+4. legacy target-shaped persistence may be read only by the migration helper
+   - never by steady-state canonical resolution
+
+Therefore:
+
+- config + missing canonical persistence => fail closed
+- config + conflicting runtime-progress => report restart/conflict, but keep config as desired truth
+- missing config cannot be repaired from runtime-progress alone
 
 ### 2. Remove duplicated target-source detection
 
@@ -163,6 +192,29 @@ The rewrite should recognize and migrate these old shapes:
 - `operator_target_revision`
 - explicit `[[negrisk.targets]]`
 
+#### Legacy `[negrisk.target_source]` migration rules
+
+`[negrisk.target_source]` is migratable only when all of the following are true:
+
+- `source = "adopted"`
+- `operator_target_revision` is present and non-empty
+- canonical `[strategy_control]` is absent
+- explicit `[[negrisk.targets]]` is absent
+
+Migration contract:
+
+- the migration helper must look up canonical lineage for the legacy `operator_target_revision`
+- it must derive one unique canonical `operator_strategy_revision`
+- if strategy-shaped canonical provenance/artifacts are missing but target-shaped legacy provenance/artifacts exist and can be deterministically converted, the migration helper must materialize the required canonical rows
+- if the legacy revision cannot be linked to one unique canonical strategy revision, migration fails closed
+
+Malformed legacy target-source input is invalid and not migratable, including:
+
+- `source = "adopted"` with missing `operator_target_revision`
+- `source = "adopted"` with empty `operator_target_revision`
+- any mixed presence with canonical `[strategy_control]`
+- any mixed presence with explicit `[[negrisk.targets]]`
+
 #### Explicit `[[negrisk.targets]]` migration rules
 
 Legacy explicit targets must follow deterministic migration rules:
@@ -181,7 +233,13 @@ Legacy explicit targets must follow deterministic migration rules:
 
 Multi-row target sets are valid migration input if and only if they parse into one deterministic full target set. There is no per-row migration and no “pick the first target” fallback.
 
-At a mutation boundary, successful migration of explicit targets may also need to materialize or upsert canonical strategy-shaped provenance/artifacts so later canonical resolution can proceed without target-shaped fallback.
+At a mutation boundary, successful migration of explicit targets must materialize or upsert the canonical strategy-shaped persistence needed for later steady-state resolution:
+
+- `strategy_candidate_sets`
+- `adoptable_strategy_revisions`
+- `strategy_adoption_provenance`
+
+After successful rewrite, later canonical resolution should not need target-shaped fallback for that migrated config.
 
 ### Migration output
 
@@ -220,7 +278,8 @@ These commands may:
 
 1. detect a legacy but migratable control-plane input
 2. resolve the canonical strategy revision
-3. rewrite the config into canonical `[strategy_control]`
+3. materialize any required canonical strategy-shaped persistence rows
+4. rewrite the config into canonical `[strategy_control]`
 4. continue with the canonical flow
 
 ### Read-only commands must not auto-rewrite
@@ -232,6 +291,14 @@ These commands must remain read-only:
 - `verify`
 
 They should report that migration is required, but they must not mutate the TOML.
+
+The canonical operator remediation path for read-only failures should be:
+
+```bash
+app-live targets adopt --config <config>
+```
+
+In this rewrite, `targets adopt` becomes the single explicit migration entrypoint for migratable old control-plane input. Read-only commands should all converge on that next step rather than emitting divergent migration guidance.
 
 ### Fail-closed migration rules
 
@@ -302,6 +369,7 @@ With compatibility removed, readiness and action models should get smaller. The 
 - if config is already canonical, report canonical readiness only
 - if migration is required, report a clear migration-required state without calling it compatibility mode
 - no legacy explicit target labels or compatibility wording
+- remediation should point to `app-live targets adopt --config <config>`
 
 ### doctor
 
@@ -309,6 +377,7 @@ With compatibility removed, readiness and action models should get smaller. The 
 - if migration is required, report that live/smoke control-plane migration must happen before full checks can proceed
 - no compatibility skip text
 - no `--adopt-compatibility` guidance
+- remediation should point to `app-live targets adopt --config <config>`
 
 ### bootstrap
 
@@ -324,6 +393,7 @@ With compatibility removed, readiness and action models should get smaller. The 
 
 - should not contain legacy-explicit-specific branches in steady state
 - if migration is still pending, it should fail as a generic control-plane migration precondition, not as a legacy explicit special case
+- remediation should point to `app-live targets adopt --config <config>`
 
 ### run / startup
 
@@ -333,7 +403,9 @@ With compatibility removed, readiness and action models should get smaller. The 
 ### targets adopt
 
 - remove `--adopt-compatibility`
-- continue to support canonical revision adoption flows only
+- against canonical input, continue to support canonical revision adoption flows
+- against migratable old control-plane input, `targets adopt --config <config>` with no selectors becomes the one explicit migration entrypoint
+- after migration succeeds, the config must be canonical `[strategy_control]` and the required canonical strategy-shaped persistence rows must exist
 
 ### targets rollback
 
@@ -366,6 +438,7 @@ Required updates:
 - example config should show only canonical strategy-control shape for live/smoke
 - README and runbooks should stop mentioning compatibility mode or legacy explicit targets as a normal path
 - smoke runbook should assume canonical `[strategy_control]` and mutation-boundary migration if old configs are encountered
+- `docs/runbooks/operator-target-adoption.md` should be rewritten or replaced so it teaches the canonical strategy-shaped control plane and the new explicit migration/remediation path
 
 ## Tests and Fixtures
 
@@ -389,6 +462,17 @@ New tests should cover:
 5. contradictory old+new control-plane input failing closed
 6. startup/run requiring canonical adopted strategy-control state
 
+The rewrite should also add direct resolver-level tests for the shared matrix:
+
+- canonical input
+- migratable `[negrisk.target_source]`
+- migratable explicit `[[negrisk.targets]]`
+- mixed canonical + legacy input
+- missing canonical persistence
+- conflicting runtime-progress vs configured strategy revision
+- malformed legacy target-source input
+- empty `targets = []`
+
 ## File-Level Impact
 
 High-impact areas likely include:
@@ -397,13 +481,17 @@ High-impact areas likely include:
 - `crates/app-live/src/cli.rs`
 - `crates/app-live/src/daemon.rs`
 - `crates/app-live/src/discovery.rs`
+- `crates/app-live/src/runtime.rs`
+- `crates/app-live/src/run_session.rs`
 - `crates/app-live/src/supervisor.rs`
 - `crates/app-live/src/queues.rs`
 - `crates/app-live/src/source_tasks.rs`
 - `crates/app-live/src/startup.rs`
 - `crates/app-live/src/commands/status/*`
 - `crates/app-live/src/commands/doctor/*`
+- `crates/app-live/src/commands/doctor/target_source.rs`
 - `crates/app-live/src/commands/bootstrap/*`
+- `crates/app-live/src/commands/bootstrap/error.rs`
 - `crates/app-live/src/commands/apply/*`
 - `crates/app-live/src/commands/verify/*`
 - `crates/app-live/src/commands/targets/adopt.rs`
@@ -414,9 +502,12 @@ High-impact areas likely include:
 - `crates/app-live/src/commands/targets/show_current.rs`
 - `crates/app-live/src/commands/targets/candidates.rs`
 - `crates/app-live/src/commands/init/*`
+- `crates/app-live/src/commands/init/wizard.rs`
+- `crates/app-live/src/commands/init/summary.rs`
 - `config/axiom-arb.example.toml`
 - `README.md`
 - `docs/runbooks/real-user-shadow-smoke.md`
+- `docs/runbooks/operator-target-adoption.md`
 
 Likely test churn includes:
 
