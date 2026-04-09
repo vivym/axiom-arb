@@ -26,7 +26,7 @@ real_user_shadow_smoke = true
 
 Do not use paper mode. Do not hand-author transient auth values or raw `negrisk.targets` members for the normal adopted-revision startup path; let the config model and startup flow resolve the adopted strategy revision. Empty rollout lists are the safe default until an adoptable revision is explicitly chosen, and adopting a revision alone does not create the smoke-ready rollout posture for adopted `neg-risk` scopes. Discovery persistence and adoption lineage are different lifecycle facts: `discover` writes candidate/adoptable artifacts, while `targets adopt` writes canonical provenance and adoption history for the chosen startup revision.
 
-If the config is still using legacy explicit `[[negrisk.targets]]`, smoke commands treat that as read-only compatibility mode. `status`, `doctor`, `verify`, and `run` can still read it, but high-level mutation flows do not auto-migrate it; use `targets adopt` explicitly when you want to enter the neutral adopted-revision model.
+If the config still carries legacy explicit target input, read-only commands stop with migration-required guidance. Use `targets adopt --config config/axiom-arb.local.toml` to rewrite the config into canonical `[strategy_control]` before you continue.
 
 If Polymarket traffic must traverse an outbound proxy, set `HTTPS_PROXY` or `ALL_PROXY` in the environment before running `bootstrap`, `doctor`, `apply`, or `run`. Use `HTTP_PROXY` only if you override Polymarket endpoints to `http` or `ws`.
 
@@ -162,7 +162,7 @@ If the wrong strategy revision was adopted for the smoke, revert it with:
 cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
 ```
 
-Adopt and rollback only rewrite the configured `operator_strategy_revision` in the TOML. In compatibility mode, the first `targets adopt` is also the explicit migration step into the neutral control plane. They do not hot-reload the running daemon.
+Adopt and rollback only rewrite the configured `operator_strategy_revision` in the TOML. They do not hot-reload the running daemon.
 
 If you need deeper debugging beyond `verify`, capture replay-visible state after the smoke with:
 

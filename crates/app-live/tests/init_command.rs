@@ -221,7 +221,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
 }
 
 #[test]
-fn init_preserve_keeps_legacy_target_source_summary_and_render_in_sync() {
+fn init_preserve_rewrites_legacy_target_source_summary_and_render_to_canonical_strategy_control() {
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(
         temp.path(),
@@ -249,7 +249,7 @@ address = "0xcccccccccccccccccccccccccccccccccccccccc"
 
 [negrisk.target_source]
 source = "adopted"
-operator_target_revision = "legacy-revision-1"
+operator_target_revision = "targets-rev-9"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
@@ -281,14 +281,21 @@ ready_families = ["family-b"]
     assert!(output.status.success(), "{}", combined(&output));
 
     let text = fs::read_to_string(temp.path()).expect("generated config should exist");
-    assert!(text.contains("[negrisk.target_source]"));
-    assert!(text.contains("[negrisk.rollout]"));
-    assert!(!text.contains("[strategy_control]"));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision"));
+    assert!(!text.contains("[negrisk.rollout]"));
 
     let combined = combined(&output);
-    assert!(combined.contains("[negrisk.target_source]"), "{combined}");
-    assert!(combined.contains("[negrisk.rollout]"), "{combined}");
-    assert!(!combined.contains("[strategy_control]"), "{combined}");
+    assert!(combined.contains("[strategy_control]"), "{combined}");
+    assert!(
+        combined.contains("operator_strategy_revision = \"strategy-rev-9\""),
+        "{combined}"
+    );
+    assert!(!combined.contains("[negrisk.target_source]"), "{combined}");
+    assert!(!combined.contains("operator_target_revision"), "{combined}");
+    assert!(!combined.contains("[negrisk.rollout]"), "{combined}");
 }
 
 #[test]

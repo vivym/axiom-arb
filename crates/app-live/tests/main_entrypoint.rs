@@ -42,7 +42,7 @@ fn binary_entrypoint_reads_paper_mode_from_config_file() {
 }
 
 #[test]
-fn example_config_mentions_strategy_control_anchor() {
+fn example_config_uses_canonical_strategy_control_only() {
     let text = fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -54,6 +54,28 @@ fn example_config_mentions_strategy_control_anchor() {
 
     assert!(text.contains("[strategy_control]"), "{text}");
     assert!(text.contains("operator_strategy_revision"), "{text}");
+    assert!(!text.contains("[negrisk.target_source]"), "{text}");
+    assert!(!text.contains("operator_target_revision"), "{text}");
+    assert!(!text.contains("[[negrisk.targets]]"), "{text}");
+}
+
+#[test]
+fn operator_docs_stop_teaching_compatibility_mode_and_target_source_aliases() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..");
+    let readme = fs::read_to_string(repo_root.join("README.md")).expect("README should load");
+    let smoke = fs::read_to_string(repo_root.join("docs/runbooks/real-user-shadow-smoke.md"))
+        .expect("smoke runbook should load");
+    let adoption = fs::read_to_string(repo_root.join("docs/runbooks/operator-target-adoption.md"))
+        .expect("adoption runbook should load");
+
+    assert!(!readme.contains("--adopt-compatibility"), "{readme}");
+    assert!(!readme.contains("compatibility mode"), "{readme}");
+    assert!(!smoke.contains("compatibility mode"), "{smoke}");
+    assert!(!smoke.contains("[[negrisk.targets]]"), "{smoke}");
+    assert!(!adoption.contains("[negrisk.target_source]"), "{adoption}");
+    assert!(!adoption.contains("operator_target_revision"), "{adoption}");
 }
 
 #[test]

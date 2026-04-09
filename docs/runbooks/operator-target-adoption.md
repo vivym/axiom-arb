@@ -1,25 +1,29 @@
-# Operator Target Adoption Runbook
+# Operator Strategy Adoption Runbook
 
-This runbook covers the operator-facing control-plane workflow for startup-scoped `neg-risk` target revisions.
+This runbook covers the lower-level control-plane workflow for startup-scoped strategy adoption.
 
-For a fresh database, the preferred Day 0 entrypoint is `app-live bootstrap`. This runbook is the lower-level fallback once you want direct control over `discover -> targets candidates -> targets adopt`, or when you need to inspect or change already-discovered target state.
+For a fresh database, prefer `app-live bootstrap`. Use this runbook when you intentionally want direct control over:
 
-Use it when you need to:
+- `discover`
+- `targets candidates`
+- `targets adopt`
+- `targets rollback`
+- lower-level readiness and provenance inspection
 
-- inspect advisory candidates and adoptable revisions
-- confirm which `operator_target_revision` is currently configured or active
-- adopt a new startup-scoped target revision
-- roll back to the previous adopted revision or an explicit older revision
-- determine whether a controlled restart is required
+The steady-state control-plane shape is canonical:
 
-This workflow stays under `app-live targets ...`. It does not hot-reload a running daemon.
+- `[strategy_control]`
+- `source = "adopted"`
+- `operator_strategy_revision = "..."`
+
+Legacy explicit target input is not a normal operating mode. Read-only commands report migration-required guidance, and `targets adopt --config ...` is the explicit rewrite path into canonical `[strategy_control]`.
 
 ## Preconditions
 
 1. Start local Postgres and set `DATABASE_URL`.
-2. Prepare a local config file such as `config/axiom-arb.local.toml`.
-3. Keep `[negrisk.target_source].source = "adopted"` in that TOML.
-4. Do not hand-edit `[negrisk.target_source].operator_target_revision` during normal operations. Use the control-plane commands below instead.
+2. Prepare a local config such as `config/axiom-arb.local.toml`.
+3. Keep startup authority on `[strategy_control]`.
+4. Do not hand-edit `operator_strategy_revision` during normal operations; use the control-plane commands below.
 
 ```bash
 export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
@@ -27,7 +31,7 @@ export DATABASE_URL=postgres://axiom:axiom@localhost:5432/axiom_arb
 
 ## 1. Inspect Candidate And Adoptable State
 
-First materialize or refresh discovery artifacts, then list advisory candidates, adoptable revisions, and the currently adopted revision:
+Materialize or refresh discovery artifacts, then inspect strategy candidates and adoptable revisions:
 
 ```bash
 cargo run -p app-live -- discover --config config/axiom-arb.local.toml
@@ -36,11 +40,11 @@ cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
 
 Expected output shape:
 
-- `advisory candidate_revision = ... snapshot_id = ...`
-- `adoptable adoptable_revision = ... candidate_revision = ... operator_target_revision = ...`
-- `adopted operator_target_revision = ... adoptable_revision = ... candidate_revision = ...`
+- `advisory strategy_candidate_revision = ...`
+- `adoptable adoptable_revision = ... strategy_candidate_revision = ... operator_strategy_revision = ...`
+- `adopted operator_strategy_revision = ... adoptable_revision = ... strategy_candidate_revision = ...`
 
-Use this command to choose the revision you want to adopt. `advisory` rows are discovery artifacts only; they are not yet adopted. `adoptable` rows are eligible inputs to `targets adopt`.
+Use this output to decide which revision you want to adopt. Advisory rows are discovery artifacts only; adoptable rows are valid inputs to `targets adopt`.
 
 ## 2. Check High-Level Readiness First
 
@@ -50,23 +54,21 @@ Start with the high-level readiness view:
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
 ```
 
-`status` is the operator homepage for config and control-plane readiness. It tells you whether the next step is:
+`status` is the operator homepage for config and control-plane readiness. It tells you whether the next action is:
 
 - `discover`
 - `targets candidates`
 - `targets adopt`
-- `apply` for Day 1+ progression
-- controlled restart
+- `apply`
+- a controlled restart
 - `doctor`
 - `run`
 
-For `real-user shadow smoke`, `apply` can still inline smoke-only target adoption and rollout enablement. For live configs, once adoption is complete and rollout posture exists, Day 1+ progression returns to conservative `apply`.
+For `real-user shadow smoke`, `apply` can still inline smoke-only strategy adoption and rollout enablement. For live configs, once adoption is complete and rollout posture exists, Day 1+ progression returns to conservative `apply`.
 
-Then drop into the lower-level control-plane views when you need exact provenance.
+## 3. Check Configured Vs Active Strategy State
 
-## 3. Check Current Configured Vs Active State
-
-Get a compact status summary:
+Get a compact summary:
 
 ```bash
 cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
@@ -74,13 +76,13 @@ cargo run -p app-live -- targets status --config config/axiom-arb.local.toml
 
 This prints:
 
-- `configured_operator_target_revision`
-- `active_operator_target_revision`
+- `configured_operator_strategy_revision`
+- `active_operator_strategy_revision`
 - `restart_needed`
 - `provenance`
 - `latest_action`
 
-For a more detailed explainability view, use:
+For a more detailed explainability view:
 
 ```bash
 cargo run -p app-live -- targets show-current --config config/axiom-arb.local.toml
@@ -89,17 +91,17 @@ cargo run -p app-live -- targets show-current --config config/axiom-arb.local.to
 That view also shows:
 
 - `adoptable_revision`
-- `candidate_revision`
+- `strategy_candidate_revision`
 - `latest_action_kind`
-- `latest_action_operator_target_revision`
+- `latest_action_operator_strategy_revision`
 
 Interpretation:
 
-- if `configured_operator_target_revision = active_operator_target_revision`, the running daemon is already using the configured target revision
-- if they differ, the new target is configured but not yet active
+- if `configured_operator_strategy_revision = active_operator_strategy_revision`, the running daemon is already using the configured revision
+- if they differ, the new strategy revision is configured but not yet active
 - `restart_needed = true` means a controlled restart is required before the daemon will use the configured revision
 
-## 4. Adopt A New Target Revision
+## 4. Adopt A New Strategy Revision
 
 The normal path is to adopt from an `adoptable_revision`:
 
@@ -107,38 +109,40 @@ The normal path is to adopt from an `adoptable_revision`:
 cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --adoptable-revision <adoptable-revision>
 ```
 
-This rewrites `[negrisk.target_source].operator_target_revision` in the TOML, writes or reuses canonical adoption provenance for that startup revision, and appends adoption history.
+This rewrites `[strategy_control].operator_strategy_revision` in the TOML, writes or reuses canonical strategy adoption provenance for that startup revision, and appends adoption history.
 
 The command prints:
 
-- `operator_target_revision`
-- `previous_operator_target_revision`
+- `operator_strategy_revision`
+- `previous_operator_strategy_revision`
 - `adoptable_revision`
-- `candidate_revision`
+- `strategy_candidate_revision`
 - `restart_required`
 
-Only use direct `operator_target_revision` adoption when you already know the durable lineage is present:
+Only use direct strategy-revision adoption when you already know the durable lineage is present:
 
 ```bash
-cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --operator-target-revision <operator-target-revision>
+cargo run -p app-live -- targets adopt --config config/axiom-arb.local.toml --operator-strategy-revision <operator-strategy-revision>
 ```
 
-Fail-closed cases:
+Fail-closed cases include:
 
 - providing both selector flags
 - providing neither selector flag
-- selecting an adoptable revision that does not resolve to exactly one rendered operator target revision
+- selecting an adoptable revision that does not resolve to exactly one rendered operator strategy revision
 - selecting a revision whose durable provenance is missing or malformed
 
 Discovery and adoption are intentionally different lifecycle steps:
 
 - `discover` persists advisory candidate rows and adoptable revision rows
-- `targets adopt` writes canonical provenance that links the chosen `operator_target_revision` back to its adoptable and candidate revisions
-- repeated adoption of the same `operator_target_revision` preserves that canonical provenance and still appends a new adoption-history row
+- `targets adopt` writes canonical provenance that links the chosen `operator_strategy_revision` back to its adoptable and strategy-candidate revisions
+- repeated adoption of the same `operator_strategy_revision` preserves that canonical provenance and still appends a new adoption-history row
+
+If read-only commands report migration-required legacy input, `targets adopt --config ...` is also the explicit config rewrite step into canonical `[strategy_control]`.
 
 ## 5. Restart To Activate The Newly Adopted Revision
 
-Adoption is startup-scoped. It does not change the target revision inside a running daemon.
+Adoption is startup-scoped. It does not hot-reload a running daemon.
 
 After a successful adopt:
 
@@ -155,12 +159,9 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
-For `real-user shadow smoke`, `apply` can still inline smoke-only target adoption and rollout enablement here. For live configs, return to `apply` only after adoption is complete and rollout posture exists; it stays conservative, does not inline target adoption or live rollout mutation, and keeps `verify` as a separate post-run check.
-If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`.
+For `real-user shadow smoke`, `apply` can still inline smoke-only strategy adoption and rollout enablement here. For live configs, return to `apply` only after adoption is complete and rollout posture exists; it stays conservative, does not inline live rollout mutation, and keeps `verify` as a separate post-run check. If `status` still reports `live-rollout-required` after adoption, update route-owned rollout scopes before returning to `apply`.
 
-`doctor` is the preflight gate after adoption. It now reports sectioned `Config / Credentials / Connectivity / Target Source / Runtime Safety` output, checks venue-facing live or smoke readiness when those probes apply, and ends with explicit next actions. If `doctor` reports target-source failure, go back to `targets candidates` / `targets adopt` instead of trying to hand-edit the TOML.
-
-`verify` is the post-run local result check. It does not perform venue probes; instead it answers whether the latest local run evidence is consistent with the current mode and control-plane posture. Use it after `run` to confirm the daemon produced the kind of result you expected before moving on.
+`doctor` is the preflight gate after adoption. It reports sectioned `Config / Credentials / Target Source / Runtime Safety / Connectivity` output, checks venue-facing readiness when those probes apply, and ends with explicit next actions. If `doctor` reports migration-required legacy input, run `targets adopt --config ...` before trying to continue. If it reports canonical rebuild or manual TOML repair, follow that remediation rather than hand-editing live state blindly.
 
 After the daemon comes back up, confirm the active revision caught up:
 
@@ -176,15 +177,15 @@ Roll back to the previous adopted revision:
 cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
 ```
 
-Or roll back to an explicit older `operator_target_revision`:
+Or roll back to an explicit older strategy revision:
 
 ```bash
-cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml --to-operator-target-revision <operator-target-revision>
+cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml --to-operator-strategy-revision <operator-strategy-revision>
 ```
 
 Rollback behavior:
 
-- rewrites the configured `operator_target_revision` in the TOML
+- rewrites the configured `operator_strategy_revision` in the TOML
 - appends adoption history
 - preserves startup-scoped semantics
 - does not hot-reload the running daemon
@@ -201,7 +202,7 @@ If `restart_needed = true`, perform a controlled restart before expecting the da
 
 ## 7. Recommended Operator Flow
 
-For day-to-day target control-plane operations, use this sequence:
+For day-to-day strategy control-plane operations, use this sequence:
 
 ```bash
 cargo run -p app-live -- status --config config/axiom-arb.local.toml
@@ -214,12 +215,10 @@ cargo run -p app-live -- apply --config config/axiom-arb.local.toml --start
 cargo run -p app-live -- verify --config config/axiom-arb.local.toml
 ```
 
-For live configs, use that high-level flow only after adoption is complete and rollout posture already exists. If `status` still reports `live-rollout-required` after adoption, edit `[negrisk.rollout].approved_families` and `ready_families` for the adopted families before returning to `apply`. For `real-user shadow smoke`, `apply` can still inline the smoke-only adoption and rollout work when `status` reports it.
-
 Interpret `status` before `apply` like this:
 
 - `discovery-required`
-  - run `bootstrap` for the preferred Day 0 flow, or run `discover` if you are intentionally on the low-level fallback
+  - run `bootstrap` for the preferred Day 0 flow, or `discover` if you are intentionally using the low-level fallback
 - `discovery-ready-not-adoptable`
   - discovery artifacts exist, but adoption is still blocked by the recorded reasons
   - inspect `targets candidates` before trying anything else
@@ -236,80 +235,40 @@ Interpret `status` before `apply` like this:
 - `blocked`
   - follow the printed next action and rerun `status`
 
-Interpret the `doctor` result before `run`:
-
-- `PASS`
-  - safe to continue to `run`
-- `PASS WITH SKIPS`
-  - verify the skipped checks match the current mode
-- `FAIL`
-  - follow the printed next action, then rerun `doctor`
-
-Interpret `verify` after `run`:
-
-- `PASS`
-  - the latest local result is consistent with the current mode and control-plane posture
-- `PASS WITH WARNINGS`
-  - the result is usable but incomplete; follow the printed next action
-- `FAIL`
-  - local evidence conflicts with the expected posture or is not credible enough; stop and inspect before rerunning
-
-For rollback:
-
-```bash
-cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
-cargo run -p app-live -- status --config config/axiom-arb.local.toml
-```
-
 ## 8. Troubleshooting
 
 If `status` shows:
 
 - `discovery-required`
-  - no discovery artifacts exist yet for the adopted-target path
-  - run `bootstrap` for the preferred Day 0 flow, or `discover` if you are intentionally using the low-level fallback
-
+  - no discovery artifacts exist yet for the adopted strategy path
 - `discovery-ready-not-adoptable`
   - discovery artifacts exist, but the recorded reasons still block adoption
-  - inspect `targets candidates` before trying to adopt anything
-
 - `adoptable-ready`
-  - no startup-scoped adopted target revision is currently configured yet, but discoverable adoptable input now exists
-  - for `real-user shadow smoke`, prefer `apply` to inline the adopt step
-  - otherwise inspect `targets candidates`, then adopt one
-
+  - no startup-scoped adopted strategy revision is configured yet, but adoptable input now exists
 - `restart-required`
   - the configured revision differs from the daemon's active revision
-  - adoption or rollback succeeded, but a controlled restart is still required
-
 - `blocked`
-  - follow the printed next action first
-  - if you need lineage detail, fall back to `targets status` / `targets show-current`
+  - follow the printed next action first; if you need lineage detail, fall back to `targets status` / `targets show-current`
 
 If `targets status` shows:
 
-- `configured_operator_target_revision = unavailable`
-  - no startup-scoped target revision is currently configured
-  - if this is a fresh database, run `discover` first, then inspect `targets candidates`, then adopt one
-
+- `configured_operator_strategy_revision = unavailable`
+  - no startup-scoped strategy revision is currently configured
 - `provenance = unavailable`
   - the configured revision exists but cannot be resolved back through durable provenance
-  - do not continue by hand-editing the TOML; adopt a valid revision again
-
 - `restart_needed = true`
-  - the configured revision differs from the daemon's active revision
-  - adoption succeeded, but a controlled restart is still required
+  - adoption or rollback succeeded, but a controlled restart is still required
 
 If `targets adopt` or `targets rollback` fails:
 
-- run `targets candidates` to verify the available revision ids
-- run `targets show-current` to inspect the current provenance chain
+- re-run `targets candidates` to verify the available revision ids
+- re-run `targets show-current` to inspect the current provenance chain
 - verify the config path is the same file you intend `doctor` and `run` to use
 
 ## 9. Safety Rules
 
-- `operator_target_revision` is the only startup and restore authority
-- `candidate_revision` and `adoptable_revision` are selection and provenance context only
+- `operator_strategy_revision` is the only startup and restore authority
+- `strategy_candidate_revision` and `adoptable_revision` are selection and provenance context only
 - do not treat `targets adopt` as a live reload
-- do not hand-edit raw target payloads for the normal adopted-target startup path
+- do not hand-edit raw route payloads for the normal adopted-revision startup path
 - always check `configured` vs `active` before assuming a new revision is in effect
