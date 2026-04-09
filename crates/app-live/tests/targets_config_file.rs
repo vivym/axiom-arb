@@ -13,10 +13,32 @@ const MINIMAL_TARGET_SOURCE_CONFIG: &str = r#"
 [runtime]
 mode = "live"
 
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
 [negrisk.target_source]
 source = "adopted"
 operator_target_revision = ""
 legacy_note = "keep-me"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
 "#;
 
 const LEGACY_EXPLICIT_CONFIG: &str = r#"
@@ -70,6 +92,40 @@ operator_strategy_revision = "strategy-rev-12"
 [strategies.neg_risk.rollout]
 approved_scopes = []
 ready_scopes = []
+legacy_note = "keep-me"
+"#;
+
+const LEGACY_TARGET_SOURCE_REWRITE_CONFIG: &str = r#"
+# preserve this comment
+[runtime]
+mode = "live"
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key-1"
+secret = "poly-secret-1"
+passphrase = "poly-passphrase-1"
+
+[negrisk.target_source]
+source = "adopted"
+operator_target_revision = "targets-rev-9"
+
+[negrisk.rollout]
+approved_families = ["family-a"]
+ready_families = ["family-a"]
 legacy_note = "keep-me"
 "#;
 
@@ -151,6 +207,89 @@ fn rewrite_operator_strategy_revision_migrates_legacy_explicit_config_to_strateg
     let validated = ValidatedConfig::new(raw).unwrap();
     let live = validated.for_app_live().unwrap();
     assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+}
+
+#[test]
+fn rewrite_operator_strategy_revision_migrates_legacy_target_source_to_strategy_control() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axiom-arb.local.toml");
+    std::fs::write(&path, MINIMAL_TARGET_SOURCE_CONFIG).unwrap();
+
+    rewrite_operator_strategy_revision(&path, "strategy-rev-9").unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# preserve this comment"));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision ="));
+    assert!(text.contains("[polymarket.source]"));
+    assert!(text.contains("[polymarket.account]"));
+    assert!(text.contains("[strategies.neg_risk.rollout]"));
+    assert!(text.contains("approved_scopes = [\"family-a\"]"));
+    assert!(text.contains("ready_scopes = [\"family-a\"]"));
+
+    let raw = load_raw_config_from_path(&path).unwrap();
+    let validated = ValidatedConfig::new(raw.clone()).unwrap();
+    let live = validated.for_app_live().unwrap();
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-9"));
+    assert_eq!(
+        raw.strategies
+            .as_ref()
+            .and_then(|strategies| strategies.neg_risk.as_ref())
+            .and_then(|neg_risk| neg_risk.rollout.as_ref())
+            .expect("route-owned rollout should exist")
+            .approved_scopes,
+        vec!["family-a".to_owned()]
+    );
+}
+
+#[test]
+fn rewrite_operator_strategy_revision_rewrites_legacy_target_source_to_canonical_only_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("axiom-arb.local.toml");
+    std::fs::write(&path, LEGACY_TARGET_SOURCE_REWRITE_CONFIG).unwrap();
+
+    rewrite_operator_strategy_revision(&path, "strategy-rev-9").unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# preserve this comment"));
+    assert!(text.contains("[strategy_control]"));
+    assert!(text.contains("source = \"adopted\""));
+    assert!(text.contains("operator_strategy_revision = \"strategy-rev-9\""));
+    assert!(!text.contains("[negrisk.target_source]"));
+    assert!(!text.contains("operator_target_revision ="));
+    assert!(!text.contains("[[negrisk.targets]]"));
+    assert!(text.contains("[strategies.neg_risk.rollout]"));
+    assert!(text.contains("approved_scopes = [\"family-a\"]"));
+    assert!(text.contains("ready_scopes = [\"family-a\"]"));
+    assert!(text.contains("legacy_note = \"keep-me\""));
+    assert!(text.contains("[polymarket.source]"));
+    assert!(text.contains("[polymarket.account]"));
+
+    let raw = load_raw_config_from_path(&path).unwrap();
+    let validated = ValidatedConfig::new(raw.clone()).unwrap();
+    assert!(raw
+        .negrisk
+        .as_ref()
+        .and_then(|negrisk| negrisk.target_source.as_ref())
+        .is_none());
+    assert!(!raw
+        .negrisk
+        .as_ref()
+        .map(|negrisk| negrisk.targets.is_present())
+        .unwrap_or(false));
+    let rollout = raw
+        .strategies
+        .as_ref()
+        .and_then(|strategies| strategies.neg_risk.as_ref())
+        .and_then(|neg_risk| neg_risk.rollout.as_ref())
+        .expect("route-owned rollout should exist after rewrite");
+    assert_eq!(rollout.approved_scopes, vec!["family-a".to_owned()]);
+    assert_eq!(rollout.ready_scopes, vec!["family-a".to_owned()]);
+
+    let live = validated.for_app_live().unwrap();
+    assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-9"));
 }
 
 #[test]
