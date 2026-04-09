@@ -102,6 +102,19 @@ Recommended result shape:
 - `InvalidConfig`
   - contradictory or non-mappable control-plane input
 
+#### Persistence authority for canonical resolution
+
+Canonical adopted resolution should be strategy-shaped. The authoritative persistence inputs for steady-state canonical resolution are:
+
+- `strategy_adoption_provenance`
+- `adoptable_strategy_revisions`
+- `strategy_candidate_sets`
+- strategy-shaped run-session/runtime-progress fields when commands need active/configured control-plane state
+
+Legacy target-shaped persistence is not canonical control-plane truth after this rewrite. Existing target-shaped provenance/artifact tables may still be read only as migration input while converting old config or old persisted lineage into canonical strategy-shaped state, but steady-state command resolution should not depend on target-shaped fallback.
+
+This rewrite does not require a broad database schema rename. It does require persistence read-path cleanup so canonical resolution prefers strategy-shaped provenance/artifacts and treats target-shaped provenance as migration-only compatibility data.
+
 ### 2. Remove duplicated target-source detection
 
 Current target/control-plane source detection is duplicated across:
@@ -149,6 +162,26 @@ The rewrite should recognize and migrate these old shapes:
 - `[negrisk.target_source]`
 - `operator_target_revision`
 - explicit `[[negrisk.targets]]`
+
+#### Explicit `[[negrisk.targets]]` migration rules
+
+Legacy explicit targets must follow deterministic migration rules:
+
+- `targets = []`
+  - invalid legacy input
+  - not migratable
+  - fail closed
+- one or more explicit target rows
+  - migratable only if the full target set parses successfully under the current strict rules:
+    - every family has a `family_id`
+    - family ids are unique
+    - every member has `condition_id`, `token_id`, `price`, and `quantity`
+  - the full parsed target set is authoritative for migration
+  - the canonical `operator_strategy_revision` is synthesized deterministically from the full target-set digest, not from a partial row or first family
+
+Multi-row target sets are valid migration input if and only if they parse into one deterministic full target set. There is no per-row migration and no “pick the first target” fallback.
+
+At a mutation boundary, successful migration of explicit targets may also need to materialize or upsert canonical strategy-shaped provenance/artifacts so later canonical resolution can proceed without target-shaped fallback.
 
 ### Migration output
 
