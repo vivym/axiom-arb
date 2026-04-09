@@ -12,10 +12,11 @@ async fn l2_probe_fetch_open_orders_uses_current_data_orders_path() {
 
     let request = server.finish();
     assert!(request.starts_with("GET /data/orders HTTP/1.1"));
-    assert!(request.contains("poly-address: 0x1111111111111111111111111111111111111111"));
-    assert!(request.contains("poly-api-key: key-1"));
-    assert!(request.contains("poly-passphrase: pass-1"));
-    assert!(request.contains("poly-signature: "));
+    assert!(request.contains("poly_address: 0x1111111111111111111111111111111111111111"));
+    assert!(request.contains("poly_api_key: key-1"));
+    assert!(request.contains("poly_passphrase: pass-1"));
+    assert!(request.contains("poly_signature: "));
+    assert!(request.contains("poly_timestamp: "));
 }
 
 #[tokio::test]
@@ -28,9 +29,9 @@ async fn l2_probe_post_heartbeat_uses_current_heartbeat_path_and_body() {
     let request = server.finish();
     assert!(request.starts_with("POST /v1/heartbeats HTTP/1.1"));
     assert!(request.contains(r#""heartbeat_id":"hb-41""#));
-    assert!(request.contains("poly-address: 0x1111111111111111111111111111111111111111"));
-    assert!(request.contains("poly-api-key: key-1"));
-    assert!(request.contains("poly-passphrase: pass-1"));
+    assert!(request.contains("poly_address: 0x1111111111111111111111111111111111111111"));
+    assert!(request.contains("poly_api_key: key-1"));
+    assert!(request.contains("poly_passphrase: pass-1"));
 }
 
 #[tokio::test]

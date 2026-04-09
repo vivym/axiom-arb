@@ -8,11 +8,11 @@ use url::Url;
 use crate::errors::{PolymarketGatewayError, PolymarketGatewayErrorKind};
 
 const DEFAULT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const POLY_API_KEY: HeaderName = HeaderName::from_static("poly-api-key");
-const POLY_ADDRESS: HeaderName = HeaderName::from_static("poly-address");
-const POLY_PASSPHRASE: HeaderName = HeaderName::from_static("poly-passphrase");
-const POLY_SIGNATURE: HeaderName = HeaderName::from_static("poly-signature");
-const POLY_TIMESTAMP: HeaderName = HeaderName::from_static("poly-timestamp");
+const POLY_API_KEY: HeaderName = HeaderName::from_static("poly_api_key");
+const POLY_ADDRESS: HeaderName = HeaderName::from_static("poly_address");
+const POLY_PASSPHRASE: HeaderName = HeaderName::from_static("poly_passphrase");
+const POLY_SIGNATURE: HeaderName = HeaderName::from_static("poly_signature");
+const POLY_TIMESTAMP: HeaderName = HeaderName::from_static("poly_timestamp");
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PolymarketL2ProbeCredentials {
