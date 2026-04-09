@@ -875,13 +875,8 @@ fn live_view_accepts_operator_facing_live_fixture() {
         .expect("operator live fixture should validate");
 
     assert!(live.has_polymarket_account());
-    assert!(live.has_target_source());
-    assert_eq!(
-        live.target_source()
-            .expect("operator live fixture should include target source")
-            .operator_target_revision(),
-        Some("targets-rev-9")
-    );
+    assert!(!live.has_target_source());
+    assert_eq!(live.operator_strategy_revision(), Some("targets-rev-9"));
     assert!(!live.has_polymarket_source());
 }
 

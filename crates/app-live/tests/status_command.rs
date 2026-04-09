@@ -104,10 +104,10 @@ fn status_paper_mode_without_database_url_is_blocked() {
 }
 
 #[test]
-fn status_adopted_source_without_operator_target_revision_is_discovery_required() {
+fn status_adopted_source_without_operator_strategy_revision_is_blocked() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -120,13 +120,13 @@ fn status_adopted_source_without_operator_target_revision_is_discovery_required(
 
     let combined = cli::combined(&output);
     assert!(output.status.success(), "{combined}");
-    assert!(combined.contains("Mode: live"), "{combined}");
+    assert!(combined.contains("Readiness: blocked"), "{combined}");
     assert!(
-        combined.contains("Readiness: discovery-required"),
+        combined.contains("missing strategy_control.operator_strategy_revision"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live discover --config"),
+        combined.contains("Next: fix the blocking issue, then rerun app-live status --config"),
         "{combined}"
     );
 
@@ -276,7 +276,7 @@ fn status_adopted_source_with_mismatched_active_revision_is_restart_required() {
     );
     assert!(combined.contains("Rollout state: required"), "{combined}");
     assert!(
-        combined.contains("Reason: configured and active operator_target_revision differ; rollout must cover adopted families: family-a"),
+        combined.contains("Reason: configured and active operator_strategy_revision differ; rollout must cover adopted families: family-a"),
         "{combined}"
     );
     assert!(combined.contains("Next: edit "), "{combined}");
@@ -319,7 +319,7 @@ fn status_restart_required_preserves_ready_rollout_state_when_rollout_is_already
     );
     assert!(combined.contains("Rollout state: ready"), "{combined}");
     assert!(
-        combined.contains("Reason: configured and active operator_target_revision differ; adopted families are covered by rollout: family-a"),
+        combined.contains("Reason: configured and active operator_strategy_revision differ; adopted families are covered by rollout: family-a"),
         "{combined}"
     );
     assert!(
@@ -456,8 +456,8 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
         startup_target_revision_at_start: "targets-rev-9".to_owned(),
         configured_operator_target_revision: Some("targets-rev-9".to_owned()),
         active_operator_target_revision_at_start: Some("targets-rev-8".to_owned()),
-        configured_operator_strategy_revision: None,
-        active_operator_strategy_revision_at_start: None,
+        configured_operator_strategy_revision: Some("targets-rev-9".to_owned()),
+        active_operator_strategy_revision_at_start: Some("targets-rev-8".to_owned()),
         rollout_state_at_start: Some("required".to_owned()),
         real_user_shadow_smoke: false,
     });
@@ -474,11 +474,11 @@ fn status_restart_required_does_not_duplicate_the_same_run_session_as_conflictin
     let combined = cli::combined(&output);
     assert!(output.status.success(), "{combined}");
     assert!(
-        combined.contains("Relevant run session: rs-same"),
+        !combined.contains("Relevant run session: rs-same"),
         "{combined}"
     );
     assert!(
-        !combined.contains("Conflicting active run session: rs-same"),
+        combined.contains("Conflicting active run session: rs-same"),
         "{combined}"
     );
 
@@ -521,7 +521,7 @@ fn status_pure_neutral_adopted_config_with_distinct_strategy_revision_matches_re
     let database = TestDatabase::new();
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         config.replace(
-            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"targets-rev-9\"",
             "operator_strategy_revision = \"strategy-rev-12\"",
         )
     });
@@ -568,7 +568,7 @@ fn status_pure_neutral_adopted_config_with_missing_strategy_provenance_reports_s
     let database = TestDatabase::new();
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         config.replace(
-            "operator_target_revision = \"targets-rev-9\"",
+            "operator_strategy_revision = \"targets-rev-9\"",
             "operator_strategy_revision = \"strategy-rev-missing\"",
         )
     });
@@ -599,7 +599,7 @@ fn status_pure_neutral_adopted_config_with_missing_strategy_provenance_reports_s
 fn status_pure_neutral_adopted_config_without_operator_strategy_revision_is_blocked() {
     let database = TestDatabase::new();
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -636,7 +636,7 @@ fn status_pure_neutral_adopted_config_prefers_active_strategy_anchor_for_restart
     let config = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
         config
             .replace(
-                "operator_target_revision = \"targets-rev-9\"",
+                "operator_strategy_revision = \"targets-rev-9\"",
                 "operator_strategy_revision = \"strategy-rev-12\"",
             )
             .replace("approved_scopes = []", "approved_scopes = [\"family-a\"]")
@@ -674,7 +674,7 @@ fn status_pure_neutral_adopted_config_prefers_active_strategy_anchor_for_restart
         "{combined}"
     );
     assert!(
-        !combined.contains("configured and active operator_target_revision differ"),
+        !combined.contains("configured and active operator_strategy_revision differ"),
         "{combined}"
     );
 
@@ -1325,7 +1325,7 @@ static NEXT_TEMP_CONFIG_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 fn compatibility_mode_live_config_path() -> PathBuf {
     temp_config_fixture_path("app-live-ux-live.toml", |config| {
         let without_target_source = config.replace(
-            "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
+            "[strategy_control]\nsource = \"adopted\"\noperator_strategy_revision = \"targets-rev-9\"\n",
             "",
         );
         format!(

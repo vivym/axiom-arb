@@ -83,10 +83,10 @@ fn apply_live_config_no_longer_returns_generic_unsupported_error() {
 }
 
 #[test]
-fn apply_live_discovery_required_stops_with_discover_guidance() {
+fn apply_live_missing_strategy_anchor_stops_with_blocking_guidance() {
     let database = TestDatabase::new();
     let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        config.replace("operator_target_revision = \"targets-rev-9\"\n", "")
+        config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "")
     });
 
     let output = Command::new(cli::app_live_binary())
@@ -95,14 +95,20 @@ fn apply_live_discovery_required_stops_with_discover_guidance() {
         .arg(&config_path)
         .env("DATABASE_URL", database.database_url())
         .output()
-        .expect("app-live apply should execute for live discovery required");
+        .expect("app-live apply should execute for live config missing strategy anchor");
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("Execution"), "{text}");
+    assert!(text.contains("Readiness: blocked"), "{text}");
+    assert!(
+        text.contains("missing strategy_control.operator_strategy_revision"),
+        "{text}"
+    );
     assert!(text.contains("Stopping before doctor preflight."), "{text}");
-    assert!(text.contains("discovery-required"), "{text}");
-    assert!(text.contains("app-live discover --config"), "{text}");
+    assert!(
+        text.contains("fix the blocking issue, then rerun app-live status --config"),
+        "{text}"
+    );
     assert!(!text.contains("status -> doctor -> run"), "{text}");
 
     database.cleanup();
@@ -731,7 +737,10 @@ fn apply_live_config_ready_with_start_blocks_when_matching_active_run_session_is
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("Current State"), "{text}");
-    assert!(text.contains("Relevant run session: rs-active"), "{text}");
+    assert!(
+        text.contains("Conflicting active run session: rs-active"),
+        "{text}"
+    );
     assert!(text.contains("Blocked"), "{text}");
     assert!(
         text.contains("resolve the existing runtime outside apply"),

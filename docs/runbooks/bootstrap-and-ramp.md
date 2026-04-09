@@ -29,10 +29,10 @@ Run replay against the same config file:
 cargo run -p app-replay -- --config config/axiom-arb.local.toml --from-seq 0 --limit 1000
 ```
 
-The sequence below is the operational posture to preserve during launch and ramp. Use it as the runbook for bringing the daemon up safely, validating reconcile truth first, and deciding when a session is clean enough to widen risk. For the adopted-target startup path, the operator should not hand-author raw `negrisk.targets` members; `doctor` and `run` should resolve the adopted target revision from the config model.
-When no rollout is present yet, keep the rollout lists empty in the generated config and let the Day 0 flow surface the next step truthfully. `discover` persists advisory and adoptable artifacts only. `targets adopt` writes `operator_target_revision`, canonical adoption provenance, and adoption history; it does not fill `approved_families` or `ready_families`.
+The sequence below is the operational posture to preserve during launch and ramp. Use it as the runbook for bringing the daemon up safely, validating reconcile truth first, and deciding when a session is clean enough to widen risk. For the adopted-strategy startup path, the operator should not hand-author raw migration-only target input; `doctor` and `run` should resolve the adopted strategy revision from the canonical config model.
+When no rollout is present yet, keep the rollout lists empty in the generated config and let the Day 0 flow surface the next step truthfully. `discover` persists advisory and adoptable artifacts only. `targets adopt` writes `operator_strategy_revision`, canonical adoption provenance, and adoption history; it does not fill `approved_families` or `ready_families`.
 
-Use the target control-plane commands instead of editing `[negrisk.target_source].operator_target_revision` by hand:
+Use the strategy control-plane commands instead of editing `[strategy_control].operator_strategy_revision` by hand:
 
 ```bash
 cargo run -p app-live -- targets candidates --config config/axiom-arb.local.toml
@@ -50,10 +50,10 @@ cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml
 or an explicit rollback target:
 
 ```bash
-cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml --to-operator-target-revision <operator-target-revision>
+cargo run -p app-live -- targets rollback --config config/axiom-arb.local.toml --to-operator-strategy-revision <operator-strategy-revision>
 ```
 
-Both `targets adopt` and `targets rollback` rewrite the configured `operator_target_revision` in the TOML and append adoption history, but they remain startup-scoped. They do not hot-reload a running daemon, so a controlled restart may still be required before the new revision becomes active.
+Both `targets adopt` and `targets rollback` rewrite the configured `operator_strategy_revision` in the TOML and append adoption history, but they remain startup-scoped. They do not hot-reload a running daemon, so a controlled restart may still be required before the new revision becomes active.
 
 ## Target Bootstrap Sequence
 

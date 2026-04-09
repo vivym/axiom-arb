@@ -11,6 +11,6 @@ api_key = "poly-api-key"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
 
-[negrisk.target_source]
+[strategy_control]
 source = "adopted"
-operator_target_revision = "targets-rev-9"
+operator_strategy_revision = "targets-rev-9"

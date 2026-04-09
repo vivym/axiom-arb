@@ -97,7 +97,7 @@ fn run_live_input_reports_provenance_chain_failure_and_not_compatibility() {
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
     assert!(
-        text.contains("could not be linked back to a candidate adoption provenance chain"),
+        text.contains("could not be linked back to a strategy adoption provenance chain"),
         "{text}"
     );
     assert!(!text.contains("compatibility"), "{text}");

@@ -102,14 +102,12 @@ fn render_live_summary(summary: InitSummary<'_>) -> WizardSummary {
             "negrisk rollout is still empty, so negrisk work remains inactive until you adopt candidates."
                 .to_string(),
         );
+    } else if summary.render_canonical_strategy_control {
+        lines.push("approved_scopes = [..existing..]".to_string());
+        lines.push("ready_scopes = [..existing..]".to_string());
     } else {
-        if summary.render_canonical_strategy_control {
-            lines.push("approved_scopes = [..existing..]".to_string());
-            lines.push("ready_scopes = [..existing..]".to_string());
-        } else {
-            lines.push("approved_families = [..existing..]".to_string());
-            lines.push("ready_families = [..existing..]".to_string());
-        }
+        lines.push("approved_families = [..existing..]".to_string());
+        lines.push("ready_families = [..existing..]".to_string());
     }
 
     let mut next_steps = vec![format!("app-live doctor --config {quoted_config_path}")];

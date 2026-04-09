@@ -69,6 +69,8 @@ fn operator_docs_stop_teaching_compatibility_mode_and_target_source_aliases() {
         .expect("smoke runbook should load");
     let adoption = fs::read_to_string(repo_root.join("docs/runbooks/operator-target-adoption.md"))
         .expect("adoption runbook should load");
+    let bootstrap = fs::read_to_string(repo_root.join("docs/runbooks/bootstrap-and-ramp.md"))
+        .expect("bootstrap runbook should load");
 
     assert!(!readme.contains("--adopt-compatibility"), "{readme}");
     assert!(!readme.contains("compatibility mode"), "{readme}");
@@ -76,6 +78,15 @@ fn operator_docs_stop_teaching_compatibility_mode_and_target_source_aliases() {
     assert!(!smoke.contains("[[negrisk.targets]]"), "{smoke}");
     assert!(!adoption.contains("[negrisk.target_source]"), "{adoption}");
     assert!(!adoption.contains("operator_target_revision"), "{adoption}");
+    assert!(
+        !bootstrap.contains("[negrisk.target_source]"),
+        "{bootstrap}"
+    );
+    assert!(
+        !bootstrap.contains("operator_target_revision"),
+        "{bootstrap}"
+    );
+    assert!(!bootstrap.contains("[[negrisk.targets]]"), "{bootstrap}");
 }
 
 #[test]

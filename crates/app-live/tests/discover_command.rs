@@ -38,7 +38,7 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_smoke_config() {
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::spawn();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
@@ -111,7 +111,7 @@ fn discover_uses_sdk_metadata_client_without_outbound_proxy() {
         then.status(200).json_body(serde_json::json!([]));
     });
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_discover_venue_hosts(config, venue.base_url().as_str())
     });
 
@@ -139,7 +139,7 @@ fn discover_materializes_candidate_and_adoptable_artifacts_from_live_adopted_con
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::spawn();
     let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         let config = format!(
             "{config}\n[polymarket.source_overrides]\nclob_host = \"https://clob.polymarket.com\"\ndata_api_host = \"https://gamma-api.polymarket.com\"\nrelayer_host = \"https://relayer-v2.polymarket.com\"\nmarket_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"\nuser_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"\nheartbeat_interval_seconds = 15\nrelayer_poll_interval_seconds = 5\nmetadata_refresh_interval_seconds = 60\n"
         );
@@ -176,7 +176,7 @@ fn discover_live_eoa_config_without_relayer_auth_still_materializes_artifacts() 
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::spawn();
     let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         let config = format!(
             "{config}\n[polymarket.source_overrides]\nclob_host = \"https://clob.polymarket.com\"\ndata_api_host = \"https://gamma-api.polymarket.com\"\nrelayer_host = \"https://relayer-v2.polymarket.com\"\nmarket_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"\nuser_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"\nheartbeat_interval_seconds = 15\nrelayer_poll_interval_seconds = 5\nmetadata_refresh_interval_seconds = 60\n"
         );
@@ -210,7 +210,7 @@ fn discover_noop_rediscovery_reuses_strategy_bundle_identity() {
         page_two_empty(),
     ]);
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
@@ -259,7 +259,7 @@ fn discover_reports_route_local_diffs_to_stdout_when_bundle_changes() {
         page_two_empty(),
     ]);
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
@@ -318,7 +318,7 @@ fn discover_diffs_against_immediately_previous_refresh_even_when_bundle_identity
         page_two_empty(),
     ]);
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
@@ -398,7 +398,7 @@ fn discover_keeps_full_set_route_digest_stable_when_neg_risk_metadata_changes() 
         page_two_empty(),
     ]);
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
@@ -457,7 +457,7 @@ fn discover_emits_debug_logs_when_rust_log_requests_them() {
     let database = discover_db::TestDatabase::new();
     let venue = MockDiscoverVenue::spawn();
     let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
-        let config = config.replace("operator_target_revision = \"targets-rev-9\"\n", "");
+        let config = config.replace("operator_strategy_revision = \"targets-rev-9\"\n", "");
         with_mock_discover_venue(config, &venue)
     });
 
