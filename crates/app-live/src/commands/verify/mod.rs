@@ -451,8 +451,8 @@ fn evaluate_smoke_outcome(
         .iter()
         .filter(|row| matches!(row.attempt.execution_mode, domain::ExecutionMode::Shadow))
         .count();
-    let has_run_evidence =
-        selected_shadow_attempt_count > 0 || !evidence.replay_shadow_attempt_artifacts.is_empty();
+    let replay_shadow_attempt_count = replay_shadow_attempt_count(evidence);
+    let has_run_evidence = selected_shadow_attempt_count > 0 || replay_shadow_attempt_count > 0;
     let has_consistent_shadow_artifacts = shadow_attempts_have_consistent_artifacts(evidence);
     let live_side_effect_count = smoke_live_attempt_count(evidence)
         + evidence
@@ -485,11 +485,16 @@ fn evaluate_smoke_outcome(
     }
 
     if has_consistent_shadow_artifacts {
+        let credible_shadow_attempt_count = if selected_shadow_attempt_count > 0 {
+            selected_shadow_attempt_count
+        } else {
+            replay_shadow_attempt_count
+        };
         return (
             model::VerifyVerdict::Pass,
             Some(format!(
                 "shadow smoke evidence is complete; shadow attempts: {}",
-                selected_shadow_attempt_count
+                credible_shadow_attempt_count
             )),
             next_actions_from_context(verify_context, &["run app-live status --config {config}"]),
         );
@@ -841,10 +846,6 @@ fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidence
         .map(|row| row.attempt.attempt_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
 
-    if shadow_attempt_ids.is_empty() {
-        return false;
-    }
-
     let shadow_artifact_attempt_ids = evidence
         .shadow_artifacts
         .iter()
@@ -857,10 +858,24 @@ fn shadow_attempts_have_consistent_artifacts(evidence: &evidence::VerifyEvidence
         .map(|row| row.attempt.attempt_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
 
+    if shadow_attempt_ids.is_empty() {
+        return !replay_shadow_artifact_attempt_ids.is_empty();
+    }
+
     shadow_attempt_ids.iter().all(|attempt_id| {
         shadow_artifact_attempt_ids.contains(attempt_id)
             || replay_shadow_artifact_attempt_ids.contains(attempt_id)
     })
+}
+
+fn replay_shadow_attempt_count(evidence: &evidence::VerifyEvidenceWindow) -> usize {
+    evidence
+        .replay_shadow_attempt_artifacts
+        .iter()
+        .filter(|row| !row.artifacts.is_empty())
+        .map(|row| row.attempt.attempt_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 fn render_context_line(label: &str, value: Option<&str>) {
@@ -1046,6 +1061,7 @@ fn shell_quote(value: String) -> String {
 mod tests {
     use std::path::Path;
 
+    use app_replay::NegRiskShadowAttemptArtifacts;
     use super::{
         context::{ConfigAnchorComparison, VerifyContext},
         evaluate_foundation_outcome,
@@ -1060,7 +1076,9 @@ mod tests {
     use crate::commands::status::model::{StatusAction, StatusReadiness};
     use chrono::Utc;
     use domain::ExecutionMode;
-    use persistence::models::{ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow};
+    use persistence::models::{
+        ExecutionAttemptRow, ExecutionAttemptWithCreatedAtRow, ShadowExecutionArtifactRow,
+    };
 
     #[test]
     fn render_report_renders_populated_content_and_quotes_config_paths() {
@@ -1217,6 +1235,32 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("contradictory local outcomes"));
+    }
+
+    #[test]
+    fn smoke_verify_accepts_replay_shadow_evidence_without_selected_attempt_rows() {
+        let context = verify_context(
+            VerifyScenario::RealUserShadowSmoke,
+            VerifyExpectation::SmokeShadowOnly,
+            VerifyControlPlaneMode::RealUserShadowSmoke,
+            Some(StatusReadiness::SmokeConfigReady),
+            vec![StatusAction::RunDoctor],
+        );
+        let evidence = VerifyEvidenceWindow {
+            replay_shadow_attempt_artifacts: vec![replay_shadow_attempt_artifacts(
+                "attempt-shadow-replay-1",
+            )],
+            ..VerifyEvidenceWindow::default()
+        };
+
+        let (verdict, reason, _next_actions) =
+            evaluate_foundation_outcome(&context, &comparable_anchor(), &evidence);
+
+        assert_eq!(verdict, VerifyVerdict::Pass);
+        assert!(reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("shadow smoke evidence is complete"));
     }
 
     #[test]
@@ -1435,6 +1479,31 @@ mod tests {
                 run_session_id: None,
             },
             created_at: Utc::now(),
+        }
+    }
+
+    fn replay_shadow_attempt_artifacts(attempt_id: &str) -> NegRiskShadowAttemptArtifacts {
+        NegRiskShadowAttemptArtifacts {
+            attempt: ExecutionAttemptRow {
+                attempt_id: attempt_id.to_owned(),
+                plan_id: "plan-1".to_owned(),
+                snapshot_id: "snapshot-1".to_owned(),
+                route: "neg-risk".to_owned(),
+                scope: "scope-1".to_owned(),
+                matched_rule_id: None,
+                execution_mode: ExecutionMode::Shadow,
+                attempt_no: 1,
+                idempotency_key: format!("{attempt_id}-idem"),
+                run_session_id: None,
+            },
+            artifacts: vec![ShadowExecutionArtifactRow {
+                attempt_id: attempt_id.to_owned(),
+                stream: "neg-risk-shadow-plan".to_owned(),
+                payload: serde_json::json!({
+                    "attempt_id": attempt_id,
+                    "scope": "scope-1",
+                }),
+            }],
         }
     }
 
