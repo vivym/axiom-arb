@@ -863,6 +863,35 @@ fn verify_smoke_passes_when_shadow_only_evidence_is_complete() {
 }
 
 #[test]
+fn verify_strategy_control_smoke_does_not_warn_for_active_routes_without_local_evidence() {
+    let verify_db = verify_db::TestDatabase::new();
+    verify_db.seed_adopted_strategy_revision_with_routes("strategy-rev-smoke-1", true);
+    verify_db.seed_strategy_runtime_progress("strategy-rev-smoke-1");
+    verify_db.seed_shadow_attempt_with_artifacts("attempt-shadow-strategy-smoke-1");
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-strategy-control-smoke-routes",
+        &verify_db::config_shapes::smoke_ready_strategy_config_for("strategy-rev-smoke-1"),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("Scenario: real-user shadow smoke"), "{text}");
+    assert!(text.contains("Verdict: PASS"), "{text}");
+    assert!(text.contains("Route neg-risk: PASS"), "{text}");
+    assert!(!text.contains("Route full-set"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_smoke_fails_when_a_durable_live_attempt_is_present_outside_the_shadow_attempt_window() {
     let verify_db = verify_db::TestDatabase::new();
     verify_db.seed_shadow_attempt_with_artifacts_in_snapshot("attempt-shadow-1", "snapshot-smoke");

@@ -38,14 +38,14 @@ pub fn evaluate(
                 report.push_check(
                     "Runtime Safety",
                     DoctorCheckStatus::Pass,
-                    "startup will request the shadow-only neg-risk posture",
+                    "startup will request the shadow posture for risk-expanding routes",
                     "",
                 );
             } else {
                 report.push_check(
                     "Runtime Safety",
                     DoctorCheckStatus::Skip,
-                    "shadow-only neg-risk posture not requested in non-smoke mode",
+                    "shadow posture for risk-expanding routes not requested in non-smoke mode",
                     "",
                 );
             }

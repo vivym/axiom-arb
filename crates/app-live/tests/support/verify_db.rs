@@ -506,6 +506,48 @@ pub fn live_ready_strategy_config() -> String {
     live_ready_strategy_config_for("strategy-rev-12")
 }
 
+pub fn smoke_ready_strategy_config_for(operator_strategy_revision: &str) -> String {
+    format!(
+        r#"[runtime]
+mode = "live"
+real_user_shadow_smoke = true
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[polymarket.source_overrides]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "{operator_strategy_revision}"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
+"#
+    )
+}
+
 pub fn live_ready_strategy_config_for(operator_strategy_revision: &str) -> String {
     format!(
         r#"[runtime]
@@ -667,6 +709,10 @@ pub mod config_shapes {
 
     pub fn live_ready_strategy_config() -> String {
         super::live_ready_strategy_config()
+    }
+
+    pub fn smoke_ready_strategy_config_for(operator_strategy_revision: &str) -> String {
+        super::smoke_ready_strategy_config_for(operator_strategy_revision)
     }
 
     pub fn live_ready_strategy_config_for(operator_strategy_revision: &str) -> String {

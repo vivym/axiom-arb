@@ -286,10 +286,17 @@ fn route_verdict_reports(
 
     evidence::routes_to_evaluate(evidence, &verify_context.active_routes)
         .into_iter()
-        .map(|route| {
+        .filter_map(|route| {
             let route_evidence = evidence::window_for_route(evidence, &route);
+            let has_local_evidence = evidence::route_has_local_evidence(&route_evidence);
+            if !has_local_evidence
+                && matches!(mode, model::VerifyControlPlaneMode::RealUserShadowSmoke)
+            {
+                return None;
+            }
+
             let (verdict, reason, _next_actions) =
-                if evidence::route_has_local_evidence(&route_evidence) {
+                if has_local_evidence {
                     match mode {
                         model::VerifyControlPlaneMode::Live => {
                             evaluate_live_outcome(verify_context, &route_evidence)
@@ -314,11 +321,11 @@ fn route_verdict_reports(
                     )
                 };
 
-            RouteVerdictReport {
+            Some(RouteVerdictReport {
                 route,
                 verdict,
                 reason,
-            }
+            })
         })
         .collect()
 }
