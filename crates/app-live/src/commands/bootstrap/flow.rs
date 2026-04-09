@@ -14,8 +14,8 @@ use crate::commands::{
         state::{load_target_candidates_catalog, summarize_target_candidates},
     },
 };
-use crate::strategy_control::migrate_legacy_strategy_control;
 use crate::startup;
+use crate::strategy_control::migrate_legacy_strategy_control;
 
 use super::{
     error::{BootstrapError, SmokeFollowUp},

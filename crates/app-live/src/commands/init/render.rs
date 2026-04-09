@@ -262,7 +262,8 @@ fn merge_existing_control_plane(raw: &mut RawAxiomConfig, existing_config: &RawA
             .as_mut()
             .and_then(|negrisk| negrisk.target_source.as_mut()),
     ) {
-        target_source.operator_target_revision = existing_target_source.operator_target_revision.clone();
+        target_source.operator_target_revision =
+            existing_target_source.operator_target_revision.clone();
     }
 
     if let Some(existing_rollout) = &existing_negrisk.rollout {

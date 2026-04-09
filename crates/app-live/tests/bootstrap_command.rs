@@ -242,6 +242,50 @@ fn bootstrap_already_adopted_smoke_path_falls_through_to_doctor_and_rollout() {
     let _ = fs::remove_file(config_path);
 }
 
+#[test]
+fn bootstrap_legacy_explicit_targets_auto_migrates_to_canonical_strategy_control_without_compatibility_ux(
+) {
+    let database = apply_db::TestDatabase::new();
+    let venue = MockDoctorVenue::success();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        with_mock_doctor_venue(with_legacy_explicit_smoke_targets(config), &venue)
+    });
+
+    let output =
+        run_bootstrap_with_stdin(&config_path, database.database_url(), "preflight-only\n");
+
+    let text = cli::combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("Config: PASS"), "{text}");
+    assert!(text.contains("Connectivity: PASS"), "{text}");
+    assert!(
+        text.contains("Smoke bootstrap reached preflight-ready smoke startup"),
+        "{text}"
+    );
+    assert!(!text.contains("compatibility mode"), "{text}");
+    assert!(!text.contains("--adopt-compatibility"), "{text}");
+    assert!(!text.contains("targets adopt"), "{text}");
+
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(rewritten.contains("[strategy_control]"), "{rewritten}");
+    assert!(
+        rewritten.contains("operator_strategy_revision = \"strategy-rev-"),
+        "{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("[negrisk.target_source]"),
+        "{rewritten}"
+    );
+    assert!(!rewritten.contains("[[negrisk.targets]]"), "{rewritten}");
+    assert!(
+        !rewritten.contains("operator_target_revision ="),
+        "{rewritten}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
 fn temp_smoke_config_path(edit: impl FnOnce(String) -> String) -> PathBuf {
     let source = cli::config_fixture("app-live-ux-smoke.toml");
     let text = fs::read_to_string(&source).expect("fixture should be readable");
@@ -376,6 +420,39 @@ fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
     target_source.remove("operator_target_revision");
 
     document.to_string()
+}
+
+fn with_legacy_explicit_smoke_targets(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("smoke config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("[negrisk] should be a table");
+    negrisk.remove("target_source");
+
+    let mut rendered = document.to_string();
+    rendered.push_str(
+        r#"
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
+token_id = "29"
+price = "0.43"
+quantity = "5"
+"#,
+    );
+    rendered
 }
 
 fn with_unreachable_discover_venue(config: String) -> String {

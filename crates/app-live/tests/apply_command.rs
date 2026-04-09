@@ -56,22 +56,20 @@ fn apply_rejects_non_smoke_config_with_specific_guidance() {
         .expect("app-live apply should execute for live config");
     let live_text = cli::combined(&live_output);
     assert!(!live_output.status.success(), "{live_text}");
-    assert!(live_text.contains("compatibility mode"), "{live_text}");
-    assert!(
-        live_text.contains("app-live targets adopt --config"),
-        "{live_text}"
-    );
-    assert!(live_text.contains("--adopt-compatibility"), "{live_text}");
+    assert!(live_text.contains("DATABASE_URL"), "{live_text}");
+    assert!(!live_text.contains("compatibility mode"), "{live_text}");
+    assert!(!live_text.contains("--adopt-compatibility"), "{live_text}");
 
     let _ = fs::remove_file(live_config);
 }
 
 #[test]
 fn apply_live_config_no_longer_returns_generic_unsupported_error() {
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| config);
     let output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
-        .arg(cli::config_fixture("app-live-ux-live.toml"))
+        .arg(&config_path)
         .env_remove("DATABASE_URL")
         .output()
         .expect("app-live apply should execute for adopted live config");
@@ -80,6 +78,8 @@ fn apply_live_config_no_longer_returns_generic_unsupported_error() {
     assert!(!output.status.success(), "{text}");
     assert!(text.contains("DATABASE_URL"), "{text}");
     assert!(!text.contains("status -> doctor -> run"), "{text}");
+
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
@@ -113,12 +113,12 @@ fn apply_live_discovery_required_stops_with_discover_guidance() {
 fn apply_live_rollout_required_stops_before_doctor_or_run() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", None);
-    let config = cli::config_fixture("app-live-ux-live.toml");
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| config);
 
     let output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
-        .arg(&config)
+        .arg(&config_path)
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live apply should execute for live rollout required");
@@ -136,18 +136,19 @@ fn apply_live_rollout_required_stops_before_doctor_or_run() {
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
 fn apply_live_restart_required_with_rollout_missing_stops_before_doctor_or_run() {
     let database = TestDatabase::new();
     database.seed_adopted_target_with_active_revision("targets-rev-9", Some("targets-rev-8"));
-    let config = cli::config_fixture("app-live-ux-live.toml");
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| config);
 
     let output = app_live_command()
         .arg("apply")
         .arg("--config")
-        .arg(&config)
+        .arg(&config_path)
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live apply should execute for live restart required with rollout missing");
@@ -166,18 +167,19 @@ fn apply_live_restart_required_with_rollout_missing_stops_before_doctor_or_run()
     assert!(!text.contains("app-live bootstrap complete"), "{text}");
 
     database.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
 fn apply_live_generic_blocked_stops_with_existing_blocking_guidance() {
     let database = TestDatabase::new();
     database.seed_adopted_target_without_provenance("targets-rev-9");
-    let config = cli::config_fixture("app-live-ux-live.toml");
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| config);
 
     let output = Command::new(cli::app_live_binary())
         .arg("apply")
         .arg("--config")
-        .arg(&config)
+        .arg(&config_path)
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live apply should execute for live blocked readiness");
@@ -192,28 +194,50 @@ fn apply_live_generic_blocked_stops_with_existing_blocking_guidance() {
     assert!(!text.contains("status -> doctor -> run"), "{text}");
 
     database.cleanup();
+    let _ = fs::remove_file(config_path);
 }
 
 #[test]
-fn apply_live_legacy_explicit_targets_require_explicit_compatibility_migration() {
-    let config_path = compatibility_mode_live_config_path();
-    let output = Command::new(cli::app_live_binary())
-        .arg("apply")
-        .arg("--config")
-        .arg(&config_path)
-        .output()
-        .expect("app-live apply should execute for legacy explicit live config");
+fn apply_legacy_explicit_targets_auto_migrates_to_canonical_strategy_control_without_compatibility_ux(
+) {
+    let database = apply_db::TestDatabase::new();
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", |config| {
+        with_legacy_explicit_smoke_targets(config)
+    });
+
+    let output = run_apply_with_stdin(&config_path, database.database_url(), "decline\n", true);
 
     let text = cli::combined(&output);
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("compatibility mode"), "{text}");
-    assert!(text.contains("app-live targets adopt --config"), "{text}");
-    assert!(text.contains("--adopt-compatibility"), "{text}");
     assert!(
-        !text.contains("fix the blocking issue, then rerun app-live status --config"),
+        text.contains("Smoke rollout readiness is not enabled"),
         "{text}"
     );
+    assert!(
+        text.contains("inline smoke rollout enablement declined"),
+        "{text}"
+    );
+    assert!(!text.contains("compatibility mode"), "{text}");
+    assert!(!text.contains("--adopt-compatibility"), "{text}");
+    assert!(!text.contains("app-live targets adopt --config"), "{text}");
 
+    let rewritten = fs::read_to_string(&config_path).expect("rewritten config should load");
+    assert!(rewritten.contains("[strategy_control]"), "{rewritten}");
+    assert!(
+        rewritten.contains("operator_strategy_revision = \"strategy-rev-"),
+        "{rewritten}"
+    );
+    assert!(
+        !rewritten.contains("[negrisk.target_source]"),
+        "{rewritten}"
+    );
+    assert!(!rewritten.contains("[[negrisk.targets]]"), "{rewritten}");
+    assert!(
+        !rewritten.contains("operator_target_revision ="),
+        "{rewritten}"
+    );
+
+    database.cleanup();
     let _ = fs::remove_file(config_path);
 }
 
@@ -1554,6 +1578,39 @@ fn with_legacy_smoke_target_source_without_revision(config: String) -> String {
     target_source.remove("operator_target_revision");
 
     document.to_string()
+}
+
+fn with_legacy_explicit_smoke_targets(config: String) -> String {
+    let mut document = config
+        .parse::<DocumentMut>()
+        .expect("config fixture should parse as TOML");
+    let root = document.as_table_mut();
+    root.remove("strategy_control");
+    if root.get("negrisk").is_none() {
+        root.insert("negrisk", table());
+    }
+    let negrisk = root
+        .get_mut("negrisk")
+        .expect("config fixture should contain [negrisk]")
+        .as_table_like_mut()
+        .expect("config fixture should contain [negrisk]");
+    negrisk.remove("target_source");
+
+    let mut rendered = document.to_string();
+    rendered.push_str(
+        r#"
+
+[[negrisk.targets]]
+family_id = "family-a"
+
+[[negrisk.targets.members]]
+condition_id = "condition-1"
+token_id = "token-1"
+price = "0.43"
+quantity = "5"
+"#,
+    );
+    rendered
 }
 
 fn live_run_session(

@@ -126,8 +126,7 @@ ready_scopes = ["family-b"]
         .and_then(|neg_risk| neg_risk.rollout.as_ref())
         .expect("route-owned rollout should exist");
     assert!(
-        !raw
-            .strategies
+        !raw.strategies
             .as_ref()
             .and_then(|strategies| strategies.neg_risk.as_ref())
             .map(|neg_risk| neg_risk.enabled)

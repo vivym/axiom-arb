@@ -15,8 +15,8 @@ use crate::commands::{
         adopt, config_file::rewrite_smoke_rollout_families, state::load_target_candidates_catalog,
     },
 };
-use crate::strategy_control::migrate_legacy_strategy_control;
 use crate::startup;
+use crate::strategy_control::migrate_legacy_strategy_control;
 
 pub mod model;
 mod output;
