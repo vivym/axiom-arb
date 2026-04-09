@@ -237,6 +237,10 @@ impl<'a> AppLiveConfigView<'a> {
             return matches!(target_source.source, NegRiskTargetSourceKindToml::Adopted);
         }
 
+        self.has_canonical_strategy_control()
+    }
+
+    pub fn has_canonical_strategy_control(&self) -> bool {
         self.raw
             .strategy_control
             .as_ref()
@@ -251,17 +255,24 @@ impl<'a> AppLiveConfigView<'a> {
             return None;
         }
 
+        self.canonical_operator_strategy_revision().or_else(|| {
+            self.raw
+                .negrisk
+                .as_ref()
+                .and_then(|negrisk| negrisk.target_source.as_ref())
+                .and_then(|target_source| target_source.operator_target_revision.as_deref())
+        })
+    }
+
+    pub fn canonical_operator_strategy_revision(&self) -> Option<&'a str> {
+        if self.is_legacy_explicit_strategy_config() {
+            return None;
+        }
+
         self.raw
             .strategy_control
             .as_ref()
             .and_then(|strategy_control| strategy_control.operator_strategy_revision.as_deref())
-            .or_else(|| {
-                self.raw
-                    .negrisk
-                    .as_ref()
-                    .and_then(|negrisk| negrisk.target_source.as_ref())
-                    .and_then(|target_source| target_source.operator_target_revision.as_deref())
-            })
     }
 
     pub fn is_legacy_explicit_strategy_config(&self) -> bool {
@@ -599,8 +610,16 @@ fn require_strategy_control_or_legacy_target_source(
         return Ok(());
     }
 
+    if raw
+        .negrisk
+        .as_ref()
+        .is_some_and(|negrisk| negrisk.targets.is_present())
+    {
+        return Ok(());
+    }
+
     Err(validation_error(
-        "missing required section: strategy_control or negrisk.target_source",
+        "missing required section: strategy_control, negrisk.target_source, or explicit negrisk.targets",
     ))
 }
 

@@ -105,3 +105,32 @@ ready_families = ["family-b"]
     assert!(text.contains("approved_families = [\"family-a\"]"));
     assert!(text.contains("ready_families = [\"family-b\"]"));
 }
+
+#[test]
+fn raw_config_round_trips_present_empty_targets_array_for_legacy_detection() {
+    let raw = load_raw_config_from_str(
+        r#"
+[runtime]
+mode = "live"
+
+[negrisk]
+targets = []
+"#,
+    )
+    .unwrap();
+
+    let text = render_raw_config_to_string(&raw).unwrap();
+    assert!(text.contains("targets = []"));
+    assert!(raw
+        .negrisk
+        .as_ref()
+        .expect("negrisk should be present")
+        .targets
+        .is_present());
+    assert!(raw
+        .negrisk
+        .as_ref()
+        .expect("negrisk should be present")
+        .targets
+        .is_empty());
+}

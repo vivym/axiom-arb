@@ -34,6 +34,10 @@ operator_target_revision = "targets-rev-9"
             .operator_target_revision(),
         Some("targets-rev-9")
     );
+    assert!(live.has_adopted_strategy_source());
+    assert_eq!(live.operator_strategy_revision(), Some("targets-rev-9"));
+    assert!(!live.has_canonical_strategy_control());
+    assert_eq!(live.canonical_operator_strategy_revision(), None);
 }
 
 #[test]
@@ -299,6 +303,11 @@ passphrase = "poly-passphrase"
 
     assert!(live.has_adopted_strategy_source());
     assert_eq!(live.operator_strategy_revision(), Some("strategy-rev-12"));
+    assert!(live.has_canonical_strategy_control());
+    assert_eq!(
+        live.canonical_operator_strategy_revision(),
+        Some("strategy-rev-12")
+    );
     assert!(!live.has_target_source());
     assert!(!live.is_legacy_explicit_strategy_config());
 }
@@ -531,7 +540,7 @@ targets = []
 }
 
 #[test]
-fn validated_config_marks_legacy_explicit_targets_as_compatibility_mode() {
+fn validated_config_keeps_legacy_explicit_targets_out_of_canonical_strategy_control() {
     let raw = load_raw_config_from_str(
         r#"
 [runtime]
