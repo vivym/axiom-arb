@@ -89,7 +89,7 @@ impl StatusAction {
             Self::FixBlockingIssueAndRerunStatus => "fix blocking issue and rerun status",
             Self::EnableSmokeRollout => "enable smoke rollout",
             Self::EnableLiveRollout => "enable live rollout",
-            Self::MigrateLegacyExplicitTargets => "migrate compatibility targets",
+            Self::MigrateLegacyExplicitTargets => "migrate legacy explicit targets",
         }
     }
 }
@@ -103,7 +103,7 @@ pub enum StatusTargetSource {
 impl StatusTargetSource {
     pub fn label(self) -> &'static str {
         match self {
-            Self::LegacyExplicitTargets => "compatibility",
+            Self::LegacyExplicitTargets => "legacy explicit targets",
             Self::AdoptedTargets => "adopted targets",
         }
     }

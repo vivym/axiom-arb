@@ -207,11 +207,11 @@ ready_families = []
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live targets candidates --config"),
+        combined.contains("Next: repair the TOML config and rerun doctor"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live targets adopt --config"),
+        !combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
 }
@@ -276,7 +276,62 @@ passphrase = "poly-passphrase-1"
 }
 
 #[tokio::test]
-async fn doctor_live_mode_fails_without_database_url_for_explicit_targets() {
+async fn doctor_canonical_config_without_persistence_requests_rebuild_guidance() {
+    let database = TestDatabase::new().await;
+    let temp = tempfile::NamedTempFile::new().expect("temp file");
+    fs::write(
+        temp.path(),
+        r#"
+[runtime]
+mode = "live"
+real_user_shadow_smoke = false
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-missing"
+
+[polymarket.source]
+clob_host = "https://clob.polymarket.com"
+data_api_host = "https://gamma-api.polymarket.com"
+relayer_host = "https://relayer-v2.polymarket.com"
+market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+heartbeat_interval_seconds = 15
+relayer_poll_interval_seconds = 5
+metadata_refresh_interval_seconds = 60
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+funder_address = "0x2222222222222222222222222222222222222222"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "00000000-0000-0000-0000-000000000003"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+"#,
+    )
+    .expect("seed canonical config");
+
+    let output = app_live_command()
+        .arg("doctor")
+        .arg("--config")
+        .arg(temp.path())
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live doctor should execute");
+
+    let combined = combined(&output);
+    assert!(!output.status.success(), "{combined}");
+    assert!(combined.contains("rebuild canonical lineage"), "{combined}");
+    assert!(
+        !combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(!combined.contains("compatibility"), "{combined}");
+}
+
+#[tokio::test]
+async fn doctor_live_mode_requires_migration_for_explicit_targets_before_database_checks() {
     let config = temp_live_config(
         r#"
 [runtime]
@@ -330,22 +385,27 @@ quantity = "5"
     let combined = combined(&output);
     assert!(!output.status.success(), "{combined}");
     assert_section_summary(&combined, "Credentials", "PASS");
-    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Connectivity", "FAIL");
+    assert_section_summary(&combined, "Target Source", "FAIL");
     assert_section_summary(&combined, "Overall", "FAIL");
     assert!(
-        combined.contains("[OK] startup target resolution succeeded"),
+        !combined.contains("startup target resolution succeeded"),
         "{combined}"
     );
-    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
-    assert!(combined.contains("--adopt-compatibility"), "{combined}");
+    assert!(combined.contains("migration required"), "{combined}");
+    assert!(
+        combined.contains("app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(!combined.contains("DATABASE_URL is set"), "{combined}");
+    assert!(!combined.contains("Connectivity:"), "{combined}");
+    assert!(!combined.contains("Runtime Safety:"), "{combined}");
+    assert!(!combined.contains("compatibility"), "{combined}");
+    assert!(!combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]
-async fn doctor_live_explicit_targets_with_database_url_pass() {
+async fn doctor_live_explicit_targets_require_migration_even_with_database_url() {
     let database = TestDatabase::new().await;
-    let venue = MockDoctorVenue::success();
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -387,11 +447,11 @@ token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
-        clob_host = venue.http_base_url(),
-        data_api_host = venue.http_base_url(),
-        relayer_host = venue.http_base_url(),
-        market_ws_url = venue.market_ws_url(),
-        user_ws_url = venue.user_ws_url(),
+        clob_host = "https://clob.polymarket.com",
+        data_api_host = "https://gamma-api.polymarket.com",
+        relayer_host = "https://relayer-v2.polymarket.com",
+        market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user",
     ));
     let output = app_live_command()
         .arg("doctor")
@@ -401,28 +461,27 @@ quantity = "5"
         .output()
         .expect("app-live doctor should execute");
 
-    assert!(output.status.success(), "{}", combined(&output));
+    assert!(!output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Runtime Safety", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Connectivity", "PASS");
-    assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Target Source", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
+    assert!(combined.contains("migration required"), "{combined}");
     assert!(
-        !combined.contains("relayer reachability probe"),
+        combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
     assert!(
-        combined.contains("Next: app-live run --config"),
+        !combined.contains("Next: app-live run --config"),
         "{combined}"
     );
-    assert!(combined.contains("[SKIP] compatibility mode"), "{combined}");
-    assert!(combined.contains("--adopt-compatibility"), "{combined}");
+    assert!(!combined.contains("Connectivity:"), "{combined}");
+    assert!(!combined.contains("compatibility"), "{combined}");
+    assert!(!combined.contains("--adopt-compatibility"), "{combined}");
 }
 
 #[tokio::test]
-async fn doctor_live_explicit_targets_without_private_key_runs_l2_probe() {
+async fn doctor_live_explicit_targets_without_private_key_still_require_migration() {
     let database = TestDatabase::new().await;
-    let venue = MockDoctorVenue::success();
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -464,11 +523,11 @@ token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
-        clob_host = venue.http_base_url(),
-        data_api_host = venue.http_base_url(),
-        relayer_host = venue.http_base_url(),
-        market_ws_url = venue.market_ws_url(),
-        user_ws_url = venue.user_ws_url(),
+        clob_host = "https://clob.polymarket.com",
+        data_api_host = "https://gamma-api.polymarket.com",
+        relayer_host = "https://relayer-v2.polymarket.com",
+        market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user",
     ));
     let output = app_live_command()
         .arg("doctor")
@@ -479,14 +538,12 @@ quantity = "5"
         .output()
         .expect("app-live doctor should execute");
 
-    assert!(output.status.success(), "{}", combined(&output));
+    assert!(!output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert_section_summary(&combined, "Connectivity", "PASS");
-    assert_section_summary(&combined, "Overall", "PASS WITH SKIPS");
-    assert!(
-        !combined.contains("relayer reachability probe"),
-        "{combined}"
-    );
+    assert_section_summary(&combined, "Target Source", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
+    assert!(combined.contains("migration required"), "{combined}");
+    assert!(!combined.contains("Connectivity:"), "{combined}");
     assert!(
         !combined.contains("missing required environment variable POLYMARKET_PRIVATE_KEY"),
         "{combined}"
@@ -494,9 +551,8 @@ quantity = "5"
 }
 
 #[tokio::test]
-async fn doctor_live_non_eoa_explicit_targets_still_runs_relayer_probe() {
+async fn doctor_live_non_eoa_explicit_targets_still_require_migration() {
     let database = TestDatabase::new().await;
-    let venue = MockDoctorVenue::success();
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -543,11 +599,11 @@ token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
-        clob_host = venue.http_base_url(),
-        data_api_host = venue.http_base_url(),
-        relayer_host = venue.http_base_url(),
-        market_ws_url = venue.market_ws_url(),
-        user_ws_url = venue.user_ws_url(),
+        clob_host = "https://clob.polymarket.com",
+        data_api_host = "https://gamma-api.polymarket.com",
+        relayer_host = "https://relayer-v2.polymarket.com",
+        market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user",
     ));
     let output = app_live_command()
         .arg("doctor")
@@ -557,18 +613,19 @@ quantity = "5"
         .output()
         .expect("app-live doctor should execute");
 
-    assert!(output.status.success(), "{}", combined(&output));
+    assert!(!output.status.success(), "{}", combined(&output));
     let combined = combined(&output);
-    assert_section_summary(&combined, "Connectivity", "PASS");
+    assert_section_summary(&combined, "Target Source", "FAIL");
+    assert_section_summary(&combined, "Overall", "FAIL");
+    assert!(combined.contains("migration required"), "{combined}");
     assert!(
-        combined.contains("relayer reachability probe succeeded"),
+        !combined.contains("relayer reachability probe"),
         "{combined}"
     );
 }
 
 #[tokio::test]
-async fn doctor_live_explicit_targets_fail_when_database_is_unreachable() {
-    let venue = MockDoctorVenue::success();
+async fn doctor_live_explicit_targets_fail_for_migration_before_database_reachability() {
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -610,11 +667,11 @@ token_id = "29"
 price = "0.43"
 quantity = "5"
 "#,
-        clob_host = venue.http_base_url(),
-        data_api_host = venue.http_base_url(),
-        relayer_host = venue.http_base_url(),
-        market_ws_url = venue.market_ws_url(),
-        user_ws_url = venue.user_ws_url(),
+        clob_host = "https://clob.polymarket.com",
+        data_api_host = "https://gamma-api.polymarket.com",
+        relayer_host = "https://relayer-v2.polymarket.com",
+        market_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+        user_ws_url = "wss://ws-subscriptions-clob.polymarket.com/ws/user",
     ));
     let output = app_live_command()
         .arg("doctor")
@@ -629,14 +686,15 @@ quantity = "5"
 
     let combined = combined(&output);
     assert!(!output.status.success(), "{combined}");
-    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
-    assert_section_summary(&combined, "Connectivity", "FAIL");
+    assert_section_summary(&combined, "Target Source", "FAIL");
     assert_section_summary(&combined, "Overall", "FAIL");
-    assert!(combined.contains("ConnectivityError"), "{combined}");
+    assert!(combined.contains("migration required"), "{combined}");
     assert!(
-        combined.contains("Next: fix the reported issue and rerun doctor"),
+        combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
+    assert!(!combined.contains("ConnectivityError"), "{combined}");
+    assert!(!combined.contains("Connectivity:"), "{combined}");
 }
 
 #[tokio::test]
@@ -865,6 +923,9 @@ passphrase = "poly-passphrase"
 async fn doctor_smoke_mode_reports_runtime_safety_as_pass() {
     let database = TestDatabase::new().await;
     let venue = MockDoctorVenue::success();
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -873,6 +934,17 @@ real_user_shadow_smoke = true
 
 [strategy_control]
 source = "adopted"
+operator_strategy_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
 
 [polymarket.source]
 clob_host = "{clob_host}"
@@ -892,19 +964,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[negrisk.rollout]
-approved_families = ["family-a"]
-ready_families = ["family-a"]
-
-[[negrisk.targets]]
-family_id = "family-a"
-
-[[negrisk.targets.members]]
-condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
-token_id = "29"
-price = "0.43"
-quantity = "5"
 "#,
         clob_host = venue.http_base_url(),
         data_api_host = venue.http_base_url(),
@@ -929,6 +988,9 @@ quantity = "5"
 async fn doctor_live_mode_reports_connectivity_failure_when_authenticated_rest_is_rejected() {
     let database = TestDatabase::new().await;
     let venue = MockDoctorVenue::orders_fail("401 Unauthorized", r#"{"error":"unauthorized"}"#);
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
     let config = temp_live_config(&format!(
         r#"
 [runtime]
@@ -937,6 +999,17 @@ real_user_shadow_smoke = false
 
 [strategy_control]
 source = "adopted"
+operator_strategy_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
 
 [polymarket.source]
 clob_host = "{clob_host}"
@@ -956,19 +1029,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000002"
 secret = "poly-secret"
 passphrase = "poly-passphrase"
-
-[negrisk.rollout]
-approved_families = ["family-a"]
-ready_families = ["family-a"]
-
-[[negrisk.targets]]
-family_id = "family-a"
-
-[[negrisk.targets.members]]
-condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
-token_id = "29"
-price = "0.43"
-quantity = "5"
 "#,
         clob_host = venue.http_base_url(),
         data_api_host = venue.http_base_url(),
@@ -987,7 +1047,7 @@ quantity = "5"
     let combined = combined(&output);
     assert!(!output.status.success(), "{combined}");
     assert_section_summary(&combined, "Credentials", "PASS");
-    assert_section_summary(&combined, "Target Source", "PASS WITH SKIPS");
+    assert_section_summary(&combined, "Target Source", "PASS");
     assert_section_summary(&combined, "Connectivity", "FAIL");
     assert_section_summary(&combined, "Overall", "FAIL");
     assert!(combined.contains("ConnectivityError"), "{combined}");
@@ -1000,6 +1060,9 @@ quantity = "5"
 #[tokio::test]
 async fn doctor_live_mode_reports_fail_summary_when_real_user_shadow_smoke_config_is_invalid() {
     let database = TestDatabase::new().await;
+    database
+        .seed_adopted_target_with_runtime_progress("targets-rev-9")
+        .await;
     let config = temp_live_config(
         r#"
 [runtime]
@@ -1008,6 +1071,17 @@ real_user_shadow_smoke = true
 
 [strategy_control]
 source = "adopted"
+operator_strategy_revision = "targets-rev-9"
+
+[strategies.full_set]
+enabled = true
+
+[strategies.neg_risk]
+enabled = true
+
+[strategies.neg_risk.rollout]
+approved_scopes = ["family-a"]
+ready_scopes = ["family-a"]
 
 [polymarket.source]
 clob_host = "ftp://clob.polymarket.com"
@@ -1027,19 +1101,6 @@ wallet_route = "eoa"
 api_key = "00000000-0000-0000-0000-000000000001"
 secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-
-[negrisk.rollout]
-approved_families = ["family-a"]
-ready_families = ["family-a"]
-
-[[negrisk.targets]]
-family_id = "family-a"
-
-[[negrisk.targets.members]]
-condition_id = "0x0000000000000000000000000000000000000000000000000000000000000001"
-token_id = "29"
-price = "0.43"
-quantity = "5"
 "#,
     );
     let output = app_live_command()

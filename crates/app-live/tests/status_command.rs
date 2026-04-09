@@ -1005,18 +1005,42 @@ fn status_reports_compatibility_mode_explicitly_for_legacy_explicit_targets() {
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
     assert!(
-        combined.contains("Target source: compatibility"),
+        combined.contains("Target source: legacy explicit targets"),
         "{combined}"
     );
     assert!(
-        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
+        combined.contains("Reason: migration required: legacy explicit targets require migration"),
         "{combined}"
     );
     assert!(
         combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
-    assert!(combined.contains("--adopt-compatibility"), "{combined}");
+    assert!(!combined.contains("compatibility"), "{combined}");
+
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn status_reports_migration_required_for_legacy_explicit_targets() {
+    let config = compatibility_mode_live_config_path();
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("status")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .expect("app-live status should execute");
+
+    let combined = cli::combined(&output);
+    assert!(output.status.success(), "{combined}");
+    assert!(combined.contains("migration required"), "{combined}");
+    assert!(
+        combined.contains("Next: app-live targets adopt --config"),
+        "{combined}"
+    );
+    assert!(!combined.contains("compatibility"), "{combined}");
+    assert!(!combined.contains("--adopt-compatibility"), "{combined}");
 
     let _ = fs::remove_file(config);
 }
@@ -1089,18 +1113,18 @@ fn status_operator_shaped_explicit_targets_still_report_compatibility_mode() {
     assert!(combined.contains("Mode: live"), "{combined}");
     assert!(combined.contains("Readiness: blocked"), "{combined}");
     assert!(
-        combined.contains("Target source: compatibility"),
+        combined.contains("Target source: legacy explicit targets"),
         "{combined}"
     );
     assert!(
-        combined.contains("Reason: legacy explicit targets are running in compatibility mode"),
+        combined.contains("Reason: migration required: legacy explicit targets require migration"),
         "{combined}"
     );
     assert!(
         combined.contains("Next: app-live targets adopt --config"),
         "{combined}"
     );
-    assert!(combined.contains("--adopt-compatibility"), "{combined}");
+    assert!(!combined.contains("compatibility"), "{combined}");
 
     let _ = fs::remove_file(config);
 }
@@ -1180,7 +1204,7 @@ fn status_actions_are_concrete_operator_actions() {
         (StatusAction::EnableLiveRollout, "enable live rollout"),
         (
             StatusAction::MigrateLegacyExplicitTargets,
-            "migrate compatibility targets",
+            "migrate legacy explicit targets",
         ),
     ];
 
@@ -1219,7 +1243,10 @@ fn status_details_use_structured_key_fields() {
         details.target_source,
         Some(StatusTargetSource::LegacyExplicitTargets)
     );
-    assert_eq!(details.target_source.unwrap().label(), "compatibility");
+    assert_eq!(
+        details.target_source.unwrap().label(),
+        "legacy explicit targets"
+    );
     assert_eq!(details.rollout_state, Some(StatusRolloutState::Ready));
     assert_eq!(details.rollout_state.unwrap().label(), "ready");
     assert_eq!(details.restart_needed, Some(true));
@@ -1268,7 +1295,10 @@ fn status_target_source_labels_are_structured() {
     use app_live::commands::status::model::StatusTargetSource;
 
     let cases = [
-        (StatusTargetSource::LegacyExplicitTargets, "compatibility"),
+        (
+            StatusTargetSource::LegacyExplicitTargets,
+            "legacy explicit targets",
+        ),
         (StatusTargetSource::AdoptedTargets, "adopted targets"),
     ];
 

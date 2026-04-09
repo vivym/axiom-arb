@@ -157,20 +157,16 @@ async fn startup_resolution_rejects_invalid_route_scope_for_registered_adapter()
 }
 
 #[tokio::test]
-async fn compatibility_explicit_targets_still_resolve_without_operator_strategy_revision() {
+async fn compatibility_explicit_targets_fail_closed_without_operator_strategy_revision() {
     let db = TestDatabase::new().await;
 
-    let resolved =
-        resolve_startup_targets(&db.pool, &sample_compatibility_live_view_without_revision())
-            .await
-            .expect("compatibility explicit targets should still resolve via config fallback");
+    let err = resolve_startup_targets(&db.pool, &sample_compatibility_live_view_without_revision())
+        .await
+        .expect_err("migratable legacy input should fail closed");
 
-    assert!(!resolved.targets.is_empty());
-    assert_eq!(
-        resolved.operator_target_revision.as_deref(),
-        Some(resolved.targets.revision())
-    );
-    assert!(resolved.targets.targets().contains_key("family-a"));
+    let text = err.to_string();
+    assert!(text.contains("migration required"), "{text}");
+    assert!(!text.contains("compatibility"), "{text}");
 }
 
 struct TestDatabase {

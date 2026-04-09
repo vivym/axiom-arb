@@ -17,11 +17,11 @@ pub fn execute(args: TargetStatusArgs) -> Result<(), Box<dyn Error>> {
         load_target_control_plane_state(&pool, &args.config).await
     })?;
 
-    print_status(&state);
+    print_status(&state, &args.config);
     Ok(())
 }
 
-fn print_status(state: &TargetControlPlaneState) {
+fn print_status(state: &TargetControlPlaneState, config_path: &std::path::Path) {
     println!(
         "configured_operator_strategy_revision = {}",
         optional_revision(state.configured_operator_strategy_revision.as_deref())
@@ -31,8 +31,8 @@ fn print_status(state: &TargetControlPlaneState) {
         optional_revision(state.active_operator_strategy_revision.as_deref())
     );
     println!(
-        "compatibility_mode = {}",
-        state.compatibility_mode.as_deref().unwrap_or("none")
+        "migration_required = {}",
+        migration_required_value(state.compatibility_mode.as_deref(), config_path)
     );
     println!(
         "restart_needed = {}",
@@ -65,5 +65,30 @@ fn optional_restart_needed(value: Option<bool>) -> &'static str {
         Some(true) => "true",
         Some(false) => "false",
         None => "unknown",
+    }
+}
+
+fn migration_required_value(
+    compatibility_mode: Option<&str>,
+    config_path: &std::path::Path,
+) -> String {
+    if compatibility_mode.is_some() {
+        format!(
+            "app-live targets adopt --config {}",
+            shell_quote(config_path.display().to_string())
+        )
+    } else {
+        "none".to_owned()
+    }
+}
+
+fn shell_quote(value: String) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        value
+    } else {
+        format!("'{}'", value.replace('\'', r"'\''"))
     }
 }

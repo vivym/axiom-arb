@@ -151,6 +151,39 @@ fn verify_explicit_target_config_is_reported_as_legacy_unsupported() {
 }
 
 #[test]
+fn verify_explicit_target_config_reports_migration_required() {
+    let verify_db = verify_db::TestDatabase::new();
+    let config_path = verify_db::temp_config_path(
+        "app-live-verify-legacy-explicit",
+        &format!(
+            "{}\n[[negrisk.targets]]\nfamily_id = \"family-a\"\n\n[[negrisk.targets.members]]\ncondition_id = \"condition-1\"\ntoken_id = \"token-1\"\nprice = \"0.43\"\nquantity = \"5\"\n",
+            fs::read_to_string(cli::config_fixture("app-live-ux-live.toml"))
+                .unwrap()
+                .replace(
+                    "[negrisk.target_source]\nsource = \"adopted\"\noperator_target_revision = \"targets-rev-9\"\n",
+                    "",
+                )
+        ),
+    );
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("verify")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", verify_db.database_url())
+        .output()
+        .unwrap();
+
+    let text = cli::combined(&output);
+    assert!(text.contains("migration required"), "{text}");
+    assert!(!text.contains("compatibility"), "{text}");
+    assert!(!text.contains("legacy unsupported"), "{text}");
+
+    verify_db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn verify_live_passes_when_local_results_match_current_config_and_control_plane() {
     let verify_db = verify_db::TestDatabase::new();
     let config_path = verify_db::temp_config_path(

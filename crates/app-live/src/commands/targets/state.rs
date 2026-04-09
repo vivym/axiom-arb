@@ -480,7 +480,7 @@ pub fn legacy_explicit_targets(config_path: &Path) -> Result<NegRiskLiveTargetSe
     let raw = load_validated_raw_config(config_path)?;
     if !is_legacy_explicit_strategy_config(&raw) {
         return Err(TargetStateError::new(
-            "legacy explicit compatibility migration requires explicit negrisk.targets",
+            "migration required: legacy explicit targets require explicit negrisk.targets",
         )
         .into());
     }
@@ -520,7 +520,7 @@ fn parse_legacy_explicit_targets(
         .as_array_of_tables()
         .ok_or_else(|| {
             TargetStateError::new(
-                "legacy explicit compatibility migration requires explicit negrisk.targets",
+                "migration required: legacy explicit targets require explicit negrisk.targets",
             )
         })?;
 

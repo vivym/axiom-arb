@@ -22,11 +22,15 @@ pub fn execute(args: TargetCandidatesArgs) -> Result<(), Box<dyn Error>> {
         Ok::<_, Box<dyn Error>>((state, catalog))
     })?;
 
-    print_candidates(&state, &catalog);
+    print_candidates(&state, &catalog, &args.config);
     Ok(())
 }
 
-fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesCatalog) {
+fn print_candidates(
+    state: &TargetControlPlaneState,
+    catalog: &TargetCandidatesCatalog,
+    config_path: &std::path::Path,
+) {
     let summary = summarize_target_candidates(catalog);
     println!(
         "recommended_adoptable_revision = {}",
@@ -40,8 +44,8 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
         summary.non_adoptable_summary()
     );
     println!(
-        "compatibility_mode = {}",
-        state.compatibility_mode.as_deref().unwrap_or("none")
+        "migration_required = {}",
+        migration_required_value(state.compatibility_mode.as_deref(), config_path)
     );
 
     if catalog.advisory_candidates.is_empty() {
@@ -79,8 +83,8 @@ fn print_candidates(state: &TargetControlPlaneState, catalog: &TargetCandidatesC
             "adopted operator_strategy_revision = {} adoptable_revision = {} strategy_candidate_revision = {}",
             operator_strategy_revision, adoptable_revision, strategy_candidate_revision
         );
-    } else if let Some(mode) = state.compatibility_mode.as_deref() {
-        println!("adopted = compatibility:{mode}");
+    } else if state.compatibility_mode.is_some() {
+        println!("adopted = migration required");
     } else {
         println!("adopted = none");
     }
@@ -99,4 +103,29 @@ pub(crate) fn adoptable_revision_lines(catalog: &TargetCandidatesCatalog) -> Vec
             )
         })
         .collect()
+}
+
+fn migration_required_value(
+    compatibility_mode: Option<&str>,
+    config_path: &std::path::Path,
+) -> String {
+    if compatibility_mode.is_some() {
+        format!(
+            "app-live targets adopt --config {}",
+            shell_quote(config_path.display().to_string())
+        )
+    } else {
+        "none".to_owned()
+    }
+}
+
+fn shell_quote(value: String) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        value
+    } else {
+        format!("'{}'", value.replace('\'', r"'\''"))
+    }
 }

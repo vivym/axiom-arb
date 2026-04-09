@@ -82,6 +82,31 @@ fn run_startup_failure_records_failed_session() {
 }
 
 #[test]
+fn run_live_input_reports_provenance_chain_failure_and_not_compatibility() {
+    let db = run_session_db::TestDatabase::new();
+    let config_path = temp_config_fixture_path("app-live-ux-live.toml", |config| config);
+
+    let output = Command::new(cli::app_live_binary())
+        .arg("run")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", db.database_url())
+        .output()
+        .expect("legacy run should execute");
+
+    let text = cli::combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("could not be linked back to a candidate adoption provenance chain"),
+        "{text}"
+    );
+    assert!(!text.contains("compatibility"), "{text}");
+
+    db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn run_smoke_mode_builds_shared_source_bundle_via_app_facing_run_path() {
     let db = apply_db::TestDatabase::new();
     db.seed_adopted_target_with_active_revision("targets-rev-9", None);

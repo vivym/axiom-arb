@@ -40,6 +40,7 @@ pub struct ResolvedStrategyRevision {
 pub enum StartupError {
     Config(ConfigError),
     Persistence(PersistenceError),
+    MigrationRequired(String),
     MissingOperatorTargetRevision,
     MissingOperatorStrategyRevision,
     MissingAdoptionProvenance {
@@ -75,6 +76,7 @@ impl fmt::Display for StartupError {
         match self {
             Self::Config(error) => write!(f, "{error}"),
             Self::Persistence(error) => write!(f, "{error}"),
+            Self::MigrationRequired(message) => write!(f, "{message}"),
             Self::MissingOperatorTargetRevision => {
                 write!(f, "missing negrisk.target_source.operator_target_revision")
             }
@@ -173,6 +175,12 @@ pub async fn resolve_startup_strategy_revision(
     pool: &PgPool,
     config: &AppLiveConfigView<'_>,
 ) -> Result<ResolvedStrategyRevision, StartupError> {
+    if config.is_legacy_explicit_strategy_config() {
+        return Err(StartupError::MigrationRequired(
+            "migration required: legacy explicit negrisk.targets requires migration".to_owned(),
+        ));
+    }
+
     if let Some(target_source) = config.target_source().filter(|source| source.is_adopted()) {
         let operator_target_revision = target_source
             .operator_target_revision()

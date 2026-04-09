@@ -136,7 +136,7 @@ pub(crate) fn render_action_template_with_mode(
         model::StatusAction::EnableLiveRollout =>
             "edit {config} and set [strategies.neg_risk.rollout].approved_scopes and ready_scopes for adopted scopes".to_owned(),
         model::StatusAction::MigrateLegacyExplicitTargets => {
-            "app-live targets adopt --config {config} --adopt-compatibility".to_owned()
+            "app-live targets adopt --config {config}".to_owned()
         }
     }
 }

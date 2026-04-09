@@ -1,15 +1,8 @@
 use std::{
     fs,
-    io::{Read, Write},
-    net::TcpListener as StdTcpListener,
     path::PathBuf,
     process::Command,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
-    thread,
-    time::Duration,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use persistence::{
@@ -26,8 +19,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use tokio_tungstenite::tungstenite::{accept as accept_websocket, Message as WsMessage};
-
 static NEXT_SCHEMA_ID: AtomicU64 = AtomicU64::new(1);
 
 const MINIMAL_LIVE_CONFIG: &str = r#"
@@ -63,7 +54,7 @@ funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
-secret = "poly-secret-1"
+secret = "cG9seS1zZWNyZXQtMQ=="
 passphrase = "poly-passphrase-1"
 
 [negrisk.rollout]
@@ -140,7 +131,7 @@ fn targets_status_reports_configured_revision_and_unavailable_active_state() {
 }
 
 #[test]
-fn targets_status_reports_compatibility_mode_for_legacy_explicit_config() {
+fn targets_status_reports_migration_required_for_legacy_explicit_config() {
     let database = TestDatabase::new();
     let config = temp_config(EXPLICIT_TARGET_LIVE_CONFIG);
 
@@ -155,14 +146,13 @@ fn targets_status_reports_compatibility_mode_for_legacy_explicit_config() {
 
     let text = combined(&output);
     assert!(output.status.success(), "{text}");
+    assert!(text.contains("migration_required = "), "{text}");
+    assert!(text.contains("app-live targets adopt --config"), "{text}");
     assert!(
-        text.contains("compatibility_mode = legacy-explicit"),
+        !text.contains("compatibility_mode = legacy-explicit"),
         "{text}"
     );
-    assert!(
-        text.contains("configured_operator_strategy_revision = unavailable"),
-        "{text}"
-    );
+    assert!(!text.contains("--adopt-compatibility"), "{text}");
 
     database.cleanup();
     let _ = fs::remove_file(config);
@@ -415,11 +405,10 @@ fn doctor_fails_when_runtime_progress_row_lacks_operator_target_revision_anchor(
 }
 
 #[test]
-fn doctor_reports_explicit_targets_with_local_resolution_and_control_plane_skip() {
+fn doctor_reports_explicit_targets_as_migration_required() {
     let database = TestDatabase::new();
     database.seed_targets_catalog_with_unprovenanced_active_revision();
-    let venue = MockDoctorVenue::success();
-    let config = temp_config(&explicit_target_live_config_with_mock_venue(&venue));
+    let config = temp_config(EXPLICIT_TARGET_LIVE_CONFIG);
 
     let output = Command::new(app_live_binary())
         .arg("doctor")
@@ -438,13 +427,14 @@ fn doctor_reports_explicit_targets_with_local_resolution_and_control_plane_skip(
         .expect("app-live doctor should execute");
 
     let text = combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("TargetSourceError"), "{text}");
+    assert!(text.contains("migration required"), "{text}");
     assert!(
-        text.contains("[OK] startup target resolution succeeded"),
+        text.contains("Next: app-live targets adopt --config"),
         "{text}"
     );
-    assert!(text.contains("[SKIP] compatibility mode"), "{text}");
-    assert!(text.contains("--adopt-compatibility"), "{text}");
-    assert!(!text.contains("TargetSourceError"), "{text}");
+    assert!(!text.contains("compatibility"), "{text}");
     assert!(!text.contains("restart required"), "{text}");
     assert!(!text.contains("runtime progress"), "{text}");
 
@@ -868,13 +858,22 @@ impl TestDatabase {
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                self.pool.close().await;
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), self.pool.close())
+                    .await;
                 let drop_schema = format!(
                     r#"DROP SCHEMA IF EXISTS "{schema}" CASCADE"#,
                     schema = self.schema
                 );
-                let _ = sqlx::query(&drop_schema).execute(&self.admin_pool).await;
-                self.admin_pool.close().await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    sqlx::query(&drop_schema).execute(&self.admin_pool),
+                )
+                .await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    self.admin_pool.close(),
+                )
+                .await;
             });
     }
 }
@@ -974,301 +973,6 @@ struct CanonicalNegRiskMember {
 
 fn default_test_database_url() -> &'static str {
     "postgres://axiom:axiom@localhost:5432/axiom_arb"
-}
-
-struct MockDoctorVenue {
-    http: ProbeHttpServer,
-    market_ws: ProbeWsServer,
-}
-
-impl MockDoctorVenue {
-    fn success() -> Self {
-        Self {
-            http: ProbeHttpServer::spawn(ProbeHttpBehavior::success()),
-            market_ws: ProbeWsServer::spawn(WsProbeKind::Market),
-        }
-    }
-
-    fn http_base_url(&self) -> &str {
-        self.http.base_url()
-    }
-
-    fn market_ws_url(&self) -> &str {
-        self.market_ws.url()
-    }
-
-    fn user_ws_url(&self) -> &str {
-        self.market_ws.url()
-    }
-}
-
-fn explicit_target_live_config_with_mock_venue(venue: &MockDoctorVenue) -> String {
-    EXPLICIT_TARGET_LIVE_CONFIG
-        .replace(
-            "clob_host = \"https://clob.polymarket.com\"",
-            &format!("clob_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "data_api_host = \"https://gamma-api.polymarket.com\"",
-            &format!("data_api_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "relayer_host = \"https://relayer-v2.polymarket.com\"",
-            &format!("relayer_host = \"{}\"", venue.http_base_url()),
-        )
-        .replace(
-            "market_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/market\"",
-            &format!("market_ws_url = \"{}\"", venue.market_ws_url()),
-        )
-        .replace(
-            "user_ws_url = \"wss://ws-subscriptions-clob.polymarket.com/ws/user\"",
-            &format!("user_ws_url = \"{}\"", venue.user_ws_url()),
-        )
-}
-
-struct ProbeHttpServer {
-    base_url: String,
-    shutdown_tx: Option<mpsc::Sender<()>>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl ProbeHttpServer {
-    fn spawn(behavior: ProbeHttpBehavior) -> Self {
-        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind http probe server");
-        let address = listener.local_addr().expect("http probe server address");
-        listener
-            .set_nonblocking(true)
-            .expect("http probe server should be nonblocking");
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        let handle = thread::spawn(move || loop {
-            if shutdown_rx.try_recv().is_ok() {
-                break;
-            }
-
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("accepted http stream should be blocking");
-                    handle_http_probe_connection(stream, &behavior)
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("http probe server accept failed: {error}"),
-            }
-        });
-
-        Self {
-            base_url: format!("http://{address}"),
-            shutdown_tx: Some(shutdown_tx),
-            handle: Some(handle),
-        }
-    }
-
-    fn base_url(&self) -> &str {
-        &self.base_url
-    }
-}
-
-impl Drop for ProbeHttpServer {
-    fn drop(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            handle.join().expect("http probe server should join");
-        }
-    }
-}
-
-#[derive(Clone)]
-struct ProbeHttpBehavior {
-    orders_status_line: String,
-    orders_body: String,
-    heartbeat_status_line: String,
-    heartbeat_body: String,
-    transactions_status_line: String,
-    transactions_body: String,
-}
-
-impl ProbeHttpBehavior {
-    fn success() -> Self {
-        Self {
-            orders_status_line: "200 OK".to_owned(),
-            orders_body: "[]".to_owned(),
-            heartbeat_status_line: "200 OK".to_owned(),
-            heartbeat_body: r#"{"success":true,"heartbeat_id":"hb-1"}"#.to_owned(),
-            transactions_status_line: "200 OK".to_owned(),
-            transactions_body: "[]".to_owned(),
-        }
-    }
-}
-
-fn handle_http_probe_connection(mut stream: std::net::TcpStream, behavior: &ProbeHttpBehavior) {
-    let mut buffer = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    let mut header_end = None;
-    let mut content_length = 0_usize;
-
-    loop {
-        let read = stream.read(&mut chunk).expect("read probe request");
-        if read == 0 {
-            break;
-        }
-
-        buffer.extend_from_slice(&chunk[..read]);
-        if header_end.is_none() {
-            header_end = find_header_end(&buffer);
-            if let Some(index) = header_end {
-                let headers = String::from_utf8_lossy(&buffer[..index]);
-                content_length = content_length_from_headers(&headers);
-            }
-        }
-
-        if let Some(index) = header_end {
-            let body_bytes = buffer.len().saturating_sub(index + 4);
-            if body_bytes >= content_length {
-                break;
-            }
-        }
-    }
-
-    let request = String::from_utf8_lossy(&buffer);
-    let request_line = request.lines().next().unwrap_or_default();
-    let (status_line, body) = http_probe_response(request_line, behavior);
-    let response = format!(
-        "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream
-        .write_all(response.as_bytes())
-        .expect("write probe response");
-    stream.flush().expect("flush probe response");
-}
-
-fn find_header_end(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-fn content_length_from_headers(headers: &str) -> usize {
-    headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            if name.trim().eq_ignore_ascii_case("content-length") {
-                value.trim().parse::<usize>().ok()
-            } else {
-                None
-            }
-        })
-        .unwrap_or(0)
-}
-
-fn http_probe_response<'a>(
-    request_line: &str,
-    behavior: &'a ProbeHttpBehavior,
-) -> (&'a str, &'a str) {
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let target = parts.next().unwrap_or_default();
-    let path = target.split('?').next().unwrap_or_default();
-
-    match (method, path) {
-        ("GET", "/orders") => (&behavior.orders_status_line, &behavior.orders_body),
-        ("POST", "/heartbeat") => (&behavior.heartbeat_status_line, &behavior.heartbeat_body),
-        ("GET", "/transactions") => (
-            &behavior.transactions_status_line,
-            &behavior.transactions_body,
-        ),
-        _ => ("404 Not Found", r#"{"error":"not found"}"#),
-    }
-}
-
-struct ProbeWsServer {
-    url: String,
-    shutdown_tx: Option<mpsc::Sender<()>>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl ProbeWsServer {
-    fn spawn(kind: WsProbeKind) -> Self {
-        let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind ws probe server");
-        let address = listener.local_addr().expect("ws probe server address");
-        listener
-            .set_nonblocking(true)
-            .expect("ws probe server should be nonblocking");
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
-        let handle = thread::spawn(move || loop {
-            if shutdown_rx.try_recv().is_ok() {
-                break;
-            }
-
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("accepted ws stream should be blocking");
-                    let mut websocket =
-                        accept_websocket(stream).expect("accept ws probe websocket");
-                    let mut responded = false;
-                    loop {
-                        match websocket.read() {
-                            Ok(WsMessage::Text(_)) if !responded => {
-                                websocket
-                                    .send(WsMessage::Text(kind.response_payload().into()))
-                                    .expect("send ws probe response");
-                                responded = true;
-                            }
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("ws probe server accept failed: {error}"),
-            }
-        });
-
-        Self {
-            url: format!("ws://{address}"),
-            shutdown_tx: Some(shutdown_tx),
-            handle: Some(handle),
-        }
-    }
-
-    fn url(&self) -> &str {
-        &self.url
-    }
-}
-
-impl Drop for ProbeWsServer {
-    fn drop(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            handle.join().expect("ws probe server should join");
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum WsProbeKind {
-    Market,
-}
-
-impl WsProbeKind {
-    fn response_payload(self) -> &'static str {
-        match self {
-            Self::Market => {
-                r#"{"event":"book","asset_id":"token-1","best_bid":"0.40","best_ask":"0.41"}"#
-            }
-        }
-    }
 }
 
 fn combined(output: &std::process::Output) -> String {

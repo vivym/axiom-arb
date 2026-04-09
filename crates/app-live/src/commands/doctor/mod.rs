@@ -42,6 +42,11 @@ struct DoctorFailure {
 }
 
 impl DoctorFailure {
+    const TARGET_SOURCE_ERROR: &'static str = "TargetSourceError";
+    const TARGET_SOURCE_MIGRATION_REQUIRED: &'static str = "TargetSourceMigrationRequired";
+    const TARGET_SOURCE_MANUAL_REPAIR: &'static str = "TargetSourceManualRepair";
+    const TARGET_SOURCE_CANONICAL_REBUILD: &'static str = "TargetSourceCanonicalRebuild";
+
     fn new(category: &'static str, message: impl Into<String>) -> Self {
         Self {
             category,
@@ -86,7 +91,7 @@ pub fn execute(args: DoctorArgs) -> Result<(), Box<dyn Error>> {
 pub(crate) fn run_report(args: &DoctorArgs) -> DoctorExecution {
     let mut report = DoctorReport::new();
     let failure = execute_inner(args, &mut report).err();
-    let next_actions = next_actions(&report, &args.config);
+    let next_actions = next_actions(&report, &args.config, failure.as_ref());
     DoctorExecution {
         report,
         next_actions,
@@ -143,18 +148,28 @@ fn execute_inner(args: &DoctorArgs, report: &mut DoctorReport) -> Result<(), Doc
     Ok(())
 }
 
-fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
+fn next_actions(
+    report: &DoctorReport,
+    config_path: &Path,
+    failure: Option<&DoctorFailure>,
+) -> Vec<String> {
     let quoted_config_path = shell_quote(config_path.display().to_string());
 
     if report.section_failed("Target Source") {
-        return vec![
-            format!(
-                "app-live targets candidates --config {quoted_config_path}"
-            ),
-            format!(
-                "app-live targets adopt --config {quoted_config_path} --adoptable-revision <revision>"
-            ),
-        ];
+        return match failure.map(|failure| failure.category) {
+            Some(DoctorFailure::TARGET_SOURCE_CANONICAL_REBUILD) => {
+                vec!["rebuild canonical lineage".to_owned()]
+            }
+            Some(DoctorFailure::TARGET_SOURCE_MANUAL_REPAIR) => {
+                vec!["repair the TOML config and rerun doctor".to_owned()]
+            }
+            Some(DoctorFailure::TARGET_SOURCE_MIGRATION_REQUIRED) => {
+                vec![format!(
+                    "app-live targets adopt --config {quoted_config_path}"
+                )]
+            }
+            _ => vec!["fix the reported issue and rerun doctor".to_owned()],
+        };
     }
 
     if report.section_failed("Config")
@@ -167,7 +182,6 @@ fn next_actions(report: &DoctorReport, config_path: &Path) -> Vec<String> {
 
     vec![format!("app-live run --config {quoted_config_path}")]
 }
-
 fn shell_quote(value: String) -> String {
     let escaped = value.replace('\'', r"'\''");
     format!("'{escaped}'")

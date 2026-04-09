@@ -6,7 +6,7 @@ use persistence::{connect_pool_from_env, RuntimeProgressRepo};
 use crate::commands::targets::state::{
     load_target_control_plane_state, normalize_active_operator_strategy_revision,
 };
-use crate::startup::{resolve_startup_targets, ResolvedTargets};
+use crate::startup::{resolve_startup_targets, ResolvedTargets, StartupError};
 use crate::NegRiskLiveTargetSet;
 
 use super::report::{DoctorCheckStatus, DoctorReport};
@@ -40,43 +40,40 @@ fn evaluate_live(
     report: &mut DoctorReport,
 ) -> Result<Option<ResolvedTargets>, DoctorFailure> {
     if config.is_legacy_explicit_strategy_config() {
-        let targets = NegRiskLiveTargetSet::try_from(config).map_err(|error| {
+        NegRiskLiveTargetSet::try_from(config).map_err(|error| {
             report.push_check(
                 "Target Source",
                 DoctorCheckStatus::Fail,
-                "TargetSourceError",
+                DoctorFailure::TARGET_SOURCE_ERROR,
                 error.to_string(),
             );
-            DoctorFailure::new("TargetSourceError", error.to_string())
+            DoctorFailure::new(DoctorFailure::TARGET_SOURCE_ERROR, error.to_string())
         })?;
         report.push_check(
             "Target Source",
-            DoctorCheckStatus::Pass,
-            "startup target resolution succeeded",
-            "",
+            DoctorCheckStatus::Fail,
+            DoctorFailure::TARGET_SOURCE_ERROR,
+            "migration required: legacy explicit negrisk.targets must be migrated via app-live targets adopt --config <config>",
         );
-        report.push_check(
-            "Target Source",
-            DoctorCheckStatus::Skip,
-            "compatibility mode: control-plane checks stay read-only until app-live targets adopt --config <config> --adopt-compatibility",
-            "",
-        );
-        return Ok(Some(ResolvedTargets {
-            operator_target_revision: (!targets.is_empty()).then(|| targets.revision().to_owned()),
-            targets,
-        }));
+        return Err(DoctorFailure::new(
+            DoctorFailure::TARGET_SOURCE_MIGRATION_REQUIRED,
+            "migration required: legacy explicit negrisk.targets must be migrated via app-live targets adopt --config <config>",
+        ));
     }
 
     if !config.has_adopted_strategy_source() {
         let message =
-            "live target source must be adopted strategy source or compatibility-mode explicit targets";
+            "live target source must be adopted strategy source or migratable legacy input";
         report.push_check(
             "Target Source",
             DoctorCheckStatus::Fail,
-            "TargetSourceError",
+            DoctorFailure::TARGET_SOURCE_ERROR,
             message,
         );
-        return Err(DoctorFailure::new("TargetSourceError", message));
+        return Err(DoctorFailure::new(
+            DoctorFailure::TARGET_SOURCE_ERROR,
+            message,
+        ));
     }
 
     let live_context = live_context.expect("live context should exist for live target source");
@@ -86,10 +83,10 @@ fn evaluate_live(
             report.push_check(
                 "Target Source",
                 DoctorCheckStatus::Fail,
-                "TargetSourceError",
+                DoctorFailure::TARGET_SOURCE_ERROR,
                 error.to_string(),
             );
-            DoctorFailure::new("TargetSourceError", error.to_string())
+            DoctorFailure::new(DoctorFailure::TARGET_SOURCE_ERROR, error.to_string())
         })
     })?;
 
@@ -97,13 +94,14 @@ fn evaluate_live(
         .runtime
         .block_on(resolve_startup_targets(&pool, config))
         .map_err(|error| {
+            let failure = classify_startup_error(&error);
             report.push_check(
                 "Target Source",
                 DoctorCheckStatus::Fail,
-                "TargetSourceError",
+                DoctorFailure::TARGET_SOURCE_ERROR,
                 error.to_string(),
             );
-            DoctorFailure::new("TargetSourceError", error.to_string())
+            failure
         })?;
 
     report.push_check(
@@ -124,10 +122,10 @@ fn evaluate_live(
                 report.push_check(
                     "Target Source",
                     DoctorCheckStatus::Fail,
-                    "TargetSourceError",
+                    DoctorFailure::TARGET_SOURCE_ERROR,
                     error.to_string(),
                 );
-                DoctorFailure::new("TargetSourceError", error.to_string())
+                DoctorFailure::new(DoctorFailure::TARGET_SOURCE_ERROR, error.to_string())
             })?;
 
         report.push_check(
@@ -175,10 +173,10 @@ fn evaluate_live(
                 report.push_check(
                     "Target Source",
                     DoctorCheckStatus::Fail,
-                    "TargetSourceError",
+                    DoctorFailure::TARGET_SOURCE_ERROR,
                     error.to_string(),
                 );
-                DoctorFailure::new("TargetSourceError", error.to_string())
+                DoctorFailure::new(DoctorFailure::TARGET_SOURCE_ERROR, error.to_string())
             })?;
 
         report.push_check(
@@ -224,4 +222,29 @@ fn evaluate_live(
     }
 
     Ok(Some(resolved_targets))
+}
+
+fn classify_startup_error(error: &StartupError) -> DoctorFailure {
+    let category = match error {
+        StartupError::MigrationRequired(_) => DoctorFailure::TARGET_SOURCE_MIGRATION_REQUIRED,
+        StartupError::MissingOperatorTargetRevision
+        | StartupError::MissingOperatorStrategyRevision => {
+            DoctorFailure::TARGET_SOURCE_MANUAL_REPAIR
+        }
+        StartupError::MissingAdoptionProvenance { .. }
+        | StartupError::MissingStrategyAdoptionProvenance { .. }
+        | StartupError::MissingRouteArtifacts { .. }
+        | StartupError::EmptyRouteArtifacts { .. }
+        | StartupError::InvalidRouteArtifacts { .. }
+        | StartupError::MissingRenderedLiveTargets { .. }
+        | StartupError::EmptyRenderedLiveTargets { .. }
+        | StartupError::InvalidRenderedLiveTargets { .. } => {
+            DoctorFailure::TARGET_SOURCE_CANONICAL_REBUILD
+        }
+        StartupError::Config(_) | StartupError::Persistence(_) => {
+            DoctorFailure::TARGET_SOURCE_ERROR
+        }
+    };
+
+    DoctorFailure::new(category, error.to_string())
 }

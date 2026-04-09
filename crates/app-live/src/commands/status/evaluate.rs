@@ -451,7 +451,9 @@ fn legacy_explicit_targets_summary(smoke_mode: bool) -> StatusSummary {
             conflicting_active_run_state: None,
             conflicting_active_started_at: None,
             conflicting_active_startup_target_revision: None,
-            reason: Some("legacy explicit targets are running in compatibility mode".to_owned()),
+            reason: Some(
+                "migration required: legacy explicit targets require migration".to_owned(),
+            ),
         },
         actions: vec![StatusAction::MigrateLegacyExplicitTargets],
     }
