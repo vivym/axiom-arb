@@ -91,6 +91,26 @@ The resolver must be a pure read model:
 
 All config rewriting and migration-related persistence writes should live in a separate migration helper, e.g. `strategy_control::migration`, which is called only by mutation-boundary commands.
 
+#### Resolver vs migration-helper responsibilities
+
+Responsibility should be split cleanly:
+
+- `strategy_control::resolver`
+  - parse and classify input shape
+  - read canonical config, canonical persistence, and runtime-progress state
+  - determine `ResolvedCanonicalStrategyControl` vs `MigrationRequired` vs `InvalidConfig`
+  - never derive legacy input into canonical state by mutating storage
+  - never rewrite config
+- `strategy_control::migration`
+  - accept only legacy input that the resolver has already classified as migratable
+  - perform the actual legacy-to-canonical mapping
+  - derive the canonical `operator_strategy_revision`
+  - resolve legacy lineage
+  - materialize required canonical persistence rows
+  - rewrite config into canonical `[strategy_control]`
+
+Legacy-to-canonical mapping should have one owner: the migration helper. The resolver may identify that a config is migratable, but it should not independently implement conversion logic.
+
 The resolver should:
 
 1. parse the validated config plus any required persistence state
@@ -493,6 +513,7 @@ High-impact areas likely include:
 - `crates/app-live/src/commands/bootstrap/*`
 - `crates/app-live/src/commands/bootstrap/error.rs`
 - `crates/app-live/src/commands/apply/*`
+- `crates/app-live/src/commands/run.rs`
 - `crates/app-live/src/commands/verify/*`
 - `crates/app-live/src/commands/targets/adopt.rs`
 - `crates/app-live/src/commands/targets/config_file.rs`
@@ -516,6 +537,7 @@ Likely test churn includes:
 - `crates/app-live/tests/doctor_command.rs`
 - `crates/app-live/tests/bootstrap_command.rs`
 - `crates/app-live/tests/apply_command.rs`
+- `crates/app-live/tests/run_command.rs`
 - `crates/app-live/tests/verify_command.rs`
 - `crates/app-live/tests/init_command.rs`
 - startup/targets-related fixtures and support helpers
