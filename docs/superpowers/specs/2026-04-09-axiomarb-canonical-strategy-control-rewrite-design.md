@@ -284,6 +284,27 @@ With compatibility removed, readiness and action models should get smaller. The 
 - remove `--adopt-compatibility`
 - continue to support canonical revision adoption flows only
 
+### targets rollback
+
+- remove compatibility-aware rollback behavior
+- rollback should operate only on canonical neutral/adopted strategy history
+- if config is still using migratable old control-plane input, rollback should require migration first rather than synthesizing compatibility state
+
+### other targets commands
+
+The rest of the `targets` command surface should also stop surfacing compatibility concepts:
+
+- `targets status`
+- `targets show-current`
+- `targets candidates`
+
+After the rewrite they should:
+
+- read canonical resolver/state only
+- stop printing `compatibility_mode = ...`
+- stop rendering compatibility-derived adopted/source summaries
+- treat old control-plane input as migration-required or invalid, not as a long-lived read path
+
 ## Init, Example Config, and Docs
 
 This rewrite should also clean operator UX so the project no longer teaches deprecated control-plane shapes.
@@ -305,6 +326,7 @@ This includes:
 - status/apply/doctor/verify tests asserting compatibility mode behavior
 - bootstrap tests that currently recognize legacy explicit mode
 - targets adopt tests for `--adopt-compatibility`
+- targets rollback/status/show-current/candidates tests asserting compatibility output or behavior
 - fixture configs using `[[negrisk.targets]]` or `[negrisk.target_source]` as normal live/smoke setup
 
 New tests should cover:
@@ -328,7 +350,11 @@ High-impact areas likely include:
 - `crates/app-live/src/commands/apply/*`
 - `crates/app-live/src/commands/verify/*`
 - `crates/app-live/src/commands/targets/adopt.rs`
+- `crates/app-live/src/commands/targets/rollback.rs`
 - `crates/app-live/src/commands/targets/state.rs`
+- `crates/app-live/src/commands/targets/status.rs`
+- `crates/app-live/src/commands/targets/show_current.rs`
+- `crates/app-live/src/commands/targets/candidates.rs`
 - `crates/app-live/src/commands/init/*`
 - `config/axiom-arb.example.toml`
 - `README.md`
