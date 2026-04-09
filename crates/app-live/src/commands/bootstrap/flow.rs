@@ -14,6 +14,7 @@ use crate::commands::{
         state::{load_target_candidates_catalog, summarize_target_candidates},
     },
 };
+use crate::strategy_control::migrate_legacy_strategy_control;
 use crate::startup;
 
 use super::{
@@ -61,6 +62,8 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
             MissingConfigOutcome::SmokeWritten => {}
         }
     }
+
+    maybe_migrate_bootstrap_config(&config_path)?;
 
     match detect_existing_bootstrap_mode(&config_path)? {
         ExistingBootstrapMode::Paper => {}
@@ -119,6 +122,33 @@ pub fn execute(args: BootstrapArgs) -> Result<(), BootstrapError> {
     }
 
     Ok(())
+}
+
+fn maybe_migrate_bootstrap_config(config_path: &Path) -> Result<(), BootstrapError> {
+    let Ok(raw) = load_raw_config_from_path(config_path) else {
+        return Ok(());
+    };
+    if !raw.runtime.real_user_shadow_smoke || raw.runtime.mode != RuntimeModeToml::Live {
+        return Ok(());
+    }
+    if !has_auto_migratable_legacy_control_plane(&raw) {
+        return Ok(());
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| BootstrapError::Init(Box::new(error)))?;
+
+    runtime
+        .block_on(async {
+            let pool = connect_pool_from_env().await?;
+            migrate_legacy_strategy_control(&pool, config_path)
+                .await
+                .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })?;
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .map_err(BootstrapError::Init)
 }
 
 fn complete_missing_config(
@@ -200,6 +230,12 @@ fn detect_existing_bootstrap_mode(
             mode: "live",
         }),
     }
+}
+
+fn has_auto_migratable_legacy_control_plane(raw: &config_schema::RawAxiomConfig) -> bool {
+    raw.negrisk
+        .as_ref()
+        .is_some_and(|negrisk| negrisk.targets.is_present() && !negrisk.targets.is_empty())
 }
 
 fn inline_smoke_adoption(config_path: &Path) -> Result<SmokeAdoptionOutcome, BootstrapError> {

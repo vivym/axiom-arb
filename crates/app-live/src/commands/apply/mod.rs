@@ -9,12 +9,13 @@ use crate::commands::{
     status::{
         self,
         evaluate::StatusOutcome,
-        model::{StatusReadiness, StatusRolloutState, StatusSummary, StatusTargetSource},
+        model::{StatusReadiness, StatusRolloutState, StatusSummary},
     },
     targets::{
         adopt, config_file::rewrite_smoke_rollout_families, state::load_target_candidates_catalog,
     },
 };
+use crate::strategy_control::migrate_legacy_strategy_control;
 use crate::startup;
 
 pub mod model;
@@ -52,6 +53,8 @@ impl fmt::Display for ApplyError {
 impl Error for ApplyError {}
 
 pub fn execute(args: ApplyArgs) -> Result<(), Box<dyn Error>> {
+    maybe_migrate_apply_config(&args.config)?;
+
     let raw = match load_raw_config_from_path(&args.config) {
         Ok(raw) => raw,
         Err(error) => {
@@ -137,17 +140,9 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             );
         }
         StatusReadiness::Blocked => {
-            let planned_action = if summary.details.target_source
-                == Some(StatusTargetSource::LegacyExplicitTargets)
-            {
-                "Stop because compatibility mode cannot be auto-migrated during live apply."
-                    .to_owned()
-            } else {
-                "Stop because status reported a blocking issue.".to_owned()
-            };
             return stop_live_apply(
                 &summary,
-                planned_action,
+                "Stop because status reported a blocking issue.".to_owned(),
                 "Blocked".to_owned(),
                 status_next_actions(config_path, &summary),
                 ApplyFailureKind::ReadinessError(summary.readiness.label().to_owned()),
@@ -291,6 +286,32 @@ fn execute_live_apply(config_path: &Path, start_requested: bool) -> Result<(), B
             Err(error)
         }
     }
+}
+
+fn maybe_migrate_apply_config(config_path: &Path) -> Result<(), Box<dyn Error>> {
+    let Ok(raw) = load_raw_config_from_path(config_path) else {
+        return Ok(());
+    };
+    if raw.runtime.mode != config_schema::RuntimeModeToml::Live {
+        return Ok(());
+    }
+    if !has_auto_migratable_legacy_control_plane(&raw) {
+        return Ok(());
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    runtime.block_on(async {
+        let pool = connect_pool_from_env().await?;
+        migrate_legacy_strategy_control(&pool, config_path)
+            .await
+            .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+
+    Ok(())
 }
 
 fn execute_smoke_apply(config_path: &Path, start_requested: bool) -> Result<(), Box<dyn Error>> {
@@ -625,6 +646,12 @@ fn smoke_readiness_failure(
         }
         _ => ApplyFailureKind::from_status_readiness(summary.readiness, reason),
     }
+}
+
+fn has_auto_migratable_legacy_control_plane(raw: &config_schema::RawAxiomConfig) -> bool {
+    raw.negrisk
+        .as_ref()
+        .is_some_and(|negrisk| negrisk.targets.is_present() && !negrisk.targets.is_empty())
 }
 
 fn planned_actions(summary: &status::model::StatusSummary, start_requested: bool) -> Vec<String> {
