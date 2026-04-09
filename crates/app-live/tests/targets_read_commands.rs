@@ -44,6 +44,9 @@ const EXPLICIT_TARGET_LIVE_CONFIG: &str = r#"
 mode = "live"
 real_user_shadow_smoke = false
 
+[strategy_control]
+source = "adopted"
+
 [polymarket.source]
 clob_host = "https://clob.polymarket.com"
 data_api_host = "https://gamma-api.polymarket.com"
@@ -54,22 +57,14 @@ heartbeat_interval_seconds = 15
 relayer_poll_interval_seconds = 5
 metadata_refresh_interval_seconds = 60
 
-[polymarket.signer]
+[polymarket.account]
 address = "0x1111111111111111111111111111111111111111"
 funder_address = "0x2222222222222222222222222222222222222222"
 signature_type = "eoa"
 wallet_route = "eoa"
 api_key = "poly-api-key-1"
+secret = "poly-secret-1"
 passphrase = "poly-passphrase-1"
-timestamp = "1700000000"
-signature = "poly-signature-1"
-
-[polymarket.relayer_auth]
-kind = "builder_api_key"
-api_key = "builder-api-key-1"
-timestamp = "1700000001"
-passphrase = "builder-passphrase-1"
-signature = "builder-signature-1"
 
 [negrisk.rollout]
 approved_families = ["family-a"]
