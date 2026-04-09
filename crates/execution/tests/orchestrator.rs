@@ -231,7 +231,19 @@ fn seeded_orchestrator_continues_attempt_numbering_after_resume() {
 
     assert_eq!(
         receipt.attempt_id,
-        "request-bound:14:request-seeded:fullset-buy-merge:condition-1:attempt-8"
+        ExecutionAttemptFactory::request_bound_attempt_id(
+            &execution_plan(),
+            &ExecutionRequest {
+                request_id: "request-seeded".to_owned(),
+                decision_input_id: "request-seeded".to_owned(),
+                snapshot_id: "snapshot-seeded".to_owned(),
+                route: "full-set".to_owned(),
+                scope: "default".to_owned(),
+                activation_mode: ExecutionMode::Live,
+                matched_rule_id: None,
+            },
+            8,
+        )
     );
 }
 
@@ -295,20 +307,31 @@ fn execute_result_exposes_attempt_metadata_without_reconstructing_from_receipt()
             plan,
         ))
         .unwrap();
+    let expected_attempt_id = ExecutionAttemptFactory::request_bound_attempt_id(
+        &execution_plan(),
+        &ExecutionRequest {
+            request_id: "request-detailed".to_owned(),
+            decision_input_id: "intent-detailed".to_owned(),
+            snapshot_id: "snapshot-detailed".to_owned(),
+            route: "full-set".to_owned(),
+            scope: "default".to_owned(),
+            activation_mode: ExecutionMode::Live,
+            matched_rule_id: Some("rule-detailed".to_owned()),
+        },
+        1,
+    );
 
     assert_eq!(
         result,
         ExecutionAttemptRecord {
             attempt: domain::ExecutionAttempt::new(
-                "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1",
+                expected_attempt_id.clone(),
                 expected_plan_id,
                 "snapshot-detailed",
                 1,
             ),
             attempt_context: domain::ExecutionAttemptContext {
-                attempt_id:
-                    "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1"
-                        .to_owned(),
+                attempt_id: expected_attempt_id.clone(),
                 snapshot_id: "snapshot-detailed".to_owned(),
                 execution_mode: ExecutionMode::Live,
                 route: "full-set".to_owned(),
@@ -316,9 +339,7 @@ fn execute_result_exposes_attempt_metadata_without_reconstructing_from_receipt()
                 matched_rule_id: Some("rule-detailed".to_owned()),
             },
             receipt: domain::ExecutionReceipt {
-                attempt_id:
-                    "request-bound:16:request-detailed:fullset-buy-merge:condition-1:attempt-1"
-                        .to_owned(),
+                attempt_id: expected_attempt_id,
                 outcome: domain::ExecutionAttemptOutcome::Succeeded,
                 submission_ref: Some("submission-full-set".to_owned()),
                 pending_ref: None,

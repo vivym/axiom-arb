@@ -130,6 +130,40 @@ fn run_smoke_mode_builds_shared_source_bundle_via_app_facing_run_path() {
 }
 
 #[test]
+fn rerunning_smoke_mode_reuses_durable_shadow_attempts_instead_of_duplicating_them() {
+    let db = apply_db::TestDatabase::new();
+    db.seed_adopted_target_with_active_revision("targets-rev-9", None);
+    let config_path = temp_config_fixture_path("app-live-ux-smoke.toml", normalize_sdk_fixture);
+
+    let first = app_live_command()
+        .arg("run")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", db.database_url())
+        .output()
+        .expect("first smoke run should execute");
+    let first_text = cli::combined(&first);
+    assert!(first.status.success(), "{first_text}");
+
+    let second = app_live_command()
+        .arg("run")
+        .arg("--config")
+        .arg(&config_path)
+        .env("DATABASE_URL", db.database_url())
+        .output()
+        .expect("second smoke run should execute");
+    let second_text = cli::combined(&second);
+    assert!(second.status.success(), "{second_text}");
+    assert!(
+        !second_text.contains("execution attempt"),
+        "{second_text}"
+    );
+
+    db.cleanup();
+    let _ = fs::remove_file(config_path);
+}
+
+#[test]
 fn run_eoa_non_shadow_live_fails_closed_before_relayer_backed_runtime_work() {
     let db = apply_db::TestDatabase::new();
     db.seed_adopted_target_with_active_revision("targets-rev-9", None);

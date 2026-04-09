@@ -1,11 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Mutex, OnceLock},
+};
 
 use chrono::{DateTime, Utc};
 use domain::{
     ApprovalState, ConditionId, IdentifierMap, IdentifierRecord, OrderId, ResolutionState,
 };
 use serde_json::{json, Value};
-use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
+use sqlx::{postgres::{PgConnection, PgRow}, Executor, PgPool, Postgres, Row, Transaction};
 
 use crate::{
     instrumentation::NegRiskPersistenceInstrumentation,
@@ -4002,15 +4005,173 @@ pub async fn append_shadow_execution_batch(
     attempts: &[ExecutionAttemptRow],
     artifacts: &[ShadowExecutionArtifactRow],
 ) -> Result<()> {
+    let _active_batch_guard = ActiveShadowBatchGuard::acquire(shadow_batch_guard_key(attempts))?;
     let mut tx = pool.begin().await?;
+    let tx_application_name = shadow_batch_application_name(attempts);
+    sqlx::query("SELECT set_config('application_name', $1, false)")
+        .bind(&tx_application_name)
+        .execute(&mut *tx)
+        .await?;
+    let tx_backend_pid =
+        sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+            .fetch_one(&mut *tx)
+            .await?;
     for attempt in attempts {
-        append_execution_attempt(&mut *tx, attempt).await?;
+        let preexisting_visible_rows = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM execution_attempts WHERE attempt_id = $1",
+        )
+        .bind(&attempt.attempt_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        match append_shadow_execution_attempt_idempotent(&mut *tx, attempt).await {
+            Err(PersistenceError::DuplicateExecutionAttempt { .. }) => {
+                let activity_snapshot = if preexisting_visible_rows == 0 {
+                    shadow_duplicate_activity_snapshot(pool, tx_backend_pid)
+                        .await
+                        .unwrap_or_else(|error| format!("activity_snapshot_error={error}"))
+                } else {
+                    "activity_snapshot_skipped".to_owned()
+                };
+                return Err(PersistenceError::DuplicateExecutionAttempt {
+                    attempt_id: format!(
+                        "{} [tx_backend_pid={} tx_application_name={:?} preexisting_visible_rows={} activity_snapshot={}]",
+                        attempt.attempt_id,
+                        tx_backend_pid,
+                        tx_application_name,
+                        preexisting_visible_rows,
+                        activity_snapshot
+                    ),
+                });
+            }
+            Err(err) => return Err(err),
+            Ok(()) => {}
+        }
     }
     for artifact in artifacts.iter().cloned() {
-        append_shadow_execution_artifact(&mut *tx, artifact).await?;
+        append_shadow_execution_artifact_idempotent(&mut *tx, artifact).await?;
     }
     tx.commit().await?;
     Ok(())
+}
+
+static ACTIVE_SHADOW_BATCHES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+
+#[derive(Debug)]
+struct ActiveShadowBatchGuard {
+    key: String,
+}
+
+impl ActiveShadowBatchGuard {
+    fn acquire(key: String) -> Result<Self> {
+        let active = ACTIVE_SHADOW_BATCHES.get_or_init(|| Mutex::new(BTreeSet::new()));
+        let mut active = active.lock().unwrap_or_else(|poison| poison.into_inner());
+        if !active.insert(key.clone()) {
+            return Err(PersistenceError::DuplicateExecutionAttempt {
+                attempt_id: format!("shadow-batch-reentry:{key}"),
+            });
+        }
+        Ok(Self { key })
+    }
+}
+
+impl Drop for ActiveShadowBatchGuard {
+    fn drop(&mut self) {
+        let active = ACTIVE_SHADOW_BATCHES.get_or_init(|| Mutex::new(BTreeSet::new()));
+        let mut active = active.lock().unwrap_or_else(|poison| poison.into_inner());
+        active.remove(&self.key);
+    }
+}
+
+fn shadow_batch_guard_key(attempts: &[ExecutionAttemptRow]) -> String {
+    let first_attempt_id = attempts
+        .first()
+        .map(|attempt| attempt.attempt_id.as_str())
+        .unwrap_or("none");
+    let last_attempt_id = attempts
+        .last()
+        .map(|attempt| attempt.attempt_id.as_str())
+        .unwrap_or("none");
+    let run_session_id = attempts
+        .first()
+        .and_then(|attempt| attempt.run_session_id.as_deref())
+        .unwrap_or("none");
+    format!(
+        "run_session_id={run_session_id};len={};first={first_attempt_id};last={last_attempt_id}",
+        attempts.len()
+    )
+}
+
+fn shadow_batch_application_name(attempts: &[ExecutionAttemptRow]) -> String {
+    let first_attempt_id = attempts
+        .first()
+        .map(|attempt| attempt.attempt_id.as_str())
+        .unwrap_or("none");
+    let last_attempt_id = attempts
+        .last()
+        .map(|attempt| attempt.attempt_id.as_str())
+        .unwrap_or("none");
+    let run_session_id = attempts
+        .first()
+        .and_then(|attempt| attempt.run_session_id.as_deref())
+        .unwrap_or("none");
+
+    // Keep the identifier short enough to fit PostgreSQL application_name truncation
+    // while still surfacing the process/session that opened the shadow batch.
+    format!(
+        "shadow-batch pid={} run={} first={} last={}",
+        std::process::id(),
+        abbreviate_application_label(run_session_id, 12),
+        abbreviate_application_label(first_attempt_id, 18),
+        abbreviate_application_label(last_attempt_id, 18)
+    )
+}
+
+fn abbreviate_application_label(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        return value.to_owned();
+    }
+
+    format!("{}…", &value[..max_len.saturating_sub(1)])
+}
+
+async fn shadow_duplicate_activity_snapshot(pool: &PgPool, tx_backend_pid: i32) -> Result<String> {
+    let rows = sqlx::query_as::<_, (i32, Option<String>, String, Option<String>, Option<String>, String)>(
+        r#"
+        SELECT
+            pid,
+            NULLIF(application_name, ''),
+            state,
+            wait_event_type,
+            wait_event,
+            LEFT(REPLACE(query, E'\n', ' '), 160)
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND pid <> $1
+        ORDER BY backend_start DESC
+        LIMIT 8
+        "#,
+    )
+    .bind(tx_backend_pid)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok("none".to_owned());
+    }
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(pid, application_name, state, wait_event_type, wait_event, query)| {
+                format!(
+                    "pid={pid},app={:?},state={},wait={:?}/{:?},query={:?}",
+                    application_name, state, wait_event_type, wait_event, query
+                )
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(" || "))
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -4321,6 +4482,76 @@ where
     }
 }
 
+async fn append_shadow_execution_attempt_idempotent(
+    executor: &mut PgConnection,
+    row: &ExecutionAttemptRow,
+) -> Result<()> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO execution_attempts (
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            route,
+            scope,
+            matched_rule_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key,
+            run_session_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT (attempt_id) DO NOTHING
+        "#,
+    )
+    .bind(&row.attempt_id)
+    .bind(&row.plan_id)
+    .bind(&row.snapshot_id)
+    .bind(&row.route)
+    .bind(&row.scope)
+    .bind(&row.matched_rule_id)
+    .bind(execution_mode_to_str(row.execution_mode))
+    .bind(row.attempt_no)
+    .bind(&row.idempotency_key)
+    .bind(&row.run_session_id)
+    .execute(&mut *executor)
+    .await?;
+
+    if result.rows_affected() == 1 {
+        return Ok(());
+    }
+
+    let existing = sqlx::query(
+        r#"
+        SELECT
+            attempt_id,
+            plan_id,
+            snapshot_id,
+            route,
+            scope,
+            matched_rule_id,
+            execution_mode,
+            attempt_no,
+            idempotency_key,
+            run_session_id
+        FROM execution_attempts
+        WHERE attempt_id = $1
+        "#,
+    )
+    .bind(&row.attempt_id)
+    .fetch_optional(&mut *executor)
+    .await?
+    .map(map_execution_attempt_row)
+    .transpose()?;
+
+    match existing {
+        Some(existing) if shadow_attempt_rows_are_equivalent(&existing, row) => Ok(()),
+        Some(_) | None => Err(PersistenceError::DuplicateExecutionAttempt {
+            attempt_id: row.attempt_id.clone(),
+        }),
+    }
+}
+
 async fn append_shadow_execution_artifact<'e, E>(
     executor: E,
     row: ShadowExecutionArtifactRow,
@@ -4350,6 +4581,58 @@ where
             attempt_id: row.attempt_id,
         })
     }
+}
+
+async fn append_shadow_execution_artifact_idempotent(
+    executor: &mut PgConnection,
+    row: ShadowExecutionArtifactRow,
+) -> Result<()> {
+    let existing = sqlx::query(
+        r#"
+        SELECT attempt_id, stream, payload
+        FROM shadow_execution_artifacts
+        WHERE attempt_id = $1 AND stream = $2
+        ORDER BY artifact_id
+        LIMIT 1
+        "#,
+    )
+    .bind(&row.attempt_id)
+    .bind(&row.stream)
+    .fetch_optional(&mut *executor)
+    .await?
+    .map(map_shadow_execution_artifact_row)
+    .transpose()?;
+
+    if let Some(existing) = existing {
+        if existing.payload == row.payload {
+            return Ok(());
+        }
+
+        return Err(PersistenceError::invalid_value(
+            "shadow_execution_artifacts.payload",
+            format!(
+                "attempt_id={} stream={} existing_payload={} desired_payload={}",
+                existing.attempt_id, existing.stream, existing.payload, row.payload
+            ),
+        ));
+    }
+
+    append_shadow_execution_artifact(&mut *executor, row).await
+}
+
+fn shadow_attempt_rows_are_equivalent(
+    existing: &ExecutionAttemptRow,
+    desired: &ExecutionAttemptRow,
+) -> bool {
+    existing.attempt_id == desired.attempt_id
+        && existing.plan_id == desired.plan_id
+        && existing.snapshot_id == desired.snapshot_id
+        && existing.route == desired.route
+        && existing.scope == desired.scope
+        && existing.matched_rule_id == desired.matched_rule_id
+        && existing.execution_mode == desired.execution_mode
+        && existing.attempt_no == desired.attempt_no
+        && existing.idempotency_key == desired.idempotency_key
 }
 
 fn map_identifier_record_row(row: PgRow) -> Result<IdentifierRecordRow> {

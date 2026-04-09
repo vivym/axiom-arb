@@ -970,6 +970,25 @@ pub(crate) fn persist_shadow_execution_records_with_run_session_id(
         .iter()
         .map(|attempt| attempt_row_with_run_session_id(attempt, run_session_id))
         .collect::<Vec<_>>();
+    let mut seen_attempt_ids = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for attempt in &attempts {
+        seen_attempt_ids
+            .entry(attempt.attempt_id.clone())
+            .or_default()
+            .push(format!(
+                "scope={} plan_id={} run_session_id={:?}",
+                attempt.scope, attempt.plan_id, attempt.run_session_id
+            ));
+    }
+    if let Some((attempt_id, entries)) = seen_attempt_ids
+        .iter()
+        .find(|(_, entries)| entries.len() > 1)
+    {
+        return Err(boxed_error(format!(
+            "duplicate shadow attempt rows reached persistence boundary: attempt_id={} entries={:?}",
+            attempt_id, entries
+        )));
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

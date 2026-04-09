@@ -8,6 +8,7 @@ edition = "2021"
 domain = { path = "../domain" }
 observability = { path = "../observability" }
 rust_decimal = "1.40.0"
+sha2 = "0.10.9"
 tracing = "0.1.41"
 
 [lib]

@@ -570,6 +570,44 @@ async fn shadow_batch_persistence_is_atomic_when_artifact_insert_fails() {
 }
 
 #[tokio::test]
+async fn shadow_batch_persistence_is_idempotent_for_identical_retries() {
+    let db = TestDatabase::new().await;
+    run_migrations(&db.pool).await.unwrap();
+
+    let attempts = vec![sample_attempt(
+        "attempt-shadow-batch-retry-1",
+        ExecutionMode::Shadow,
+    )];
+    let artifacts = vec![sample_shadow_artifact("attempt-shadow-batch-retry-1")];
+
+    append_shadow_execution_batch(&db.pool, &attempts, &artifacts)
+        .await
+        .expect("first shadow batch append should succeed");
+    append_shadow_execution_batch(&db.pool, &attempts, &artifacts)
+        .await
+        .expect("replaying the same shadow batch should be idempotent");
+
+    let persisted_attempts = ExecutionAttemptRepo
+        .list_shadow_attempts(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(persisted_attempts.len(), 1);
+    assert_eq!(persisted_attempts[0].attempt_id, "attempt-shadow-batch-retry-1");
+
+    let persisted_artifacts = ShadowArtifactRepo
+        .list_for_attempts(&db.pool, &["attempt-shadow-batch-retry-1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(persisted_artifacts.len(), 1);
+    assert_eq!(
+        persisted_artifacts[0].attempt_id,
+        "attempt-shadow-batch-retry-1"
+    );
+
+    db.cleanup().await;
+}
+
+#[tokio::test]
 async fn shadow_artifact_table_rejects_live_attempt_ids_via_direct_sql() {
     let db = TestDatabase::new().await;
     run_migrations(&db.pool).await.unwrap();

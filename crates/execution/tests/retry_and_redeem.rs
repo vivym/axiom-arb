@@ -325,7 +325,7 @@ fn execution_attempt_factory_continues_from_seeded_request_bound_plan_counter() 
     assert_eq!(attempt.attempt_no, 5);
     assert_eq!(
         attempt.attempt_id,
-        "request-bound:14:request-seeded:redeem-resolved:condition-seeded:attempt-5"
+        ExecutionAttemptFactory::request_bound_attempt_id(&plan, &request, 5)
     );
     assert_eq!(context.attempt_id, attempt.attempt_id);
 }

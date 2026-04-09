@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use domain::{ExecutionAttempt, ExecutionAttemptContext, ExecutionMode, ExecutionRequest};
+use sha2::{Digest, Sha256};
 
 use crate::plans::ExecutionPlan;
 
@@ -29,6 +30,15 @@ impl ExecutionAttemptFactory {
         )
     }
 
+    pub fn request_bound_attempt_id(
+        plan: &ExecutionPlan,
+        request: &ExecutionRequest,
+        attempt_no: u32,
+    ) -> String {
+        let plan_id = Self::request_bound_plan_id(plan, request);
+        Self::attempt_id_for_plan_id(&plan_id, attempt_no)
+    }
+
     pub fn next_for_plan(
         &mut self,
         plan: &ExecutionPlan,
@@ -42,7 +52,7 @@ impl ExecutionAttemptFactory {
             .or_insert(0);
         *next_attempt_no += 1;
 
-        let attempt_id = format!("{}:attempt-{}", plan_id, *next_attempt_no);
+        let attempt_id = Self::attempt_id_for_plan_id(&plan_id, *next_attempt_no);
         let attempt = ExecutionAttempt::new(
             attempt_id.clone(),
             plan_id,
@@ -60,4 +70,24 @@ impl ExecutionAttemptFactory {
 
         (attempt, context)
     }
+
+    fn attempt_id_for_plan_id(plan_id: &str, attempt_no: u32) -> String {
+        format!(
+            "request-bound:{}:attempt-{}",
+            stable_request_bound_digest(plan_id),
+            attempt_no
+        )
+    }
+}
+
+fn stable_request_bound_digest(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut encoded, "{byte:02x}");
+    }
+    encoded
 }

@@ -63,6 +63,7 @@ pub fn eligible_shadow_records_with_run_session_id(
     recorder: Option<RuntimeMetricsRecorder>,
     run_session_id: Option<&str>,
 ) -> Result<Vec<NegRiskShadowExecutionRecord>, NegRiskShadowError> {
+    let mut seen_attempts = std::collections::BTreeMap::<String, (String, String)>::new();
     let live_rules = approved_families
         .iter()
         .map(|family_id| {
@@ -95,7 +96,7 @@ pub fn eligible_shadow_records_with_run_session_id(
             continue;
         }
 
-        records.push(execute_shadow_family(
+        let record = execute_shadow_family(
             snapshot_id,
             target,
             activation
@@ -107,7 +108,22 @@ pub fn eligible_shadow_records_with_run_session_id(
                 None => ExecutionInstrumentation::disabled(),
             },
             run_session_id,
-        )?);
+        )?;
+        if let Some((first_key, first_family_id)) = seen_attempts.insert(
+            record.attempt.attempt_id.clone(),
+            (family_id.clone(), target.family_id.clone()),
+        ) {
+            return Err(NegRiskShadowError::Planning(format!(
+                "duplicate shadow attempt generated in same batch: attempt_id={} first_key={} first_family_id={} second_key={} second_family_id={}",
+                record.attempt.attempt_id,
+                first_key,
+                first_family_id,
+                family_id,
+                target.family_id,
+            )));
+        }
+
+        records.push(record);
     }
 
     Ok(records)
@@ -250,5 +266,42 @@ mod tests {
             records[0].attempt.run_session_id.as_deref(),
             Some("run-session-7")
         );
+    }
+
+    #[test]
+    fn eligible_shadow_records_bound_attempt_identity_for_large_neg_risk_family_plans() {
+        let members = (0..200)
+            .map(|index| NegRiskMemberLiveTarget {
+                condition_id: format!("condition-{index:03}"),
+                token_id: format!("token-{index:03}"),
+                price: Decimal::new(42 + i64::from(index), 2),
+                quantity: Decimal::new(10 + i64::from(index), 0),
+            })
+            .collect();
+        let targets = BTreeMap::from([(
+            "family-large".to_owned(),
+            NegRiskFamilyLiveTarget {
+                family_id: "family-large".to_owned(),
+                members,
+            },
+        )]);
+        let approved_families = BTreeSet::from(["family-large".to_owned()]);
+        let ready_families = BTreeSet::from(["family-large".to_owned()]);
+
+        let records = eligible_shadow_records_with_run_session_id(
+            "snapshot-large",
+            &targets,
+            &approved_families,
+            &ready_families,
+            None,
+            Some("run-session-large"),
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert!(records[0].attempt.plan_id.len() > 4096);
+        assert!(records[0].attempt.attempt_id.len() < 128);
+        assert!(records[0].attempt.attempt_id.starts_with("request-bound:"));
+        assert!(records[0].attempt.attempt_id.ends_with(":attempt-1"));
     }
 }

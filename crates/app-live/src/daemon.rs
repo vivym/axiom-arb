@@ -375,6 +375,8 @@ mod tests {
 
     use config_schema::{load_raw_config_from_str, ValidatedConfig};
     use domain::ExecutionMode;
+    use persistence::models::{ExecutionAttemptRow, ShadowExecutionArtifactRow};
+    use serde_json::json;
 
     use super::seed_live_supervisor_from_durable_state;
     use crate::{load_real_user_shadow_smoke_config, AppSupervisor, NegRiskLiveTargetSet};
@@ -408,6 +410,67 @@ mod tests {
         assert_eq!(summary.neg_risk_live_attempt_count, 0);
         assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
         assert_eq!(supervisor.neg_risk_shadow_execution_artifacts().len(), 1);
+    }
+
+    #[test]
+    fn smoke_startup_reuses_seeded_shadow_attempts_without_regenerating_them() {
+        let mut supervisor = AppSupervisor::for_tests();
+        seed_live_supervisor_from_durable_state(
+            &mut supervisor,
+            crate::runtime::DurableLiveStartupState {
+                last_journal_seq: 0,
+                last_state_version: 0,
+                published_snapshot_id: Some("snapshot-0".to_owned()),
+                pending_reconcile_anchors: Vec::new(),
+                live_execution_records: Vec::new(),
+                shadow_execution_attempts: vec![ExecutionAttemptRow {
+                    attempt_id:
+                        "request-bound:40:negrisk-shadow-request:snapshot-0:family-a:attempt-1"
+                            .to_owned(),
+                    plan_id: "request-bound:40:negrisk-shadow-request:snapshot-0:family-a:plan"
+                        .to_owned(),
+                    snapshot_id: "snapshot-0".to_owned(),
+                    route: "neg-risk".to_owned(),
+                    scope: "family-a".to_owned(),
+                    matched_rule_id: Some("family-a-live".to_owned()),
+                    execution_mode: ExecutionMode::Shadow,
+                    attempt_no: 1,
+                    idempotency_key: "idem-family-a-attempt-1".to_owned(),
+                    run_session_id: Some("run-session-old".to_owned()),
+                }],
+                shadow_execution_artifacts: vec![ShadowExecutionArtifactRow {
+                    attempt_id:
+                        "request-bound:40:negrisk-shadow-request:snapshot-0:family-a:attempt-1"
+                            .to_owned(),
+                    stream: "neg-risk-shadow-plan".to_owned(),
+                    payload: json!({
+                        "attempt_id": "request-bound:40:negrisk-shadow-request:snapshot-0:family-a:attempt-1",
+                        "snapshot_id": "snapshot-0",
+                        "scope": "family-a",
+                    }),
+                }],
+                candidate_restore_status: crate::supervisor::CandidateRestoreStatus::default(),
+            },
+            NegRiskLiveTargetSet::try_from(&smoke_config_view()).expect("targets should parse"),
+            BTreeSet::from(["family-a".to_owned()]),
+            BTreeSet::from(["family-a".to_owned()]),
+            load_real_user_shadow_smoke_config(&smoke_config_view())
+                .expect("smoke config should parse"),
+            false,
+        );
+        supervisor.set_run_session_id("run-session-new");
+
+        let summary = supervisor.run_once().expect("supervisor should run");
+
+        assert_eq!(summary.negrisk_mode, ExecutionMode::Shadow);
+        assert_eq!(summary.neg_risk_live_attempt_count, 0);
+        assert_eq!(supervisor.neg_risk_shadow_execution_attempts().len(), 1);
+        assert_eq!(
+            supervisor.neg_risk_shadow_execution_attempts()[0]
+                .run_session_id
+                .as_deref(),
+            Some("run-session-old")
+        );
     }
 
     fn smoke_config_view() -> config_schema::AppLiveConfigView<'static> {
