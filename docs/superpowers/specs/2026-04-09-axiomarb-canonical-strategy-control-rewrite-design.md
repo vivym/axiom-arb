@@ -163,6 +163,8 @@ Therefore:
 - config + missing canonical persistence => fail closed
 - config + conflicting runtime-progress => report restart/conflict, but keep config as desired truth
 - missing config cannot be repaired from runtime-progress alone
+- canonical config + canonical persistence for some other revision => ignore unrelated stale rows; only rows matching the configured `operator_strategy_revision` are relevant
+- canonical config + contradictory canonical persistence for the configured revision => fail closed; no implicit “latest row wins” reconciliation
 
 ### 2. Remove duplicated target-source detection
 
@@ -178,6 +180,8 @@ This rewrite should eliminate those parallel checks and centralize source interp
 
 The validated config view should expose canonical control-plane facts, not compatibility detection helpers.
 
+All non-CLI live/smoke consumers that currently read control-plane state indirectly must also route through the same canonical resolver contract, including runtime/daemon/source-task/supervisor/session helpers. The rewrite is not complete if commands are canonicalized but lower-level runtime consumers still read legacy target-shaped state directly.
+
 ### 3. Collapse startup onto canonical strategy control
 
 `crates/app-live/src/startup.rs` currently supports both canonical adopted strategy control and compatibility-derived startup targets.
@@ -187,6 +191,8 @@ After this rewrite:
 - startup should only consume canonical adopted strategy-control state
 - compatibility-derived target rendering should be removed from startup truth
 - any legacy config must be migrated before startup is allowed to proceed
+- startup must not invoke the migration helper
+- startup must fail closed on migratable legacy input and return a migration-required error for the caller to surface
 
 ### 4. Simplify status/apply/verify models
 
@@ -228,6 +234,12 @@ Migration contract:
 - if strategy-shaped canonical provenance/artifacts are missing but target-shaped legacy provenance/artifacts exist and can be deterministically converted, the migration helper must materialize the required canonical rows
 - if the legacy revision cannot be linked to one unique canonical strategy revision, migration fails closed
 
+For this rewrite, automatic migration of legacy target-source input should be conservative:
+
+- if existing strategy-shaped canonical lineage already exists for the logical revision, use it
+- otherwise, migrate only when the helper can deterministically convert legacy target-shaped lineage into canonical strategy-shaped rows
+- if neither condition holds, fail closed and require operator repair rather than guessing
+
 Malformed legacy target-source input is invalid and not migratable, including:
 
 - `source = "adopted"` with missing `operator_target_revision`
@@ -250,6 +262,19 @@ Legacy explicit targets must follow deterministic migration rules:
     - every member has `condition_id`, `token_id`, `price`, and `quantity`
   - the full parsed target set is authoritative for migration
   - the canonical `operator_strategy_revision` is synthesized deterministically from the full target-set digest, not from a partial row or first family
+
+Deterministic digest contract:
+
+- build the same canonical neg-risk target-set representation currently used by `neg_risk_live_target_revision_from_targets`
+- families are grouped by `family_id`
+- members are canonically sorted by:
+  - `condition_id`
+  - `token_id`
+  - normalized `price`
+  - normalized `quantity`
+- serialize the canonical structure to JSON
+- compute `sha256:<hex>`
+- derive the migrated strategy revision as `strategy-rev-<digest-without-prefix>`
 
 Multi-row target sets are valid migration input if and only if they parse into one deterministic full target set. There is no per-row migration and no “pick the first target” fallback.
 
@@ -297,10 +322,15 @@ Automatic rewrite should only happen at explicit mutation boundaries that alread
 These commands may:
 
 1. detect a legacy but migratable control-plane input
-2. resolve the canonical strategy revision
+2. call the migration helper
 3. materialize any required canonical strategy-shaped persistence rows
 4. rewrite the config into canonical `[strategy_control]`
-4. continue with the canonical flow
+5. re-run the canonical resolver against the rewritten config
+6. continue with the canonical flow
+
+Mutation-boundary commands must not continue directly from partially migrated state. The required sequence is:
+
+`detect -> migrate -> rewrite -> re-resolve -> continue`
 
 ### Read-only commands must not auto-rewrite
 
@@ -319,6 +349,16 @@ app-live targets adopt --config <config>
 ```
 
 In this rewrite, `targets adopt` becomes the single explicit migration entrypoint for migratable old control-plane input. Read-only commands should all converge on that next step rather than emitting divergent migration guidance.
+
+Read-only remediation decision table:
+
+- migratable legacy input
+  - remediation: `app-live targets adopt --config <config>`
+- contradictory or malformed control-plane input
+  - remediation: fix the TOML so only one valid canonical control-plane shape remains, then rerun
+- canonical config with missing or contradictory canonical persistence
+  - remediation: rebuild canonical lineage outside read-only commands, then rerun
+  - read-only commands must not imply that `targets adopt` alone can fix every closed state
 
 ### Fail-closed migration rules
 
@@ -419,6 +459,9 @@ With compatibility removed, readiness and action models should get smaller. The 
 
 - should only start from canonical adopted strategy-control state
 - legacy shapes must be migrated before startup
+- `run` is not a mutation boundary for this rewrite
+- if `run` encounters migratable legacy input, it must fail closed and surface the migration-required remediation rather than invoking migration implicitly
+- `run` may delegate canonical resolution to `startup`, but neither `run` nor `startup` may preserve a hidden compatibility branch
 
 ### targets adopt
 
@@ -492,6 +535,14 @@ The rewrite should also add direct resolver-level tests for the shared matrix:
 - conflicting runtime-progress vs configured strategy revision
 - malformed legacy target-source input
 - empty `targets = []`
+
+Acceptance tests should also cover the exact operator-facing artifacts named in this spec:
+
+- `init` wizard/render/summary output
+- `config/axiom-arb.example.toml`
+- `README.md`
+- `docs/runbooks/real-user-shadow-smoke.md`
+- `docs/runbooks/operator-target-adoption.md`
 
 ## File-Level Impact
 
