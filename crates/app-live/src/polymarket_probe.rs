@@ -394,6 +394,10 @@ impl PolymarketStreamApi for LegacyStreamProbeApi {
                 )
                 .await
                 .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
+            client
+                .send_user_ping()
+                .await
+                .map_err(|error| PolymarketGatewayError::connectivity(error.to_string()))?;
             let event = client
                 .next_user_event()
                 .await
@@ -492,6 +496,23 @@ mod tests {
             .await
             .expect("user events should succeed");
         assert!(matches!(user_events[0], UserWsEvent::Trade(_)));
+    }
+
+    #[tokio::test]
+    async fn legacy_stream_probe_accepts_user_ws_pong_when_no_business_event_arrives() {
+        let _guard = env_lock().lock().await;
+        let _proxy_guard = ProxyEnvGuard::clear();
+
+        let market_ws = ProbeWsServer::spawn(WsProbeKind::Market);
+        let user_ws = ProbeWsServer::spawn(WsProbeKind::UserPongOnPing);
+        let api = LegacyStreamProbeApi::new(sample_source_config(market_ws.url(), user_ws.url()));
+
+        let user_events = api
+            .user_events(&sample_user_stream_auth(), &["condition-1".to_owned()])
+            .await
+            .expect("user events should succeed when websocket replies to ping");
+
+        assert!(matches!(user_events[0], UserWsEvent::Pong));
     }
 
     #[test]
@@ -695,11 +716,13 @@ mod tests {
                         let mut responded = false;
                         loop {
                             match websocket.read() {
-                                Ok(WsMessage::Text(_)) if !responded => {
-                                    websocket
-                                        .send(WsMessage::Text(kind.response_payload().into()))
-                                        .expect("send ws probe response");
-                                    responded = true;
+                                Ok(WsMessage::Text(text)) if !responded => {
+                                    if kind.should_respond_to(&text) {
+                                        websocket
+                                            .send(WsMessage::Text(kind.response_payload().into()))
+                                            .expect("send ws probe response");
+                                        responded = true;
+                                    }
                                 }
                                 Ok(_) => {}
                                 Err(_) => break,
@@ -741,9 +764,17 @@ mod tests {
     enum WsProbeKind {
         Market,
         User,
+        UserPongOnPing,
     }
 
     impl WsProbeKind {
+        fn should_respond_to(self, message: &str) -> bool {
+            match self {
+                Self::Market | Self::User => true,
+                Self::UserPongOnPing => message.trim().eq_ignore_ascii_case("PING"),
+            }
+        }
+
         fn response_payload(self) -> &'static str {
             match self {
                 Self::Market => {
@@ -752,6 +783,7 @@ mod tests {
                 Self::User => {
                     r#"{"event":"trade","trade_id":"trade-1","order_id":"order-1","status":"MATCHED","condition_id":"condition-1","price":"0.41","size":"100","fee_rate_bps":"15","transaction_hash":"0xtrade"}"#
                 }
+                Self::UserPongOnPing => "PONG",
             }
         }
     }

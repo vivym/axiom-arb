@@ -224,8 +224,13 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
             "market websocket probe skipped because resolved startup targets did not contain usable token IDs",
         ));
     } else {
-        backend.subscribe_market_assets(&token_ids).await?;
-        checks.push(ConnectivityCheck::pass("market websocket probe succeeded"));
+        match backend.subscribe_market_assets(&token_ids).await {
+            Ok(()) => checks.push(ConnectivityCheck::pass("market websocket probe succeeded")),
+            Err(error) if is_market_websocket_timeout(&error) => checks.push(ConnectivityCheck::skip(
+                "market websocket probe skipped because no immediate market event arrived after subscription",
+            )),
+            Err(error) => return Err(error),
+        }
     }
 
     let condition_ids = collect_condition_ids(resolved_targets);
@@ -234,10 +239,16 @@ async fn run_live_probes<B: PolymarketProbeFacade>(
             "user websocket probe skipped because resolved startup targets did not contain usable condition IDs",
         ));
     } else if let Some(user_ws_auth) = user_ws_auth {
-        backend
+        match backend
             .subscribe_user_markets(user_ws_auth, &condition_ids)
-            .await?;
-        checks.push(ConnectivityCheck::pass("user websocket probe succeeded"));
+            .await
+        {
+            Ok(()) => checks.push(ConnectivityCheck::pass("user websocket probe succeeded")),
+            Err(error) if is_user_websocket_timeout(&error) => checks.push(ConnectivityCheck::skip(
+                "user websocket probe skipped because no immediate user event arrived after subscription",
+            )),
+            Err(error) => return Err(error),
+        }
     } else {
         checks.push(ConnectivityCheck::skip(
             "user websocket probe skipped because the current config does not expose reusable account credentials",
@@ -271,6 +282,20 @@ fn collect_token_ids(resolved_targets: &ResolvedTargets) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn is_user_websocket_timeout(error: &PolymarketProbeError) -> bool {
+    error.category == "ConnectivityError"
+        && error
+            .message
+            .contains("user websocket probe timed out after")
+}
+
+fn is_market_websocket_timeout(error: &PolymarketProbeError) -> bool {
+    error.category == "ConnectivityError"
+        && error
+            .message
+            .contains("market websocket probe timed out after")
 }
 
 fn collect_condition_ids(resolved_targets: &ResolvedTargets) -> Vec<String> {
@@ -522,6 +547,60 @@ mod tests {
         assert!(error.message.contains("forced failure"));
     }
 
+    #[tokio::test]
+    async fn user_websocket_timeout_is_reported_as_skip_not_failure() {
+        let mut backend = UserTimeoutBackend::default();
+
+        let checks = run_live_probes(
+            &mut backend,
+            &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
+            Some(&sample_relayer_runtime_config()),
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect("user websocket timeout should not fail the full probe set");
+
+        assert!(checks.iter().any(|check| {
+            check.status == DoctorCheckStatus::Skip
+                && check
+                    .label
+                    .contains("user websocket probe skipped because no immediate user event arrived")
+        }));
+        assert!(backend.calls.contains(&ProbeCall::PostOrderHeartbeat(
+            sample_l2_probe_credentials()
+        )));
+        assert!(backend.calls.contains(&ProbeCall::FetchRecentTransactions));
+    }
+
+    #[tokio::test]
+    async fn market_websocket_timeout_is_reported_as_skip_not_failure() {
+        let mut backend = MarketTimeoutBackend::default();
+
+        let checks = run_live_probes(
+            &mut backend,
+            &sample_resolved_targets(vec![("condition-1", "token-1")]),
+            &sample_l2_probe_credentials(),
+            Some(&sample_relayer_runtime_config()),
+            Some(sample_user_ws_auth()),
+        )
+        .await
+        .expect("market websocket timeout should not fail the full probe set");
+
+        assert!(checks.iter().any(|check| {
+            check.status == DoctorCheckStatus::Skip
+                && check
+                    .label
+                    .contains("market websocket probe skipped because no immediate market event arrived")
+        }));
+        assert!(backend.calls.contains(&ProbeCall::SubscribeUserMarkets(vec![
+            "condition-1".to_owned()
+        ])));
+        assert!(backend.calls.contains(&ProbeCall::PostOrderHeartbeat(
+            sample_l2_probe_credentials()
+        )));
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ProbeCall {
         FetchOpenOrders(PolymarketL2ProbeCredentials),
@@ -601,6 +680,16 @@ mod tests {
 
     struct FailingBackend;
 
+    #[derive(Default)]
+    struct UserTimeoutBackend {
+        calls: Vec<ProbeCall>,
+    }
+
+    #[derive(Default)]
+    struct MarketTimeoutBackend {
+        calls: Vec<ProbeCall>,
+    }
+
     impl PolymarketProbeFacade for FailingBackend {
         fn fetch_open_orders<'a>(
             &'a mut self,
@@ -637,6 +726,104 @@ mod tests {
             &'a mut self,
             _relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
         ) -> ProbeFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl PolymarketProbeFacade for UserTimeoutBackend {
+        fn fetch_open_orders<'a>(
+            &'a mut self,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::FetchOpenOrders(l2_probe_credentials.clone()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe_market_assets<'a>(&'a mut self, token_ids: &'a [String]) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::SubscribeMarketAssets(token_ids.to_vec()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe_user_markets<'a>(
+            &'a mut self,
+            _auth: UserWsProbeAuth<'a>,
+            condition_ids: &'a [String],
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::SubscribeUserMarkets(condition_ids.to_vec()));
+            Box::pin(async {
+                Err(PolymarketProbeError::new(
+                    "ConnectivityError",
+                    "user websocket probe timed out after 5s",
+                ))
+            })
+        }
+
+        fn post_order_heartbeat<'a>(
+            &'a mut self,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::PostOrderHeartbeat(l2_probe_credentials.clone()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn fetch_recent_transactions<'a>(
+            &'a mut self,
+            _relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
+        ) -> ProbeFuture<'a> {
+            self.calls.push(ProbeCall::FetchRecentTransactions);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl PolymarketProbeFacade for MarketTimeoutBackend {
+        fn fetch_open_orders<'a>(
+            &'a mut self,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::FetchOpenOrders(l2_probe_credentials.clone()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn subscribe_market_assets<'a>(&'a mut self, token_ids: &'a [String]) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::SubscribeMarketAssets(token_ids.to_vec()));
+            Box::pin(async {
+                Err(PolymarketProbeError::new(
+                    "ConnectivityError",
+                    "market websocket probe timed out after 5s",
+                ))
+            })
+        }
+
+        fn subscribe_user_markets<'a>(
+            &'a mut self,
+            _auth: UserWsProbeAuth<'a>,
+            condition_ids: &'a [String],
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::SubscribeUserMarkets(condition_ids.to_vec()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn post_order_heartbeat<'a>(
+            &'a mut self,
+            l2_probe_credentials: &'a PolymarketL2ProbeCredentials,
+        ) -> ProbeFuture<'a> {
+            self.calls
+                .push(ProbeCall::PostOrderHeartbeat(l2_probe_credentials.clone()));
+            Box::pin(async { Ok(()) })
+        }
+
+        fn fetch_recent_transactions<'a>(
+            &'a mut self,
+            _relayer_runtime_config: &'a LocalRelayerRuntimeConfig,
+        ) -> ProbeFuture<'a> {
+            self.calls.push(ProbeCall::FetchRecentTransactions);
             Box::pin(async { Ok(()) })
         }
     }
