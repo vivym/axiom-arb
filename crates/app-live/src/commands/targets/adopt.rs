@@ -10,7 +10,6 @@ use persistence::{
     },
     OperatorStrategyAdoptionHistoryRepo, StrategyAdoptionRepo, StrategyControlArtifactRepo,
 };
-use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::{
@@ -18,12 +17,11 @@ use crate::{
     commands::targets::{
         config_file::rewrite_operator_strategy_revision,
         state::{
-            configured_operator_strategy_revision, legacy_explicit_targets,
-            load_active_operator_strategy_revision, resolve_adoption_selection,
-            synthetic_strategy_revision_for_legacy_explicit_config,
-            ResolvedStrategyAdoptionSelection,
+            configured_operator_strategy_revision, load_active_operator_strategy_revision,
+            resolve_adoption_selection, ResolvedStrategyAdoptionSelection,
         },
     },
+    strategy_control::{migrate_legacy_strategy_control, MigrationSource},
 };
 
 pub fn execute(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
@@ -37,9 +35,9 @@ pub fn execute(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
 
 fn execute_inner(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
     validate_selector_flags(
+        &args.config,
         args.operator_strategy_revision.as_deref(),
         args.adoptable_revision.as_deref(),
-        args.adopt_compatibility,
     )?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -53,7 +51,7 @@ fn execute_inner(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
             &args.config,
             args.operator_strategy_revision.as_deref(),
             args.adoptable_revision.as_deref(),
-            args.adopt_compatibility,
+            false,
         )
         .await
     })?;
@@ -63,19 +61,13 @@ fn execute_inner(args: TargetAdoptArgs) -> Result<(), Box<dyn Error>> {
 }
 
 fn validate_selector_flags(
+    config_path: &Path,
     operator_strategy_revision: Option<&str>,
     adoptable_revision: Option<&str>,
-    adopt_compatibility: bool,
 ) -> Result<(), Box<dyn Error>> {
-    if adopt_compatibility {
-        return match (operator_strategy_revision, adoptable_revision) {
-            (None, None) => Ok(()),
-            _ => Err("--adopt-compatibility cannot be combined with revision selectors".into()),
-        };
-    }
-
     match (operator_strategy_revision, adoptable_revision) {
         (Some(_), None) | (None, Some(_)) => Ok(()),
+        (None, None) if has_migratable_legacy_strategy_control(config_path)? => Ok(()),
         _ => Err(
             "exactly one of --operator-strategy-revision or --adoptable-revision must be provided"
                 .into(),
@@ -132,30 +124,23 @@ pub(crate) async fn adopt_selected_revision(
     config_path: &Path,
     operator_strategy_revision: Option<&str>,
     adoptable_revision: Option<&str>,
-    adopt_compatibility: bool,
+    _adopt_compatibility: bool,
 ) -> Result<AdoptSummary, Box<dyn Error>> {
-    validate_selector_flags(
-        operator_strategy_revision,
-        adoptable_revision,
-        adopt_compatibility,
-    )?;
+    validate_selector_flags(config_path, operator_strategy_revision, adoptable_revision)?;
 
-    let selection = if adopt_compatibility {
-        let operator_strategy_revision =
-            synthetic_strategy_revision_for_legacy_explicit_config(config_path)?;
-        let synthetic_adoptable_revision =
-            synthetic_adoptable_revision(&operator_strategy_revision);
-        ensure_compatibility_migration_artifacts(
-            pool,
-            config_path,
-            &operator_strategy_revision,
-            &synthetic_adoptable_revision,
-        )
-        .await?;
+    let previous_operator_strategy_revision = configured_operator_strategy_revision(config_path)?;
+
+    let selection = if operator_strategy_revision.is_none() && adoptable_revision.is_none() {
+        let outcome = migrate_legacy_strategy_control(pool, config_path)
+            .await
+            .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
         ResolvedStrategyAdoptionSelection {
-            operator_strategy_revision,
-            adoptable_revision: Some(synthetic_adoptable_revision),
-            migration_source: Some("legacy-explicit".to_owned()),
+            operator_strategy_revision: outcome.operator_strategy_revision,
+            adoptable_revision: Some(outcome.adoptable_strategy_revision),
+            migration_source: Some(match outcome.source {
+                MigrationSource::LegacyTargetSource => "legacy-target-source".to_owned(),
+                MigrationSource::LegacyExplicitTargets => "legacy-explicit".to_owned(),
+            }),
         }
     } else {
         resolve_adoption_selection(pool, operator_strategy_revision, adoptable_revision).await?
@@ -165,7 +150,6 @@ pub(crate) async fn adopt_selected_revision(
         Some(selection.operator_strategy_revision.as_str()),
     )
     .await?;
-    let previous_operator_strategy_revision = configured_operator_strategy_revision(config_path)?;
     let rewrite_required = config_requires_strategy_control_rewrite(config_path)?
         || previous_operator_strategy_revision.as_deref()
             != Some(selection.operator_strategy_revision.as_str());
@@ -423,52 +407,6 @@ async fn strategy_candidate_revision_for_selection(
         .map(|row| row.strategy_candidate_revision))
 }
 
-async fn ensure_compatibility_migration_artifacts(
-    pool: &PgPool,
-    config_path: &Path,
-    operator_strategy_revision: &str,
-    adoptable_strategy_revision: &str,
-) -> Result<(), Box<dyn Error>> {
-    let targets = legacy_explicit_targets(config_path)?;
-    let strategy_candidate_revision =
-        synthetic_strategy_candidate_revision(operator_strategy_revision);
-
-    StrategyControlArtifactRepo
-        .upsert_strategy_candidate_set(
-            pool,
-            &StrategyCandidateSetRow {
-                strategy_candidate_revision: strategy_candidate_revision.clone(),
-                snapshot_id: format!("compatibility-migration-{operator_strategy_revision}"),
-                source_revision: "legacy-explicit".to_owned(),
-                payload: json!({
-                    "migration_source": "legacy-explicit",
-                    "strategy_candidate_revision": strategy_candidate_revision,
-                }),
-            },
-        )
-        .await?;
-
-    StrategyControlArtifactRepo
-        .upsert_adoptable_strategy_revision(
-            pool,
-            &AdoptableStrategyRevisionRow {
-                adoptable_strategy_revision: adoptable_strategy_revision.to_owned(),
-                strategy_candidate_revision: strategy_candidate_revision.clone(),
-                rendered_operator_strategy_revision: operator_strategy_revision.to_owned(),
-                payload: json!({
-                    "migration_source": "legacy-explicit",
-                    "adoptable_strategy_revision": adoptable_strategy_revision,
-                    "strategy_candidate_revision": strategy_candidate_revision,
-                    "rendered_operator_strategy_revision": operator_strategy_revision,
-                    "rendered_live_targets": targets.targets(),
-                }),
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
 fn config_requires_strategy_control_rewrite(config_path: &Path) -> Result<bool, Box<dyn Error>> {
     let raw = load_raw_config_from_path(config_path)?;
     Ok(raw.strategy_control.is_none()
@@ -484,16 +422,11 @@ fn config_requires_strategy_control_rewrite(config_path: &Path) -> Result<bool, 
             .unwrap_or(false))
 }
 
-fn synthetic_adoptable_revision(operator_strategy_revision: &str) -> String {
-    format!(
-        "adoptable-strategy-{}",
-        operator_strategy_revision.trim_start_matches("strategy-rev-")
-    )
-}
-
-fn synthetic_strategy_candidate_revision(operator_strategy_revision: &str) -> String {
-    format!(
-        "strategy-candidate-{}",
-        operator_strategy_revision.trim_start_matches("strategy-rev-")
-    )
+fn has_migratable_legacy_strategy_control(config_path: &Path) -> Result<bool, Box<dyn Error>> {
+    let raw = load_raw_config_from_path(config_path)?;
+    Ok(raw.strategy_control.is_none()
+        && raw
+            .negrisk
+            .as_ref()
+            .is_some_and(|negrisk| negrisk.target_source.is_some() || negrisk.targets.is_present()))
 }

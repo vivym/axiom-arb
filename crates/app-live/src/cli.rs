@@ -106,9 +106,6 @@ pub struct TargetAdoptArgs {
 
     #[arg(long)]
     pub adoptable_revision: Option<String>,
-
-    #[arg(long)]
-    pub adopt_compatibility: bool,
 }
 
 #[derive(clap::Args, Debug)]

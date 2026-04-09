@@ -89,13 +89,32 @@ quantity = "5"
 
 #[test]
 fn targets_adopt_requires_exactly_one_selector_flag() {
-    let config = temp_config(MINIMAL_TARGET_SOURCE_CONFIG);
+    let database = TestDatabase::new();
+    let config = temp_config(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[strategy_control]
+source = "adopted"
+operator_strategy_revision = "strategy-rev-12"
+"#,
+    );
 
     let output = Command::new(app_live_binary())
         .arg("targets")
         .arg("adopt")
         .arg("--config")
         .arg(&config)
+        .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live targets adopt should execute");
 
@@ -106,6 +125,7 @@ fn targets_adopt_requires_exactly_one_selector_flag() {
         "{text}"
     );
 
+    database.cleanup();
     let _ = fs::remove_file(config);
 }
 
@@ -411,7 +431,69 @@ fn targets_adopt_rejects_invalid_route_artifacts_in_neutral_adoptable_payload() 
 }
 
 #[test]
-fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
+fn targets_adopt_migrates_legacy_target_source_without_selectors() {
+    let database = TestDatabase::new();
+    database.seed_legacy_target_lineage();
+    let config = temp_config(MINIMAL_TARGET_SOURCE_CONFIG_REV_9);
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("adopt")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets adopt should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains("operator_strategy_revision = strategy-rev-9"),
+        "{text}"
+    );
+    assert!(
+        text.contains("migration_source = legacy-target-source"),
+        "{text}"
+    );
+
+    let rewritten = fs::read_to_string(&config).expect("rewritten config should load");
+    assert_rewritten_strategy_control(&rewritten, "strategy-rev-9");
+
+    let latest = database.latest_history().expect("history row should exist");
+    assert_eq!(latest.action_kind, "adopt");
+    assert_eq!(latest.operator_strategy_revision, "strategy-rev-9");
+    assert_eq!(
+        latest.previous_operator_strategy_revision.as_deref(),
+        Some("targets-rev-9")
+    );
+    assert_eq!(
+        latest.adoptable_strategy_revision.as_deref(),
+        Some("adoptable-strategy-9")
+    );
+    assert_eq!(
+        latest.strategy_candidate_revision.as_deref(),
+        Some("strategy-candidate-9")
+    );
+
+    let provenance = database
+        .provenance_for("strategy-rev-9")
+        .expect("provenance lookup should succeed")
+        .expect("canonical provenance should be written");
+    assert_eq!(
+        provenance.adoptable_strategy_revision,
+        "adoptable-strategy-9"
+    );
+    assert_eq!(
+        provenance.strategy_candidate_revision,
+        "strategy-candidate-9"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_adopt_migrates_legacy_explicit_config_without_selectors() {
     let database = TestDatabase::new();
     let config = database.legacy_explicit_config_path();
 
@@ -420,7 +502,6 @@ fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
         .arg("adopt")
         .arg("--config")
         .arg(&config)
-        .arg("--adopt-compatibility")
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live targets adopt should execute");
@@ -475,7 +556,62 @@ fn targets_adopt_migrates_legacy_explicit_config_into_first_neutral_revision() {
 }
 
 #[test]
-fn targets_adopt_compatibility_treats_matching_legacy_runtime_digest_as_no_restart() {
+fn targets_adopt_empty_legacy_targets_fail_closed_without_selectors() {
+    let database = TestDatabase::new();
+    let config = temp_config(
+        r#"
+[runtime]
+mode = "live"
+
+[polymarket.account]
+address = "0x1111111111111111111111111111111111111111"
+signature_type = "eoa"
+wallet_route = "eoa"
+api_key = "poly-api-key"
+secret = "poly-secret"
+passphrase = "poly-passphrase"
+
+[negrisk]
+targets = []
+"#,
+    );
+
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("adopt")
+        .arg("--config")
+        .arg(&config)
+        .env("DATABASE_URL", database.database_url())
+        .output()
+        .expect("app-live targets adopt should execute");
+
+    let text = combined(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("empty negrisk.targets array is invalid legacy input"),
+        "{text}"
+    );
+
+    database.cleanup();
+    let _ = fs::remove_file(config);
+}
+
+#[test]
+fn targets_adopt_help_does_not_mention_compatibility_flag() {
+    let output = Command::new(app_live_binary())
+        .arg("targets")
+        .arg("adopt")
+        .arg("--help")
+        .output()
+        .expect("app-live targets adopt --help should execute");
+
+    let text = combined(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(!text.contains("--adopt-compatibility"), "{text}");
+}
+
+#[test]
+fn targets_adopt_legacy_runtime_progress_no_longer_needs_compatibility_flag() {
     let database = TestDatabase::new();
     database.seed_legacy_explicit_runtime_progress();
     let config = database.legacy_explicit_config_path();
@@ -495,7 +631,6 @@ fn targets_adopt_compatibility_treats_matching_legacy_runtime_digest_as_no_resta
         .arg("adopt")
         .arg("--config")
         .arg(&config)
-        .arg("--adopt-compatibility")
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live targets adopt should execute");
@@ -541,7 +676,6 @@ fn targets_rollback_allows_compatibility_mode_after_neutral_history_exists() {
         .arg("adopt")
         .arg("--config")
         .arg(&seed_config)
-        .arg("--adopt-compatibility")
         .env("DATABASE_URL", database.database_url())
         .output()
         .expect("app-live targets adopt should execute");
@@ -730,6 +864,68 @@ impl TestDatabase {
 
     fn legacy_explicit_config_path(&self) -> PathBuf {
         temp_config(LEGACY_EXPLICIT_LIVE_CONFIG)
+    }
+
+    fn seed_legacy_target_lineage(&self) {
+        self.runtime.block_on(async {
+            CandidateArtifactRepo
+                .upsert_candidate_target_set(
+                    &self.pool,
+                    &CandidateTargetSetRow {
+                        candidate_revision: "candidate-9".to_owned(),
+                        snapshot_id: "snapshot-candidate-9".to_owned(),
+                        source_revision: "discovery-candidate-9".to_owned(),
+                        payload: json!({
+                            "candidate_revision": "candidate-9",
+                            "snapshot_id": "snapshot-candidate-9",
+                        }),
+                    },
+                )
+                .await
+                .expect("candidate row should persist");
+
+            CandidateArtifactRepo
+                .upsert_adoptable_target_revision(
+                    &self.pool,
+                    &AdoptableTargetRevisionRow {
+                        adoptable_revision: "adoptable-9".to_owned(),
+                        candidate_revision: "candidate-9".to_owned(),
+                        rendered_operator_target_revision: "targets-rev-9".to_owned(),
+                        payload: json!({
+                            "adoptable_revision": "adoptable-9",
+                            "candidate_revision": "candidate-9",
+                            "rendered_operator_target_revision": "targets-rev-9",
+                            "rendered_live_targets": {
+                                "family-a": {
+                                    "family_id": "family-a",
+                                    "members": [
+                                        {
+                                            "condition_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+                                            "token_id": "29",
+                                            "price": "0.43",
+                                            "quantity": "5"
+                                        }
+                                    ]
+                                }
+                            }
+                        }),
+                    },
+                )
+                .await
+                .expect("adoptable row should persist");
+
+            CandidateAdoptionRepo
+                .upsert_provenance(
+                    &self.pool,
+                    &CandidateAdoptionProvenanceRow {
+                        operator_target_revision: "targets-rev-9".to_owned(),
+                        adoptable_revision: "adoptable-9".to_owned(),
+                        candidate_revision: "candidate-9".to_owned(),
+                    },
+                )
+                .await
+                .expect("candidate provenance should persist");
+        });
     }
 
     fn latest_history(&self) -> Option<OperatorStrategyAdoptionHistoryRow> {
